@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analytics Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #1a202c;
+        }
+
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 280px 1fr 350px;
+            height: 100vh;
+            gap: 0;
+        }
+
+        /* Left Sidebar */
+        .sidebar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 32px;
+            font-size: 20px;
+            font-weight: 700;
+            color: #4c51bf;
+        }
+
+        .logo::before {
+            content: "🧠";
+            font-size: 24px;
+        }
+
+        .nav-section {
+            margin-bottom: 24px;
+        }
+
+        .nav-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+        }
+
+        .nav-item {
+            padding: 12px 16px;
+            margin: 4px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+        }
+
+        .nav-item:hover {
+            background: rgba(79, 70, 229, 0.1);
+            color: #4c51bf;
+        }
+
+        .nav-item.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+        }
+
+        /* Main Content */
+        .main-content {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            color: #4a5568;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(79, 70, 229, 0.4);
+        }
+
+        /* Chart Grid */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .chart-container:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .chart-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .chart-options {
+            display: flex;
+            gap: 8px;
+        }
+
+        .option-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(79, 70, 229, 0.1);
+            color: #4c51bf;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .option-btn.active {
+            background: #4c51bf;
+            color: white;
+        }
+
+        /* Metrics Row */
+        .metrics-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 4px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-change {
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        .metric-change.positive { color: #38a169; }
+        .metric-change.negative { color: #e53e3e; }
+
+        /* AI Chat Sidebar */
+        .ai-sidebar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ai-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .ai-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .ai-info h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .ai-info p {
+            font-size: 12px;
+            color: #718096;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 85%;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .message.user {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            margin-left: auto;
+        }
+
+        .message.ai {
+            background: rgba(79, 70, 229, 0.1);
+            color: #2d3748;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 24px;
+            outline: none;
+            font-size: 14px;
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .send-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .send-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
+        }
+
+        .suggestions {
+            margin-top: 16px;
+        }
+
+        .suggestion {
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: rgba(79, 70, 229, 0.05);
+            border: 1px solid rgba(79, 70, 229, 0.1);
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .suggestion:hover {
+            background: rgba(79, 70, 229, 0.1);
+        }
+
+        /* Chart Canvas */
+        .chart-canvas {
+            height: 300px;
+            position: relative;
+        }
+
+        .small-chart {
+            height: 200px;
+        }
+
+        /* Loading Animation */
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #cbd5e0;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+            .dashboard-container {
+                grid-template-columns: 250px 1fr 300px;
+            }
+        }
+
+        @media (max-width: 960px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr auto;
+            }
+            
+            .sidebar, .ai-sidebar {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Left Sidebar -->
+        <div class="sidebar">
+            <div class="logo">
+                AI Analytics
+            </div>
+            
+            <div class="nav-section">
+                <div class="nav-title">Analytics</div>
+                <div class="nav-item active">
+                    📊 Overview
+                </div>
+                <div class="nav-item">
+                    📈 Revenue Analysis
+                </div>
+                <div class="nav-item">
+                    👥 Customer Insights
+                </div>
+                <div class="nav-item">
+                    📦 Product Performance
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-title">Visualizations</div>
+                <div class="nav-item">
+                    📊 Bar Charts
+                </div>
+                <div class="nav-item">
+                    📈 Line Graphs
+                </div>
+                <div class="nav-item">
+                    🥧 Pie Charts
+                </div>
+                <div class="nav-item">
+                    🗺️ Heat Maps
+                </div>
+                <div class="nav-item">
+                    📋 Data Tables
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-title">AI Tools</div>
+                <div class="nav-item">
+                    🤖 Query Builder
+                </div>
+                <div class="nav-item">
+                    💡 Insights Generator
+                </div>
+                <div class="nav-item">
+                    🎯 Anomaly Detection
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="header">
+                <h1>Revenue Analytics Dashboard</h1>
+                <div class="controls">
+                    <button class="btn btn-secondary">📤 Export</button>
+                    <button class="btn btn-secondary">⚙️ Settings</button>
+                    <button class="btn btn-primary">🤖 AI Insights</button>
+                </div>
+            </div>
+
+            <!-- Metrics Row -->
+            <div class="metrics-row">
+                <div class="metric-card">
+                    <div class="metric-value">$2.4M</div>
+                    <div class="metric-label">Total Revenue</div>
+                    <div class="metric-change positive">↗ +15.3%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">1,847</div>
+                    <div class="metric-label">Orders</div>
+                    <div class="metric-change positive">↗ +8.7%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">$1,299</div>
+                    <div class="metric-label">Avg Order Value</div>
+                    <div class="metric-change positive">↗ +6.1%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">94.2%</div>
+                    <div class="metric-label">Return Rate</div>
+                    <div class="metric-change negative">↘ -2.3%</div>
+                </div>
+            </div>
+
+            <!-- Chart Grid -->
+            <div class="chart-grid">
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Monthly Revenue Trends</h3>
+                        <div class="chart-options">
+                            <button class="option-btn active">Area</button>
+                            <button class="option-btn">Line</button>
+                            <button class="option-btn">Bar</button>
+                        </div>
+                    </div>
+                    <div class="chart-canvas">
+                        <canvas id="revenueChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <h3 class="chart-title">City Performance</h3>
+                        <div class="chart-options">
+                            <button class="option-btn active">Doughnut</button>
+                            <button class="option-btn">Bar</button>
+                        </div>
+                    </div>
+                    <div class="chart-canvas small-chart">
+                        <canvas id="cityChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-grid">
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Customer Acquisition</h3>
+                        <div class="chart-options">
+                            <button class="option-btn active">Line</button>
+                            <button class="option-btn">Area</button>
+                        </div>
+                    </div>
+                    <div class="chart-canvas small-chart">
+                        <canvas id="acquisitionChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Product Categories</h3>
+                        <div class="chart-options">
+                            <button class="option-btn active">Polar</button>
+                            <button class="option-btn">Bar</button>
+                        </div>
+                    </div>
+                    <div class="chart-canvas small-chart">
+                        <canvas id="categoryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Chat Sidebar -->
+        <div class="ai-sidebar">
+            <div class="ai-header">
+                <div class="ai-avatar">AI</div>
+                <div class="ai-info">
+                    <h3>Analytics Assistant</h3>
+                    <p>Online • Ready to help</p>
+                </div>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="message ai">
+                    👋 Hi! I'm your AI analytics assistant. I can help you create visualizations, analyze data patterns, and generate insights. What would you like to explore?
+                </div>
+                
+                <div class="message user">
+                    Show me revenue trends by region
+                </div>
+                
+                <div class="message ai">
+                    I've analyzed your revenue data by region. Here are the key insights:
+                    <br><br>
+                    📈 North America leads with 45% of total revenue
+                    <br>
+                    🌍 Europe shows 23% growth YoY
+                    <br>
+                    🚀 Asia-Pacific is the fastest growing at 31% YoY
+                    <br><br>
+                    Would you like me to create a regional breakdown chart?
+                </div>
+
+                <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>
+
+            <div class="suggestions">
+                <div class="suggestion">💡 "Predict next quarter revenue"</div>
+                <div class="suggestion">🔍 "Find anomalies in sales data"</div>
+                <div class="suggestion">📊 "Create customer segmentation chart"</div>
+                <div class="suggestion">🎯 "Show top performing products"</div>
+            </div>
+
+            <div class="input-container">
+                <input type="text" class="chat-input" placeholder="Ask about your data..." id="chatInput">
+                <button class="send-btn" id="sendBtn">
+                    ➤
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Wait for Chart.js to load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Chart.js configurations and data
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 20
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: {
+                            color: 'rgba(0,0,0,0.05)'
+                        }
+                    },
+                    x: {
+                        grid: {
+                            display: false
+                        }
+                    }
+                }
+            };
+
+            // Revenue Chart
+            const revenueCtx = document.getElementById('revenueChart').getContext('2d');
+            new Chart(revenueCtx, {
+                type: 'line',
+                data: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                    datasets: [{
+                        label: 'Revenue',
+                        data: [180000, 220000, 190000, 250000, 280000, 240000, 310000, 290000, 320000, 280000, 340000, 380000],
+                        borderColor: 'rgb(102, 126, 234)',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: 'rgb(102, 126, 234)',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 2,
+                        pointRadius: 6
+                    }]
+                },
+                options: chartOptions
+            });
+
+            // City Performance Chart
+            const cityCtx = document.getElementById('cityChart').getContext('2d');
+            new Chart(cityCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix'],
+                    datasets: [{
+                        data: [30, 25, 20, 15, 10],
+                        backgroundColor: [
+                            'rgb(102, 126, 234)',
+                            'rgb(118, 75, 162)',
+                            'rgb(255, 99, 132)',
+                            'rgb(54, 162, 235)',
+                            'rgb(255, 205, 86)'
+                        ],
+                        borderWidth: 0,
+                        cutout: '70%'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 15,
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Customer Acquisition Chart
+            const acquisitionCtx = document.getElementById('acquisitionChart').getContext('2d');
+            new Chart(acquisitionCtx, {
+                type: 'line',
+                data: {
+                    labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    datasets: [{
+                        label: 'New Customers',
+                        data: [45, 52, 38, 67],
+                        borderColor: 'rgb(118, 75, 162)',
+                        backgroundColor: 'rgba(118, 75, 162, 0.1)',
+                        tension: 0.4,
+                        pointRadius: 4
+                    }]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y: {
+                            ...chartOptions.scales.y,
+                            max: 80
+                        }
+                    }
+                }
+            });
+
+            // Product Categories Chart
+            const categoryCtx = document.getElementById('categoryChart').getContext('2d');
+            new Chart(categoryCtx, {
+                type: 'polarArea',
+                data: {
+                    labels: ['Electronics', 'Clothing', 'Books', 'Home & Garden', 'Sports'],
+                    datasets: [{
+                        data: [35, 28, 15, 12, 10],
+                        backgroundColor: [
+                            'rgba(102, 126, 234, 0.7)',
+                            'rgba(118, 75, 162, 0.7)',
+                            'rgba(255, 99, 132, 0.7)',
+                            'rgba(54, 162, 235, 0.7)',
+                            'rgba(255, 205, 86, 0.7)'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 10,
+                                font: {
+                                    size: 10
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        r: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // AI Chat Functionality
+            const chatInput = document.getElementById('chatInput');
+            const sendBtn = document.getElementById('sendBtn');
+            const chatMessages = document.getElementById('chatMessages');
+            const typingIndicator = document.getElementById('typingIndicator');
+
+            const aiResponses = [
+                "I've generated a new visualization based on your request. The chart shows interesting patterns in your data.",
+                "Based on the analysis, I found some key insights: 📈 Sales are trending upward with a 15% increase this quarter.",
+                "I can create a custom dashboard for that metric. Would you like me to add it to your main view?",
+                "The data suggests seasonal patterns. Let me create a time-series analysis for you.",
+                "I've identified 3 anomalies in your dataset. Would you like me to investigate further?",
+                "Here's a predictive model based on your historical data. The forecast shows promising growth."
+            ];
+
+            function sendMessage() {
+                const message = chatInput.value.trim();
+                if (!message) return;
+
+                // Add user message
+                const userMsg = document.createElement('div');
+                userMsg.className = 'message user';
+                userMsg.textContent = message;
+                chatMessages.appendChild(userMsg);
+
+                // Clear input
+                chatInput.value = '';
+
+                // Show typing indicator
+                typingIndicator.style.display = 'flex';
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+
+                // Simulate AI response
+                setTimeout(() => {
+                    typingIndicator.style.display = 'none';
+                    
+                    const aiMsg = document.createElement('div');
+                    aiMsg.className = 'message ai';
+                    aiMsg.innerHTML = aiResponses[Math.floor(Math.random() * aiResponses.length)];
+                    chatMessages.appendChild(aiMsg);
+                    
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }, 1500 + Math.random() * 1000);
+            }
+
+            sendBtn.addEventListener('click', sendMessage);
+            chatInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            // Suggestion clicks
+            document.querySelectorAll('.suggestion').forEach(suggestion => {
+                suggestion.addEventListener('click', () => {
+                    chatInput.value = suggestion.textContent.replace('💡 ', '').replace(/"/g, '');
+                    sendMessage();
+                });
+            });
+
+            // Chart option toggles
+            document.querySelectorAll('.option-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // Remove active class from siblings
+                    btn.parentElement.querySelectorAll('.option-btn').forEach(sibling => {
+                        sibling.classList.remove('active');
+                    });
+                    // Add active class to clicked button
+                    btn.classList.add('active');
+                });
+            });
+
+            // Navigation interactions
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+                    item.classList.add('active');
+                });
+            });
+
+            // Animate metric cards on load
+            setTimeout(() => {
+                document.querySelectorAll('.metric-card').forEach((card, index) => {
+                    setTimeout(() => {
+                        card.style.transform = 'translateY(0)';
+                        card.style.opacity = '1';
+                    }, index * 100);
+                });
+            }, 500);
+        });
+    </script>
+</body>
+</html>
