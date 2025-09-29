@@ -1,0 +1,97 @@
+# Drafts and documentation
+Draft*.md
+*.draft
+drafts/
+notes/
+
+# Research papers and PDFs
+Papers/
+*.pdf
+research/
+
+# VS Code settings
+.vscode/
+*.code-workspace
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env
+.venv
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# PyCharm
+.idea/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+.temp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Model files (if large)
+*.pkl
+*.joblib
+models/weights/
+
+# Data files (if large)
+data/raw/
+data/processed/
+*.csv
+*.parquet
+
+# IDE and editor files
+*.swp
+*.swo
+*~
+
+# Configuration files with secrets
+config.ini
+secrets.json
+.env.local
