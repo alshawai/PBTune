@@ -3,6 +3,7 @@ Draft*.md
 *.draft
 drafts/
 notes/
+code-snippets/
 
 # Research papers and PDFs
 Papers/
@@ -94,4 +95,8 @@ data/processed/
 # Configuration files with secrets
 config.ini
 secrets.json
+.codebrush.json
 .env.local
+
+tmp.*
+temp.*
