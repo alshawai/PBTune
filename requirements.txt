@@ -1,0 +1,13 @@
+# Database
+psycopg2-binary
+sqlalchemy
+
+# Data processing
+pandas
+numpy
+
+# Environment variables
+python-dotenv
+
+# Machine Learning (if needed)
+scikit-learn
