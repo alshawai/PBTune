@@ -1,7 +1,5 @@
 # PostgreSQL Connection and Configuration Parameters System
 
-[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%202025-blue.svg)](https://github.com/eima40x4c/ai-optimization-database) [![Status](https://img.shields.io/badge/Status-Complete-darkgreen.svg)](https://github.com/eima40x4c/ai-optimization-database)
-
 ## Overview
 
 This document describes the comprehensive system built for connecting to PostgreSQL databases and retrieving all tunable configuration parameters (knobs) for machine learning-based database optimization. The system is organized into four main modules: `config`, `database`, `knobs`, and `scripts`.
@@ -991,6 +989,18 @@ The system is designed to support advanced database optimization research, parti
 ---
 
 **For questions or issues, refer to:**
-- `docs/ENVIRONMENT_SETUP.md` for initial setup
+- [ENVIRONMENT_SETUP.md](./ENVIRONMENT_SETUP.md) for initial setup
 - Module docstrings for detailed API documentation
 - `__main__.py` files for usage examples
+
+---
+
+## Related Documentation
+
+### PBT System Integration
+
+The database connection and knob retrieval system serves as the **foundation** for the Population Based Training (PBT) system:
+
+- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)**: How retrieved knobs are used to define KnobSpace for PBT optimization
+- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)**: How Workers use knob configurations during evolutionary optimization
+- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)**: How KnobApplicator uses this connection system to apply configurations
