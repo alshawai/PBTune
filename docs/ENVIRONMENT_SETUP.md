@@ -32,6 +32,15 @@ Install the required Python packages:
 pip install -r requirements.txt
 ```
 
+**Key Dependencies**:
+- **psycopg2-binary**: PostgreSQL database adapter
+- **psutil**: System and process monitoring (critical for accurate performance metrics)
+- **numpy**: Numerical operations for PBT sampling and scoring
+- **pandas**: Data processing for knob retrieval
+- **python-dotenv**: Environment variable management
+
+**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](./PERFORMANCE_EVALUATION.md#system-monitoring-with-psutil) for details.
+
 ### 4. Important Security Notes
 
 - **Never commit the `.env` file** to version control. It's already included in `.gitignore`.
@@ -77,3 +86,19 @@ If you're running a Python script and changes to `.env` aren't being picked up:
 1. Restart your Python interpreter/terminal
 2. Make sure the `.env` file is in the project root directory
 3. Check that `load_dotenv()` is called at the beginning of your script
+
+## Next Steps
+
+After setting up your environment, explore the system documentation:
+
+### Core System Documentation
+- **[PostgreSQL Connection and Knobs](./POSTGRESQL_CONNECTION_AND_KNOBS.md)**: Database connection management and knob retrieval system
+- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)**: Worker, Evolution, and Population classes for population-based training
+- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)**: Evaluator, metrics collection, and scoring system
+- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)**: KnobSpace and KnobApplicator for safe configuration handling
+
+### Quick Start
+1. Set up environment (this guide)
+2. Understand database connection  [PostgreSQL Connection](./POSTGRESQL_CONNECTION_AND_KNOBS.md)
+3. Learn PBT algorithm  [PBT Core Components](./PBT_CORE_COMPONENTS.md)
+4. Run end-to-end tuning
