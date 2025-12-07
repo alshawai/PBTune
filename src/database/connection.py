@@ -16,7 +16,9 @@ from src.config.database import get_db_config, DatabaseConfig
 
 
 def get_connection(
-    config: Optional[DatabaseConfig] = None, dbname: Optional[str] = None
+    config: Optional[DatabaseConfig] = None,
+    dbname: Optional[str] = None,
+    connect_timeout: Optional[int] = None
 ) -> PgConnection:
     """
     Create a psycopg2 database connection.
@@ -52,6 +54,9 @@ def get_connection(
     connection_params = config.to_dict()
     if dbname is not None:
         connection_params["dbname"] = dbname
+
+    if connect_timeout is not None:
+        connection_params["connect_timeout"] = connect_timeout  # type: ignore
 
     return psycopg2.connect(**connection_params) # type: ignore
 

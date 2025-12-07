@@ -17,7 +17,7 @@ if __name__ == "__main__":
         print(f"  User: {CONFIG.user}")
         print(f"  Host: {CONFIG.host}")
         print(f"  Port: {CONFIG.port}")
-        print(f"  Database: {CONFIG.name}")
+        print(f"  Database: {CONFIG.dbname}")
 
         print("\nConnection String (safe):")
         print(f"  {CONFIG.get_connection_string()}")

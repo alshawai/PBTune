@@ -19,10 +19,10 @@ if __name__ == "__main__":
     print("=" * 37)
 
     CONFIG = get_db_config()
-    print(f"\nProduction database: {CONFIG.name}")
+    print(f"\nProduction database: {CONFIG.dbname}")
 
     TEST_DB_NAME = "test_db_module_temp"
-    TEST_CONFIG = replace(CONFIG, name=TEST_DB_NAME)
+    TEST_CONFIG = replace(CONFIG, dbname=TEST_DB_NAME)
     print(f"Test database: {TEST_DB_NAME}")
     print("\n🟡 This test will create and destroy a temporary database.")
 
