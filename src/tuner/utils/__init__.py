@@ -11,10 +11,22 @@ from src.tuner.utils.applicator import (
     ApplicationResult,
     KnobContext,
 )
+from src.tuner.utils.instance_manager import (
+    PostgresInstanceManager,
+    InstanceConfig,
+)
+from src.tuner.utils.postgres_instance import (
+    PostgresInstance,
+    KnobCategory,
+)
 
 __all__ = [
     'KnobApplicator',
     'ApplicatorConfig',
     'ApplicationResult',
     'KnobContext',
+    'PostgresInstanceManager',
+    'InstanceConfig',
+    'PostgresInstance',
+    'KnobCategory',
 ]
