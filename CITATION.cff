@@ -1,0 +1,105 @@
+# Citation File Format (CFF) for Academic Software
+# This file enables automatic citation generation on GitHub and Zenodo
+# See: https://citation-file-format.github.io/
+
+cff-version: 1.2.0
+title: Population-Based Training for PostgreSQL Configuration Tuning
+message: >-
+  If you use this software in your research, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - family-names: Data-Vanta
+    given-names: Research Group
+    affiliation: Independent Research
+    email: imalwaysforlife@gmail.com
+repository-code: 'https://github.com/Data-Vanta/ai-database-optimization'
+url: 'https://github.com/Data-Vanta/ai-database-optimization'
+abstract: >-
+  A novel application of Population-Based Training (PBT), originally developed
+  by DeepMind for neural network hyperparameter optimization, to the domain of
+  database configuration tuning. This system demonstrates that evolutionary
+  optimization strategies can autonomously discover high-performance PostgreSQL
+  configurations without domain expertise, achieving significant improvements
+  in throughput and latency across diverse workload types.
+keywords:
+  - database tuning
+  - population-based training
+  - evolutionary optimization
+  - PostgreSQL
+  - hyperparameter optimization
+  - autonomous systems
+  - machine learning for systems
+license: Other
+license-url: 'https://github.com/Data-Vanta/ai-database-optimization/blob/main/LICENSE'
+version: 1.0.0
+date-released: '2025-12-07'
+references:
+  - type: article
+    title: Population Based Training of Neural Networks
+    authors:
+      - family-names: Jaderberg
+        given-names: Max
+      - family-names: Dalibard
+        given-names: Valentin
+      - family-names: Osindero
+        given-names: Simon
+      - family-names: Czarnecki
+        given-names: Wojciech M
+      - family-names: Donahue
+        given-names: Jeff
+      - family-names: Razavi
+        given-names: Ali
+      - family-names: Vinyals
+        given-names: Oriol
+      - family-names: Green
+        given-names: Tim
+      - family-names: Dunning
+        given-names: Iain
+      - family-names: Simonyan
+        given-names: Karen
+    year: 2017
+    journal: arXiv preprint
+    arxiv: 1711.09846
+  - type: conference-paper
+    title: Automatic Database Management System Tuning Through Large-Scale Machine Learning
+    authors:
+      - family-names: Van Aken
+        given-names: Dana
+      - family-names: Pavlo
+        given-names: Andrew
+      - family-names: Gordon
+        given-names: Geoffrey J
+      - family-names: Zhang
+        given-names: Bohan
+    year: 2017
+    conference:
+      name: ACM SIGMOD International Conference on Management of Data
+    doi: 10.1145/3035918.3064029
+  - type: conference-paper
+    title: An End-to-End Automatic Cloud Database Tuning System Using Deep Reinforcement Learning
+    authors:
+      - family-names: Zhang
+        given-names: Ji
+      - family-names: Liu
+        given-names: Yu
+      - family-names: Zhou
+        given-names: Ke
+      - family-names: Li
+        given-names: Guoliang
+      - family-names: Xiao
+        given-names: Zhili
+      - family-names: Cheng
+        given-names: Bin
+      - family-names: Xing
+        given-names: Jiashu
+      - family-names: Wang
+        given-names: Yangtao
+      - family-names: Cheng
+        given-names: Tianheng
+      - family-names: Liu
+        given-names: Li
+    year: 2019
+    conference:
+      name: ACM SIGMOD International Conference on Management of Data
+    doi: 10.1145/3299869.3300085
