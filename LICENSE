@@ -1,0 +1,185 @@
+Academic Research License (Non-Commercial Use)
+
+Copyright (c) 2025 Data-Vanta Research Group
+
+===============================================================================
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+===============================================================================
+
+1. DEFINITIONS
+
+"Software" refers to the Population-Based Training for PostgreSQL Configuration 
+Tuning system, including all source code, documentation, and associated files 
+in this repository.
+
+"Academic Research" means research conducted at an academic institution 
+primarily for educational or scientific purposes, not for commercial gain.
+
+"Commercial Use" means use of the Software for direct or indirect commercial 
+advantage or private monetary compensation, including but not limited to:
+  - Deployment in production systems or services
+  - Integration into commercial products or services
+  - Use in consulting services or paid support
+  - Any use that generates revenue or commercial value
+
+"Derivative Work" means any work based on or derived from the Software, 
+including modifications, extensions, or adaptations.
+
+2. GRANT OF LICENSE
+
+Subject to the terms and conditions of this License, the copyright holder 
+hereby grants you a limited, non-exclusive, non-transferable, royalty-free 
+license to use the Software for Academic Research purposes only, including:
+
+  a) Running and executing the Software for research experiments
+  b) Reading, studying, and analyzing the source code
+  c) Modifying the Software for academic research purposes
+  d) Reproducing results reported in academic publications
+  e) Teaching and educational purposes in academic settings
+
+3. RESTRICTIONS
+
+You may NOT:
+
+  a) Use the Software for Commercial Use without explicit written permission
+  b) Deploy the Software in production database systems
+  c) Integrate the Software into commercial products or services
+  d) Remove or alter any copyright notices or license terms
+  e) Redistribute the Software without attribution to the original authors
+  f) Grant sublicenses or transfer rights to third parties
+  g) Use the Software in violation of applicable laws or regulations
+
+4. ATTRIBUTION REQUIREMENTS
+
+All uses of the Software must include:
+
+  a) Acknowledgment of the original authors and copyright holder
+  b) Citation of relevant academic publications (see README.md)
+  c) Notice that the Software is used under this Academic Research License
+  d) Clear indication of any modifications made to the original Software
+
+In academic publications:
+
+  If you publish research using this Software, you MUST cite it appropriately 
+  as specified in the README.md file. Failure to provide proper citation 
+  constitutes a violation of this license.
+
+5. DERIVATIVE WORKS
+
+If you create a Derivative Work:
+
+  a) You must clearly mark it as modified from the original
+  b) You must retain all copyright notices from the original Software
+  c) You must include a copy of this License with the Derivative Work
+  d) You must make it clear that the Derivative Work is also subject to 
+     these terms and conditions
+  e) Commercial use of Derivative Works requires separate permission
+
+6. DISTRIBUTION
+
+You may distribute unmodified or modified copies of the Software under the 
+following conditions:
+
+  a) Distribution is for Academic Research purposes only
+  b) All copyright notices and this License are included
+  c) Recipients are informed that use is subject to this License
+  d) No fee is charged for the Software itself (reasonable media costs allowed)
+
+7. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+FITNESS FOR A PARTICULAR PURPOSE, CORRECTNESS, OR NONINFRINGEMENT.
+
+The copyright holder makes no representations or warranties regarding:
+  - The accuracy, completeness, or reliability of the Software
+  - The suitability of the Software for any particular purpose
+  - The performance or results obtained from using the Software
+  - The absence of errors, bugs, or defects in the Software
+
+8. LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR 
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS 
+IN THE SOFTWARE, INCLUDING BUT NOT LIMITED TO:
+
+  - Direct, indirect, incidental, or consequential damages
+  - Loss of data, revenue, or profits
+  - Interruption of research or work
+  - Damage to computer systems or databases
+  - Any other pecuniary loss or damage
+
+This limitation applies even if the copyright holder has been advised of the 
+possibility of such damages.
+
+9. DATA PRIVACY AND SECURITY
+
+Users are solely responsible for:
+
+  a) Compliance with data protection regulations (GDPR, CCPA, etc.)
+  b) Securing database credentials and sensitive information
+  c) Protecting research data and experimental results
+  d) Ensuring ethical use of the Software
+
+The Software processes database configurations and performance metrics. Users 
+must ensure appropriate safeguards are in place when working with sensitive 
+or production data.
+
+10. TERMINATION
+
+This License automatically terminates if you violate any of its terms. Upon 
+termination:
+
+  a) You must immediately cease all use of the Software
+  b) You must destroy all copies of the Software in your possession
+  c) Any Derivative Works you created remain subject to this License
+
+11. COMMERCIAL LICENSING
+
+For Commercial Use, production deployment, or integration into commercial 
+products:
+
+  Contact: [imalwaysforlife@gmail.com]
+  Subject: Commercial License Inquiry - PBT PostgreSQL Tuning
+
+Separate commercial licensing terms and pricing will be negotiated on a 
+case-by-case basis.
+
+12. JURISDICTION
+
+This License shall be governed by and construed in accordance with the laws 
+applicable to the jurisdiction where the copyright holder is located, without 
+regard to conflict of law principles.
+
+13. ENTIRE AGREEMENT
+
+This License constitutes the entire agreement between you and the copyright 
+holder concerning the Software and supersedes any prior agreements or 
+understandings, whether written or oral.
+
+14. SEVERABILITY
+
+If any provision of this License is found to be invalid or unenforceable, 
+the remaining provisions shall continue in full force and effect.
+
+===============================================================================
+ACCEPTANCE
+===============================================================================
+
+BY USING, COPYING, MODIFYING, OR DISTRIBUTING THE SOFTWARE, YOU INDICATE 
+YOUR ACCEPTANCE OF THIS LICENSE AND ALL ITS TERMS AND CONDITIONS.
+
+IF YOU DO NOT AGREE TO THESE TERMS, DO NOT USE THE SOFTWARE.
+
+===============================================================================
+QUESTIONS
+===============================================================================
+
+For questions about this License, contact the copyright holder or open an 
+issue at: https://github.com/Data-Vanta/ai-database-optimization/issues
+
+===============================================================================
+
+Last Updated: December 2025
+Version: 1.0
