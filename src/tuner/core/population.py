@@ -24,10 +24,11 @@ Design:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from src.config.database import DatabaseConfig
 from src.tuner.core.worker import Worker
 from src.tuner.core.evolution import (
     execute_exploit_explore,
@@ -37,8 +38,10 @@ from src.tuner.core.evolution import (
 )
 from src.tuner.config.knob_space import KnobSpace
 from src.tuner.evaluator.metrics import PerformanceMetrics
+from src.tuner.utils.logger_config import get_logger
 
 logger = logging.getLogger(__name__)
+base_logger = logging.getLogger(__name__)  # For non-worker logs
 
 
 @dataclass
@@ -67,7 +70,7 @@ class PopulationConfig:
     ready_interval: int = 3
     exploit_quantile: float = 0.25
     perturbation_factors: tuple[float, float] = (0.8, 1.2)
-    convergence_threshold: float = 0.05
+    convergence_threshold: float = 0.5
     max_generations: int = 100
     early_stopping_patience: int = 10
 
@@ -143,6 +146,7 @@ class Population:
         self,
         knob_space: KnobSpace,
         config: Optional[PopulationConfig] = None,
+        evaluator: Optional[Any] = None,
     ):
         """
         Initialize a Population instance.
@@ -153,9 +157,13 @@ class Population:
             The search space for knob configurations
         config : Optional[PopulationConfig]
             Configuration parameters. Uses defaults if None.
+        evaluator : Optional[Evaluator]
+            Evaluator instance (for accessing metric config). If None, adaptive
+            normalization will use global config objects (less clean but works).
         """
         self.knob_space = knob_space
         self.config = config or PopulationConfig()
+        self.evaluator = evaluator
 
         self.workers: List[Worker] = []
         self.current_generation: int = 0
@@ -164,7 +172,9 @@ class Population:
         self.best_overall_score: float = 0.0
         self.generations_without_improvement: int = 0
 
-        logger.info(
+        self._ranges_updated: bool = False
+
+        logger.debug(
             "Created Population: size=%s, ready_interval=%s, exploit_quantile=%s",
             self.config.population_size,
             self.config.ready_interval,
@@ -175,8 +185,8 @@ class Population:
         """
         Initialize the worker population.
         
-        Creates Worker instances with either provided configurations or
-        random sampling from the knob space.
+        Uses Latin Hypercube Sampling (LHS) for diverse initial configurations.
+        This ensures better coverage of the search space and reduces early convergence.
         
         Parameters
         ----------
@@ -188,6 +198,10 @@ class Population:
         ------
         ValueError
             If initial_configs is provided but length doesn't match population_size
+        
+        Note
+        ----
+        After calling this, call setup_worker_instances() to assign instance configs.
         """
         if initial_configs is not None:
             if len(initial_configs) != self.config.population_size:
@@ -195,6 +209,11 @@ class Population:
                     f"initial_configs length ({len(initial_configs)}) must match "
                     f"population_size ({self.config.population_size})"
                 )
+        else:
+            initial_configs = self.knob_space.sample_diverse_configs(
+                num_samples=self.config.population_size,
+                seed=42  # Fixed seed for reproducibility across runs
+            )
 
         self.workers = []
         for worker_id in range(self.config.population_size):
@@ -207,7 +226,58 @@ class Population:
             )
             self.workers.append(worker)
 
-        logger.info("Initialized %s workers", len(self.workers))
+    def setup_worker_instances(
+        self,
+        instances: List[Any],
+        dbname: str = 'postgres',
+        user: str = 'postgres',
+        password: str = ''
+    ) -> None:
+        """
+        Assign PostgreSQL instance configurations to workers.
+        
+        Parameters
+        ----------
+        instances : List[InstanceConfig]
+            List of InstanceConfig objects from PostgresInstanceManager
+        dbname : str
+            Database name to connect to
+        user : str
+            PostgreSQL username
+        password : str
+            PostgreSQL password
+        
+        Example
+        -------
+        >>> population.initialize()
+        >>> instance_manager = PostgresInstanceManager(...)
+        >>> instances = instance_manager.setup_instances(num_workers=8)
+        >>> population.setup_worker_instances(instances, dbname='mydb', user='myuser')
+        """
+
+        if len(instances) != len(self.workers):
+            raise ValueError(
+                f"Number of instances ({len(instances)}) must match "
+                f"number of workers ({len(self.workers)})"
+            )
+
+        for worker in self.workers:
+            instance = instances[worker.worker_id]
+            worker.port = instance.port
+
+            worker.db_config = DatabaseConfig(
+                host='localhost',
+                port=instance.port,
+                dbname=dbname,
+                user=user,
+                password=password
+            )
+
+            worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+            worker_logger.info(
+                "Assigned to instance port %d",
+                worker.port
+            )
 
     def evaluate_generation(
         self,
@@ -248,7 +318,7 @@ class Population:
         >>> population.evaluate_generation(my_evaluate, parallel=True)
         """
         logger.info(
-            "Evaluating generation %s (%s)",
+            "Evaluating generation %s - %s",
             self.current_generation,
             'parallel' if parallel else 'sequential'
         )
@@ -258,12 +328,14 @@ class Population:
                 try:
                     metrics, score = evaluate_fn(worker)
                     worker.update_metrics(metrics, score)
-                    logger.debug(
-                        "Worker-%s: score=%.4f, step_count=%s",
-                        worker.worker_id, score, worker.step_count
+                    worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+                    worker_logger.debug(
+                        "score=%.4f, step_count=%s",
+                        score, worker.step_count
                     )
                 except Exception as e:
-                    logger.error("Error evaluating Worker-%s: %s", worker.worker_id, e)
+                    worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+                    worker_logger.error("Error evaluating: %s", e)
                     raise
         else:
             max_workers = max_workers or self.config.population_size
@@ -280,17 +352,84 @@ class Population:
                     try:
                         metrics, score = future.result()
                         worker.update_metrics(metrics, score)
-                        logger.debug(
-                            "Worker-%s: score=%.4f, step_count=%s",
-                            worker.worker_id, score, worker.step_count
+                        worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+                        worker_logger.debug(
+                            "score=%.4f, step_count=%s",
+                            score, worker.step_count
                         )
                     except Exception as e:
-                        logger.error("Error evaluating Worker-%s: %s", worker.worker_id, e)
+                        worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+                        worker_logger.error("Error evaluating: %s", e)
                         raise
 
         logger.info("Generation %s evaluation complete", self.current_generation)
 
-    def exploit_and_explore(self, require_ready: bool = True, verbose: bool = False) -> int:
+    def update_metric_ranges_if_needed(self) -> None:
+        """
+        Update metric normalization ranges after initial exploration phase.
+        
+        This implements OtterTune's adaptive approach: after collecting enough
+        data from initial evaluations, compute realistic min/max ranges based
+        on used hardware's actual performance.
+        
+        Strategy:
+        - Collect metrics from multiple generations to capture performance variability
+        - Wait for at least 2 full generations (2 * population_size samples)
+        - Use percentile-based ranges to be robust to outliers
+        
+        Called automatically during train_generation() after evaluations.
+        """
+        if self._ranges_updated:
+            return
+
+        all_metrics: List[PerformanceMetrics] = []
+        for worker in self.workers:
+            all_metrics.extend(worker.performance_history)
+
+        # Need samples from multiple generations to capture variability
+        # Minimum: 2 generations worth of data (2 * population_size)
+        min_samples_needed = max(8, 2 * len(self.workers))
+
+        if len(all_metrics) < min_samples_needed:
+            logger.debug(
+                "Waiting for sufficient samples for adaptive normalization: "
+                "%d/%d (generation %d)",
+                len(all_metrics), min_samples_needed, self.current_generation
+            )
+            return
+
+        logger.info(
+            "Updating normalization ranges from %d observations across %d workers",
+            len(all_metrics), len(self.workers)
+        )
+
+        if self.evaluator is not None and hasattr(self.evaluator, 'config'):
+            metric_config = self.evaluator.config.metric_config
+
+            try:
+                already_initialized = getattr(metric_config, '_ranges_initialized', False)
+                if not already_initialized:
+                    metric_config.update_ranges(all_metrics)
+                    logger.info(
+                        "✓ Adaptive normalization activated for %s "
+                        "workload (based on %d observations)",
+                        metric_config.workload_type.value,
+                        len(all_metrics)
+                    )
+                else:
+                    logger.debug("Metric ranges already initialized, skipping update")
+            except AttributeError as e:
+                logger.warning("Failed to update metric ranges: %s", e)
+
+        self._ranges_updated = True
+        logger.info("Metric normalization ranges updated successfully")
+
+    def exploit_and_explore(
+        self,
+        require_ready: bool = True,
+        verbose: bool = False,
+        exclude_knobs: Optional[List[str]] = None
+    ) -> int:
         """
         Perform exploit-explore step on poor-performing workers.
         
@@ -305,6 +444,8 @@ class Population:
             Only consider workers that have completed ready_interval steps
         verbose : bool, default=False
             Enable verbose logging of exploit-explore details
+        exclude_knobs : Optional[List[str]]
+            Knobs to exclude from perturbation (keep constant)
         
         Returns
         -------
@@ -318,6 +459,7 @@ class Population:
             current_generation=self.current_generation,
             require_ready=require_ready,
             verbose=verbose,
+            exclude_knobs=exclude_knobs
         )
 
         logger.info(
@@ -369,7 +511,7 @@ class Population:
 
     def train_generation(
         self,
-        evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
+        evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         require_ready: bool = True,
         verbose: bool = False,
@@ -378,9 +520,9 @@ class Population:
         Execute one complete PBT generation.
         
         This is the main training loop method. It:
-        1. Evaluates all workers
-        2. Records generation statistics
-        3. Performs exploit-explore if appropriate
+        1. Evaluates all workers with their current configurations
+        2. Performs exploit-explore to evolve poor performers
+        3. Records generation statistics
         4. Increments generation counter
         
         Parameters
@@ -411,18 +553,19 @@ class Population:
         ...     if population.should_stop():
         ...         break
         """
-        logger.info("=" * 30)
-        logger.info("Starting generation %s", self.current_generation)
-
         self.evaluate_generation(evaluate_fn, parallel=parallel)
 
-        result = self.record_generation()
+        self.update_metric_ranges_if_needed()
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,
-            verbose=verbose
+            verbose=verbose,
+            exclude_knobs=None  # No restrictions in multi-instance mode
         )
+
+        result = self.record_generation()
         result.num_exploited = num_exploited
+
         self.current_generation += 1
 
         logger.info(

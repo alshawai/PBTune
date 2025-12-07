@@ -56,6 +56,16 @@ class PBTConfig:
     num_parallel_workers : int
         Number of parallel workers for evaluation. Should be <= population_size.
         Default: 4 (use all cores)
+    
+    evaluation_duration : float
+        Duration in seconds for each worker's workload measurement.
+        Longer = more accurate but slower. Shorter = faster iterations but noisier.
+        Default: 30.0 seconds
+    
+    warmup_queries : int
+        Number of warmup queries before measurement begins.
+        Ensures database caches are populated for fair comparison.
+        Default: 50 queries
         
     random_seed : Optional[int]
         Random seed for reproducibility. If None, results will be non-deterministic.
@@ -73,6 +83,8 @@ class PBTConfig:
     perturbation_factors: Tuple[float, float] = (0.8, 1.2)
     resample_probability: float = 0.0
     num_parallel_workers: int = 4
+    evaluation_duration: float = 30.0
+    warmup_queries: int = 50
     random_seed: Optional[int] = None
     verbose: bool = True
 
@@ -105,6 +117,12 @@ class PBTConfig:
         if self.num_parallel_workers > self.population_size:
             raise ValueError("num_parallel_workers cannot exceed population_size")
 
+        if self.evaluation_duration <= 0:
+            raise ValueError("evaluation_duration must be positive")
+
+        if self.warmup_queries < 0:
+            raise ValueError("warmup_queries cannot be negative")
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -130,6 +148,8 @@ class PBTConfig:
             "perturbation_factors": self.perturbation_factors,
             "resample_probability": self.resample_probability,
             "num_parallel_workers": self.num_parallel_workers,
+            "evaluation_duration": self.evaluation_duration,
+            "warmup_queries": self.warmup_queries,
             "random_seed": self.random_seed,
             "verbose": self.verbose,
         }
@@ -150,43 +170,50 @@ class PBTConfig:
         )
 
 
-# Predefined configurations for different scenarios
-# RAPID: Very quick prototyping (2-3 minutes total)
+# Strategy: Short evaluations, few warmup, quick iterations
 RAPID_CONFIG = PBTConfig(
     population_size=4,
     num_generations=10,
-    exploit_quantile=0.25,  # More aggressive (replace 1 worker)
+    exploit_quantile=0.25,
     ready_interval=1,
     num_parallel_workers=4,
+    evaluation_duration=15.0,
+    warmup_queries=20,
     verbose=True
 )
 
-# STANDARD: Balanced prototyping (10-15 minutes total)
+# Strategy: Moderate evaluations, balanced accuracy vs speed
 STANDARD_CONFIG = PBTConfig(
     population_size=4,
     num_generations=30,
     exploit_quantile=0.2,
     ready_interval=2,
     num_parallel_workers=4,
+    evaluation_duration=30.0,
+    warmup_queries=50,
     verbose=True
 )
 
-# THOROUGH: Comprehensive search (30-60 minutes total)
+# Strategy: Longer evaluations for accuracy, more exploration
 THOROUGH_CONFIG = PBTConfig(
     population_size=8,
     num_generations=50,
     exploit_quantile=0.2,
     ready_interval=3,
-    num_parallel_workers=4,  # 4 for budget laptop
+    num_parallel_workers=4,
+    evaluation_duration=45.0,
+    warmup_queries=100,
     verbose=True
 )
 
-# RESEARCH: For cloud deployment with more resources
+# Strategy: Production-grade measurements, extensive exploration
 RESEARCH_CONFIG = PBTConfig(
     population_size=16,
     num_generations=100,
     exploit_quantile=0.2,
     ready_interval=5,
     num_parallel_workers=16,
+    evaluation_duration=60.0,
+    warmup_queries=200,
     verbose=True
 )

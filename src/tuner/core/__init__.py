@@ -28,5 +28,4 @@ __all__ = [
     "get_best_worker",
     "get_population_statistics",
     "check_convergence",
-    # "Population",  # TODO: Uncomment when population.py is implemented
 ]

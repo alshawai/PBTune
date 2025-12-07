@@ -39,11 +39,12 @@ Example:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import copy
 
 from src.tuner.config.knob_space import KnobSpace
 from src.tuner.evaluator.metrics import PerformanceMetrics
+from src.config.database import DatabaseConfig
 
 
 @dataclass
@@ -99,6 +100,16 @@ class Worker:
         Optional: Track configuration changes over time
         Useful for analysis and debugging
         
+    port : Optional[int]
+        PostgreSQL instance port for this worker
+        Set by instance manager during initialization
+        Each worker gets its own port (base_port + worker_id)
+        
+    db_config : Optional[DatabaseConfig]
+        Instance-specific database configuration
+        Set by instance manager during initialization
+        Contains host, port, dbname, user, password for worker's instance
+        
     Notes
     -----
     **Performance Score:**
@@ -117,11 +128,16 @@ class Worker:
     performance_score: float = 0.0
     metrics: Optional[PerformanceMetrics] = None
 
+    performance_history: List[PerformanceMetrics] = field(default_factory=list)
+
     step_count: int = 0
     parent_id: Optional[int] = None
     generation_created: int = 0
 
     config_history: list = field(default_factory=list)
+
+    port: Optional[int] = None
+    db_config: Optional[DatabaseConfig] = None
 
     def __post_init__(self):
         """Initialize worker with random configuration if none provided."""
@@ -152,7 +168,12 @@ class Worker:
         """
         return self.step_count >= self.ready_interval
 
-    def clone_from(self, other: 'Worker', current_generation: int) -> None:
+    def clone_from(
+        self,
+        other: 'Worker',
+        current_generation: int,
+        exclude_knobs: Optional[List[str]] = None
+    ) -> None:
         """
         Copy configuration from another worker (EXPLOIT phase).
         
@@ -164,18 +185,29 @@ class Worker:
         current_generation : int
             The current generation number (for tracking)
             
+        exclude_knobs : Optional[List[str]]
+            Knobs to exclude from copying (e.g., restart-required knobs between restart intervals)
+            
         Notes
         -----
         What gets copied:
-        - knob_config: The actual PostgreSQL parameters
+        - knob_config: The actual PostgreSQL parameters (excluding those in exclude_knobs)
         
         What does NOT get copied:
         - performance_score: Will be recalculated after explore/evaluate
         - metrics: Will be measured fresh
         - step_count: Maintained (worker keeps its evaluation count)
         - worker_id: Never changes (identity preserved)
+        - Knobs in exclude_knobs list (e.g., restart-required knobs remain unchanged)
         """
-        self.knob_config = copy.deepcopy(other.knob_config)
+        if exclude_knobs:
+            if other.knob_config:
+                for knob_name, value in other.knob_config.items():
+                    if knob_name not in exclude_knobs:
+                        if self.knob_config:
+                            self.knob_config[knob_name] = copy.deepcopy(value)
+        else:
+            self.knob_config = copy.deepcopy(other.knob_config)
 
         self.parent_id = other.worker_id
         self.generation_created = current_generation
@@ -192,7 +224,8 @@ class Worker:
         self,
         perturbation_factors: Tuple[float, float] = (0.8, 1.2),
         current_generation: Optional[int] = None,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        exclude_knobs: Optional[List[str]] = None
     ) -> None:
         """
         Perturb configuration (EXPLORE phase).
@@ -208,6 +241,9 @@ class Worker:
             
         seed : Optional[int]
             Random seed for reproducibility
+        
+        exclude_knobs : Optional[List[str]]
+            Knobs to exclude from perturbation (keep constant)
             
         Notes
         -----
@@ -219,6 +255,7 @@ class Worker:
             config=self.knob_config,  # type: ignore
             perturbation_factor=perturbation_factors,
             seed=seed,
+            exclude_knobs=exclude_knobs
         )
 
         if self.config_history is not None and current_generation is not None:
@@ -252,6 +289,7 @@ class Worker:
         self.metrics = metrics
         self.performance_score = score
         self.step_count += 1
+        self.performance_history.append(metrics)
 
     def get_config_copy(self) -> Dict[str, Any]:
         """
@@ -288,13 +326,15 @@ class Worker:
         """Human-readable representation."""
         status = "ready" if self.is_ready() else "not ready"
         parent_str = f", parent={self.parent_id}" if self.parent_id is not None else ""
+        port_str = f", port={self.port}" if self.port is not None else ""
 
         return (
             f"Worker(id={self.worker_id}, "
             f"score={self.performance_score:.4f}, "
             f"steps={self.step_count}, "
             f"status={status}"
-            f"{parent_str})"
+            f"{parent_str}"
+            f"{port_str})"
         )
 
     def __str__(self) -> str:
@@ -322,4 +362,5 @@ class Worker:
             'is_ready': self.is_ready(),
             'parent_id': self.parent_id,
             'generation_created': self.generation_created,
+            'port': self.port,
         }

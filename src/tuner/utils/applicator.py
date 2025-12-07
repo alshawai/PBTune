@@ -5,15 +5,15 @@ Knob Applicator for PostgreSQL Configuration
 The KnobApplicator safely applies database configuration changes with:
 - Context-aware application (SET vs ALTER SYSTEM vs restart required)
 - Parameter validation against pg_settings constraints
-- Rollback support for failed changes
+- Partial success support (follows research convention)
 - Restart requirement detection
 - Configuration persistence options
 
 Context Classification:
 ----------------------
 - internal: Cannot be changed (read-only)
-- postmaster: Requires server restart
-- sighup: Requires configuration reload (pg_reload_conf())
+- postmaster: Requires server restart (e.g., shared_buffers, max_connections)
+- sighup: Requires configuration reload via pg_reload_conf()
 - superuser: Can change within session (SET command)
 - user: Can change within session (SET command)
 - backend: Set at connection startup only
@@ -23,7 +23,7 @@ Application Strategies:
 ----------------------
 1. Session-level (SET): Fast, temporary, no persistence
 2. Server-level (ALTER SYSTEM): Persists to postgresql.auto.conf, requires reload
-3. Restart: For postmaster context parameters
+3. Restart: For postmaster context parameters (manual or automatic)
 
 Example Usage:
 -------------
@@ -33,7 +33,8 @@ Example Usage:
 ...     persist=True,
 ...     auto_reload=True,
 ...     validate=True,
-...     dry_run=False
+...     rollback_on_error=False,  # Allow partial success
+...     allow_restart_params=True  # Include high-impact parameters
 ... )
 >>> 
 >>> applicator = KnobApplicator(connection_params, config)
@@ -45,22 +46,22 @@ Example Usage:
 ... }
 >>> 
 >>> result = applicator.apply(knob_config)
->>> print(f"Applied: {result.applied_count}")
->>> print(f"Restart required: {result.restart_required}")
+>>> print(f"Applied: {result.applied_count}/{len(knob_config)}")
+>>> print(f"Restart required for: {result.restart_required}")
+>>> # Typical output: Applied 3/3, restart required for: {'shared_buffers'}
 """
 
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Set
 from enum import Enum
-import logging
+import threading
 import psycopg2
 from psycopg2.extensions import connection as PostgresConnection
 
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
-
-logger = logging.getLogger(__name__)
+from src.tuner.utils.logger_config import get_logger
 
 
 class KnobContext(Enum):
@@ -90,16 +91,22 @@ class ApplicatorConfig:
     dry_run : bool
         Simulate application without making changes (default: False)
     rollback_on_error : bool
-        Rollback all changes if any parameter fails (default: True)
+        Rollback all changes if any parameter fails (default: False for tuning)
+        Note: Modern tuning systems (OtterTune, CDBTune) use partial success -
+        they apply as many parameters as possible and continue with failures.
     allow_restart_params : bool
         Allow parameters that require restart (default: True)
+    auto_restart : bool
+        Automatically restart PostgreSQL when needed (default: False)
+        WARNING: Requires appropriate permissions and can cause downtime.
     """
     persist: bool = True
     auto_reload: bool = True
     validate: bool = True
     dry_run: bool = False
-    rollback_on_error: bool = True
+    rollback_on_error: bool = False
     allow_restart_params: bool = True
+    auto_restart: bool = False
 
 
 @dataclass
@@ -188,7 +195,8 @@ class KnobApplicator:
     def __init__(
         self,
         connection_params: Dict[str, Any],
-        config: Optional[ApplicatorConfig] = None
+        config: Optional[ApplicatorConfig] = None,
+        worker_id: Optional[int] = None
     ):
         """
         Initialize KnobApplicator.
@@ -199,13 +207,18 @@ class KnobApplicator:
             PostgreSQL connection parameters
         config : Optional[ApplicatorConfig]
             Application configuration (uses defaults if None)
+        worker_id : Optional[int]
+            Worker ID for logging
         """
         self.connection_params = connection_params
         self.config = config or ApplicatorConfig()
+        self.worker_id = worker_id
         self.connection: Optional[PostgresConnection] = None
         self.param_cache: Dict[str, ParameterInfo] = {}
+        self._lock = threading.Lock()  # Thread safety for connection management
+        self.logger = get_logger(__name__, worker_id=worker_id)
 
-        logger.info(
+        self.logger.debug(
             "Initialized KnobApplicator: persist=%s, validate=%s, dry_run=%s",
             self.config.persist,
             self.config.validate,
@@ -213,22 +226,33 @@ class KnobApplicator:
         )
 
     def connect(self) -> None:
-        """Establish connection to PostgreSQL."""
+        """Establish connection to PostgreSQL (thread-safe)."""
+        with self._lock:
+            self._connect_internal()
+
+    def _connect_internal(self) -> None:
+        """Internal connect (assumes lock is held)."""
         try:
             db_config = DatabaseConfig(**self.connection_params)
             self.connection = get_connection(config=db_config)
-            self.connection.autocommit = False
-            logger.info("Connected to PostgreSQL")
+
+            self.connection.autocommit = True
+            self.logger.debug("Connected to PostgreSQL")
         except psycopg2.Error as e:
-            logger.error("Failed to connect to PostgreSQL: %s", e)
+            self.logger.error("Failed to connect to PostgreSQL: %s", e)
             raise
 
     def disconnect(self) -> None:
-        """Close PostgreSQL connection."""
+        """Close PostgreSQL connection (thread-safe)."""
+        with self._lock:
+            self._disconnect_internal()
+
+    def _disconnect_internal(self) -> None:
+        """Internal disconnect (assumes lock is held)."""
         if self.connection:
             self.connection.close()
             self.connection = None
-            logger.info("Disconnected from PostgreSQL")
+            self.logger.info("Disconnected from PostgreSQL")
 
     def _load_parameter_info(self, param_names: List[str]) -> None:
         """
@@ -277,10 +301,10 @@ class KnobApplicator:
                 )
                 self.param_cache[param_info.name] = param_info
 
-            logger.debug("Loaded info for %d parameters", len(rows))
+            self.logger.debug("Loaded info for %d parameters", len(rows))
 
         except psycopg2.Error as e:
-            logger.error("Failed to load parameter info: %s", e)
+            self.logger.error("Failed to load parameter info: %s", e)
             raise
         finally:
             cursor.close()
@@ -383,7 +407,7 @@ class KnobApplicator:
             return False, "Not connected to PostgreSQL"
 
         if self.config.dry_run:
-            logger.info("[DRY RUN] Would apply: %s = %s", name, value)
+            self.logger.info("[DRY RUN] Would apply: %s = %s", name, value)
             return True, None
 
         cursor = self.connection.cursor()
@@ -391,24 +415,34 @@ class KnobApplicator:
             if param_info.context == "postmaster":
                 if self.config.persist:
                     cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
-                    logger.info("Applied %s = %s (restart required)", name, value)
+                    self.logger.info("(restart required) Applied %s = %s", name, value)
                 else:
-                    logger.warning("%s requires restart, skipping (persist=False)", name)
+                    self.logger.warning("%s requires restart, skipping (persist=False)", name)
                     return False, f"{name} requires restart but persist=False"
 
-            elif self.config.persist:  # runtime modifiable with persistence
-                cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
-                logger.info("Applied %s = %s (ALTER SYSTEM)", name, value)
+            elif param_info.context in ["sighup", "backend", "superuser-backend"]:
+                # SIGHUP and BACKEND params require pg_reload_conf() (global change)
+                # Can't use session-level SET
+                if self.config.persist:
+                    cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
+                    self.logger.info("(ALTER SYSTEM) Applied %s = %s", name, value)
+                else:
+                    self.logger.debug("%s requires pg_reload_conf(), skipping in session-only mode", name)
+                    return False, f"{name} requires pg_reload_conf() but persist=False"
 
-            else:  # runtime modifiable without persistence
+            elif self.config.persist:  # runtime modifiable with persistence (USER/SUPERUSER)
+                cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
+                self.logger.info("(ALTER SYSTEM) Applied %s = %s", name, value)
+
+            else:  # runtime modifiable without persistence (USER/SUPERUSER)
                 cursor.execute(f"SET {name} = %s", (value,))
-                logger.info("Applied %s = %s (SET session)", name, value)
+                self.logger.info("(SET session) Applied %s = %s", name, value)
 
             return True, None
 
         except psycopg2.Error as e:
             error_msg = f"Failed to apply {name}: {e}"
-            logger.error(error_msg)
+            self.logger.error("%s", error_msg)
             return False, error_msg
         finally:
             cursor.close()
@@ -426,17 +460,19 @@ class KnobApplicator:
             return False
 
         if self.config.dry_run:
-            logger.info("[DRY RUN] Would reload configuration")
+            self.logger.info("[DRY RUN] Would reload configuration")
             return True
 
         cursor = self.connection.cursor()
         try:
             cursor.execute("SELECT pg_reload_conf()")
-            logger.info("Reloaded PostgreSQL configuration")
+            self.logger.info("Reloaded PostgreSQL configuration")
             return True
+
         except psycopg2.Error as e:
-            logger.error("Failed to reload configuration: %s", e)
+            self.logger.error("Failed to reload configuration: %s", e)
             return False
+
         finally:
             cursor.close()
 
@@ -473,6 +509,14 @@ class KnobApplicator:
         >>> else:
         ...     print(f"Failed: {result.message}")
         """
+        with self._lock:  # Use lock to ensure thread-safe application
+            return self._apply_locked(knob_config)
+
+    def _apply_locked(
+        self,
+        knob_config: Dict[str, Any]
+    ) -> ApplicationResult:
+        """Internal apply method (called while holding lock)."""
         result = ApplicationResult(success=False)
 
         if not knob_config:
@@ -483,7 +527,7 @@ class KnobApplicator:
         was_connected = self.connection is not None
         if not was_connected:
             try:
-                self.connect()
+                self._connect_internal()
             except psycopg2.Error as e:
                 result.message = f"Failed to connect: {e}"
                 return result
@@ -494,7 +538,7 @@ class KnobApplicator:
 
             missing = set(param_names) - set(self.param_cache.keys())
             if missing:
-                logger.warning("Unknown parameters (will skip): %s", missing)
+                self.logger.warning("Unknown parameters (will skip): %s", missing)
                 for name in missing:
                     result.failed[name] = "Parameter not found in pg_settings"
                     result.failed_count += 1
@@ -507,7 +551,7 @@ class KnobApplicator:
                         if not is_valid:
                             result.failed[name] = error_msg  # type: ignore
                             result.failed_count += 1
-                            logger.warning("Validation failed: %s", error_msg)
+                            self.logger.warning("Validation failed: %s", error_msg)
 
             for name, value in knob_config.items():
                 if name in result.failed:
@@ -530,35 +574,45 @@ class KnobApplicator:
                     result.failed_count += 1
 
             if result.failed_count > 0 and self.config.rollback_on_error:
-                self.connection.rollback()  # type: ignore
-                logger.warning("Rolled back all changes due to %d failures", result.failed_count)
+                self.logger.warning("Failed to apply %d parameters", result.failed_count)
                 result.success = False
-                result.message = f"Rolled back: {result.failed_count} failures"
+                result.message = f"{result.failed_count} failures"
             else:
-                self.connection.commit()  # type: ignore
-
                 if self.config.persist and self.config.auto_reload and result.applied_count > 0:
                     if not self._reload_configuration():
-                        logger.warning("Configuration applied but reload failed")
+                        self.logger.warning("Configuration applied but reload failed")
 
-                result.success = True
-                result.message = f"Applied {result.applied_count} parameters"
+                result.success = result.applied_count > 0
+
+                if result.applied_count > 0:
+                    result.message = f"Applied {result.applied_count} parameters"
+                else:
+                    result.message = "No parameters applied"
 
                 if result.failed_count > 0:
                     result.message += f", {result.failed_count} failed"
+                    self.logger.info(
+                        "Partial success: %d applied, %d failed",
+                        result.applied_count,
+                        result.failed_count
+                    )
 
                 if result.restart_required:
                     result.message += f", {len(result.restart_required)} require restart"
+                    if self.config.auto_restart:
+                        self.logger.warning(
+                            "Restart required for: %s (auto_restart delegated to RestartManager)", 
+                            result.restart_required
+                        )
 
         except psycopg2.Error as e:
-            self.connection.rollback()  # type: ignore
             result.success = False
             result.message = f"Database error: {e}"
-            logger.error("Application failed: %s", e)
+            self.logger.error("Application failed: %s", e)
 
         finally:  # Disconnect if we connected
             if not was_connected:
-                self.disconnect()
+                self._disconnect_internal()
 
         return result
 
@@ -596,7 +650,7 @@ class KnobApplicator:
             return {row[0]: row[1] for row in rows}
 
         except psycopg2.Error as e:
-            logger.error("Failed to get current values: %s", e)
+            self.logger.error("Failed to get current values: %s", e)
             return {}
         finally:
             cursor.close()
@@ -622,16 +676,16 @@ class KnobApplicator:
         try:
             if self.config.persist:
                 cursor.execute(f"ALTER SYSTEM RESET {name}")
-                logger.info("Reset %s (ALTER SYSTEM)", name)
+                self.logger.info("Reset %s (ALTER SYSTEM)", name)
             else:
                 cursor.execute(f"RESET {name}")
-                logger.info("Reset %s (session)", name)
+                self.logger.info("Reset %s (session)", name)
 
             self.connection.commit()  # type: ignore
             return True
 
         except psycopg2.Error as e:
-            logger.error("Failed to reset %s: %s", name, e)
+            self.logger.error("Failed to reset %s: %s", name, e)
             self.connection.rollback()  # type: ignore
             return False
         finally:
