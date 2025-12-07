@@ -10,11 +10,11 @@ from abc import ABC, abstractmethod
 from typing import Any, List, Dict, Optional, Tuple
 from enum import Enum
 from dataclasses import dataclass
-from datetime import datetime 
+from datetime import datetime
 import uuid
 
 
-class QueryType(Enum): 
+class QueryType(Enum):
     """Types of database queries"""
     POINT_QUERY = "point"
     RANGE_QUERY = "range"
@@ -24,7 +24,7 @@ class QueryType(Enum):
     SPATIAL_QUERY = "spatial"
 
 
-class IndexType(Enum): 
+class IndexType(Enum):
     """Types of indexes supported by the system"""
     BTREE = "btree"
     HASH = "hash"
@@ -42,8 +42,8 @@ class StrategyType(Enum):
     BATCH = "batch"
 
 
-@dataclass 
-class QueryPattern: 
+@dataclass
+class QueryPattern:
     """Represents a query pattern for analysis"""
     query_id: str
     query_type: QueryType
@@ -51,12 +51,12 @@ class QueryPattern:
     selectivity: float  # fraction of rows returned (0.0 to 1.0)
     frequency: int  # how often this pattern appears
     timestamp: datetime
-    execution_time: float 
+    execution_time: float
     cost: float  # Abstract cost metric
 
 
 @dataclass
-class PerformanceMetrics: 
+class PerformanceMetrics:
     """Performance metrics for monitoring"""
     query_response_time: float
     index_hit_ratio: float
@@ -67,9 +67,8 @@ class PerformanceMetrics:
     adaptation_cost: float
     timestamp: datetime
 
-    
 @dataclass
-class IndexMetadata: 
+class IndexMetadata:
     """Metadata about an index"""
     index_id: str
     index_type: IndexType
@@ -88,7 +87,7 @@ class Index(ABC):
     can work with indexes without knowing thier implementation details. 
     """
 
-    @abstractmethod 
+    @abstractmethod
     def search(self, key: Any) -> List[Any]:
         """
         Search for records matching given key.
@@ -103,7 +102,6 @@ class Index(ABC):
         List
             List of matching records/row IDS
         """
-        pass
 
     @abstractmethod
     def insert(self, key: Any, value: Any) -> bool:
@@ -122,10 +120,9 @@ class Index(ABC):
         bool
             True if insertion was successful
         """
-        pass
 
     @abstractmethod
-    def delete(self, key: Any) -> bool: 
+    def delete(self, key: Any) -> bool:
         """
         Delete a key from index.
         
@@ -139,22 +136,18 @@ class Index(ABC):
         bool
             True if deletion was successful
         """
-        pass
 
     @abstractmethod
     def get_metadata(self) -> IndexMetadata:
         """Get metadata about this index"""
-        pass
 
     @abstractmethod
     def get_size(self) -> int:
         """Get the size of the index in bytes"""
-        pass
 
     @abstractmethod
-    def optimize(self) -> None: 
+    def optimize(self) -> None:
         """Perform index-specific optimizations"""
-        pass
 
 
 class WorkloadAnalyzer(ABC):
@@ -175,7 +168,6 @@ class WorkloadAnalyzer(ABC):
         query_pattern : QueryPattern
             The query pattern to analyze
         """
-        pass
 
     @abstractmethod
     def get_access_patterns(self, time_window: int = 3600) -> Dict[str, Any]:
@@ -192,7 +184,6 @@ class WorkloadAnalyzer(ABC):
         Dict[str, Any]
             Dictionary containing access pattern analysis
         """
-        pass
 
     @abstractmethod
     def get_temporal_stability(self) -> float:
@@ -204,7 +195,6 @@ class WorkloadAnalyzer(ABC):
         float
             Stability score from 0.0 (highly variable) to 1.0 (very stable)
         """
-        pass 
 
     @abstractmethod
     def get_resource_constraints(self) -> Dict[str, float]:
@@ -216,7 +206,6 @@ class WorkloadAnalyzer(ABC):
         Dict[str, float]
             Dictionary with memory, CPU, I/O constraint metrics
         """
-        pass
 
     @abstractmethod
     def predict_workload_trend(self, horizon: int = 3600) -> Dict[str, Any]:
@@ -228,7 +217,6 @@ class WorkloadAnalyzer(ABC):
         horizon : int, default=3600
             Prediction horizon in seconds
         """
-        pass
 
 
 class PerformanceMonitor(ABC):
@@ -242,14 +230,12 @@ class PerformanceMonitor(ABC):
     """
 
     @abstractmethod
-    def record_metrics(self, metrics: PerformanceMetrics) -> None: 
+    def record_metrics(self, metrics: PerformanceMetrics) -> None:
         """Record performance metrics"""
-        pass
 
     @abstractmethod
     def get_current_metrics(self) -> PerformanceMetrics:
         """Get the latest performance metrics"""
-        pass
 
     @abstractmethod
     def get_historical_metrics(
@@ -272,27 +258,23 @@ class PerformanceMonitor(ABC):
         List[PerformanceMetrics]
             List of performance metrics in the given time range
         """
-        pass
 
     @abstractmethod
     def check_short_term_triggers(self) -> List[Dict[str, Any]]:
         """Check for short-term adaptation triggers (seconds to minutes)"""
-        pass
-    
+
     @abstractmethod
     def check_medium_term_triggers(self) -> List[Dict[str, Any]]:
         """Check for medium-term adaptation triggers (minutes to hours)"""
-        pass
 
     @abstractmethod
     def check_long_term_triggers(self) -> List[Dict[str, Any]]:
         """Check for long-term adaptation triggers (hours to days)"""
-        pass
 
     @abstractmethod
     def calculate_adaptation_cost(
-        self, 
-        current_config: Dict[str, Any], 
+        self,
+        current_config: Dict[str, Any],
         proposed_config: Dict[str, Any]
     ) -> float:
         """
@@ -310,7 +292,6 @@ class PerformanceMonitor(ABC):
         float
             The calculated adaptation cost
         """
-        pass
 
 
 class IndexStrategy(ABC):
@@ -324,12 +305,11 @@ class IndexStrategy(ABC):
     @abstractmethod
     def get_strategy_type(self) -> StrategyType:
         """Get the type of this strategy"""
-        pass
 
     @abstractmethod
     def should_trigger(
-        self, 
-        workload_analysis: Dict[str, Any], 
+        self,
+        workload_analysis: Dict[str, Any],
         performance_metrics: PerformanceMetrics
     ) -> bool:
         """
@@ -347,12 +327,11 @@ class IndexStrategy(ABC):
         bool
             True if this strategy should be activated
         """
-        pass
 
     @abstractmethod
     def recommend_actions(
         self,
-        current_indexes: List[Index], 
+        current_indexes: List[Index],
         workload_analysis: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
@@ -370,11 +349,10 @@ class IndexStrategy(ABC):
         List[Dict[str, Any]]
             List of recommended actions (create, drop, modify indexes)
         """
-        pass
 
     @abstractmethod
     def get_confidence_score(
-        self, 
+        self,
         recommendation: Dict[str, Any]
     ) -> float:
         """
@@ -389,7 +367,6 @@ class IndexStrategy(ABC):
         float
             Confidence score from 0.0 to 1.0
         """
-        pass
 
 
 class MetaController(ABC):
@@ -406,10 +383,9 @@ class MetaController(ABC):
     @abstractmethod
     def initialize_system(self, config: Dict[str, Any]) -> None:
         """Initialize the adaptive indexing system"""
-        pass
 
     @abstractmethod
-    def execute_bootstrap_phase(self, phase: int) -> None: 
+    def execute_bootstrap_phase(self, phase: int) -> None:
         """
         Execute a specific bootstrap phase (1-5).
         
@@ -419,12 +395,10 @@ class MetaController(ABC):
         Phase 4: Initial Config - Intelligent strategy selection
         Phase 5: Monitoring - Coninuous adaptive learning
         """
-        pass
 
     @abstractmethod
     def orchestrate_strategies(self) -> None:
         """Main orchestration loop that coordinates all strategies"""
-        pass
 
     @abstractmethod
     def select_active_strategies(
@@ -447,7 +421,6 @@ class MetaController(ABC):
         List[StrategyType]
             List of strategy types to activate
         """
-        pass
 
     @abstractmethod
     def resolve_conflicts(
@@ -467,20 +440,17 @@ class MetaController(ABC):
         List[Dict[str, Any]]
             List of resolved, final recommendations
         """
-        pass
 
     @abstractmethod
     def execute_recommendations(self, recommendations: List[Dict[str, Any]]) -> None:
         """Execute final set of recommendations"""
-        pass
 
     @abstractmethod
-    def get_system_state(self) -> Dict[str, Any]: 
+    def get_system_state(self) -> Dict[str, Any]:
         """Get current system state for monitoring and debugging"""
-        pass
 
 
-class AdaptiveIndexingSystem: 
+class AdaptiveIndexingSystem:
     """
     Main system class that brings all components together
     
@@ -489,7 +459,7 @@ class AdaptiveIndexingSystem:
 
     def __init__(self):
         self.meta_controller: Optional[MetaController] = None
-        self.workload_analyzer: Optional[WorkloadAnalyzer] = None 
+        self.workload_analyzer: Optional[WorkloadAnalyzer] = None
         self.performance_monitor: Optional[PerformanceMonitor] = None
         self.strategies: Dict[StrategyType, IndexStrategy] = {}
         self.indexs: Dict[str, Index] = {}
@@ -497,10 +467,10 @@ class AdaptiveIndexingSystem:
         self.initialized = False
 
     def register_components(
-            self, 
+            self,
             meta_controller: MetaController,
-            workload_analyzer: WorkloadAnalyzer, 
-            pefromance_monitor: PerformanceMonitor, 
+            workload_analyzer: WorkloadAnalyzer,
+            pefromance_monitor: PerformanceMonitor,
             strategies: Dict[StrategyType, IndexStrategy]
     ) -> None:
         """Register all system components"""
@@ -518,32 +488,32 @@ class AdaptiveIndexingSystem:
             self.strategies
             ]):
             raise ValueError("All components must be registered before initialization")
-        
+
         self.meta_controller.initialize_system(config)  # type: ignore
 
         for phase in range(1, 6):
             self.meta_controller.execute_bootstrap_phase(phase)  # type: ignore
-        
+
         self.initialized = True
 
-    def process_query(self, query_pattern: QueryPattern) -> Any: 
+    def process_query(self, query_pattern: QueryPattern) -> Any:
         """Process an incoming query pattern"""
-        if not self.initialized: 
+        if not self.initialized:
             raise RuntimeError("System must be initialized before processing queries")
-        
+
         self.workload_analyzer.analyze_query(query_pattern)  # type: ignore
         self.meta_controller.orchestrate_strategies()  # type: ignore
 
-        # return a placeholder result 
+        # return a placeholder result
         return {"query_id": query_pattern.query_id, "status": "processed"}
-    
+
 
 if __name__ == "__main__":
     print("Hybrid Adaptive Indexing System - Core Abstractions")
     print("=" * 51)
     print("Core interfaces defined:")
     print("- Index: Base interface for all index types")
-    print("- WorkloadAnalyzer: Workload analysis and monitoring") 
+    print("- WorkloadAnalyzer: Workload analysis and monitoring")
     print("- PerformanceMonitor: Performance tracking and feedback loops")
     print("- IndexStrategy: Strategy implementations (Predictive, Reactive, etc.)")
     print("- MetaController: Main orchestration and decision making")
