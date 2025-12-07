@@ -209,6 +209,56 @@ class KnobSpace:
         """Get knob definition by name"""
         return self.knobs[knob_name]
 
+    def get_restart_required_knobs(self) -> List[str]:
+        """
+        Get list of knobs that require PostgreSQL restart.
+        
+        Returns
+        -------
+        List[str]
+            List of knob names requiring restart
+        """
+        return [name for name, defn in self.knobs.items() if defn.restart_required]
+
+    def get_runtime_modifiable_knobs(self) -> List[str]:
+        """
+        Get list of knobs that can be modified at runtime.
+        
+        Returns
+        -------
+        List[str]
+            List of knob names that can be changed without restart
+        """
+        return [name for name, defn in self.knobs.items() if not defn.restart_required]
+
+    def split_config_by_restart_requirement(
+        self, config: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Split configuration into restart-required and runtime-modifiable parts.
+        
+        Parameters
+        ----------
+        config : Dict[str, Any]
+            Full configuration
+        
+        Returns
+        -------
+        Tuple[Dict[str, Any], Dict[str, Any]]
+            (restart_required_config, runtime_modifiable_config)
+        """
+        restart_config = {}
+        runtime_config = {}
+
+        for knob_name, value in config.items():
+            if knob_name in self.knobs:
+                if self.knobs[knob_name].restart_required:
+                    restart_config[knob_name] = value
+                else:
+                    runtime_config[knob_name] = value
+
+        return restart_config, runtime_config
+
     def validate_config(self, config: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """
         Validate a configuration.
@@ -264,11 +314,130 @@ class KnobSpace:
 
         return config
 
+    def sample_diverse_configs(
+        self,
+        num_samples: int,
+        seed: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Sample diverse configurations using Latin Hypercube Sampling (LHS).
+        
+        LHS ensures better coverage of the search space compared to pure random sampling,
+        reducing the likelihood of early convergence due to similar initial configurations.
+        
+        Parameters
+        ----------
+        num_samples : int
+            Number of configurations to sample
+        seed : Optional[int]
+            Random seed for reproducibility
+            
+        Returns
+        -------
+        List[Dict[str, Any]]
+            List of diverse configurations
+            
+        Notes
+        -----
+        For numerical knobs (INTEGER, REAL):
+        - Divides the range into num_samples equal intervals
+        - Samples once from each interval
+        - Randomly permutes the samples across dimensions
+        
+        For categorical knobs (BOOLEAN, ENUM):
+        - Uses stratified sampling when possible
+        - Falls back to random sampling for small populations
+        """
+        rng = np.random.default_rng(seed)
+        configs = []
+
+        numerical_knobs = [
+            (name, defn) for name, defn in self.knobs.items()
+            if defn.knob_type in (KnobType.INTEGER, KnobType.REAL)
+        ]
+        categorical_knobs = [
+            (name, defn) for name, defn in self.knobs.items()
+            if defn.knob_type in (KnobType.BOOLEAN, KnobType.ENUM)
+        ]
+
+        lhs_samples = {}
+        for knob_name, knob_def in numerical_knobs:
+            intervals = np.linspace(0, 1, num_samples + 1)
+            samples = []
+
+            for i in range(num_samples):
+                u = rng.uniform(intervals[i], intervals[i + 1])
+
+                if knob_def.scale == KnobScale.LOG:
+                    log_min = np.log(knob_def.min_value)  # type: ignore
+                    log_max = np.log(knob_def.max_value)  # type: ignore
+                    log_value = log_min + u * (log_max - log_min)
+                    value = np.exp(log_value)
+
+                    if knob_def.knob_type == KnobType.INTEGER:
+                        value = int(value)
+                    else:
+                        value = float(value)
+                else:
+                    value = knob_def.min_value + u * (
+                        knob_def.max_value - knob_def.min_value
+                        )  # type: ignore
+
+                    if knob_def.knob_type == KnobType.INTEGER:
+                        value = int(value)
+                    else:
+                        value = float(value)
+
+                samples.append(value)
+
+            # Randomly permute samples for this dimension
+            rng.shuffle(samples)
+            lhs_samples[knob_name] = samples
+
+        categorical_samples = {}
+        for knob_name, knob_def in categorical_knobs:
+            if knob_def.knob_type == KnobType.BOOLEAN:
+                # Alternate True/False, then shuffle
+                samples = [True, False] * (num_samples // 2)
+                if num_samples % 2 == 1:
+                    samples.append(rng.choice([True, False]))
+                rng.shuffle(samples)
+            else:
+                # For ENUM: stratified sampling if enough values, else random
+                enum_values = knob_def.enum_values
+                if enum_values and len(enum_values) >= num_samples // 2:
+                    samples = []
+                    for i in range(num_samples):
+                        samples.append(enum_values[i % len(enum_values)])
+                    rng.shuffle(samples)
+                else:
+                    # Too few enum values or None, use random sampling
+                    samples = [
+                        knob_def.sample_random_value(rng)
+                        for _ in range(num_samples)
+                    ]
+
+            categorical_samples[knob_name] = samples
+
+        for i in range(num_samples):
+            config = {}
+
+            for knob_name, _ in numerical_knobs:
+                config[knob_name] = lhs_samples[knob_name][i]
+
+            for knob_name, _ in categorical_knobs:
+                config[knob_name] = categorical_samples[knob_name][i]
+
+            configs.append(config)
+
+        return configs
+
     def perturb_config(
         self,
         config: Dict[str, Any],
         perturbation_factor: Tuple[float, float] = (0.8, 1.2),
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        exclude_knobs: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Perturb a configuration (PBT exploration step).
@@ -284,6 +453,8 @@ class KnobSpace:
             (min_factor, max_factor) for perturbation. Default (0.8, 1.2) means ±20%
         seed : Optional[int]
             Random seed
+        exclude_knobs : Optional[List[str]]
+            List of knob names to exclude from perturbation (keep unchanged)
             
         Returns
         -------
@@ -292,8 +463,13 @@ class KnobSpace:
         """
         rng = np.random.default_rng(seed)
         perturbed = {}
+        exclude_set = set(exclude_knobs or [])
 
         for knob_name, value in config.items():
+            if knob_name in exclude_set:
+                perturbed[knob_name] = value
+                continue
+
             knob_def = self.knobs[knob_name]
 
             if knob_def.knob_type == KnobType.INTEGER:
@@ -319,10 +495,30 @@ class KnobSpace:
 
                 perturbed[knob_name] = new_value
 
-            elif knob_def.knob_type in [KnobType.BOOLEAN, KnobType.ENUM]:
-                # Resample categorical with 20% probability
-                if rng.random() < 0.2:
-                    perturbed[knob_name] = knob_def.sample_random_value(rng)
+            elif knob_def.knob_type == KnobType.BOOLEAN:
+                # For boolean: higher probability (30%) since only 2 values
+                # When perturbed, always flip (deterministic neighborhood)
+                if rng.random() < 0.3:
+                    perturbed[knob_name] = not value
+                else:
+                    perturbed[knob_name] = value
+
+            elif knob_def.knob_type == KnobType.ENUM:
+                # Proportional perturbation based on cardinality
+                # More options → lower probability to maintain diversity
+                # Fewer options → higher probability to explore thoroughly
+                enum_count = len(knob_def.enum_values) if knob_def.enum_values else 2
+                perturb_prob = min(0.4, 2.0 / enum_count)
+
+                if rng.random() < perturb_prob:
+                    # Neighborhood sampling: choose from OTHER values only
+                    # This ensures we actually explore when we perturb
+                    if knob_def.enum_values and len(knob_def.enum_values) > 1:
+                        other_values = [v for v in knob_def.enum_values if v != value]
+                        perturbed[knob_name] = rng.choice(other_values)
+                    else:
+                        # Fallback for degenerate case
+                        perturbed[knob_name] = value
                 else:
                     perturbed[knob_name] = value
 

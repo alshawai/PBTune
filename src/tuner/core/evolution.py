@@ -30,10 +30,14 @@ Where:
 
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+import logging
 import numpy as np
 
 from src.tuner.core.worker import Worker
+from src.tuner.utils.logger_config import WorkerLoggerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 def truncation_selection(
@@ -118,7 +122,8 @@ def execute_exploit_explore(
     perturbation_factors: Tuple[float, float] = (0.8, 1.2),
     current_generation: int = 0,
     require_ready: bool = True,
-    verbose: bool = True
+    verbose: bool = True,
+    exclude_knobs: Optional[List[str]] = None
 ) -> int:
     """
     Execute complete exploit-explore cycle for the population.
@@ -143,6 +148,14 @@ def execute_exploit_explore(
     require_ready : bool
         Only exploit ready workers
         Default: True
+    
+    verbose : bool
+        Enable verbose logging
+        Default: True
+    
+    exclude_knobs : Optional[List[str]]
+        Knobs to exclude from perturbation (keep constant)
+        Used for two-stage PBT where restart knobs are frozen between restart intervals
         
     verbose : bool
         Print exploitation details
@@ -185,7 +198,7 @@ def execute_exploit_explore(
 
     if not pairs:
         if verbose:
-            print("  No workers exploited (not enough ready workers)")
+            logger.info("No workers exploited (not enough ready workers)")
         return 0
 
     for poor_idx, elite_idx in pairs:
@@ -193,20 +206,31 @@ def execute_exploit_explore(
         elite_worker = workers[elite_idx]
 
         if verbose:
-            print(f"  Worker-{poor_worker.worker_id} "
-                  f"(score={poor_worker.performance_score:.4f}) "
-                  f"← exploits Worker-{elite_worker.worker_id} "
-                  f"(score={elite_worker.performance_score:.4f})")
+            poor_logger = WorkerLoggerAdapter(logger, {'worker_id': poor_worker.worker_id})
+            elite_logger = WorkerLoggerAdapter(logger, {'worker_id': elite_worker.worker_id})
 
-        poor_worker.clone_from(elite_worker, current_generation)
+            logger.info(
+                "Worker-%d (score=%.4f) ← exploits Worker-%d (score=%.4f)",
+                poor_worker.worker_id,
+                poor_worker.performance_score,
+                elite_worker.worker_id,
+                elite_worker.performance_score
+            )
+
+        poor_worker.clone_from(
+            elite_worker,
+            current_generation,
+            exclude_knobs=exclude_knobs
+        )
 
         poor_worker.perturb(
             perturbation_factors=perturbation_factors,
-            current_generation=current_generation
+            current_generation=current_generation,
+            exclude_knobs=exclude_knobs
         )
 
         if verbose:
-            print("    → Copied config and applied perturbation")
+            logger.info("  → Copied config and applied perturbation")
 
     return len(pairs)
 
