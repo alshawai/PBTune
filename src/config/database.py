@@ -35,7 +35,7 @@ class DatabaseConfig:
         Database host address
     port : str
         Database port
-    name : str
+    dbname : str
         Database name
     """
 
@@ -43,7 +43,7 @@ class DatabaseConfig:
     password: str
     host: str
     port: str
-    name: str
+    dbname: str
 
     @classmethod
     def from_env(cls) -> "DatabaseConfig":
@@ -72,7 +72,7 @@ class DatabaseConfig:
             password=password,
             host=os.getenv("DB_HOST", "localhost"),
             port=os.getenv("DB_PORT", "5432"),
-            name=os.getenv("DB_NAME", "test_dataset"),
+            dbname=os.getenv("DB_NAME", "test_dataset"),
         )
 
     def to_dict(self) -> Dict[str, str]:
@@ -89,7 +89,7 @@ class DatabaseConfig:
             "password": self.password,
             "host": self.host,
             "port": self.port,
-            "dbname": self.name,
+            "dbname": self.dbname,
         }
 
     def get_connection_string(self, hide_password: bool = True) -> str:
@@ -107,7 +107,7 @@ class DatabaseConfig:
             PostgreSQL connection string (for display purposes)
         """
         password = "****" if hide_password else self.password
-        return f"postgresql://{self.user}:{password}@{self.host}:{self.port}/{self.name}"
+        return f"postgresql://{self.user}:{password}@{self.host}:{self.port}/{self.dbname}"
 
     def get_sqlalchemy_url(self) -> str:
         """
@@ -118,13 +118,13 @@ class DatabaseConfig:
         str
             SQLAlchemy database URL with credentials
         """
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.dbname}"
 
     def __repr__(self) -> str:
         """String representation with hidden password."""
         return (
             f"DatabaseConfig(user='{self.user}', host='{self.host}', "
-            f"port='{self.port}', dbname='{self.name}')"
+            f"port='{self.port}', dbname='{self.dbname}')"
         )
 
 

@@ -37,15 +37,15 @@ def create_database(config: Optional[DatabaseConfig] = None) -> None:
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT 1 FROM pg_database WHERE datname = %s", (config.name,)
+            "SELECT 1 FROM pg_database WHERE datname = %s", (config.dbname,)
         )
         exists = cursor.fetchone()
 
         if not exists:
-            cursor.execute(f'CREATE DATABASE "{config.name}"')
-            print(f"🟢 Database '{config.name}' created successfully!")
+            cursor.execute(f'CREATE DATABASE "{config.dbname}"')
+            print(f"🟢 Database '{config.dbname}' created successfully!")
         else:
-            print(f"Database '{config.name}' already exists.")
+            print(f"Database '{config.dbname}' already exists.")
 
         cursor.close()
         conn.close()
@@ -92,11 +92,11 @@ def drop_database(config: Optional[DatabaseConfig] = None) -> None:
             WHERE pg_stat_activity.datname = %s
               AND pid <> pg_backend_pid()
             """,
-            (config.name,),
+            (config.dbname,),
         )
 
-        cursor.execute(f'DROP DATABASE IF EXISTS "{config.name}"')
-        print(f"🟢 Database '{config.name}' dropped successfully!")
+        cursor.execute(f'DROP DATABASE IF EXISTS "{config.dbname}"')
+        print(f"🟢 Database '{config.dbname}' dropped successfully!")
 
         cursor.close()
         conn.close()
@@ -132,7 +132,7 @@ def reset_database(config: Optional[DatabaseConfig] = None) -> None:
     if config is None:
         config = get_db_config()
 
-    print(f"Resetting database '{config.name}'...")
+    print(f"Resetting database '{config.dbname}'...")
     drop_database(config)
     create_database(config)
     print("🟢 Database reset complete!")

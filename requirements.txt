@@ -6,8 +6,20 @@ sqlalchemy
 pandas
 numpy
 
+# System monitoring
+psutil
+
 # Environment variables
 python-dotenv
 
 # Machine Learning (if needed)
 scikit-learn
+
+# Population Based Training
+# (No specific library - we implement from scratch)
+
+# Parallel processing
+# (Using built-in multiprocessing and concurrent.futures)
+
+# Workload benchmarking
+# Note: SYSBENCH installed separately via system package manager
