@@ -1,0 +1,36 @@
+{
+  "name": "Example OLAP Workload",
+  "description": "Sample analytical workload with aggregations and scans",
+  "queries": [
+    {
+      "sql": "SELECT COUNT(*), AVG(k), SUM(k), MIN(k), MAX(k) FROM sbtest1",
+      "weight": 0.25,
+      "description": "Full table aggregation"
+    },
+    {
+      "sql": "SELECT (k % 100) as bucket, COUNT(*), AVG(k) FROM sbtest1 GROUP BY bucket",
+      "weight": 0.2,
+      "description": "Grouping with aggregation"
+    },
+    {
+      "sql": "SELECT COUNT(*), AVG(k) FROM sbtest1 WHERE k > 50000",
+      "weight": 0.2,
+      "description": "Filtered aggregation"
+    },
+    {
+      "sql": "SELECT * FROM sbtest1 WHERE k BETWEEN 10000 AND 20000 ORDER BY k",
+      "weight": 0.15,
+      "description": "Range scan with sort"
+    },
+    {
+      "sql": "SELECT (k / 1000) as range, COUNT(*), MIN(k), MAX(k), AVG(k) FROM sbtest1 WHERE k > 10000 GROUP BY range",
+      "weight": 0.12,
+      "description": "Complex analytical query"
+    },
+    {
+      "sql": "SELECT MIN(k), MAX(k), AVG(k), STDDEV(k) FROM sbtest1",
+      "weight": 0.08,
+      "description": "Statistical aggregations"
+    }
+  ]
+}
