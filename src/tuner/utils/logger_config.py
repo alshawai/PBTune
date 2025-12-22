@@ -23,48 +23,148 @@ logger.info("Worker-specific log message")
 import logging
 import sys
 from typing import Optional
+from pathlib import Path
+import datetime
+import colorsys
 from enum import Enum
-import re
 
 
-class VerbosityLevel(Enum):
-    """Verbosity levels for logging control."""
-    QUIET = logging.WARNING      # Only warnings and errors
-    NORMAL = logging.INFO         # Standard operational messages
-    VERBOSE = logging.DEBUG       # Detailed debug information
-    TRACE = 5                     # Ultra-detailed trace (custom level)
+class ModuleName(Enum):
+    """Module name identifiers for color mapping."""
+    MAIN = 'main'
+    EVALUATOR = 'evaluator'
+    APPLICATOR = 'applicator'
+    POPULATION = 'population'
+    WORKER = 'worker'
+    RESTART = 'restart'
+    INSTANCE = 'instance'
+    EVOLUTION = 'evolution'
+
+
+class ColorPalette:
+    """
+    Unified color palette for consistent colors across ANSI (terminal) and HTML.
+    
+    This ensures that a given semantic color (e.g., INFO, Worker-0) appears
+    the same in both console logs and HTML output.
+    """
+
+    _LEVEL_COLORS_RGB = {
+        'DEBUG': (26, 142, 188),     # Cyan
+        'INFO': (46, 204, 113),      # Green
+        'WARNING': (243, 156, 18),   # Orange
+        'ERROR': (231, 76, 60),      # Red
+        'CRITICAL': (155, 89, 182),  # Purple
+    }
+
+    _MODULE_COLORS_RGB = {
+        ModuleName.MAIN: (52, 152, 219),       # Blue
+        ModuleName.EVALUATOR: (26, 188, 156),  # Teal
+        ModuleName.APPLICATOR: (155, 89, 182), # Purple
+        ModuleName.POPULATION: (46, 204, 113), # Green
+        ModuleName.WORKER: (241, 196, 15),     # Yellow
+        ModuleName.RESTART: (230, 126, 34),    # Orange
+        ModuleName.INSTANCE: (52, 231, 228),   # Bright Cyan
+        ModuleName.EVOLUTION: (175, 122, 197), # Light Purple
+    }
+
+    _WORKER_COLORS_BASE_RGB = [
+        (52, 152, 219),   # Blue (Worker-0)
+        (46, 204, 113),   # Green (Worker-1)
+        (0, 188, 212),    # Cyan (Worker-2)
+        (241, 196, 15),   # Yellow (Worker-3)
+        (233, 30, 99),    # Pink/Magenta (Worker-4)
+        (231, 76, 60),    # Red (Worker-5)
+        (236, 240, 241),  # White (Worker-6)
+        (149, 165, 166),  # Gray (Worker-7)
+    ]
+
+    @staticmethod
+    def _rgb_to_ansi(r: int, g: int, b: int) -> str:
+        """Convert RGB to ANSI 24-bit color code."""
+        return f'\033[38;2;{r};{g};{b}m'
+
+    @staticmethod
+    def _rgb_to_hex(r: int, g: int, b: int) -> str:
+        """Convert RGB to hex color code."""
+        return f'#{r:02x}{g:02x}{b:02x}'
+
+    @classmethod
+    def get_level_color(cls, level: str, format_type: str = 'ansi') -> str:
+        """Get color for log level."""
+        rgb = cls._LEVEL_COLORS_RGB.get(level, (236, 240, 241))  # Default white
+        if format_type == 'ansi':
+            return cls._rgb_to_ansi(*rgb)
+        return cls._rgb_to_hex(*rgb)
+
+    @classmethod
+    def get_module_color(cls, module_name: str, format_type: str = 'ansi') -> str:
+        """Get color for module name."""
+        module_lower = module_name.lower()
+
+        # Detect module type
+        for module_type in ModuleName:
+            if module_type.value in module_lower or (
+                module_type == ModuleName.MAIN and '__main__' in module_lower
+            ):
+                rgb = cls._MODULE_COLORS_RGB[module_type]
+                if format_type == 'ansi':
+                    return f'\033[1m{cls._rgb_to_ansi(*rgb)}'  # Bold
+                return cls._rgb_to_hex(*rgb)
+
+        # Default color for unknown modules
+        if format_type == 'ansi':
+            return '\033[37m'  # White
+        return '#ecf0f1'  # Light gray
+
+    @classmethod
+    def get_worker_color(cls, worker_id: int, format_type: str = 'ansi') -> str:
+        """
+        Get color for worker ID with dynamic generation for >8 workers.
+        
+        For workers 0-7: Use predefined colors (optimized contrast)
+        For workers 8+:  Generate HSL-based colors dynamically
+        
+        Parameters
+        ----------
+        worker_id : int
+            Worker identifier (0-indexed)
+        format_type : str
+            'ansi' for terminal, 'html' for HTML output
+            
+        Returns
+        -------
+        str
+            ANSI color code or hex color
+            
+        Examples
+        --------
+        >>> ColorPalette.get_worker_color(0, 'ansi')   # Predefined blue ANSI
+        >>> ColorPalette.get_worker_color(0, 'html')   # Predefined blue hex
+        >>> ColorPalette.get_worker_color(15, 'ansi')  # Generated color ANSI
+        """
+        # Use predefined colors for first 8 workers
+        if worker_id < len(cls._WORKER_COLORS_BASE_RGB):
+            rgb = cls._WORKER_COLORS_BASE_RGB[worker_id]
+        else:
+            # Generate color dynamically using HSL
+            hue = (worker_id * 137.5) % 360  # Golden angle for good distribution
+            saturation = 0.7
+            lightness = 0.6
+
+            # Convert HSL to RGB
+            r, g, b = colorsys.hls_to_rgb(hue / 360, lightness, saturation)
+            rgb = (int(r * 255), int(g * 255), int(b * 255))
+
+        if format_type == 'ansi':
+            return cls._rgb_to_ansi(*rgb)
+        return cls._rgb_to_hex(*rgb)
 
 
 class ColorCode:
-    """ANSI color codes for terminal output."""
+    """ANSI control codes for terminal formatting."""
     RESET = '\033[0m'
     BOLD = '\033[1m'
-
-    DEBUG = '\033[36m'      # Cyan
-    INFO = '\033[32m'       # Green
-    WARNING = '\033[33m'    # Yellow
-    ERROR = '\033[31m'      # Red
-    CRITICAL = '\033[35m'   # Magenta
-
-    WORKER_COLORS = [
-        '\033[94m',   # Bright Blue (Worker-0)
-        '\033[92m',   # Bright Green (Worker-1)
-        '\033[96m',   # Bright Cyan (Worker-2)
-        '\033[93m',   # Bright Yellow (Worker-3)
-        '\033[95m',   # Bright Magenta (Worker-4)
-        '\033[91m',   # Bright Red (Worker-5)
-        '\033[97m',   # Bright White (Worker-6)
-        '\033[90m',   # Bright Gray (Worker-7)
-    ]
-
-    MODULE_MAIN = '\033[1;34m'        # Bold Blue (main)
-    MODULE_EVALUATOR = '\033[1;36m'   # Bold Cyan (evaluator)
-    MODULE_APPLICATOR = '\033[1;35m'  # Bold Magenta (applicator)
-    MODULE_POPULATION = '\033[1;32m'  # Bold Green (population)
-    MODULE_WORKER = '\033[1;33m'      # Bold Yellow (worker)
-    MODULE_RESTART = '\033[38;5;214m' # Orange/Amber (restart_manager)
-    MODULE_INSTANCE = '\033[38;5;51m' # Bright Teal/Turquoise (instance_manager)
-    MODULE_EVOLUTION = '\033[38;5;141m' # Purple (evolution)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -73,14 +173,6 @@ class ColoredFormatter(logging.Formatter):
     
     Format: [TIME] [LEVEL] [MODULE] [WORKER-ID] MESSAGE
     """
-
-    LEVEL_COLORS = {
-        'DEBUG': ColorCode.DEBUG,
-        'INFO': ColorCode.INFO,
-        'WARNING': ColorCode.WARNING,
-        'ERROR': ColorCode.ERROR,
-        'CRITICAL': ColorCode.CRITICAL,
-    }
 
     def __init__(self, enable_colors: bool = True, show_module: bool = True):
         """
@@ -109,44 +201,26 @@ class ColoredFormatter(logging.Formatter):
             return super().format(record)
 
         message = super().format(record)
-        level_color = self.LEVEL_COLORS.get(record.levelname, '')
-        module_color = ''
-        if self.show_module:
-            module_name = record.name.lower()
-            if 'main' in module_name or '__main__' in module_name:
-                module_color = ColorCode.MODULE_MAIN
-            elif 'evaluator' in module_name:
-                module_color = ColorCode.MODULE_EVALUATOR
-            elif 'applicator' in module_name:
-                module_color = ColorCode.MODULE_APPLICATOR
-            elif 'population' in module_name:
-                module_color = ColorCode.MODULE_POPULATION
-            elif 'worker' in module_name:
-                module_color = ColorCode.MODULE_WORKER
-            elif 'restart' in module_name:
-                module_color = ColorCode.MODULE_RESTART
-            elif 'instance' in module_name:
-                module_color = ColorCode.MODULE_INSTANCE
-            elif 'evolution' in module_name:
-                module_color = ColorCode.MODULE_EVOLUTION
-            else:
-                module_color = '\033[37m'  # White for other modules
-
-        worker_color = ''
-        if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
-            worker_idx = record.worker_id % len(ColorCode.WORKER_COLORS)  # type: ignore
-            worker_color = ColorCode.WORKER_COLORS[worker_idx]
-
         parts = message.split(' - ', 3)
         if len(parts) < 3:
             return message  # Fallback if format doesn't match
 
+        level_color = ColorPalette.get_level_color(record.levelname, 'ansi')
         timestamp = parts[0]
         levelname = parts[1].strip()
 
         if self.show_module and len(parts) == 4:
             module = parts[2]
             msg = parts[3]
+
+            module_color = ColorPalette.get_module_color(record.name, 'ansi')
+
+            worker_color = ''  # Get worker color if applicable
+            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+                worker_color = ColorPalette.get_worker_color(
+                    record.worker_id,  # type: ignore
+                    'ansi'
+                )
 
             colored_message = (
                 f"{level_color}{timestamp}{ColorCode.RESET} - "
@@ -158,8 +232,16 @@ class ColoredFormatter(logging.Formatter):
                 colored_message += f"{worker_color}{msg}{ColorCode.RESET}"
             else:
                 colored_message += msg
-        else:
+        else:  # No module
             msg = parts[2] if len(parts) >= 3 else parts[-1]
+
+            worker_color = ''
+            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+                worker_color = ColorPalette.get_worker_color(
+                    record.worker_id,  # type: ignore
+                    'ansi'
+                )
+
             colored_message = (
                 f"{level_color}{timestamp}{ColorCode.RESET} - "
                 f"{level_color}{ColorCode.BOLD}{levelname}{ColorCode.RESET} - "
@@ -176,23 +258,6 @@ class ColoredFormatter(logging.Formatter):
 class HTMLFormatter(logging.Formatter):
     """Format log records as HTML with proper color styling."""
 
-    ANSI_TO_HTML = {
-        '30': '#000000', '31': '#e74c3c', '32': '#2ecc71', '33': '#f39c12',
-        '34': '#3498db', '35': '#9b59b6', '36': '#1abc9c', '37': '#ecf0f1',
-        '90': '#7f8c8d', '91': '#e74c3c', '92': '#2ecc71', '93': '#f1c40f',
-        '94': '#3498db', '95': '#e91e63', '96': '#00bcd4', '97': '#ffffff',
-        # 256 color codes
-        '38;5;214': '#ff8700', '38;5;51': '#00ffff', '38;5;141': '#af87ff',
-    }
-
-    LEVEL_COLORS = {
-        'DEBUG': '#1abc9c',
-        'INFO': '#2ecc71', 
-        'WARNING': '#f39c12',
-        'ERROR': '#e74c3c',
-        'CRITICAL': '#9b59b6',
-    }
-
     def __init__(self, show_module: bool = True):
         self.show_module = show_module
         if show_module:
@@ -200,7 +265,6 @@ class HTMLFormatter(logging.Formatter):
         else:
             fmt = '%(asctime)s - %(levelname)-8s - %(message)s'
         super().__init__(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S')
-        self.log_lines = []
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as HTML."""
@@ -212,51 +276,59 @@ class HTMLFormatter(logging.Formatter):
 
         timestamp = self._escape_html(parts[0])
         levelname = parts[1].strip()
-        level_color = self.LEVEL_COLORS.get(levelname, '#ecf0f1')
 
-        html = f'<span style="color: #7f8c8d">{timestamp}</span> - '
-        html += f'<span style="color: {level_color}; font-weight: bold">{self._escape_html(levelname)}</span> - '
+        level_color = ColorPalette.get_level_color(levelname, 'html')
+
+        html = f'<span style="color: {level_color}">{timestamp}</span> - '
+        html += (
+            f'<span style="color: {level_color}; '
+            f'font-weight: bold">{self._escape_html(levelname)}</span> - '
+        )
 
         if self.show_module and len(parts) == 4:
             module = self._escape_html(parts[2])
             msg = self._escape_html(parts[3])
 
-            module_color = '#3498db'  # Default blue
-            if 'evaluator' in parts[2].lower():
-                module_color = '#1abc9c'
-            elif 'population' in parts[2].lower():
-                module_color = '#2ecc71'
-            elif 'instance' in parts[2].lower():
-                module_color = '#00bcd4'
+            module_color = ColorPalette.get_module_color(record.name, 'html')
 
-            html += f'<span style="color: {module_color}">{module}</span> - '
+            html += (
+                f'<span style="color: {module_color}; '
+                f'font-weight: bold">{module}</span> - '
+            )
 
-            if '[Worker-' in msg:
-                worker_match = re.match(r'\[Worker-(\d+)\]', msg)
-                if worker_match:
-                    worker_id = int(worker_match.group(1))
-                    worker_colors = ['#3498db', '#2ecc71', '#00bcd4', '#f1c40f', 
-                                   '#e91e63', '#e74c3c', '#ffffff', '#7f8c8d']
-                    worker_color = worker_colors[worker_id % len(worker_colors)]
-                    html += f'<span style="color: {worker_color}">{msg}</span>'
-                else:
-                    html += msg
+            # Use record.worker_id instead of regex parsing
+            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+                worker_color = ColorPalette.get_worker_color(
+                    record.worker_id,  # type: ignore
+                    'html'
+                )
+                html += f'<span style="color: {worker_color}">{msg}</span>'
             else:
                 html += msg
         else:
             msg = self._escape_html(parts[2] if len(parts) >= 3 else parts[-1])
-            html += msg
+
+            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+                worker_color = ColorPalette.get_worker_color(
+                    record.worker_id,  # type: ignore
+                    'html'
+                )
+                html += f'<span style="color: {worker_color}">{msg}</span>'
+            else:
+                html += msg
 
         return html
 
     @staticmethod
     def _escape_html(text: str) -> str:
-        """Escape HTML special characters."""
-        return (text.replace('&', '&amp;')
-                   .replace('<', '&lt;')
-                   .replace('>', '&gt;')
-                   .replace('"', '&quot;')
-                   .replace("'", '&#x27;'))
+        """Escape HTML special characters to prevent HTML injection."""
+        return (
+            text.replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&#x27;')
+        )
 
 
 class WorkerLoggerAdapter(logging.LoggerAdapter):
@@ -285,18 +357,18 @@ class WorkerLoggerAdapter(logging.LoggerAdapter):
 def setup_logging(
     verbosity: str = 'INFO',
     enable_colors: bool = True,
-    log_file: Optional[str] = None,
+    output_file: Optional[Path] = None,
     show_module: bool = True
 ) -> None:
     """
     Setup global logging configuration.
     
-    Call this once at application startup.
+    Called once at application startup.
     
     Parameters
     ----------
     verbosity : str
-        Logging level: 'QUIET', 'NORMAL', 'VERBOSE', 'TRACE'
+        Logging level: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'TRACE'
     enable_colors : bool
         Enable colored output (disable for file output)
     log_file : Optional[str]
@@ -306,114 +378,170 @@ def setup_logging(
     
     Example
     -------
-    >>> setup_logging(verbosity='VERBOSE', enable_colors=True)
+    >>> setup_logging(verbosity='DEBUG', enable_colors=True)
     >>> logger = get_logger(__name__)
     >>> logger.info("Application started")
     """
     level_map = {
-        'QUIET': VerbosityLevel.QUIET.value,
-        'NORMAL': VerbosityLevel.NORMAL.value,
-        'VERBOSE': VerbosityLevel.VERBOSE.value,
-        'TRACE': VerbosityLevel.TRACE.value,
         'DEBUG': logging.DEBUG,
         'INFO': logging.INFO,
         'WARNING': logging.WARNING,
         'ERROR': logging.ERROR,
+        'TRACE': 5,  # Custom level for TRACE
     }
 
-    log_level = level_map.get(verbosity.upper(), logging.INFO)
+    log_level = level_map.get(verbosity.upper())
 
     console_formatter = ColoredFormatter(
         enable_colors=enable_colors,
         show_module=show_module
     )
 
+    # A console handler that sends log records to stdout (terminal/console)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(log_level)
+    console_handler.setLevel(log_level)  # type: ignore
     console_handler.setFormatter(console_formatter)
 
+    # A root logger that all module loggers inherit from.
     root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    root_logger.handlers.clear()  # Remove existing handlers
+    root_logger.setLevel(log_level)  # type: ignore
+    # Remove existing handlers
+    root_logger.handlers.clear()  # handles cases where `setup_logging` is called multiple times.
     root_logger.addHandler(console_handler)
 
-    if log_file:
+    if output_file:
+        # Writing logs to an HTML file for better rendering with colors
         html_formatter = HTMLFormatter(show_module=show_module)
 
         class HTMLFileHandler(logging.FileHandler):
             """Custom file handler that wraps logs in HTML structure."""
+            HTML_TEMPLATE = '''<!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>PBT Tuning Log - {timestamp}</title>
+                <style>
+                    :root {{
+                        --bg-color: #1e1e1e;
+                        --text-color: #d4d4d4;
+                        --border-color: #3498db;
+                        --info-color: #2ecc71;
+                        --warning-color: #f39c12;
+                        --error-color: #e74c3c;
+                        --debug-color: #1abc9c;
+                        --muted-color: #7f8c8d;
+                    }}
+                    
+                    body {{
+                        background-color: var(--bg-color);
+                        color: var(--text-color);
+                        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                        font-size: 13px;
+                        padding: 20px;
+                        line-height: 1.6;
+                        margin: 0;
+                    }}
+                    
+                    .header {{
+                        border-bottom: 2px solid var(--border-color);
+                        padding-bottom: 20px;
+                        margin-bottom: 20px;
+                    }}
+                    
+                    .header h2 {{
+                        color: var(--border-color);
+                        margin: 0 0 10px 0;
+                    }}
+                    
+                    .header p {{
+                        color: var(--muted-color);
+                        margin: 5px 0;
+                    }}
+                    
+                    .logs {{
+                        max-width: 100%;
+                        overflow-x: auto;
+                    }}
+                    
+                    .log-line {{
+                        margin: 2px 0;
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                        padding: 2px 0;
+                    }}
+                    
+                    .log-line:hover {{
+                        background-color: rgba(255, 255, 255, 0.05);
+                    }}
+                    
+                    .level-info {{ color: var(--info-color); font-weight: bold; }}
+                    .level-warning {{ color: var(--warning-color); font-weight: bold; }}
+                    .level-error {{ color: var(--error-color); font-weight: bold; }}
+                    .level-debug {{ color: var(--debug-color); font-weight: bold; }}
+                    
+                    .footer {{
+                        border-top: 2px solid var(--border-color);
+                        padding-top: 20px;
+                        margin-top: 20px;
+                        color: var(--muted-color);
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h2>🔧 PBT PostgreSQL Tuning Log</h2>
+                    <p>Generated: {timestamp}</p>
+                </div>
+                <div class="logs">
+            '''
+
+            HTML_FOOTER = '''    </div>
+                <div class="footer">
+                    <p>End of log - Total runtime: {runtime}</p>
+                </div>
+            </body>
+            </html>'''
+
             def __init__(self, filename, mode='w', encoding='utf-8'):
                 super().__init__(filename, mode, encoding)
-                self.log_lines = []
+                self.start_time = datetime.datetime.now()
                 self._write_html_header()
-            
+
             def _write_html_header(self):
                 """Write HTML header with styling."""
-                import datetime
-                header = '''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>PBT Tuning Log</title>
-    <style>
-        body {
-            background-color: #1e1e1e;
-            color: #d4d4d4;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 13px;
-            padding: 20px;
-            line-height: 1.6;
-        }
-        .log-line {
-            margin: 2px 0;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .timestamp { color: #7f8c8d; }
-        .level-info { color: #2ecc71; font-weight: bold; }
-        .level-warning { color: #f39c12; font-weight: bold; }
-        .level-error { color: #e74c3c; font-weight: bold; }
-        .level-debug { color: #1abc9c; font-weight: bold; }
-        .module { color: #3498db; }
-        .worker { font-weight: bold; }
-    </style>
-</head>
-<body>
-<h2 style="color: #3498db;">🔧 PBT PostgreSQL Tuning Log</h2>
-<p style="color: #7f8c8d;">Generated: ''' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '''</p>
-<hr style="border-color: #3498db;">
-<div class="logs">
-'''
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                header = self.HTML_TEMPLATE.format(timestamp=timestamp)
                 self.stream.write(header)
                 self.stream.flush()
-            
+
             def emit(self, record):
                 """Emit a record as HTML."""
                 try:
+                    # formats using the specified formatter (in this case, HTMLFormatter)
                     msg = self.format(record)
                     self.stream.write(f'<div class="log-line">{msg}</div>\n')
                     self.stream.flush()
-                except Exception:
+                except OSError:
                     self.handleError(record)
-            
+
             def close(self):
                 """Close handler and write HTML footer."""
-                footer = '''</div>
-<hr style="border-color: #3498db;">
-<p style="color: #7f8c8d;">End of log</p>
-</body>
-</html>'''
+                runtime = datetime.datetime.now() - self.start_time
+                footer = self.HTML_FOOTER.format(
+                    runtime=f"{runtime.total_seconds():.1f}s"
+                )
                 try:
                     self.stream.write(footer)
                     self.stream.flush()
-                except:
+                except OSError:
                     pass
                 super().close()
-        
-        # Use .html extension for proper rendering
-        html_log_file = log_file.replace('.log', '.html') if log_file.endswith('.log') else log_file + '.html'
+
+        html_log_file = output_file.with_suffix('.html')
         file_handler = HTMLFileHandler(html_log_file, mode='w', encoding='utf-8')
-        file_handler.setLevel(log_level)
+
+        file_handler.setLevel(log_level)  # type: ignore
         file_handler.setFormatter(html_formatter)
         root_logger.addHandler(file_handler)
 
@@ -421,14 +549,17 @@ def setup_logging(
     logging.getLogger('psycopg2').setLevel(logging.WARNING)
 
 
-def get_logger(name: str, worker_id: Optional[int] = None) -> logging.Logger:
+def get_logger(
+        name: str = __name__,
+        worker_id: Optional[int] = None
+    ) -> logging.Logger:
     """
     Get a logger instance with optional worker ID.
     
     Parameters
     ----------
     name : str
-        Module name (typically __name__)
+        Module name, defaults to __name__
     worker_id : Optional[int]
         Worker ID for parallel execution tracking
     
@@ -472,9 +603,9 @@ def log_section_header(
     -------
     >>> log_section_header(logger, "GENERATION 5")
     # Output:
-    # ============================================================
+    # ============
     # GENERATION 5
-    # ============================================================
+    # ============
     """
     width = len(title) if width is None else width
     logger.info("=" * width)
@@ -527,8 +658,3 @@ def log_generation_summary(
     logger.info(f"  Elapsed:     {elapsed:.1f}s")
     logger.info(f"  Converged:   {'YES' if converged else 'NO'}")
     logger.info("")
-
-
-def get_module_logger(module_name: str = __name__) -> logging.Logger:
-    """Get logger for current module (convenience function)."""
-    return logging.getLogger(module_name)
