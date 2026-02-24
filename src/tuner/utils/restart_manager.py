@@ -84,7 +84,7 @@ class RestartCostModel:
         self.restart_interval = restart_interval
 
         base_logger.debug(
-            "Initialized RestartCostModel: base=%.1fs, warmup_ratio=%.1f, interval=%d",
+            "✓ Initialized RestartCostModel: base=%.1fs, warmup_ratio=%.1f, interval=%d",
             base_restart_time, cache_warmup_ratio, restart_interval
         )
 
@@ -237,11 +237,14 @@ class PostgresRestartManager:
         else:
             self.logger = base_logger
 
-        if self.config.method == 'auto':
-            self.config.method = self._detect_restart_method()
-
+        # Detect data_dir first (needed by method detection)
         if not self.config.data_dir:
             self.config.data_dir = self._detect_data_dir()
+        
+        self.data_dir = self.config.data_dir
+
+        if self.config.method == 'auto':
+            self.config.method = self._detect_restart_method()
 
         self.logger.debug(
             "Initialized PostgresRestartManager with method: %s, data_dir: %s",
@@ -251,10 +254,18 @@ class PostgresRestartManager:
 
     def _detect_restart_method(self) -> str:
         """Auto-detect best restart method for platform"""
+        if self.data_dir:
+            try:
+                pg_ctl = self._find_pg_ctl()
+                if pg_ctl:
+                    return 'pg_ctl'
+            except Exception:
+                pass
+        
         system = platform.system()
 
         if system == 'Linux':
-            try:  # Check if systemctl available
+            try:  # Check if systemctl available (for system-wide service only)
                 subprocess.run(
                     ['systemctl', '--version'],
                     capture_output=True,
@@ -399,7 +410,7 @@ class PostgresRestartManager:
                     )
 
                     try:
-                        _, stderr = process.communicate(timeout=10)
+                        _, stderr = process.communicate(timeout=20)
                         returncode = process.returncode
                     except subprocess.TimeoutExpired:
                         self.logger.error(

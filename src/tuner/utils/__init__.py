@@ -19,6 +19,12 @@ from src.tuner.utils.postgres_instance import (
     PostgresInstance,
     KnobCategory,
 )
+from src.tuner.utils.snapshot_manager import (
+    SnapshotManager,
+    SnapshotConfig,
+    SnapshotMethod,
+    detect_best_snapshot_method,
+)
 
 __all__ = [
     'KnobApplicator',
@@ -29,4 +35,8 @@ __all__ = [
     'InstanceConfig',
     'PostgresInstance',
     'KnobCategory',
+    'SnapshotManager',
+    'SnapshotConfig',
+    'SnapshotMethod',
+    'detect_best_snapshot_method',
 ]
