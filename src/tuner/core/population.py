@@ -25,10 +25,12 @@ Design:
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Callable, Tuple
-import logging
+import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.config.database import DatabaseConfig
+from src.database.connection import get_connection
 from src.tuner.core.worker import Worker
 from src.tuner.core.evolution import (
     execute_exploit_explore,
@@ -39,9 +41,9 @@ from src.tuner.core.evolution import (
 from src.tuner.config.knob_space import KnobSpace
 from src.tuner.evaluator.metrics import PerformanceMetrics
 from src.tuner.utils.logger_config import get_logger
+from src.tuner.utils.snapshot_manager import SnapshotManager, SnapshotConfig
 
-logger = logging.getLogger(__name__)
-base_logger = logging.getLogger(__name__)  # For non-worker logs
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -172,10 +174,15 @@ class Population:
         self.best_overall_score: float = 0.0
         self.generations_without_improvement: int = 0
 
+        # Snapshot support (configured via setup_snapshots() method)
+        self.snapshot_manager: Optional[SnapshotManager] = None
+        self.worker_data_dirs: Optional[List[Path]] = None
+        self.instance_manager: Optional[Any] = None
+
         self._ranges_updated: bool = False
 
         logger.debug(
-            "Created Population: size=%s, ready_interval=%s, exploit_quantile=%s",
+            "-> Created Population: size=%s, ready_interval=%s, exploit_quantile=%s",
             self.config.population_size,
             self.config.ready_interval,
             self.config.exploit_quantile
@@ -278,6 +285,63 @@ class Population:
                 "Assigned to instance port %d",
                 worker.port
             )
+
+    def setup_snapshots(
+        self,
+        worker_data_dirs: List[Path],
+        instance_manager: Any,
+        pbt_config: Any,
+    ) -> None:
+        """
+        Register snapshot manager for database restoration during training.
+        
+        **Prerequisites**: 
+        Baseline snapshot must already exist (created by PBTTuner._create_baseline_snapshot()).
+        
+        **Snapshot Architecture**:
+        - Uses ONE baseline snapshot created from a clean database state
+        - ALL workers restore from this SAME baseline at configured intervals
+        - Each worker then applies their unique knob configuration on top
+        
+        Parameters
+        ----------
+        worker_data_dirs : List[Path]
+            PostgreSQL data directories for each worker, ordered by worker ID
+        instance_manager : PostgresInstanceManager
+            Instance manager for stopping/starting instances during restoration
+        pbt_config : PBTConfig
+            PBT configuration containing enable_snapshots and snapshot_restore_interval
+        """
+        if not getattr(pbt_config, 'enable_snapshots', False):
+            logger.debug("Snapshots disabled in config")
+            return
+
+        baseline_path = Path('./pg_snapshots/baseline')
+
+        snapshot_config = SnapshotConfig(
+            baseline_path=baseline_path,
+            restore_interval=getattr(pbt_config, 'snapshot_restore_interval', 5)
+        )
+
+        self.snapshot_manager = SnapshotManager(snapshot_config)
+        self.worker_data_dirs = worker_data_dirs
+        self.instance_manager = instance_manager
+
+        # Baseline must already exist
+        if not self.snapshot_manager.baseline_created:
+            logger.error(
+                "Baseline snapshot not found at %s. "
+                "This should have been created during instance setup.",
+                baseline_path
+            )
+            self.snapshot_manager = None
+            return
+
+        logger.info(
+            "Snapshot restoration enabled: baseline=%s, interval=%d",
+            baseline_path,
+            snapshot_config.restore_interval
+        )
 
     def evaluate_generation(
         self,
@@ -553,9 +617,73 @@ class Population:
         ...     if population.should_stop():
         ...         break
         """
+        # Restore database snapshots if enabled and it's time to restore
+        if self.snapshot_manager and self.snapshot_manager.should_restore(self.current_generation):
+            logger.info(
+                "Restoring database snapshots for generation %d (interval: %d)",
+                self.current_generation,
+                self.snapshot_manager.config.restore_interval
+            )
+
+            if self.instance_manager:
+                try:
+                    # Stop all PostgreSQL instances
+                    logger.debug("Stopping PostgreSQL instances for snapshot restoration")
+                    for worker_id in range(len(self.workers)):
+                        self.instance_manager.stop_instance(worker_id)
+                    
+                    # Restore all worker databases from baseline snapshot
+                    logger.debug("Restoring %d worker databases from baseline", len(self.worker_data_dirs))
+                    self.snapshot_manager.restore_all_workers(self.worker_data_dirs)
+                    
+                    # Restart all PostgreSQL instances
+                    logger.debug("Restarting PostgreSQL instances")
+                    for worker_id in range(len(self.workers)):
+                        self.instance_manager.start_instance(worker_id)
+
+                    # Wait for instances to be fully ready after restoration
+                    logger.debug("Waiting for instances to accept connections...")
+                    max_wait = 10.0
+                    check_interval = 0.5
+                    start_wait = time.time()
+
+                    all_ready = False
+                    while (time.time() - start_wait) < max_wait:
+                        # Try to verify at least one instance is accepting connections
+                        try:
+                            # Quick connection test using worker 0's config
+                            test_conn = get_connection(
+                                config=self.workers[0].db_config,
+                                connect_timeout=1
+                            )
+                            test_conn.close()
+                            all_ready = True
+                            elapsed = time.time() - start_wait
+                            logger.debug("Instances ready after %.1fs", elapsed)
+                            break
+                        except Exception:
+                            time.sleep(check_interval)
+
+                    if not all_ready:
+                        logger.warning(
+                            "Instances may not be fully ready after %.1fs wait",
+                            max_wait
+                        )
+
+                    logger.info("✓ Database snapshots restored successfully")
+
+                except Exception as e:
+                    logger.error("Snapshot restoration failed: %s", e)
+                    raise
+            else:
+                logger.warning("Snapshot restoration requested but instance_manager not available")
+
         self.evaluate_generation(evaluate_fn, parallel=parallel)
 
         self.update_metric_ranges_if_needed()
+
+        # Check for score saturation and expand ranges if needed
+        self._check_and_handle_saturation(evaluate_fn)
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,
@@ -606,6 +734,115 @@ class Population:
             return True
 
         return False
+
+    def _check_and_handle_saturation(
+        self,
+        evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]]
+    ) -> None:
+        """
+        Check if any workers' scores are saturated and expand ranges if needed.
+        
+        When saturation is detected:
+        1. Identify which worker(s) are saturated (hitting normalized ceiling)
+        2. Record their PRE-saturation scores
+        3. Expand ranges to accommodate better performance
+        4. Rescore all workers with new ranges
+        5. Update best score: use the saturated worker with highest PRE-saturation
+           score (they're the true improver), but report their POST-saturation
+           score (fair comparison with new ranges)
+        
+        Parameters
+        ----------
+        evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
+            Evaluation function (only used to get metric config for rescoring)
+        """
+        # Only check after ranges are initialized
+        if not self._ranges_updated or self.evaluator is None:
+            return
+        
+        metric_config = self.evaluator.config.metric_config
+        
+        # Check each worker for saturation and record PRE-saturation scores
+        saturated_workers = []
+        pre_saturation_scores = {}
+        
+        for worker in self.workers:
+            if worker.metrics is not None:
+                pre_saturation_scores[worker.worker_id] = worker.performance_score
+                saturation = metric_config.detect_saturation(worker.metrics)
+                if saturation['any']:
+                    saturated_workers.append(worker)
+        
+        # If no saturation, nothing to do
+        if not saturated_workers:
+            return
+        
+        # Find the best saturated worker (highest PRE-saturation score)
+        best_saturated_worker = max(saturated_workers, key=lambda w: w.performance_score)
+        best_saturated_pre_score = best_saturated_worker.performance_score
+        
+        logger.info(
+            "⚠️  Score saturation detected in %d/%d workers (generation %d)",
+            len(saturated_workers), len(self.workers), self.current_generation
+        )
+        logger.info(
+            "    Best saturated: Worker-%d with PRE-saturation score %.4f",
+            best_saturated_worker.worker_id, best_saturated_pre_score
+        )
+        
+        # Expand ranges based on current generation's metrics
+        current_metrics = [w.metrics for w in self.workers if w.metrics is not None]
+        ranges_expanded = metric_config.expand_ranges_for_metrics(
+            current_metrics,
+            expansion_factor=0.5  # 50% headroom for continued improvement
+        )
+        
+        if not ranges_expanded:
+            logger.debug("Ranges not expanded, no rescoring needed")
+            return
+        
+        # Rescore all workers in current generation with new ranges
+        logger.info("♻️  Rescoring current generation with expanded ranges...")
+        for worker in self.workers:
+            if worker.metrics is not None:
+                old_score = worker.performance_score
+                new_score = metric_config.compute_score(worker.metrics)
+                worker.performance_score = new_score
+                
+                if abs(new_score - old_score) > 0.5:  # Log significant changes
+                    logger.debug(
+                        "  Worker-%d: %.4f → %.4f (Δ%.4f)",
+                        worker.worker_id, old_score, new_score, new_score - old_score
+                    )
+        
+        # Get the POST-saturation score of the best saturated worker
+        best_saturated_post_score = best_saturated_worker.performance_score
+        
+        # Update best overall score ONLY if:
+        # 1. The best saturated worker's PRE-saturation score indicated improvement
+        #    (they hit the ceiling, showing they're better than previous best)
+        # 2. Use their POST-saturation score as the new best (fair comparison)
+        #
+        # NOTE: POST-saturation score may be lower than PRE-saturation due to
+        # expanded ranges, but it's the "true" score with proper normalization
+        if best_saturated_pre_score >= self.best_overall_score * 0.95:  # Within 5% indicates ceiling hit
+            logger.info(
+                "✨ Updating best score: %.4f → %.4f (Worker-%d POST-saturation)",
+                self.best_overall_score, best_saturated_post_score,
+                best_saturated_worker.worker_id
+            )
+            logger.info(
+                "    (Worker-%d showed improvement by hitting saturation at %.4f)",
+                best_saturated_worker.worker_id, best_saturated_pre_score
+            )
+            self.best_overall_score = best_saturated_post_score
+            self.generations_without_improvement = 0
+        else:
+            logger.debug(
+                "No best score update: saturated worker's PRE-score %.4f didn't "
+                "exceed previous best %.4f",
+                best_saturated_pre_score, self.best_overall_score
+            )
 
     def get_best_configuration(self) -> tuple[Dict[str, Any], float]:
         """
