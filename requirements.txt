@@ -1,19 +1,22 @@
 # Database
-psycopg2-binary
-sqlalchemy
+psycopg2-binary==2.9.11
+SQLAlchemy==2.0.46
 
 # Data processing
-pandas
-numpy
+pandas==3.0.1
+numpy==2.4.2
 
 # System monitoring
-psutil
+psutil==7.2.2
 
 # Environment variables
-python-dotenv
+python-dotenv==1.2.1
 
 # Machine Learning (if needed)
-scikit-learn
+scikit-learn==1.8.0
+
+# Configuration
+PyYAML==6.0.3
 
 # Population Based Training
 # (No specific library - we implement from scratch)

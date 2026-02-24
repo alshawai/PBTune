@@ -2,6 +2,7 @@
 Draft*.md
 *.draft
 drafts/
+.prompts/
 notes/
 code-snippets/
 
@@ -101,3 +102,11 @@ config.ini
 secrets.json
 .codebrush.json
 .env.local
+
+# Optimization results (ignore bulky timestamped traces and HTML logs)
+results/pbt_results_*.json
+results/intermediate_*.json
+results/*.html
+
+# Postgres Snapshots generated during execution
+pg_snapshots/
