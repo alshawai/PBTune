@@ -1,0 +1,56 @@
+{
+  "name": "Mixed Workload",
+  "description": "Combination of OLTP and OLAP workloads",
+  "queries": [
+    {
+      "sql": "SELECT * FROM sbtest1 WHERE id = {id}",
+      "weight": 0.18,
+      "description": "OLTP: Point selects"
+    },
+    {
+      "sql": "SELECT k, c FROM sbtest1 WHERE id = {id}",
+      "weight": 0.12,
+      "description": "OLTP: Point selects (columns)"
+    },
+    {
+      "sql": "SELECT * FROM sbtest1 WHERE id BETWEEN {low} AND {high} LIMIT 50",
+      "weight": 0.15,
+      "description": "OLTP: Small range scans"
+    },
+    {
+      "sql": "SELECT id, k FROM sbtest1 WHERE k = {k_val} LIMIT 10",
+      "weight": 0.10,
+      "description": "OLTP: Index lookups"
+    },
+    {
+      "sql": "UPDATE sbtest1 SET k = k + 1 WHERE id = {id}",
+      "weight": 0.10,
+      "description": "OLTP: Updates"
+    },
+    {
+      "sql": "SELECT COUNT(*), AVG(k), SUM(k) FROM sbtest1 WHERE k > {threshold}",
+      "weight": 0.10,
+      "description": "OLAP: Simple aggregations"
+    },
+    {
+      "sql": "SELECT (k % 1000) as bucket, COUNT(*), AVG(k) FROM sbtest1 GROUP BY bucket",
+      "weight": 0.10,
+      "description": "OLAP: GROUP BY with moderate cardinality"
+    },
+    {
+      "sql": "SELECT id, k FROM sbtest1 WHERE k BETWEEN {low_k} AND {high_k} ORDER BY k DESC LIMIT 100",
+      "weight": 0.08,
+      "description": "OLAP: Range scan with sorting"
+    },
+    {
+      "sql": "SELECT (k / 10000) as range, COUNT(*), MIN(k), MAX(k), AVG(k) FROM sbtest1 GROUP BY range HAVING COUNT(*) > 50",
+      "weight": 0.05,
+      "description": "OLAP: Statistical aggregation"
+    },
+    {
+      "sql": "SELECT id, k FROM sbtest1 ORDER BY k DESC LIMIT 200",
+      "weight": 0.02,
+      "description": "OLAP: Top-N query"
+    }
+  ]
+}

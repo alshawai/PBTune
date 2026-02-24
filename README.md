@@ -8,7 +8,7 @@ This repository contains a research implementation applying **Population-Based T
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Key Innovation](#key-innovation)
@@ -62,6 +62,7 @@ This work proposes a **novel alternative**: applying Population-Based Training�
 ### Population-Based Training (PBT)
 
 PBT maintains a population of $N$ workers, each with:
+
 - A **configuration** $\theta_i$ (knob values)
 - A **performance score** $f(\theta_i)$ (throughput, latency, etc.)
 
@@ -127,14 +128,14 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed 
 
 ### Core Components
 
-| Component | Purpose | Location |
-|-----------|---------|----------|
-| **Population** | Manages worker pool, orchestrates PBT algorithm | [`src/tuner/core/population.py`](src/tuner/core/population.py) |
-| **Worker** | Individual configuration + performance state | [`src/tuner/core/worker.py`](src/tuner/core/worker.py) |
-| **Evolution** | Exploit-explore algorithms (selection, perturbation) | [`src/tuner/core/evolution.py`](src/tuner/core/evolution.py) |
-| **Evaluator** | Workload execution, metric collection | [`src/tuner/evaluator/evaluator.py`](src/tuner/evaluator/evaluator.py) |
-| **Instance Manager** | Multi-instance PostgreSQL orchestration | [`src/tuner/utils/instance_manager.py`](src/tuner/utils/instance_manager.py) |
-| **Knob Space** | Search space definition, sampling, perturbation | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py) |
+| Component            | Purpose                                              | Location                                                                     |
+| -------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **Population**       | Manages worker pool, orchestrates PBT algorithm      | [`src/tuner/core/population.py`](src/tuner/core/population.py)               |
+| **Worker**           | Individual configuration + performance state         | [`src/tuner/core/worker.py`](src/tuner/core/worker.py)                       |
+| **Evolution**        | Exploit-explore algorithms (selection, perturbation) | [`src/tuner/core/evolution.py`](src/tuner/core/evolution.py)                 |
+| **Evaluator**        | Workload execution, metric collection                | [`src/tuner/evaluator/evaluator.py`](src/tuner/evaluator/evaluator.py)       |
+| **Instance Manager** | Multi-instance PostgreSQL orchestration              | [`src/tuner/utils/instance_manager.py`](src/tuner/utils/instance_manager.py) |
+| **Knob Space**       | Search space definition, sampling, perturbation      | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py)           |
 
 See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component interaction details.
 
@@ -197,6 +198,7 @@ pip install -r requirements.txt
 ```
 
 **Key Dependencies:**
+
 - `psycopg2-binary` - PostgreSQL adapter
 - `psutil` - System resource monitoring
 - `numpy` - Numerical operations for PBT
@@ -230,6 +232,7 @@ python -m src.scripts.setup_database
 ```
 
 This creates:
+
 - `sbtest1` table with 10,000 rows (OLTP workload testing)
 - Indexes and constraints
 
@@ -252,6 +255,7 @@ python -m src.tuner.main \
 ```
 
 **Output:**
+
 - JSON results: `results/pbt_results_TIMESTAMP.json`
 - HTML log (colored): `results/pbt_tuning.html`
 
@@ -312,15 +316,46 @@ python -m src.tuner.main --help
 
 **Key Arguments:**
 
-| Argument | Options | Default | Description |
-|----------|---------|---------|-------------|
-| `--tier` | `minimal`, `core`, `standard`, `extensive` | `minimal` | Knob space tier (5, 13, 36, 80+ knobs) |
-| `--config` | `rapid`, `standard`, `thorough` | `standard` | PBT configuration profile |
-| `--population` | 4-16 | 8 | Number of parallel workers |
-| `--generations` | 10-100 | 30 | Optimization iterations |
-| `--workload` | `oltp`, `olap`, `mixed` | `oltp` | Workload type |
-| `--duration` | seconds | 30 | Evaluation duration per worker |
-| `--verbose` | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG` | `NORMAL` | Logging level |
+| Argument        | Options                                    | Default    | Description                            |
+| --------------- | ------------------------------------------ | ---------- | -------------------------------------- |
+| `--tier`        | `minimal`, `core`, `standard`, `extensive` | `minimal`  | Knob space tier (5, 13, 36, 80+ knobs) |
+| `--config`      | `rapid`, `standard`, `thorough`            | `standard` | PBT configuration profile              |
+| `--population`  | 4-16                                       | 8          | Number of parallel workers             |
+| `--generations` | 10-100                                     | 30         | Optimization iterations                |
+| `--workload`    | `oltp`, `olap`, `mixed`                    | `oltp`     | Workload type                          |
+| `--duration`    | seconds                                    | 30         | Evaluation duration per worker         |
+| `--verbose`     | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG`      | `NORMAL`   | Logging level                          |
+
+### Custom Workloads
+
+The tuner allows you to define your own workload templates using JSON or YAML.
+These files are natively executed by the `WorkloadExecutor`, which supports
+dynamic parameter injection for variables such as `{id}`, `{k_val}`, `{threshold}`,
+`{low}`, `{high}`, and `{offset}`.
+
+Example JSON (`my_workload.json`):
+
+```json
+{
+  "name": "Custom Workload",
+  "description": "Application-specific query patterns",
+  "queries": [
+    {
+      "sql": "SELECT * FROM users WHERE id = {id}",
+      "weight": 0.5,
+      "description": "Primary key lookup"
+    }
+  ]
+}
+```
+
+Run with:
+
+```bash
+python -m src.tuner.main --workload-file path/to/my_workload.json
+```
+
+See the [workloads directory README](workloads/README.md) for full formatting details.
 
 ---
 
@@ -353,13 +388,12 @@ This work builds upon several research directions:
 ### Autonomous Database Tuning
 
 - **OtterTune (2017)**: Automated configuration tuning using ML and transfer learning
-  - *Contribution*: Adaptive metric normalization using percentile-based ranges
-  
+  - _Contribution_: Adaptive metric normalization using percentile-based ranges
 - **CDBTune (2019)**: Deep reinforcement learning for database knob tuning
-  - *Contribution*: Intelligent restart management, batched restarts every N iterations
+  - _Contribution_: Intelligent restart management, batched restarts every N iterations
 
 - **QTune (2019)**: Query-aware database configuration tuning
-  - *Contribution*: Workload-specific metric weighting
+  - _Contribution_: Workload-specific metric weighting
 
 ### Evolutionary Optimization
 
@@ -370,6 +404,7 @@ This work builds upon several research directions:
 ### Relevant Papers
 
 See [`papers/`](./papers/) directory for full collection, including:
+
 - Auto DBMS Tuner (5 papers)
 - Reinforcement Learning for DB tuning (4 papers)
 - Query Optimization (1 paper)
@@ -384,6 +419,7 @@ See [`papers/`](./papers/) directory for full collection, including:
 ### Preliminary Observations
 
 **System Used for Development:**
+
 - Population: 4-8 workers
 - Generations: 10-30
 - Knob Tier: `core` (13 parameters)
@@ -402,16 +438,16 @@ Below is an actual configuration discovered by PBT on development hardware (form
 
 ```json
 {
-  "shared_buffers": 75984,                    // ~593 MB
-  "effective_cache_size": 87009,              // ~679 MB
-  "work_mem": 6800,                           // ~53 MB
-  "maintenance_work_mem": 504084,             // ~3.8 GB
-  "random_page_cost": 1.98,                   // SSD-friendly
+  "shared_buffers": 75984, // ~593 MB
+  "effective_cache_size": 87009, // ~679 MB
+  "work_mem": 6800, // ~53 MB
+  "maintenance_work_mem": 504084, // ~3.8 GB
+  "random_page_cost": 1.98, // SSD-friendly
   "effective_io_concurrency": 156,
   "max_parallel_workers_per_gather": 2,
   "checkpoint_completion_target": 0.55,
-  "checkpoint_timeout": 439,                  // ~7 minutes
-  "wal_buffers": 272,                         // ~2 MB
+  "checkpoint_timeout": 439, // ~7 minutes
+  "wal_buffers": 272, // ~2 MB
   "default_statistics_target": 2405,
   "max_connections": 81,
   "max_worker_processes": 6
@@ -423,6 +459,7 @@ Below is an actual configuration discovered by PBT on development hardware (form
 ### Planned Comprehensive Evaluation
 
 Future work includes rigorous benchmarking:
+
 - Multiple hardware configurations (cloud and on-premise)
 - Diverse workload types (TPC-H, TPC-C, real-world traces)
 - Comparison with baseline tuning methods
@@ -437,6 +474,7 @@ See `results/` directory for optimization traces from your runs.
 ### Planned Enhancements
 
 #### 1. Test Coverage
+
 Currently, the system lacks comprehensive test coverage. Planned additions:
 
 - **Unit Tests**: Individual component testing (Worker, Evolution, Population)
@@ -462,7 +500,7 @@ Target: >80% code coverage with `pytest` framework.
 
 ## Contributing
 
-This is an **academic research project** under active development. 
+This is an **academic research project** under active development.
 
 ### Contribution Guidelines
 
@@ -489,21 +527,21 @@ Be respectful, professional, and constructive. This is academic research—criti
 
 Copyright © 2025 Data-Vanta Research Group
 
-This software is provided for **academic research and educational purposes only**. 
+This software is provided for **academic research and educational purposes only**.
 
 ### Permitted Use
 
 ✅ Academic research and experimentation  
 ✅ Educational purposes (teaching, learning)  
 ✅ Non-commercial evaluation and testing  
-✅ Citation in academic publications  
+✅ Citation in academic publications
 
 ### Prohibited Use
 
 ❌ Commercial use or deployment  
 ❌ Production database systems  
 ❌ Redistribution without attribution  
-❌ Proprietary derivative works  
+❌ Proprietary derivative works
 
 ### Conditions
 
@@ -585,7 +623,7 @@ For research collaboration or academic inquiries, please open a GitHub issue or 
 
 **Built with** 🧬 **Evolutionary Optimization** | 🐘 **PostgreSQL** | 🐍 **Python**
 
-*Advancing the state-of-the-art in autonomous database systems*
+_Advancing the state-of-the-art in autonomous database systems_
 
 ---
 

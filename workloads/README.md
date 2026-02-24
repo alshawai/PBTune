@@ -45,23 +45,20 @@ You can also use a simple list of SQL queries (equal weights):
 
 ```json
 {
-  "queries": [
-    "SELECT * FROM table WHERE id = 1",
-    "SELECT COUNT(*) FROM table"
-  ]
+  "queries": ["SELECT * FROM table WHERE id = 1", "SELECT COUNT(*) FROM table"]
 }
 ```
 
 ## Fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | No | Workload name (defaults to filename) |
-| `description` | No | Workload description |
-| `queries` | **Yes** | List of SQL queries |
-| `queries[].sql` | **Yes** | SQL query string |
-| `queries[].weight` | No | Execution frequency weight (default: 1.0) |
-| `queries[].description` | No | Query description |
+| Field                   | Required | Description                               |
+| ----------------------- | -------- | ----------------------------------------- |
+| `name`                  | No       | Workload name (defaults to filename)      |
+| `description`           | No       | Workload description                      |
+| `queries`               | **Yes**  | List of SQL queries                       |
+| `queries[].sql`         | **Yes**  | SQL query string                          |
+| `queries[].weight`      | No       | Execution frequency weight (default: 1.0) |
+| `queries[].description` | No       | Query description                         |
 
 ## Weights
 
@@ -78,8 +75,8 @@ You can also use a simple list of SQL queries (equal weights):
 # Use custom workload file
 python -m src.tuner.main --tier core --workload-file workloads/my_workload.json
 
-# JSON format
-python -m src.tuner.main --tier minimal --workload-file workloads/example_oltp.json
+# JSON format standard workload parsing
+python -m src.tuner.main --tier minimal --workload-file workloads/oltp.json
 
 # YAML format (requires pyyaml)
 python -m src.tuner.main --tier minimal --workload-file workloads/my_workload.yaml
@@ -102,23 +99,33 @@ tuner.run()
 
 ## Provided Examples
 
-### example_oltp.json
-OLTP workload with:
-- Point selects (30%)
-- Updates (20%)
-- Small range scans (15%)
-- Inserts (10%)
+### oltp.json
+
+Definitive OLTP standard workload with:
+
+- Point selects (52%)
+- Range scans (16%)
+- Updates (17%)
+- Deletes (1.5%)
+- Inserts (1.5%)
 
 **Use for**: Transaction processing optimization
 
-### example_olap.json
-OLAP workload with:
-- Aggregations (45%)
-- GROUP BY queries (32%)
-- Range scans (15%)
+### olap.json
+
+Definitive OLAP standard workload with:
+
+- Aggregations (42%)
+- GROUP BY queries (34%)
+- Range scans (10%)
 - Statistical functions (8%)
+- Window functions & complex joins (6%)
 
 **Use for**: Analytical query optimization
+
+### mixed.json
+
+Definitive Mixed workload containing probabilities from both `oltp.json` and `olap.json`.
 
 ## Creating Custom Workloads
 
@@ -138,7 +145,7 @@ LIMIT 20;
 ```json
 {
   "name": "Production App Workload",
-  "description": "Top 10 queries from production",
+  "description": "Top 20 queries from production",
   "queries": [
     {
       "sql": "SELECT * FROM users WHERE email = 'user@example.com'",
@@ -154,22 +161,7 @@ LIMIT 20;
 }
 ```
 
-### Step 3: Validate Queries
-
-```python
-from src.tuner.evaluator.evaluator import WorkloadFileLoader
-from src.database.connection import get_connection
-
-# Load and validate
-executor = WorkloadFileLoader.load_from_file("workloads/my_workload.json")
-
-# Validate against database
-conn = get_connection()
-results = WorkloadFileLoader.validate_queries(executor.queries, conn)
-print(f"Valid: {results['valid']}/{results['total']}")
-```
-
-### Step 4: Run Tuning
+### Step 3: Run Tuning
 
 ```bash
 python -m src.tuner.main --tier core --workload-file workloads/my_workload.json
@@ -178,42 +170,49 @@ python -m src.tuner.main --tier core --workload-file workloads/my_workload.json
 ## Best Practices
 
 ### Query Selection
+
 ✅ **Do**: Include your most frequent queries  
 ✅ **Do**: Include queries that represent different patterns  
 ✅ **Do**: Use parameterized queries when possible  
 ❌ **Don't**: Include admin queries (VACUUM, ANALYZE)  
-❌ **Don't**: Include DDL statements (CREATE, ALTER)  
+❌ **Don't**: Include DDL statements (CREATE, ALTER)
 
 ### Weights
+
 ✅ **Do**: Base weights on actual query frequency  
 ✅ **Do**: Use higher weights for performance-critical queries  
 ❌ **Don't**: Make weights too extreme (e.g., 0.99, 0.01)  
-❌ **Don't**: Ignore low-frequency but important queries  
+❌ **Don't**: Ignore low-frequency but important queries
 
 ### Query Complexity
+
 ✅ **Do**: Include a mix of simple and complex queries  
 ✅ **Do**: Test range scans, joins, and aggregations  
 ✅ **Do**: Include representative WHERE clauses  
 ❌ **Don't**: Use only trivial queries (e.g., `SELECT 1`)  
-❌ **Don't**: Include queries that always fail  
+❌ **Don't**: Include queries that always fail
 
 ## Troubleshooting
 
 ### "Workload file not found"
+
 - Check file path is correct
 - Use absolute paths or paths relative to project root
 
 ### "PyYAML is required for YAML workload files"
+
 ```bash
 pip install pyyaml
 ```
 
 ### "Query validation failed"
+
 - Ensure tables and columns exist in database
 - Check for typos in SQL statements
 - Verify database connection
 
 ### Queries Running Slowly
+
 - Reduce `measurement_duration` in evaluator config
 - Use fewer complex queries
 - Check database has appropriate indexes
@@ -231,7 +230,7 @@ Use Python string formatting for dynamic queries:
 }
 ```
 
-**Note**: Parameters are currently not automatically substituted. You'll need to modify `CustomQueryExecutor` to handle parameterization.
+**Note**: Parameter bindings are supported natively by `WorkloadExecutor`. Supported parameters include: `{id}`, `{k_val}`, `{threshold}`, `{low}`, `{high}`, `{low_k}`, `{high_k}`, and `{offset}`. To use custom variables, you will need to add them to `WorkloadExecutor._instantiate_query()`.
 
 ### Multiple Workload Files
 
@@ -244,6 +243,5 @@ python -m src.tuner.main --workload-file workloads/morning.json
 # Evening workload (write-heavy)
 python -m src.tuner.main --workload-file workloads/evening.json
 ```
-
 
 > Check `src/tuner/evaluator/evaluator.py` for implementation details

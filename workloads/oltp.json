@@ -1,0 +1,46 @@
+{
+  "name": "OLTP Workload",
+  "description": "Standard Sysbench-like OLTP benchmark",
+  "queries": [
+    {
+      "sql": "SELECT * FROM sbtest1 WHERE id = {id}",
+      "weight": 0.4,
+      "description": "Point select (primary key lookup)"
+    },
+    {
+      "sql": "SELECT * FROM sbtest1 WHERE id BETWEEN {low} AND {high} LIMIT 100",
+      "weight": 0.16,
+      "description": "Small range scan"
+    },
+    {
+      "sql": "SELECT id, k FROM sbtest1 WHERE k = {k_val} LIMIT 10",
+      "weight": 0.12,
+      "description": "Index scan on secondary column"
+    },
+    {
+      "sql": "SELECT id, k FROM sbtest1 WHERE id BETWEEN {low} AND {high} ORDER BY k LIMIT 20",
+      "weight": 0.12,
+      "description": "Range scan with ordering"
+    },
+    {
+      "sql": "UPDATE sbtest1 SET k = k + 1 WHERE id = {id}",
+      "weight": 0.14,
+      "description": "Simple UPDATE (primary key)"
+    },
+    {
+      "sql": "UPDATE sbtest1 SET c = 'updated' WHERE k = {k_val}",
+      "weight": 0.03,
+      "description": "UPDATE with secondary index"
+    },
+    {
+      "sql": "DELETE FROM sbtest1 WHERE id = {id}",
+      "weight": 0.015,
+      "description": "DELETE row"
+    },
+    {
+      "sql": "INSERT INTO sbtest1 (id, k, c, pad) SELECT MAX(id)+1, {k_val}, 'reinserted', 'x' FROM sbtest1",
+      "weight": 0.015,
+      "description": "INSERT row"
+    }
+  ]
+}
