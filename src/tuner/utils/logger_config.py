@@ -24,6 +24,7 @@ import logging
 import sys
 from typing import Optional
 from pathlib import Path
+import shutil
 import datetime
 import colorsys
 from enum import Enum
@@ -39,6 +40,7 @@ class ModuleName(Enum):
     RESTART = 'restart'
     INSTANCE = 'instance'
     EVOLUTION = 'evolution'
+    SNAPSHOT = 'snapshot'
 
 
 class ColorPalette:
@@ -66,6 +68,7 @@ class ColorPalette:
         ModuleName.RESTART: (230, 126, 34),    # Orange
         ModuleName.INSTANCE: (52, 231, 228),   # Bright Cyan
         ModuleName.EVOLUTION: (175, 122, 197), # Light Purple
+        ModuleName.SNAPSHOT: (233, 30, 99),    # Pink/Magenta
     }
 
     _WORKER_COLORS_BASE_RGB = [
@@ -658,3 +661,42 @@ def log_generation_summary(
     logger.info(f"  Elapsed:     {elapsed:.1f}s")
     logger.info(f"  Converged:   {'YES' if converged else 'NO'}")
     logger.info("")
+
+def print_startup_banner() -> None:
+    """
+    Print a colorful ASCII art banner directly to stdout.
+    Bypasses the logging module to avoid adding timestamps and log levels.
+    """
+    banner = r"""
+    ____  ____  ______   ____             __  ______           _____ ____    __     ______                     
+   / __ \/ __ )/_  __/  / __ \____  _____/ /_/ ____/________  / ___// __ \  / /    /_  __/_  ______  ___  _____
+  / /_/ / __  | / /    / /_/ / __ \/ ___/ __/ / __/ ___/ _ \  \__ \/ / / / / /      / / / / / / __ \/ _ \/ ___/
+ / ____/ /_/ / / /    / ____/ /_/ (__  ) /_/ /_/ / /  /  __/ ___/ / /_/ / / /___   / / / /_/ / / / /  __/ /    
+/_/   /_____/ /_/    /_/    \____/____/\__/\____/_/   \___/ /____/\___\_\/_____/  /_/  \__,_/_/ /_/\___/_/     
+"""
+
+    # Use the INFO color (Green) for the banner and standard bold text for the subtitle
+    color = ColorPalette.get_level_color('INFO', 'ansi')
+    reset = ColorCode.RESET
+    bold = ColorCode.BOLD
+
+    # Get terminal width
+    term_width = shutil.get_terminal_size().columns
+
+    # Ensure a reasonable minimum width (e.g., 100) if terminal is very narrow
+    term_width = max(term_width, 100)
+
+    # Calculate banner width based on the longest line
+    banner_lines = banner.strip('\n').split('\n')
+    banner_width = max(len(line) for line in banner_lines) if banner_lines else 105
+
+    # Print the banner (already aligned relative to itself, we can print it directly)
+    # If we wanted to center the banner block itself, we could left-pad each line:
+    padding = " " * max(0, (term_width - banner_width) // 2)
+    for line in banner_lines:
+        print(f"{padding}{color}{bold}{line}{reset}")
+
+    subtitle = "Population-Based Training for Automatic Database Parameter Tuning"
+    # Center the subtitle text relative to the terminal
+    print(f"\n{bold}{subtitle.center(term_width)}{reset}")
+    print("\n" + "=" * term_width + "\n")
