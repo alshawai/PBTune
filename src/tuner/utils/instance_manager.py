@@ -50,12 +50,13 @@ class PostgresInstanceManager:
     - Reuse existing instances from previous runs
     - Clean up resources
     """
-    
+
     def __init__(
         self,
         base_dir: Path,
         base_port: int = 5432,
         template_db_config: Optional[DatabaseConfig] = None,
+        table_size: int = 5000000,
         pg_ctl_path: Optional[str] = None,
         initdb_path: Optional[str] = None
     ):
@@ -70,6 +71,8 @@ class PostgresInstanceManager:
             Base port number (worker N uses base_port + N)
         template_db_config : Optional[DatabaseConfig]
             Template database config (for schema/data)
+        table_size : int
+            Number of rows to insert into sbtest1 table (default: 5M)
         pg_ctl_path : Optional[str]
             Path to pg_ctl executable (auto-detected if None)
         initdb_path : Optional[str]
@@ -78,28 +81,28 @@ class PostgresInstanceManager:
         self.base_dir = Path(base_dir)
         self.base_port = base_port
         self.template_db_config = template_db_config
+        self.table_size = table_size
         self.instances: Dict[int, InstanceConfig] = {}
-        
+
         # Auto-detect PostgreSQL binaries
         self.pg_ctl = pg_ctl_path or self._find_executable('pg_ctl')
         self.initdb = initdb_path or self._find_executable('initdb')
         self.pg_dump = self._find_executable('pg_dump')
         self.psql = self._find_executable('psql')
-        
+
         if not self.pg_ctl:
             raise RuntimeError("pg_ctl not found. Please install PostgreSQL or specify path.")
         if not self.initdb:
             raise RuntimeError("initdb not found. Please install PostgreSQL or specify path.")
-        
-        logger.info("Initialized InstanceManager: base_dir=%s, base_port=%d", base_dir, base_port)
-    
+
+        logger.debug("✓ Initialized InstanceManager: base_dir=%s, base_port=%d\n", base_dir, base_port)
+
     def _find_executable(self, name: str) -> Optional[str]:
         """Find PostgreSQL executable in PATH or common locations."""
-        # Try PATH first
-        path = shutil.which(name)
+        path = shutil.which(name)  # Trying PATH first
         if path:
             return path
-        
+
         # Try common PostgreSQL installation paths
         common_paths = [
             f"C:/Program Files/PostgreSQL/18/bin/{name}.exe",
@@ -108,7 +111,7 @@ class PostgresInstanceManager:
             f"/usr/local/pgsql/bin/{name}",
             f"/usr/lib/postgresql/*/bin/{name}",
         ]
-        
+
         for path_pattern in common_paths:
             if '*' in path_pattern:
                 # Handle wildcard paths
@@ -118,10 +121,10 @@ class PostgresInstanceManager:
                     return matches[0]
             elif Path(path_pattern).exists():
                 return path_pattern
-        
+
         logger.warning("Could not find %s in PATH or common locations", name)
         return None
-    
+
     def setup_instances(self, num_workers: int, force_recreate: bool = False) -> List[InstanceConfig]:
         """
         Set up PostgreSQL instances for all workers.
@@ -230,7 +233,7 @@ class PostgresInstanceManager:
             return False
 
         return True
-    
+
     def _is_instance_running(self, data_dir: Path) -> bool:
         """
         Check if a PostgreSQL instance is already running.
@@ -271,7 +274,7 @@ class PostgresInstanceManager:
     def _create_instance(self, worker_id: int, port: int, data_dir: Path) -> InstanceConfig:
         """Create and initialize a new PostgreSQL instance."""
         data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Step 1: Initialize data directory with initdb
         logger.debug("Running initdb for worker-%d...", worker_id)
         try:
@@ -480,19 +483,18 @@ class PostgresInstanceManager:
     def _configure_instance(self, data_dir: Path, port: int) -> None:
         """Configure PostgreSQL instance with appropriate settings."""
         conf_path = data_dir / 'postgresql.conf'
-        
+
         # Read existing config
         with open(conf_path, 'r') as f:
             config_lines = f.readlines()
-        
-        # Append custom configuration
+
         custom_config = f"""
 # Custom configuration for worker instance
 port = {port}
-max_connections = 20
-shared_buffers = 128MB
 logging_collector = off
 log_destination = 'stderr'
+# Use /tmp for Unix domain sockets to avoid path length issues
+unix_socket_directories = '/tmp'
 """
         
         with open(conf_path, 'a') as f:
@@ -581,8 +583,8 @@ log_destination = 'stderr'
                 import random
                 logger.debug("Inserting sample data into sbtest1...")
                 batch_size = 1000
-                total_rows = 500000
-                
+                total_rows = self.table_size
+
                 for batch_start in range(0, total_rows, batch_size):
                     values = []
                     for _ in range(batch_start, min(batch_start + batch_size, total_rows)):
