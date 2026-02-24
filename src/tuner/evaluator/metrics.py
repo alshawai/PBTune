@@ -281,6 +281,7 @@ class MetricConfig:
         self.throughput_min = float(max(0.1, thr_p05 - padding_factor * thr_range))
         self.throughput_max = float(thr_p95 + padding_factor * thr_range)
 
+        self._ranges_initialized = True
         logger.info(
             "Updated normalization ranges from %d observations:\n"
             "  Latency (%s): [%.2f, %.2f] ms\n"
@@ -291,6 +292,163 @@ class MetricConfig:
             self.throughput_min, self.throughput_max,
             padding_factor * 100
         )
+
+    def detect_saturation(
+        self,
+        metrics: PerformanceMetrics,
+        saturation_threshold: float = 0.95
+    ) -> Dict[str, bool]:
+        """
+        Detect if metrics are saturating (hitting normalization ceiling).
+        
+        Saturation occurs when the NORMALIZED component (after min-max scaling)
+        approaches 1.0, indicating the metric has hit or exceeded the range bounds.
+        
+        Parameters
+        ----------
+        metrics : PerformanceMetrics
+            Performance measurements to check
+        saturation_threshold : float
+            Normalized score threshold for saturation (default: 0.95)
+            Component scores >= this indicate saturation
+        
+        Returns
+        -------
+        Dict[str, bool]
+            Dictionary indicating which metrics are saturated:
+            - 'latency': True if latency component is saturated
+            - 'throughput': True if throughput component is saturated
+            - 'any': True if any component is saturated
+        """
+        saturation = {'latency': False, 'throughput': False, 'any': False}
+        
+        # Check latency saturation by computing its normalized value
+        latency = getattr(metrics, f"latency_{self.latency_metric}")
+        if latency > 0:
+            # Clamp and normalize (same as in compute_score)
+            latency_clamped = np.clip(latency, self.latency_min, self.latency_max)
+            latency_normalized = (
+                (self.latency_max - latency_clamped) /
+                (self.latency_max - self.latency_min)
+            )
+            if latency_normalized >= saturation_threshold:
+                saturation['latency'] = True
+        
+        # Check throughput saturation by computing its normalized value
+        if metrics.throughput > 0:
+            throughput_clamped = np.clip(
+                metrics.throughput,
+                self.throughput_min,
+                self.throughput_max
+            )
+            throughput_normalized = (
+                (throughput_clamped - self.throughput_min) /
+                (self.throughput_max - self.throughput_min)
+            )
+            if throughput_normalized >= saturation_threshold:
+                saturation['throughput'] = True
+        
+        saturation['any'] = saturation['latency'] or saturation['throughput']
+        
+        return saturation
+
+    def expand_ranges_for_metrics(
+        self,
+        metrics_list: List[PerformanceMetrics],
+        expansion_factor: float = 0.5
+    ) -> bool:
+        """
+        Expand normalization ranges to accommodate metrics that exceed current bounds.
+        
+        Uses 5th/95th percentiles for robustness, then expands beyond those to
+        provide headroom for continued improvement.
+        
+        Parameters
+        ----------
+        metrics_list : List[PerformanceMetrics]
+            Current generation's metrics that triggered expansion
+        expansion_factor : float
+            How much to expand beyond observed values (default: 50%)
+        
+        Returns
+        -------
+        bool
+            True if ranges were expanded, False if no expansion needed
+        """
+        if not metrics_list:
+            return False
+        
+        latencies = [
+            getattr(m, f"latency_{self.latency_metric}")
+            for m in metrics_list
+            if getattr(m, f"latency_{self.latency_metric}") > 0
+        ]
+        throughputs = [
+            m.throughput for m in metrics_list
+            if m.throughput > 0
+        ]
+        
+        if not latencies or not throughputs:
+            return False
+        
+        expanded = False
+        old_lat_min, old_lat_max = self.latency_min, self.latency_max
+        old_thr_min, old_thr_max = self.throughput_min, self.throughput_max
+        
+        # Use percentiles for robustness (if enough samples)
+        if len(latencies) >= 3:
+            lat_p05 = float(np.percentile(latencies, 5))
+            lat_p95 = float(np.percentile(latencies, 95))
+        else:
+            lat_p05 = float(min(latencies))
+            lat_p95 = float(max(latencies))
+        
+        if len(throughputs) >= 3:
+            thr_p05 = float(np.percentile(throughputs, 5))
+            thr_p95 = float(np.percentile(throughputs, 95))
+        else:
+            thr_p05 = float(min(throughputs))
+            thr_p95 = float(max(throughputs))
+        
+        # Expand latency range if best performance exceeds current bounds
+        if lat_p05 < self.latency_min:
+            lat_range = self.latency_max - self.latency_min
+            new_min = lat_p05 - (expansion_factor * lat_range)
+            self.latency_min = float(max(0.1, new_min))
+            expanded = True
+        
+        if lat_p95 > self.latency_max:
+            lat_range = self.latency_max - self.latency_min
+            new_max = lat_p95 + (expansion_factor * lat_range)
+            self.latency_max = float(new_max)
+            expanded = True
+        
+        # Expand throughput range if best performance exceeds current bounds
+        if thr_p05 < self.throughput_min:
+            thr_range = self.throughput_max - self.throughput_min
+            new_min = thr_p05 - (expansion_factor * thr_range)
+            self.throughput_min = float(max(0.1, new_min))
+            expanded = True
+        
+        if thr_p95 > self.throughput_max:
+            thr_range = self.throughput_max - self.throughput_min
+            new_max = thr_p95 + (expansion_factor * thr_range)
+            self.throughput_max = float(new_max)
+            expanded = True
+        
+        if expanded:
+            logger.info(
+                "⚡ Expanded normalization ranges due to saturation:\n"
+                "  Latency (%s): [%.2f, %.2f] → [%.2f, %.2f] ms\n"
+                "  Throughput: [%.2f, %.2f] → [%.2f, %.2f] QPS\n"
+                "  (expansion: %.0f%% of range for headroom)",
+                self.latency_metric,
+                old_lat_min, old_lat_max, self.latency_min, self.latency_max,
+                old_thr_min, old_thr_max, self.throughput_min, self.throughput_max,
+                expansion_factor * 100
+            )
+        
+        return expanded
 
     def compute_score(self, metrics: PerformanceMetrics) -> float:
         """

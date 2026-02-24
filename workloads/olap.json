@@ -1,0 +1,81 @@
+{
+  "name": "OLAP Workload",
+  "description": "Standard TPC-H inspired OLAP benchmark",
+  "queries": [
+    {
+      "sql": "SELECT COUNT(*), AVG(k), SUM(k), MIN(k), MAX(k) FROM sbtest1",
+      "weight": 0.15,
+      "description": "Full table scan with aggregations"
+    },
+    {
+      "sql": "SELECT COUNT(*), AVG(k), SUM(k) FROM sbtest1 WHERE k > {threshold}",
+      "weight": 0.12,
+      "description": "Conditional aggregation"
+    },
+    {
+      "sql": "SELECT COUNT(*), AVG(k) FROM sbtest1 WHERE k BETWEEN {low} AND {high}",
+      "weight": 0.10,
+      "description": "Range scan with aggregation"
+    },
+    {
+      "sql": "SELECT (k % 100) as bucket, COUNT(*), AVG(k) FROM sbtest1 GROUP BY bucket",
+      "weight": 0.10,
+      "description": "Small GROUP BY"
+    },
+    {
+      "sql": "SELECT (k % 10000) as bucket, COUNT(*), AVG(k), SUM(k) FROM sbtest1 GROUP BY bucket HAVING COUNT(*) > 5",
+      "weight": 0.10,
+      "description": "Large GROUP BY with HAVING"
+    },
+    {
+      "sql": "SELECT MIN(k), MAX(k), AVG(k), STDDEV(k), VARIANCE(k) FROM sbtest1",
+      "weight": 0.08,
+      "description": "Statistical aggregations"
+    },
+    {
+      "sql": "SELECT id, k FROM sbtest1 WHERE k > {threshold} ORDER BY k DESC LIMIT 1000",
+      "weight": 0.08,
+      "description": "Large sort operation"
+    },
+    {
+      "sql": "SELECT id, k, c FROM sbtest1 ORDER BY k DESC LIMIT 500",
+      "weight": 0.07,
+      "description": "Top-N query with sort"
+    },
+    {
+      "sql": "SELECT (k / 10000) as range_bucket, (k % 1000) as mod_bucket, COUNT(*), MIN(k), MAX(k), AVG(k) FROM sbtest1 WHERE k > 10000 GROUP BY range_bucket, mod_bucket",
+      "weight": 0.07,
+      "description": "Complex aggregation with multiple grouping levels"
+    },
+    {
+      "sql": "SELECT (k % 5000) as bucket, COUNT(*) as cnt, AVG(k) as avg_k, SUM(k) as sum_k FROM sbtest1 GROUP BY bucket HAVING COUNT(*) > 100 ORDER BY cnt DESC LIMIT 100",
+      "weight": 0.06,
+      "description": "Heavy analytical with HAVING and ORDER"
+    },
+    {
+      "sql": "SELECT k FROM sbtest1 ORDER BY k LIMIT 1 OFFSET {offset}",
+      "weight": 0.03,
+      "description": "Percentile calculation"
+    },
+    {
+      "sql": "SELECT id, k, (SELECT AVG(k) FROM sbtest1 WHERE k < t.k) as running_avg FROM sbtest1 t WHERE id < 10000",
+      "weight": 0.02,
+      "description": "Window function simulation via subquery"
+    },
+    {
+      "sql": "SELECT a.id, a.k, b.k FROM sbtest1 a JOIN sbtest1 b ON a.k = b.id WHERE a.id < 50000 LIMIT 1000",
+      "weight": 0.01,
+      "description": "Large JOIN simulation using self-join"
+    },
+    {
+      "sql": "SELECT (k % 1000) as bucket, COUNT(DISTINCT id) as distinct_count FROM sbtest1 GROUP BY bucket",
+      "weight": 0.005,
+      "description": "Distinct count aggregation"
+    },
+    {
+      "sql": "SELECT (k / 1000) as k_range, (id % 100) as id_bucket, COUNT(*), AVG(k) FROM sbtest1 GROUP BY k_range, id_bucket HAVING COUNT(*) > 10",
+      "weight": 0.005,
+      "description": "Multi-column GROUP BY"
+    }
+  ]
+}

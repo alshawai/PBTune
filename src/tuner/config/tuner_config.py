@@ -33,12 +33,12 @@ class PBTConfig:
     num_generations : int
         Number of evolution generations to run. Each generation evaluates all
         workers, then performs exploit-explore.
-        Default: 20 (suitable for quick prototyping)
+        Default: 20 (for quick prototyping)
         
     exploit_quantile : float
         Fraction of population to exploit/explore. Bottom exploit_quantile will
         copy from top exploit_quantile.
-        Default: 0.2 (20% - from DeepMind PBT paper)
+        Default: 0.2 (20% - from DeepMind original paper)
         
     ready_interval : int
         Number of evaluations a worker must complete before being eligible for
@@ -67,6 +67,22 @@ class PBTConfig:
         Ensures database caches are populated for fair comparison.
         Default: 50 queries
         
+    workload_seed : Optional[int]
+        Seed for workload query selection randomness. When set, all workers
+        will execute the exact same sequence of queries, ensuring fair comparison
+        regardless of cache state.
+        Default: 42 (deterministic by default for fair comparison)
+        
+    enable_snapshots : bool
+        Whether to enable database snapshot restoration between generations.
+        When True, workers' data directories are restored to a baseline state
+        before each generation to prevent data drift from write operations.
+        Default: False (must be explicitly enabled)
+        
+    snapshot_restore_interval : int
+        Restore snapshots every N generations. Only used if enable_snapshots=True.
+        Default: 1
+        
     random_seed : Optional[int]
         Random seed for reproducibility. If None, results will be non-deterministic.
         Default: None
@@ -85,6 +101,9 @@ class PBTConfig:
     num_parallel_workers: int = 4
     evaluation_duration: float = 30.0
     warmup_queries: int = 50
+    workload_seed: Optional[int] = 42
+    enable_snapshots: bool = False
+    snapshot_restore_interval: int = 1
     random_seed: Optional[int] = None
     verbose: bool = True
 
@@ -123,6 +142,9 @@ class PBTConfig:
         if self.warmup_queries < 0:
             raise ValueError("warmup_queries cannot be negative")
 
+        if self.snapshot_restore_interval < 1:
+            raise ValueError("snapshot_restore_interval must be at least 1")
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -150,6 +172,9 @@ class PBTConfig:
             "num_parallel_workers": self.num_parallel_workers,
             "evaluation_duration": self.evaluation_duration,
             "warmup_queries": self.warmup_queries,
+            "workload_seed": self.workload_seed,
+            "enable_snapshots": self.enable_snapshots,
+            "snapshot_restore_interval": self.snapshot_restore_interval,
             "random_seed": self.random_seed,
             "verbose": self.verbose,
         }
@@ -179,6 +204,8 @@ RAPID_CONFIG = PBTConfig(
     num_parallel_workers=4,
     evaluation_duration=15.0,
     warmup_queries=20,
+    workload_seed=42,
+    enable_snapshots=False,
     verbose=True
 )
 
@@ -191,6 +218,9 @@ STANDARD_CONFIG = PBTConfig(
     num_parallel_workers=4,
     evaluation_duration=30.0,
     warmup_queries=50,
+    workload_seed=42,
+    enable_snapshots=True,
+    snapshot_restore_interval=5,
     verbose=True
 )
 
@@ -203,6 +233,9 @@ THOROUGH_CONFIG = PBTConfig(
     num_parallel_workers=4,
     evaluation_duration=45.0,
     warmup_queries=100,
+    workload_seed=42,
+    enable_snapshots=True,
+    snapshot_restore_interval=1,
     verbose=True
 )
 
@@ -215,5 +248,8 @@ RESEARCH_CONFIG = PBTConfig(
     num_parallel_workers=16,
     evaluation_duration=60.0,
     warmup_queries=200,
+    workload_seed=42,
+    enable_snapshots=True,
+    snapshot_restore_interval=1,
     verbose=True
 )
