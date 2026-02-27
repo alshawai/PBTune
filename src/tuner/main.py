@@ -64,6 +64,7 @@ from src.tuner.evaluator.evaluator import (
     WorkloadExecutor,
     WorkloadFileLoader,
 )
+from src.tuner.evaluator.benchmark import SysbenchExecutor
 from src.tuner.evaluator.metrics import (
     PerformanceMetrics,
     WorkloadType,
@@ -135,6 +136,7 @@ class PBTTuner:
         cleanup_instances: bool = False,
         skip_schema_init: bool = False,
         force_recreate_baseline: bool = False,
+        benchmark: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
         """
@@ -184,14 +186,19 @@ class PBTTuner:
             workload_type=workload_type,
             metric_config=self.metric_config,
             db_config=self.db_config,
-            warmup_queries=self.pbt_config.warmup_queries,
+            warmup_duration=self.pbt_config.warmup_duration,
             measurement_duration=self.pbt_config.evaluation_duration,
             cooldown_duration=3.0,
             enable_restart=True,
             restart_interval=10,
         )
 
-        workload_executor = self._create_workload_executor(workload_type, workload_file)
+        if benchmark == 'sysbench':
+            self.logger.info("🔧 Using external Sysbench C-binary for rigorous benchmarking.")
+            workload_executor = SysbenchExecutor()  # type: ignore
+        else:
+            workload_executor = self._create_workload_executor(workload_type, workload_file)
+
         self.evaluator = Evaluator(self.evaluator_config, workload_executor)
 
         pop_config = PopulationConfig(
@@ -210,12 +217,11 @@ class PBTTuner:
             evaluator=self.evaluator
         )
 
-        table_size = getattr(workload_executor, 'table_size', 5000000)
         self.instance_manager = PostgresInstanceManager(
             base_dir=Path('./pg_instances'),
             base_port=5440,
             template_db_config=None if skip_schema_init else self.db_config,
-            table_size=table_size
+            schema_provider=workload_executor,
         )
 
         self.start_time: Optional[float] = None
@@ -231,45 +237,6 @@ class PBTTuner:
             "%s%sPBT Database Tuner Initialization Complete!%s",
             ColorCode.BOLD, info_color, ColorCode.RESET
         )
-
-    def _validate_database_setup(self) -> None:
-        """Validate that required database tables exist."""
-        try:
-            conn = get_connection(config=self.db_config)
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name = 'sbtest1')"
-            )
-            sbtest_exists = cursor.fetchone()[0]  # type: ignore
-
-            cursor.close()
-            conn.close()
-
-            if not sbtest_exists and self.workload_type == WorkloadType.OLTP:
-                log_section_header(self.logger, "❌ DATABASE SETUP REQUIRED")
-                self.logger.error("\nThe 'sbtest1' table does not exist in the database.")
-                self.logger.error("This table is required for OLTP workload execution.")
-
-                print("\nYou have two options:")
-                print("  1. Create the table now")
-                print("  2. Abort and exit the program")
-                print()
-                response = input("Create sbtest1 table now? (yes/no): ").strip().lower()
-
-                if response in ['yes', 'y', '1']:
-                    print("\n📋 Creating sbtest1 table...")
-                    setup_sysbench_table()
-                    print("✅ Table created successfully! Continuing with optimization...\n")
-                else:
-                    print("\n🔴 Execution aborted by user.")
-                    print("   Run manually: python -m src.scripts.setup_database sysbench")
-                    self.logger.warning("Execution aborted by user due to missing sbtest1 table.")
-                    sys.exit(1)
-
-        except Exception as e:
-            self.logger.warning("Could not validate database setup: %s", e)
 
     def _create_workload_executor(
         self,
@@ -769,6 +736,13 @@ on your hardware and configuration.
         help='Path to custom workload file (JSON/YAML). Overrides --workload.'
     )
 
+    workload_exclusive.add_argument(
+        '--benchmark',
+        type=str,
+        choices=['sysbench'],
+        help='Run standard external C-binary benchmark instead of internal Python workloads'
+    )
+
     workload_group.add_argument(
         '--duration',
         type=float,
@@ -777,8 +751,8 @@ on your hardware and configuration.
 
     workload_group.add_argument(
         '--warmup',
-        type=int,
-        help='Number of warmup queries before measurement (overrides config)'
+        type=float,
+        help='Warmup duration in seconds before measurement (overrides config)'
     )
 
     instance_group = parser.add_argument_group('Instance Management')
@@ -856,7 +830,7 @@ def main():
         "%s%sStarting PBT Database Tuner Initialization...%s",
         ColorCode.BOLD, info_color, ColorCode.RESET
     )
-    
+
     logger.debug("📝 Logging to HTML file: %s", output_file)
 
     config_map = {
@@ -877,7 +851,7 @@ def main():
         if args.duration:
             config_dict['evaluation_duration'] = args.duration
         if args.warmup:
-            config_dict['warmup_queries'] = args.warmup
+            config_dict['warmup_duration'] = args.warmup
 
         pbt_config = PBTConfig(**config_dict)
 
@@ -895,6 +869,7 @@ def main():
             workload_type=workload_type,
             output_dir=args.output_dir,
             workload_file=args.workload_file,
+            benchmark=args.benchmark,
             force_recreate_instances=args.force_recreate_instances,
             cleanup_instances=args.cleanup_instances,
             skip_schema_init=args.skip_schema_init,

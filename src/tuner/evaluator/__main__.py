@@ -219,7 +219,7 @@ if __name__ == "__main__":
         metrics = executor.execute(
             connection=mock_conn,
             duration=0.1,  # 100ms for quick test
-            warmup=5
+            warmup=5.0
         )
 
         print("\nMetrics collected:")
@@ -261,7 +261,7 @@ if __name__ == "__main__":
         metrics = executor.execute(
             connection=mock_conn,
             duration=0.1,
-            warmup=3
+            warmup=3.0
         )
 
         print("\nMetrics collected:")
@@ -293,7 +293,7 @@ if __name__ == "__main__":
                 'user': 'postgres',
                 'password': 'password'
             },
-            warmup_queries=50,
+            warmup_duration=30.0,
             measurement_duration=30.0,
             cooldown_duration=2.0
         )
@@ -323,7 +323,7 @@ if __name__ == "__main__":
             workload_type=WorkloadType.OLTP,
             metric_config=MetricConfig.for_oltp(),
             connection_params={'host': 'localhost'},
-            warmup_queries=5,
+            warmup_duration=5.0,
             measurement_duration=0.1,
             cooldown_duration=0.05
         )
