@@ -12,17 +12,17 @@ Architecture:
 """
 
 from __future__ import annotations
-import subprocess
-import shutil
-import psutil
 import time
 import logging
+from glob import glob
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Dict
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import subprocess
 import getpass
-
+import shutil
+import psutil
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 
@@ -56,7 +56,7 @@ class PostgresInstanceManager:
         base_dir: Path,
         base_port: int = 5432,
         template_db_config: Optional[DatabaseConfig] = None,
-        table_size: int = 5000000,
+        schema_provider: Optional[object] = None,
         pg_ctl_path: Optional[str] = None,
         initdb_path: Optional[str] = None
     ):
@@ -71,8 +71,9 @@ class PostgresInstanceManager:
             Base port number (worker N uses base_port + N)
         template_db_config : Optional[DatabaseConfig]
             Template database config (for schema/data)
-        table_size : int
-            Number of rows to insert into sbtest1 table (default: 5M)
+        schema_provider : Optional[object]
+            Object implementing prepare(db_config) and validate(db_config)
+            for schema initialization. Typically the workload executor.
         pg_ctl_path : Optional[str]
             Path to pg_ctl executable (auto-detected if None)
         initdb_path : Optional[str]
@@ -81,7 +82,7 @@ class PostgresInstanceManager:
         self.base_dir = Path(base_dir)
         self.base_port = base_port
         self.template_db_config = template_db_config
-        self.table_size = table_size
+        self.schema_provider = schema_provider
         self.instances: Dict[int, InstanceConfig] = {}
 
         # Auto-detect PostgreSQL binaries
@@ -95,7 +96,11 @@ class PostgresInstanceManager:
         if not self.initdb:
             raise RuntimeError("initdb not found. Please install PostgreSQL or specify path.")
 
-        logger.debug("✓ Initialized InstanceManager: base_dir=%s, base_port=%d\n", base_dir, base_port)
+        logger.debug(
+            "✓ Initialized InstanceManager: base_dir=%s, base_port=%d\n",
+            base_dir,
+            base_port
+        )
 
     def _find_executable(self, name: str) -> Optional[str]:
         """Find PostgreSQL executable in PATH or common locations."""
@@ -115,7 +120,6 @@ class PostgresInstanceManager:
         for path_pattern in common_paths:
             if '*' in path_pattern:
                 # Handle wildcard paths
-                from glob import glob
                 matches = glob(path_pattern)
                 if matches:
                     return matches[0]
@@ -125,7 +129,11 @@ class PostgresInstanceManager:
         logger.warning("Could not find %s in PATH or common locations", name)
         return None
 
-    def setup_instances(self, num_workers: int, force_recreate: bool = False) -> List[InstanceConfig]:
+    def setup_instances(
+        self,
+        num_workers: int,
+        force_recreate: bool = False
+    ) -> List[InstanceConfig]:
         """
         Set up PostgreSQL instances for all workers.
         Reuses existing instances when possible unless force_recreate=True.
@@ -142,16 +150,25 @@ class PostgresInstanceManager:
         List[InstanceConfig]
             List of configured instances
         """
-        logger.info("Setting up %d PostgreSQL instances (force_recreate=%s)", num_workers, force_recreate)
-        
+        logger.info(
+            "Setting up %d PostgreSQL instances (force_recreate=%s)",
+            num_workers,
+            force_recreate
+        )
+
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
             data_dir = self.base_dir / f"worker_{worker_id}"
-            
+
             if not force_recreate and self._is_valid_instance(data_dir, port):
-                logger.info("Reusing existing instance for worker-%d at %s (port %d)", worker_id, data_dir, port)
+                logger.info(
+                    "Reusing existing instance for worker-%d at %s (port %d)",
+                    worker_id,
+                    data_dir,
+                    port
+                )
 
                 if self._is_instance_running(data_dir):
                     logger.debug("Instance already running, skipping start")
@@ -173,12 +190,17 @@ class PostgresInstanceManager:
                 if data_dir.exists():
                     logger.info("Removing old instance at %s", data_dir)
                     shutil.rmtree(data_dir)
-                
-                logger.info("Creating new instance for worker-%d at %s (port %d)", worker_id, data_dir, port)
+
+                logger.info(
+                    "Creating new instance for worker-%d at %s (port %d)",
+                    worker_id,
+                    data_dir,
+                    port
+                )
                 instance = self._create_instance(worker_id, port, data_dir)
-            
+
             self.instances[worker_id] = instance
-        
+
         return list(self.instances.values())
     
     def _is_valid_instance(self, data_dir: Path, expected_port: int) -> bool:
@@ -300,7 +322,6 @@ class PostgresInstanceManager:
         
         # initdb creates a user with current Windows username, not 'postgres'
         # We need to connect with that user first, then create 'postgres' user
-        import getpass
         current_user = getpass.getuser()
         
         max_attempts = 15  # 15 attempts = 30 seconds max wait
@@ -533,88 +554,37 @@ unix_socket_directories = '/tmp'
 
     def _initialize_schema(self, port: int) -> None:
         """
-        Initialize schema by creating required tables directly.
-        
-        Creates sbtest1 table (for OLTP workload) with sample data.
-        This is more reliable than pg_dump/psql approach.
-        """
-        if not self.template_db_config:
-            logger.debug("No template database configured, skipping schema init")
-            return
-        
-        logger.debug("Initializing schema for instance on port %d", port)
-        
-        try:
-            # Connect to the test_dataset database on this instance
-            instance_config = DatabaseConfig(
-                host='localhost',
-                port=str(port),
-                dbname=self.template_db_config.dbname,  # test_dataset
-                user=self.template_db_config.user,  # postgres
-                password=self.template_db_config.password or ''
-            )
-            
-            conn = get_connection(config=instance_config)
-            cursor = conn.cursor()
-            
-            # Check if sbtest1 table already exists
-            cursor.execute(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name = 'sbtest1')"
-            )
-            exists = cursor.fetchone()[0]
-            
-            if exists:
-                logger.debug("Table 'sbtest1' already exists on port %d", port)
-            else:
-                logger.info("Creating sbtest1 table on port %d...", port)
-                
-                # Create sbtest1 table (SYSBENCH-compatible schema)
-                cursor.execute("""
-                    CREATE TABLE sbtest1 (
-                        id SERIAL PRIMARY KEY,
-                        k INTEGER NOT NULL DEFAULT 0,
-                        c CHAR(120) NOT NULL DEFAULT '',
-                        pad CHAR(60) NOT NULL DEFAULT ''
-                    )
-                """)
-                
-                # Insert sample data in batches
-                import random
-                logger.debug("Inserting sample data into sbtest1...")
-                batch_size = 1000
-                total_rows = self.table_size
+        Initialize schema by delegating to the schema_provider.
 
-                for batch_start in range(0, total_rows, batch_size):
-                    values = []
-                    for _ in range(batch_start, min(batch_start + batch_size, total_rows)):
-                        k = random.randint(1, 100000)
-                        c = ('x' * random.randint(50, 120))[:120].ljust(120)
-                        pad = ('y' * random.randint(30, 60))[:60].ljust(60)
-                        # Escape single quotes in strings
-                        c_escaped = c.replace("'", "''")
-                        pad_escaped = pad.replace("'", "''")
-                        values.append(f"({k}, '{c_escaped}', '{pad_escaped}')")
-                    
-                    cursor.execute(f"INSERT INTO sbtest1 (k, c, pad) VALUES {','.join(values)}")
-                
-                # Create index
-                logger.debug("Creating indexes on sbtest1...")
-                cursor.execute("CREATE INDEX k_1 ON sbtest1(k)")
-                
-                # Analyze table
-                cursor.execute("ANALYZE sbtest1")
-                
-                conn.commit()
-                logger.info("Schema initialized successfully on port %d (sbtest1: %d rows)", port, total_rows)
-            
-            cursor.close()
-            conn.close()
-            
+        The provider's validate() checks if the schema already exists;
+        if not, prepare() creates it. This keeps all benchmark-specific
+        logic (sysbench prepare, TPC-H dbgen, etc.) out of the instance
+        manager.
+        """
+        if not self.schema_provider or not self.template_db_config:
+            logger.debug("No schema provider configured, skipping schema init")
+            return
+
+        instance_config = DatabaseConfig(
+            host='localhost',
+            port=str(port),
+            dbname=self.template_db_config.dbname,
+            user=self.template_db_config.user,
+            password=self.template_db_config.password or ''
+        )
+
+        try:
+            if self.schema_provider.validate(instance_config):
+                logger.debug("Schema already valid on port %d", port)
+                return
+
+            logger.info("Preparing schema on port %d...", port)
+            self.schema_provider.prepare(instance_config)
+            logger.info("Schema preparation complete on port %d", port)
+
         except Exception as e:
             logger.error("Failed to initialize schema on port %d: %s", port, e)
-            # Don't raise - allow instance to be used even without schema
-    
+
     def start_instance(self, worker_id: int) -> bool:
         """
         Start a specific worker's PostgreSQL instance.

@@ -293,6 +293,20 @@ python -m src.tuner.main \
   --workload-file workloads/custom_queries.json
 ```
 
+### Example 5: Tuning a Real Production Database
+
+Point the tuner at your real database using standard environment variables, and it will automatically use `pg_basebackup` to clone a local snapshot for safe, isolated tuning:
+
+```bash
+export DB_HOST=my-production-replica.domain.com
+export DB_PORT=5432
+export DB_USER=admin
+export DB_PASSWORD=secret
+export DB_NAME=myapp
+
+python -m src.tuner.main --workload-file workloads/my_real_queries.json
+```
+
 ### View Results
 
 Open the HTML log in your browser for color-coded output:
@@ -325,6 +339,15 @@ python -m src.tuner.main --help
 | `--workload`    | `oltp`, `olap`, `mixed`                    | `oltp`     | Workload type                          |
 | `--duration`    | seconds                                    | 30         | Evaluation duration per worker         |
 | `--verbose`     | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG`      | `NORMAL`   | Logging level                          |
+
+### Dual-Evaluation Strategy
+
+This framework intentionally supports a two-pronged benchmarking methodology:
+
+- **Academic Baselines**: For scientifically rigorous evaluations without Python overhead, use external C-binaries (e.g. `--benchmark sysbench`).
+- **Custom Prototyping**: For tuning proprietary application databases, use the internal JSON-based query templates.
+
+For full architectural details on this design, please read the [Benchmarking Documentation](docs/benchmarking.md).
 
 ### Custom Workloads
 
