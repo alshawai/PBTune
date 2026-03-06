@@ -27,12 +27,13 @@ Design Patterns:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 import json
 import logging
 import time
 import random
+import subprocess
 import threading
 from queue import Queue
 import yaml
@@ -49,6 +50,7 @@ from src.tuner.evaluator.metrics import (
     WorkloadType,
     MetricConfig,
 )
+from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.tuner.core.worker import Worker
 from src.tuner.utils.restart_manager import (
     RestartCostModel,
@@ -79,8 +81,8 @@ class EvaluatorConfig:
         Metric weights and scoring configuration
     db_config : DatabaseConfig
         PostgreSQL database configuration
-    warmup_queries : int
-        Number of warmup queries before measurement (default: 100)
+    warmup_duration : float
+        Duration of warmup phase in seconds before measurement (default: 30.0)
     measurement_duration : float
         Duration of measurement phase in seconds (default: 60.0)
     cooldown_duration : float
@@ -95,13 +97,14 @@ class EvaluatorConfig:
     workload_type: WorkloadType
     metric_config: MetricConfig
     db_config: DatabaseConfig
-    warmup_queries: int = 100
+    warmup_duration: float = 30.0
     measurement_duration: float = 60.0
     cooldown_duration: float = 5.0
     enable_restart: bool = False
     restart_interval: int = 10
     restart_config: Optional[RestartConfig] = None
-    workload_seed: Optional[int] = None
+    workload_seed: int = 42
+    warmup_passes: int = 0
 
 
 class WorkloadExecutor:
@@ -117,8 +120,9 @@ class WorkloadExecutor:
         self,
         queries: list[str],
         weights: Optional[list[float]] = None,
-        table_size: int = 5000000,
-        num_threads: int = 1,
+        table_size: int = 100000,
+        num_tables: int = 10,
+        num_threads: int = 8,
     ):
         """
         Initialize template workload executor.
@@ -126,24 +130,31 @@ class WorkloadExecutor:
         Parameters
         ----------
         queries : list[str]
-            List of SQL queries to execute (can contain placeholders like {id}, {k_val}, etc.)
+            List of SQL queries to execute (can contain placeholders like {id}, {table}, etc.)
         weights : Optional[list[float]]
             Execution frequency weights (default: uniform)
         table_size : int
-            Size of table for parameter instantiation (default: 5M)
+            Rows per table for parameter instantiation (default: 100K, academic standard)
+        num_tables : int
+            Number of sbtest tables to use (default: 10, academic standard)
         num_threads : int
-            Number of concurrent threads (default: 1 for sequential)
+            Number of concurrent threads (default: 8)
         """
         self.queries = queries
         self.weights = weights or [1.0] * len(queries)
         total = sum(self.weights)  # Normalize weights
         self.weights = [w / total for w in self.weights]
         self.table_size = table_size
+        self.num_tables = num_tables
         self.num_threads = num_threads
 
     def _instantiate_query(self, template: str) -> str:
         """Instantiate query template with random parameters."""
+        table_idx = random.randint(1, self.num_tables)
+        table2_idx = random.randint(1, self.num_tables)
         params = {
+            'table': f'sbtest{table_idx}',
+            'table2': f'sbtest{table2_idx}',
             'id': random.randint(1, self.table_size),
             'k_val': random.randint(1, self.table_size),
             'threshold': random.randint(self.table_size // 4, 3 * self.table_size // 4),
@@ -158,11 +169,48 @@ class WorkloadExecutor:
         except KeyError:
             return template  # A template that doesn't need parameters
 
+    def prepare(self, db_config: DatabaseConfig) -> None:
+        """Create required sbtest tables using native sysbench C-binary."""
+        logger.info(
+            "Preparing %d sbtest tables (%d rows each) on %s:%s...",
+            self.num_tables, self.table_size, db_config.host, db_config.port,
+        )
+        cmd = [
+            "sysbench", "oltp_read_write",
+            "--db-driver=pgsql",
+            f"--pgsql-host={db_config.host}",
+            f"--pgsql-port={db_config.port}",
+            f"--pgsql-user={db_config.user}",
+            f"--pgsql-password={db_config.password}",
+            f"--pgsql-db={db_config.dbname}",
+            f"--tables={self.num_tables}",
+            f"--table-size={self.table_size}",
+        ]
+        subprocess.run(
+            cmd + ["cleanup"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(cmd + ["prepare"], check=True, stdout=subprocess.DEVNULL)
+        logger.info("Schema preparation complete.")
+
+    def validate(self, db_config: DatabaseConfig) -> bool:
+        """Check if all required sbtest tables exist."""
+        conn = get_connection(config=db_config)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
+        )
+        count = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        return count >= self.num_tables
+
     def execute(
         self,
         connection: PostgresConnection,
         duration: float,
-        warmup: int = 0,
+        warmup: float = 30.0,
         worker_id: Optional[int] = None,
         workload_seed: Optional[int] = None
     ) -> PerformanceMetrics:
@@ -182,18 +230,20 @@ class WorkloadExecutor:
 
         cursor = connection.cursor()
 
-        work_logger.debug("Template query warmup: %s queries", warmup)
-        for _ in range(warmup):
-            template = random.choices(self.queries, weights=self.weights)[0]
-            query = self._instantiate_query(template)
-            try:
-                cursor.execute(query)
-                if cursor.description is not None:
-                    cursor.fetchall()
-                connection.commit()
-            except Exception as e:
-                work_logger.warning("Warmup query failed: %s", e)
-                connection.rollback()
+        if warmup > 0:
+            work_logger.debug("Template query warmup: %.1fs", warmup)
+            warmup_end = time.time() + warmup
+            while time.time() < warmup_end:
+                template = random.choices(self.queries, weights=self.weights)[0]
+                query = self._instantiate_query(template)
+                try:
+                    cursor.execute(query)
+                    if cursor.description is not None:
+                        cursor.fetchall()
+                    connection.commit()
+                except Exception as e:
+                    work_logger.warning("Warmup query failed: %s", e)
+                    connection.rollback()
         cursor.close()
 
         if self.num_threads > 1:
@@ -484,12 +534,29 @@ class WorkloadFileLoader:
 
         name = data.get('name', filepath.stem)
         description = data.get('description', 'Custom workload')
+
+        schema = data.get('schema', {})
+        num_tables = schema.get('tables', 1)
+        table_size = schema.get('table_size', 100000)
+
+        if not schema:
+            logger.warning(
+                "Workload '%s' has no 'schema' section — defaulting to 1 table "
+                "with 100K rows. Add a 'schema' section for multi-table support.",
+                name,
+            )
+
         logger.debug(
-            "-> Loaded workload '%s': %s (%d queries)\n",
-            name, description, len(query_list)
+            "-> Loaded workload '%s': %s (%d queries, %d tables × %d rows)\n",
+            name, description, len(query_list), num_tables, table_size,
         )
 
-        return WorkloadExecutor(queries=query_list, weights=weight_list)
+        return WorkloadExecutor(
+            queries=query_list,
+            weights=weight_list,
+            num_tables=num_tables,
+            table_size=table_size,
+        )
 
 
 
@@ -541,7 +608,7 @@ class Evaluator:
     def __init__(
         self,
         config: EvaluatorConfig,
-        workload_executor: WorkloadExecutor,
+        workload_executor: Union[WorkloadExecutor, BenchmarkExecutor],
         worker_id: Optional[str] = None,
     ):
         """
@@ -551,7 +618,7 @@ class Evaluator:
         ----------
         config : EvaluatorConfig
             Evaluation configuration
-        workload_executor : WorkloadExecutor
+        workload_executor : Union[WorkloadExecutor, BenchmarkExecutor]
             Workload execution strategy
         worker_id : Optional[str]
             Worker identifier for logging
@@ -1133,18 +1200,19 @@ class Evaluator:
                     # Memory percentage
                     try:
                         system_memory = psutil.virtual_memory().total
-                        metrics['memory_utilization'] = (total_memory_rss / system_memory) * 100
+                        metrics['memory_utilization'] = total_memory_rss / system_memory
                         memory_mb = total_memory_rss / (1024 * 1024)
+                        memory_pct = metrics['memory_utilization'] * 100
                         if worker_id is not None:
                             worker_logger = get_logger(__name__, worker_id=worker_id)
                             worker_logger.debug(
                                 "Memory: %.1fMB (%.1f%%) across %d processes",
-                                memory_mb, metrics['memory_utilization'], len(postgres_processes)
+                                memory_mb, memory_pct, len(postgres_processes)
                             )
                         else:
                             self.logger.debug(
                                 "Memory: %.1fMB (%.1f%%) across %d processes",
-                                memory_mb, metrics['memory_utilization'], len(postgres_processes)
+                                memory_mb, memory_pct, len(postgres_processes)
                             )
                     except:
                         metrics['memory_utilization'] = 0.0
@@ -1178,6 +1246,42 @@ class Evaluator:
             metrics['cache_hit_ratio'] = 0.0
 
         return metrics
+
+    def _vacuum_after_dml(
+        self,
+        db_config: DatabaseConfig,
+        worker_id: Optional[int] = None
+    ) -> None:
+        """
+        Run VACUUM ANALYZE after DML-heavy workloads to prevent table bloat.
+        
+        Only executes for OLTP and mixed workloads that contain
+        UPDATE/DELETE/INSERT operations which create dead tuples.
+        """
+        # Skip for read-only workloads (OLAP, TPC-H)
+        if self.config.workload_type.value in ('olap', 'tpch'):
+            return
+        
+        logger = (
+            get_logger(__name__, worker_id=worker_id)
+            if worker_id is not None else self.logger
+        )
+        
+        try:
+            conn = get_connection(config=db_config)
+            conn.autocommit = True  # VACUUM cannot run inside a transaction
+            cursor = conn.cursor()
+            
+            start = time.time()
+            cursor.execute("VACUUM ANALYZE")
+            elapsed = time.time() - start
+            
+            logger.debug("VACUUM ANALYZE completed in %.2fs", elapsed)
+            cursor.close()
+            conn.close()
+            
+        except Exception as e:
+            logger.warning("Post-workload VACUUM ANALYZE failed: %s", e)
 
     def evaluate_worker(
         self,
@@ -1301,13 +1405,23 @@ class Evaluator:
                     except Exception as e:
                         worker_logger.debug("Failed to capture initial stats: %s", e)
 
-                metrics = self.workload_executor.execute(
-                    connection=connection,
-                    duration=self.config.measurement_duration,
-                    warmup=self.config.warmup_queries,
-                    worker_id=worker.worker_id,
-                    workload_seed=self.config.workload_seed
-                )
+                if isinstance(self.workload_executor, BenchmarkExecutor):
+                    metrics = self.workload_executor.execute(
+                        db_config=worker.db_config,
+                        worker_id=worker.worker_id,
+                        workload_seed=self.config.workload_seed,
+                        duration=self.config.measurement_duration,
+                        warmup=self.config.warmup_duration,
+                        warmup_passes=self.config.warmup_passes
+                    )
+                else:
+                    metrics = self.workload_executor.execute(
+                        connection=connection,
+                        duration=self.config.measurement_duration,
+                        warmup=self.config.warmup_duration,
+                        worker_id=worker.worker_id,
+                        workload_seed=self.config.workload_seed
+                    )
 
                 stats_after = None
                 if connection and not connection.closed and stats_before:
@@ -1357,6 +1471,9 @@ class Evaluator:
                 metrics.cache_hit_ratio = system_metrics['cache_hit_ratio']
             if 'memory_utilization' in system_metrics:
                 metrics.memory_utilization = system_metrics['memory_utilization']
+
+            # Clean up dead tuples from DML operations to prevent bloat between generations
+            self._vacuum_after_dml(worker.db_config, worker_id=worker.worker_id)
 
             base_score = self.config.metric_config.compute_score(metrics)
 

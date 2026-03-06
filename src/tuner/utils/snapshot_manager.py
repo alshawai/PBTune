@@ -1293,11 +1293,17 @@ class SnapshotManager:
         -------
         bool
             True if restore should be performed
+
+        Note: Skips restore for generation 0 because instances were just
+        initialized with correct data.
         """
         if not self.baseline_created:
             return False
 
-        # Restore at generation 0 and every N generations after
+        # Skip generation 0 — instances were just initialized with correct data
+        if generation == 0:
+            return False
+
         return generation % self.config.restore_interval == 0
 
     def get_status(self) -> Dict[str, Any]:
