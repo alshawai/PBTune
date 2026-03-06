@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+from concurrent.futures.thread import ThreadPoolExecutor
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
@@ -291,6 +292,7 @@ class Population:
         worker_data_dirs: List[Path],
         instance_manager: Any,
         pbt_config: Any,
+        baseline_path: Optional[Path] = None,
     ) -> None:
         """
         Register snapshot manager for database restoration during training.
@@ -316,7 +318,7 @@ class Population:
             logger.debug("Snapshots disabled in config")
             return
 
-        baseline_path = Path('./pg_snapshots/baseline')
+        baseline_path = baseline_path or Path('./pg_snapshots/baseline')
 
         snapshot_config = SnapshotConfig(
             baseline_path=baseline_path,
@@ -547,10 +549,16 @@ class Population:
         """
         stats = get_population_statistics(self.workers)
         best_worker = get_best_worker(self.workers)
-        converged = check_convergence(
-            self.workers,
-            self.config.convergence_threshold
-        )
+        converged = False
+        if self._ranges_updated:
+            converged = check_convergence(
+                self.workers,
+                self.config.convergence_threshold
+            )
+        else:
+            logger.debug(
+                "Convergence check deferred: adaptive normalization not yet active"
+            )
 
         result = GenerationResult(
             generation=self.current_generation,
