@@ -538,7 +538,7 @@ class PostgresRestartManager:
             stop_result = subprocess.run(
                 [pg_ctl, 'stop', '-D', self.config.data_dir, '-w', '-m', 'fast'],
                 capture_output=True,
-                timeout=15,  # Allow more time for clean shutdown
+                timeout=30,  # Allow more time for clean shutdown
                 text=True
             )
 
