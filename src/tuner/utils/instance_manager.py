@@ -84,6 +84,7 @@ class PostgresInstanceManager:
         self.template_db_config = template_db_config
         self.schema_provider = schema_provider
         self.instances: Dict[int, InstanceConfig] = {}
+        self.baseline_snapshot_path: Optional[Path] = None
 
         # Auto-detect PostgreSQL binaries
         self.pg_ctl = pg_ctl_path or self._find_executable('pg_ctl')
@@ -179,6 +180,12 @@ class PostgresInstanceManager:
                 if self.template_db_config:
                     self._ensure_postgres_user_exists(port)
 
+                # Ensure schema is valid even for reused instances.
+                # When switching benchmarks (e.g. sysbench → tpch),
+                # validate() will detect missing tables and prepare()
+                # will create the new schema.
+                self._initialize_schema(port, data_dir)
+
                 instance = InstanceConfig(
                     worker_id=worker_id,
                     port=port,
@@ -186,10 +193,21 @@ class PostgresInstanceManager:
                     running=True
                 )
             else:
-                # Create new instance
                 if data_dir.exists():
                     logger.info("Removing old instance at %s", data_dir)
+                    # Try graceful pg_ctl stop before removing data dir
+                    try:
+                        subprocess.run(
+                            [self.pg_ctl, '-D', str(data_dir), 'stop', '-m', 'immediate'],
+                            capture_output=True, text=True, timeout=10, check=False
+                        )
+                        time.sleep(1)
+                    except (subprocess.TimeoutExpired, Exception):
+                        pass
+
                     shutil.rmtree(data_dir)
+
+                self._kill_stale_port_holder(port)
 
                 logger.info(
                     "Creating new instance for worker-%d at %s (port %d)",
@@ -293,6 +311,38 @@ class PostgresInstanceManager:
             # If psutil not available, assume not running and try to start
             return False
 
+    def _kill_stale_port_holder(self, port: int) -> None:
+        """
+        Kill any process still holding a worker port from a previous crashed run.
+        
+        Parameters
+        ----------
+        port : int
+            TCP port to check for stale listeners
+        """
+        try:
+            for conn in psutil.net_connections(kind='tcp'):
+                if conn.laddr.port == port and conn.status == 'LISTEN':
+                    try:
+                        proc = psutil.Process(conn.pid)
+                        proc_name = proc.name().lower()
+                        if 'postgres' in proc_name or 'postmaster' in proc_name:
+                            logger.warning(
+                                "Killing stale PostgreSQL process (PID %d) holding port %d",
+                                conn.pid, port
+                            )
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)
+                            except psutil.TimeoutExpired:
+                                proc.kill()
+                                proc.wait(timeout=3)
+                            time.sleep(1)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        except (psutil.AccessDenied, OSError) as e:
+            logger.debug("Could not check for stale port holders: %s", e)
+
     def _create_instance(self, worker_id: int, port: int, data_dir: Path) -> InstanceConfig:
         """Create and initialize a new PostgreSQL instance."""
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +413,7 @@ class PostgresInstanceManager:
             instance_conn.close()
             
             # Step 5: Initialize schema/data (create sbtest1 table)
-            self._initialize_schema(port)
+            self._initialize_schema(port, data_dir)
         elif instance_conn:
             instance_conn.close()
         
@@ -552,7 +602,7 @@ unix_socket_directories = '/tmp'
             logger.warning("Error issuing pg_ctl start command: %s", e)
             # Continue anyway - connection test will tell us if it worked
 
-    def _initialize_schema(self, port: int) -> None:
+    def _initialize_schema(self, port: int, data_dir: Path) -> None:
         """
         Initialize schema by delegating to the schema_provider.
 
@@ -560,6 +610,10 @@ unix_socket_directories = '/tmp'
         if not, prepare() creates it. This keeps all benchmark-specific
         logic (sysbench prepare, TPC-H dbgen, etc.) out of the instance
         manager.
+
+        Fast path: if a baseline snapshot exists for the current scale
+        factor, restores from snapshot instead of running the full
+        prepare() pipeline (stop → rsync → start → validate).
         """
         if not self.schema_provider or not self.template_db_config:
             logger.debug("No schema provider configured, skipping schema init")
@@ -578,12 +632,66 @@ unix_socket_directories = '/tmp'
                 logger.debug("Schema already valid on port %d", port)
                 return
 
+            # Fast path: restore from existing baseline snapshot
+            if self.baseline_snapshot_path and self.baseline_snapshot_path.exists():
+                logger.info(
+                    "Restoring schema from baseline snapshot on port %d", port
+                )
+                try:
+                    subprocess.run(
+                        [self.pg_ctl, '-D', str(data_dir), 'stop', '-m', 'fast'],
+                        capture_output=True, text=True, timeout=30, check=False
+                    )
+                    time.sleep(1)
+
+                    subprocess.run(
+                        ['rsync', '-a', '--delete',
+                         '--exclude', 'postmaster.pid',
+                         '--exclude', 'postmaster.opts',
+                         '--exclude', 'postgresql.conf',
+                         '--exclude', 'pg_hba.conf',
+                         '--exclude', 'pg_ident.conf',
+                         str(self.baseline_snapshot_path) + '/',
+                         str(data_dir) + '/'],
+                        capture_output=True, text=True, timeout=120, check=True
+                    )
+
+                    self._start_instance_internal(data_dir)
+
+                    # Wait for instance to become ready after restore
+                    for attempt in range(10):
+                        time.sleep(2)
+                        try:
+                            if self.schema_provider.validate(instance_config):
+                                logger.info(
+                                    "Schema restored from snapshot on port %d",
+                                    port
+                                )
+                                return
+                        except Exception:
+                            pass
+
+                    logger.warning(
+                        "Snapshot restore validation failed on port %d, "
+                        "falling back to prepare()", port
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Snapshot restore failed on port %d: %s, "
+                        "falling back to prepare()", port, e
+                    )
+                    # Ensure instance is running for prepare() fallback
+                    if not self._is_instance_running(data_dir):
+                        self._start_instance_internal(data_dir)
+                        time.sleep(2)
+
             logger.info("Preparing schema on port %d...", port)
             self.schema_provider.prepare(instance_config)
-            logger.info("Schema preparation complete on port %d", port)
+            logger.debug("Schema preparation complete on port %d", port)
 
         except Exception as e:
             logger.error("Failed to initialize schema on port %d: %s", port, e)
+            raise
 
     def start_instance(self, worker_id: int) -> bool:
         """
