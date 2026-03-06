@@ -7,27 +7,27 @@ The Population-Based Training (PBT) Auto-Tuning framework employs a unique **Dua
 All executors implement a common **SchemaProvider** interface (`prepare()` + `validate()`), allowing the `PostgresInstanceManager` to initialize worker database schemas without knowing benchmark-specific details.
 
 ```
-┌─────────────────────────┐      ┌──────────────────────────┐
-│   SysbenchExecutor      │      │   WorkloadExecutor       │
-│   (C-binary benchmark)  │      │   (JSON/YAML templates)  │
-│                         │      │                          │
-│  prepare() → sysbench   │      │  prepare() → sysbench    │
-│  validate() → SQL count │      │  validate() → SQL count  │
-│  execute() → sysbench   │      │  execute() → Python SQL  │
-└────────────┬────────────┘      └─────────────┬────────────┘
-             │         SchemaProvider          │
-             └──────────────┬──────────────────┘
-                            ▼
-              ┌──────────────────────────┐
-              │  PostgresInstanceManager │
-              │                          │
-              │  _initialize_schema():   │
-              │    if !validate() →      │
-              │       prepare()          │
-              └──────────────────────────┘
+┌─────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐
+│   SysbenchExecutor      │  │   TPCHExecutor           │  │   WorkloadExecutor       │
+│   (C-binary benchmark)  │  │   (dbgen + psycopg2)     │  │   (JSON/YAML templates)  │
+│                         │  │                          │  │                          │
+│  prepare() → sysbench   │  │  prepare() → dbgen+COPY  │  │  prepare() → sysbench    │
+│  validate() → SQL count │  │  validate() → SQL count  │  │  validate() → SQL count  │
+│  execute() → sysbench   │  │  execute() → psycopg2    │  │  execute() → Python SQL  │
+└────────────┬────────────┘  └─────────────┬────────────┘  └─────────────┬────────────┘
+             │              SchemaProvider │                             │
+             └─────────────────────────────│─────────────────────────────┘
+                                           ▼
+                            ┌──────────────────────────┐
+                            │  PostgresInstanceManager │
+                            │                          │
+                            │  _initialize_schema():   │
+                            │    if !validate() →      │
+                            │       prepare()          │
+                            └──────────────────────────┘
 ```
 
-Both executors use the **native `sysbench` C-binary** for table creation (`sysbench prepare`), ensuring consistent, fast schema initialization regardless of the evaluation path.
+All executors implement the common **SchemaProvider** interface, allowing the `PostgresInstanceManager` to initialize worker database schemas without knowing benchmark-specific details.
 
 ## 1. Academic Validation: External C-Binary Benchmarks
 
@@ -38,14 +38,17 @@ To ensure **overhead-free, scientifically rigorous evaluations**, the tuner supp
 ### Supported External Drivers:
 
 - **Sysbench (OLTP)**: The industry standard for transactional database benchmarking.
-  - _Configuration_: 10 tables × 100,000 rows (scale factor 1), 2 threads per worker
+  - _Configuration_: 10 tables × 100,000 rows (scale factor 1), 8 threads per worker
   - _Metrics_: TPS (Transactions Per Second) + p95 Transaction Latency (ms)
   - _Usage_: `python -m src.tuner.main --benchmark sysbench`
 - **TPC-H (OLAP)**: The gold standard for analytical queries.
-  - _Status: Planned for Phase 2._
-  - _Usage_: (Using lightweight C/Python wrapper around `dbgen` instead of heavy JVM frameworks like `oltpbench` to conserve memory and maintain performance on 8GB RAM development machines).
+  - _Configuration_: 8 tables, 22 standard decision-support queries, configurable scale factor (default SF=1 → ~1GB data, ~6M `lineitem` rows per worker)
+  - _Metrics_: Query Throughput (QPS) + p50/p95 Query Latency (ms)
+  - _Usage_: `python -m src.tuner.main --benchmark tpch [--scale-factor 1.0]`
+  - _Data Generation_: Uses the standard `dbgen` C-binary. On first run, the tuner automatically clones the trusted [`electrum/tpch-dbgen`](https://github.com/electrum/tpch-dbgen) mirror, compiles it, and generates `.tbl` data files. Requires `build-essential` (`sudo apt install build-essential`).
+  - _Data Loading_: Uses `psycopg2.copy_expert()` with PostgreSQL `COPY` for fast bulk loading directly from `.tbl` files (no intermediate CSVs).
 
-_Why Python is acceptable for TPC-H (Phase 2):_ Unlike Sysbench where throughput (queries per microsecond) is tested, TPC-H consists of 22 complex queries each taking several seconds or minutes. Because the database execution time completely dwarfs the millisecond overhead of a Python client submitting the query string over the network, using Python wrappers for TPC-H is mathematically sound and widely accepted in academic tuning literature.
+_Why Python is acceptable for TPC-H:_ Unlike Sysbench where throughput (queries per microsecond) is tested, TPC-H consists of 22 complex queries each taking several seconds or minutes. Because the database execution time completely dwarfs the millisecond overhead of a Python client submitting the query string over the network, using Python wrappers for TPC-H is mathematically sound and widely accepted in academic tuning literature.
 
 ## 2. Real-World Prototyping: Internal JSON Templates
 
