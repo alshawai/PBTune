@@ -50,7 +50,7 @@ from src.tuner.evaluator.metrics import (
     WorkloadType,
     MetricConfig,
 )
-from src.tuner.evaluator.benchmark import BenchmarkExecutor
+from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.tuner.core.worker import Worker
 from src.tuner.utils.restart_manager import (
     RestartCostModel,
@@ -104,6 +104,7 @@ class EvaluatorConfig:
     restart_interval: int = 10
     restart_config: Optional[RestartConfig] = None
     workload_seed: int = 42
+    warmup_passes: int = 0
 
 
 class WorkloadExecutor:
@@ -1199,18 +1200,19 @@ class Evaluator:
                     # Memory percentage
                     try:
                         system_memory = psutil.virtual_memory().total
-                        metrics['memory_utilization'] = (total_memory_rss / system_memory) * 100
+                        metrics['memory_utilization'] = total_memory_rss / system_memory
                         memory_mb = total_memory_rss / (1024 * 1024)
+                        memory_pct = metrics['memory_utilization'] * 100
                         if worker_id is not None:
                             worker_logger = get_logger(__name__, worker_id=worker_id)
                             worker_logger.debug(
                                 "Memory: %.1fMB (%.1f%%) across %d processes",
-                                memory_mb, metrics['memory_utilization'], len(postgres_processes)
+                                memory_mb, memory_pct, len(postgres_processes)
                             )
                         else:
                             self.logger.debug(
                                 "Memory: %.1fMB (%.1f%%) across %d processes",
-                                memory_mb, metrics['memory_utilization'], len(postgres_processes)
+                                memory_mb, memory_pct, len(postgres_processes)
                             )
                     except:
                         metrics['memory_utilization'] = 0.0
@@ -1370,10 +1372,11 @@ class Evaluator:
                 if isinstance(self.workload_executor, BenchmarkExecutor):
                     metrics = self.workload_executor.execute(
                         db_config=worker.db_config,
+                        worker_id=worker.worker_id,
+                        workload_seed=self.config.workload_seed,
                         duration=self.config.measurement_duration,
                         warmup=self.config.warmup_duration,
-                        worker_id=worker.worker_id,
-                        workload_seed=self.config.workload_seed
+                        warmup_passes=self.config.warmup_passes
                     )
                 else:
                     metrics = self.workload_executor.execute(

@@ -43,9 +43,7 @@ from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
 import numpy as np
 
-from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
-from src.scripts.setup_database import setup_sysbench_table
 from src.tuner.utils.snapshot_manager import SnapshotManager, SnapshotConfig
 
 from src.tuner.config import (
@@ -54,6 +52,8 @@ from src.tuner.config import (
     RAPID_CONFIG,
     STANDARD_CONFIG,
     THOROUGH_CONFIG,
+    RESEARCH_CONFIG,
+    EXTREME_CONFIG,
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.evolution import get_best_worker
@@ -64,7 +64,8 @@ from src.tuner.evaluator.evaluator import (
     WorkloadExecutor,
     WorkloadFileLoader,
 )
-from src.tuner.evaluator.benchmark import SysbenchExecutor
+from src.benchmarks.sysbench.executor import SysbenchExecutor
+from src.benchmarks.tpch.executor import TPCHExecutor
 from src.tuner.evaluator.metrics import (
     PerformanceMetrics,
     WorkloadType,
@@ -137,6 +138,7 @@ class PBTTuner:
         skip_schema_init: bool = False,
         force_recreate_baseline: bool = False,
         benchmark: Optional[str] = None,
+        scale_factor: Optional[float] = None,
         logger: Optional[logging.Logger] = None,
     ):
         """
@@ -191,12 +193,24 @@ class PBTTuner:
             cooldown_duration=3.0,
             enable_restart=True,
             restart_interval=10,
+            warmup_passes=self.pbt_config.warmup_passes,
         )
+
+        self.scale_factor = pbt_config.scale_factor if scale_factor is None else scale_factor
 
         if benchmark == 'sysbench':
             self.logger.info("🔧 Using external Sysbench C-binary for rigorous benchmarking.")
+            self.benchmark_name = 'sysbench'
             workload_executor = SysbenchExecutor()  # type: ignore
+        elif benchmark == 'tpch':
+            self.logger.info(
+                "🔧 Using TPC-H benchmark (SF=%.1f) for analytical workload evaluation.",
+                self.scale_factor
+            )
+            self.benchmark_name = 'tpch'
+            workload_executor = TPCHExecutor(scale_factor=self.scale_factor)  # type: ignore
         else:
+            self.benchmark_name = workload_type.value
             workload_executor = self._create_workload_executor(workload_type, workload_file)
 
         self.evaluator = Evaluator(self.evaluator_config, workload_executor)
@@ -309,14 +323,20 @@ class PBTTuner:
                 self._restart_logged_this_gen = True
                 self.restart_count += 1
 
+            latency_label = self.metric_config.latency_metric
+            latency_value = getattr(metrics, f"latency_{latency_label}", 0.0)
+
             worker_logger.info(
-                "score=%.4f, latency_p95=%.2fms, throughput=%.1f QPS,\n "
+                "score=%.4f, latency_%s=%.2f%s, throughput=%.1f %s,\n "
                 "Memory=%.2f%%, IO Read=%.2f MB, IO Write=%.2f MB, " 
                 "Cache Hit=%.1f%%, Error Rate=%.2f%%",
                 score,
-                metrics.latency_p95,
+                latency_label,
+                latency_value,
+                metrics.latency_unit,
                 metrics.throughput,
-                metrics.memory_utilization,
+                metrics.throughput_unit,
+                metrics.memory_utilization * 100.0,
                 metrics.io_read_mb,
                 metrics.io_write_mb,
                 metrics.cache_hit_ratio * 100.0,
@@ -429,6 +449,13 @@ class PBTTuner:
                    self.pbt_config.population_size)
 
         try:
+            baseline_path = Path(
+                f'./pg_snapshots/baseline_{self.benchmark_name}_sf{self.scale_factor}'
+            )
+            # Skip snapshot-based init if we're about to recreate the baseline
+            if not self.force_recreate_baseline:
+                self.instance_manager.baseline_snapshot_path = baseline_path
+
             instances = self.instance_manager.setup_instances(
                 num_workers=self.pbt_config.population_size,
                 force_recreate=self.force_recreate_instances
@@ -473,7 +500,10 @@ class PBTTuner:
             self.population.setup_snapshots(
                 worker_data_dirs=worker_data_dirs,
                 instance_manager=self.instance_manager,
-                pbt_config=self.pbt_config
+                pbt_config=self.pbt_config,
+                baseline_path=Path(
+                    f'./pg_snapshots/baseline_{self.benchmark_name}_sf{self.scale_factor}'
+                )
             )
             self.logger.info("✓ Snapshot restoration configured\n")
 
@@ -526,7 +556,9 @@ class PBTTuner:
         instances : List[InstanceConfig]
             List of instance configurations from instance_manager
         """
-        baseline_path = Path('./pg_snapshots/baseline')
+        baseline_path = Path(
+            f'./pg_snapshots/baseline_{self.benchmark_name}_sf{self.scale_factor}'
+        )
         snapshot_config = SnapshotConfig(
             baseline_path=baseline_path,
             restore_interval=getattr(self.pbt_config, 'snapshot_restore_interval', 5)
@@ -698,7 +730,7 @@ on your hardware and configuration.
         '--config',
         type=str,
         default='standard',
-        choices=['rapid', 'standard', 'thorough'],
+        choices=['rapid', 'standard', 'thorough', 'research', 'extreme'],
         help='PBT configuration profile (default: standard)'
     )
 
@@ -739,8 +771,8 @@ on your hardware and configuration.
     workload_exclusive.add_argument(
         '--benchmark',
         type=str,
-        choices=['sysbench'],
-        help='Run standard external C-binary benchmark instead of internal Python workloads'
+        choices=['sysbench', 'tpch'],
+        help='Run standard external benchmark (sysbench=OLTP, tpch=OLAP)'
     )
 
     workload_group.add_argument(
@@ -753,6 +785,14 @@ on your hardware and configuration.
         '--warmup',
         type=float,
         help='Warmup duration in seconds before measurement (overrides config)'
+    )
+
+    workload_group.add_argument(
+        '--scale-factor',
+        type=float,
+        default=None,
+        help='TPC-H scale factor (default: falls back to active PBT config tier parameter). '
+             'Only used with --benchmark tpch'
     )
 
     instance_group = parser.add_argument_group('Instance Management')
@@ -837,10 +877,19 @@ def main():
         'rapid': RAPID_CONFIG,
         'standard': STANDARD_CONFIG,
         'thorough': THOROUGH_CONFIG,
+        'research': RESEARCH_CONFIG,
+        'extreme': EXTREME_CONFIG,
     }
     pbt_config = config_map[args.config]
 
-    if args.population or args.generations or args.parallel_workers or args.duration or args.warmup:
+    if (
+        args.population
+        or args.generations
+        or args.parallel_workers
+        or args.duration
+        or args.warmup
+        or args.scale_factor
+    ):
         config_dict = pbt_config.to_dict()
         if args.population:
             config_dict['population_size'] = args.population
@@ -852,6 +901,8 @@ def main():
             config_dict['evaluation_duration'] = args.duration
         if args.warmup:
             config_dict['warmup_duration'] = args.warmup
+        if args.scale_factor:
+            config_dict['scale_factor'] = args.scale_factor
 
         pbt_config = PBTConfig(**config_dict)
 
@@ -861,6 +912,11 @@ def main():
         'mixed': WorkloadType.MIXED,
     }
     workload_type = workload_map[args.workload]
+
+    if args.benchmark == 'tpch':
+        workload_type = WorkloadType.OLAP
+    elif args.benchmark == 'sysbench':
+        workload_type = WorkloadType.OLTP
 
     try:
         tuner = PBTTuner(
