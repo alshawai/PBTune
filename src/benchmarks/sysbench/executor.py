@@ -66,17 +66,47 @@ class SysbenchExecutor(BenchmarkExecutor):
         logger.info("Sysbench prepare complete.")
 
     def validate(self, db_config: DatabaseConfig) -> bool:
-        """Return True if all required sbtest tables exist."""
-        conn = get_connection(config=db_config)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT count(*) FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
-        )
-        count = cursor.fetchone()[0]
-        cursor.close()
-        conn.close()
-        return count >= self.tables
+        """Return True if all required sbtest tables exist AND have expected rows."""
+        logger = get_logger(__name__)
+        try:
+            conn = get_connection(config=db_config)
+            cursor = conn.cursor()
+
+            # First check if all tables exist
+            cursor.execute(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
+            )
+            count = cursor.fetchone()[0]
+
+            if count < self.tables:
+                logger.debug("Sysbench tables missing (found %d, expected %d)", count, self.tables)
+                cursor.close()
+                conn.close()
+                return False
+
+            # Then check if they're actually populated (just sample table 1).
+            cursor.execute("SELECT max(id) FROM sbtest1")
+            max_id = cursor.fetchone()[0]
+
+            # Sysbench insert might not be exactly equal to table_size if there were errors 
+            # during prepare, but it should be close or equal
+            if max_id is None or max_id < (self.table_size * 0.9):
+                logger.debug(
+                    "Sysbench tables exist but are empty/underpopulated "
+                    "(max id %s, expected ~%d)", max_id, self.table_size
+                )
+                cursor.close()
+                conn.close()
+                return False
+
+            cursor.close()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.debug("Sysbench validation failed: %s", e)
+            return False
 
     def execute(
         self,

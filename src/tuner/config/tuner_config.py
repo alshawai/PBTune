@@ -100,6 +100,14 @@ class PBTConfig:
     verbose : bool
         Whether to print detailed progress information.
         Default: True
+        
+    sysbench_tables : int
+        Number of tables for Sysbench workload.
+        Default: 10
+        
+    sysbench_table_size : int
+        Number of rows per table for Sysbench workload.
+        Default: 100000
     """
 
     population_size: int = 4
@@ -118,6 +126,8 @@ class PBTConfig:
     snapshot_restore_interval: int = 1
     random_seed: Optional[int] = None
     verbose: bool = True
+    sysbench_tables: int = 10
+    sysbench_table_size: int = 100000
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -197,6 +207,8 @@ class PBTConfig:
             "snapshot_restore_interval": self.snapshot_restore_interval,
             "random_seed": self.random_seed,
             "verbose": self.verbose,
+            "sysbench_tables": self.sysbench_tables,
+            "sysbench_table_size": self.sysbench_table_size,
         }
 
     def __repr__(self) -> str:
@@ -226,6 +238,8 @@ RAPID_CONFIG = PBTConfig(
     warmup_duration=10.0,
     workload_seed=42,
     scale_factor=0.01,
+    sysbench_tables=2,
+    sysbench_table_size=10000,
     warmup_passes=0,
     enable_snapshots=False,
     verbose=True
@@ -242,6 +256,8 @@ STANDARD_CONFIG = PBTConfig(
     warmup_duration=30.0,
     workload_seed=42,
     scale_factor=0.1,
+    sysbench_tables=10,
+    sysbench_table_size=100000,
     warmup_passes=1,
     enable_snapshots=True,
     snapshot_restore_interval=5,
@@ -259,6 +275,8 @@ THOROUGH_CONFIG = PBTConfig(
     warmup_duration=60.0,
     workload_seed=42,
     scale_factor=1.0,
+    sysbench_tables=20,
+    sysbench_table_size=200000,
     warmup_passes=1,
     enable_snapshots=True,
     snapshot_restore_interval=1,
@@ -276,6 +294,8 @@ RESEARCH_CONFIG = PBTConfig(
     warmup_duration=60.0,
     workload_seed=42,
     scale_factor=1.0,
+    sysbench_tables=50,
+    sysbench_table_size=500000,
     warmup_passes=2,
     enable_snapshots=True,
     snapshot_restore_interval=1,
@@ -293,6 +313,8 @@ EXTREME_CONFIG = PBTConfig(
     warmup_duration=120.0,
     workload_seed=42,
     scale_factor=10.0,
+    sysbench_tables=100,
+    sysbench_table_size=1000000,
     warmup_passes=2,
     enable_snapshots=True,
     snapshot_restore_interval=1,
