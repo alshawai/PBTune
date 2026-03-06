@@ -179,7 +179,7 @@ def generate_data(dbgen_path: Path, scale_factor: float = 1.0) -> Path:
         old_tbl.unlink()
 
     result = subprocess.run(
-        [str(dbgen_path), "-s", str(scale_factor)],
+        [str(dbgen_path), "-vf", "-s", str(scale_factor)],
         cwd=str(output_dir),
         capture_output=True,
         text=True,
