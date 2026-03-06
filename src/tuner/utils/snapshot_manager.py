@@ -1293,6 +1293,9 @@ class SnapshotManager:
         -------
         bool
             True if restore should be performed
+
+        Note: Skips restore for generation 0 because instances were just
+        initialized with correct data.
         """
         if not self.baseline_created:
             return False

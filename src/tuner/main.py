@@ -139,6 +139,8 @@ class PBTTuner:
         force_recreate_baseline: bool = False,
         benchmark: Optional[str] = None,
         scale_factor: Optional[float] = None,
+        sysbench_tables: Optional[int] = None,
+        sysbench_table_size: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
     ):
         """
@@ -197,21 +199,41 @@ class PBTTuner:
         )
 
         self.scale_factor = pbt_config.scale_factor if scale_factor is None else scale_factor
+        self.sysbench_tables = (
+            pbt_config.sysbench_tables
+            if sysbench_tables is None
+            else sysbench_tables
+        )
+        self.sysbench_table_size = (
+            pbt_config.sysbench_table_size
+            if sysbench_table_size is None
+            else sysbench_table_size
+        )
 
         if benchmark == 'sysbench':
             self.logger.info("🔧 Using external Sysbench C-binary for rigorous benchmarking.")
             self.benchmark_name = 'sysbench'
-            workload_executor = SysbenchExecutor()  # type: ignore
+            workload_executor = SysbenchExecutor(
+                tables=self.sysbench_tables,
+                table_size=self.sysbench_table_size
+            )  # type: ignore
+            self.snapshot_identifier = f"sysbench_t{self.sysbench_tables}_s{self.sysbench_table_size}"
         elif benchmark == 'tpch':
             self.logger.info(
                 "🔧 Using TPC-H benchmark (SF=%.1f) for analytical workload evaluation.",
                 self.scale_factor
             )
+            self.logger.debug(
+                "💡 TPC-H is a read-only OLAP benchmark; no need for snapshot restorations."
+            )
+            self.pbt_config.enable_snapshots = False
             self.benchmark_name = 'tpch'
             workload_executor = TPCHExecutor(scale_factor=self.scale_factor)  # type: ignore
+            self.snapshot_identifier = f"tpch_sf{self.scale_factor}"
         else:
             self.benchmark_name = workload_type.value
             workload_executor = self._create_workload_executor(workload_type, workload_file)
+            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.scale_factor}"
 
         self.evaluator = Evaluator(self.evaluator_config, workload_executor)
 
@@ -232,15 +254,13 @@ class PBTTuner:
         )
 
         self.instance_manager = PostgresInstanceManager(
-            base_dir=Path('./pg_instances'),
+            base_dir=Path(f'./pg_instances/{self.benchmark_name}'),
             base_port=5440,
             template_db_config=None if skip_schema_init else self.db_config,
             schema_provider=workload_executor,
         )
 
         self.start_time: Optional[float] = None
-        self.best_score: float = 0.0
-        self.best_config: Optional[Dict[str, Any]] = None
         self.generation_history = []
 
         self.current_generation: int = 0
@@ -251,6 +271,18 @@ class PBTTuner:
             "%s%sPBT Database Tuner Initialization Complete!%s",
             ColorCode.BOLD, info_color, ColorCode.RESET
         )
+
+    @property
+    def best_config(self) -> Dict[str, Any]:
+        """Dynamically fetch the all-time best configuration from Population"""
+        config, _ = self.population.get_best_configuration()
+        return config
+
+    @property
+    def best_score(self) -> float:
+        """Dynamically fetch the all-time mathematically rescored best score from Population"""
+        _, score = self.population.get_best_configuration()
+        return score
 
     def _create_workload_executor(
         self,
@@ -394,10 +426,12 @@ class PBTTuner:
         if hasattr(self, '_restart_logged_this_gen'):
             self.logger.info("🟢 PostgreSQL restarted (total restarts: %d)", self.restart_count)
 
-        if result.best_score > self.best_score:
-            self.best_score = result.best_score
-            self.best_config = result.best_config.copy()
-            self.logger.info("🎉 NEW BEST SCORE: %.4f", self.best_score)
+        # Notify user of new high score conditionally (handles dynamic rescales upwards too)
+        _, current_global_best_score = self.population.get_best_configuration()
+        if getattr(self, '_last_logged_best_score', None) != current_global_best_score:
+            if current_global_best_score > getattr(self, '_last_logged_best_score', -1.0):
+                self.logger.info("🎉 NEW BEST SCORE: %.4f", current_global_best_score)
+            self._last_logged_best_score = current_global_best_score
 
         gen_summary = {
             'generation': generation,
@@ -450,7 +484,7 @@ class PBTTuner:
 
         try:
             baseline_path = Path(
-                f'./pg_snapshots/baseline_{self.benchmark_name}_sf{self.scale_factor}'
+                f'./pg_snapshots/baseline_{self.snapshot_identifier}'
             )
             # Skip snapshot-based init if we're about to recreate the baseline
             if not self.force_recreate_baseline:
@@ -502,7 +536,7 @@ class PBTTuner:
                 instance_manager=self.instance_manager,
                 pbt_config=self.pbt_config,
                 baseline_path=Path(
-                    f'./pg_snapshots/baseline_{self.benchmark_name}_sf{self.scale_factor}'
+                    f'./pg_snapshots/baseline_{self.snapshot_identifier}'
                 )
             )
             self.logger.info("✓ Snapshot restoration configured\n")
@@ -557,7 +591,7 @@ class PBTTuner:
             List of instance configurations from instance_manager
         """
         baseline_path = Path(
-            f'./pg_snapshots/baseline_{self.benchmark_name}_sf{self.scale_factor}'
+            f'./pg_snapshots/baseline_{self.snapshot_identifier}'
         )
         snapshot_config = SnapshotConfig(
             baseline_path=baseline_path,
@@ -618,13 +652,8 @@ class PBTTuner:
 
     def save_final_results(self, total_time: float) -> Dict[str, Any]:
         """Save final tuning results"""
-        if self.best_config is None:
-            best_config, best_score = self.population.get_best_configuration()
-            self.best_config = best_config
-            self.best_score = best_score
 
-        best_worker = get_best_worker(self.population.workers)
-        best_metrics = best_worker.metrics
+        best_metrics = self.population.best_overall_metrics
 
         results = {
             'tuning_session': {
@@ -795,6 +824,22 @@ on your hardware and configuration.
              'Only used with --benchmark tpch'
     )
 
+    workload_group.add_argument(
+        '--sysbench-tables',
+        type=int,
+        default=None,
+        help='Number of Sysbench tables (default: falls back to active PBT config tier parameter). '
+             'Only used with --benchmark sysbench'
+    )
+
+    workload_group.add_argument(
+        '--sysbench-table-size',
+        type=int,
+        default=None,
+        help='Sysbench rows per table (default: falls back to active PBT config tier parameter). '
+             'Only used with --benchmark sysbench'
+    )
+
     instance_group = parser.add_argument_group('Instance Management')
     instance_group.add_argument(
         '--force-recreate-instances',
@@ -889,6 +934,8 @@ def main():
         or args.duration
         or args.warmup
         or args.scale_factor
+        or args.sysbench_tables
+        or args.sysbench_table_size
     ):
         config_dict = pbt_config.to_dict()
         if args.population:
@@ -903,6 +950,10 @@ def main():
             config_dict['warmup_duration'] = args.warmup
         if args.scale_factor:
             config_dict['scale_factor'] = args.scale_factor
+        if args.sysbench_tables:
+            config_dict['sysbench_tables'] = args.sysbench_tables
+        if args.sysbench_table_size:
+            config_dict['sysbench_table_size'] = args.sysbench_table_size
 
         pbt_config = PBTConfig(**config_dict)
 
@@ -926,6 +977,9 @@ def main():
             output_dir=args.output_dir,
             workload_file=args.workload_file,
             benchmark=args.benchmark,
+            scale_factor=args.scale_factor,
+            sysbench_tables=args.sysbench_tables,
+            sysbench_table_size=args.sysbench_table_size,
             force_recreate_instances=args.force_recreate_instances,
             cleanup_instances=args.cleanup_instances,
             skip_schema_init=args.skip_schema_init,
