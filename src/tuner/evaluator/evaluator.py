@@ -1247,6 +1247,42 @@ class Evaluator:
 
         return metrics
 
+    def _vacuum_after_dml(
+        self,
+        db_config: DatabaseConfig,
+        worker_id: Optional[int] = None
+    ) -> None:
+        """
+        Run VACUUM ANALYZE after DML-heavy workloads to prevent table bloat.
+        
+        Only executes for OLTP and mixed workloads that contain
+        UPDATE/DELETE/INSERT operations which create dead tuples.
+        """
+        # Skip for read-only workloads (OLAP, TPC-H)
+        if self.config.workload_type.value in ('olap', 'tpch'):
+            return
+        
+        logger = (
+            get_logger(__name__, worker_id=worker_id)
+            if worker_id is not None else self.logger
+        )
+        
+        try:
+            conn = get_connection(config=db_config)
+            conn.autocommit = True  # VACUUM cannot run inside a transaction
+            cursor = conn.cursor()
+            
+            start = time.time()
+            cursor.execute("VACUUM ANALYZE")
+            elapsed = time.time() - start
+            
+            logger.debug("VACUUM ANALYZE completed in %.2fs", elapsed)
+            cursor.close()
+            conn.close()
+            
+        except Exception as e:
+            logger.warning("Post-workload VACUUM ANALYZE failed: %s", e)
+
     def evaluate_worker(
         self,
         worker: Worker,
@@ -1435,6 +1471,9 @@ class Evaluator:
                 metrics.cache_hit_ratio = system_metrics['cache_hit_ratio']
             if 'memory_utilization' in system_metrics:
                 metrics.memory_utilization = system_metrics['memory_utilization']
+
+            # Clean up dead tuples from DML operations to prevent bloat between generations
+            self._vacuum_after_dml(worker.db_config, worker_id=worker.worker_id)
 
             base_score = self.config.metric_config.compute_score(metrics)
 

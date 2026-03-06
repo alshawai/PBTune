@@ -173,6 +173,8 @@ class Population:
         self.history: List[GenerationResult] = []
 
         self.best_overall_score: float = 0.0
+        self.best_overall_metrics: Optional[PerformanceMetrics] = None
+        self.best_overall_config: Dict[str, Any] = {}
         self.generations_without_improvement: int = 0
 
         # Snapshot support (configured via setup_snapshots() method)
@@ -482,6 +484,20 @@ class Population:
                         metric_config.workload_type.value,
                         len(all_metrics)
                     )
+
+                    # Rescore current generation and best overall score with new adaptive ranges
+                    logger.info("♻️  Rescoring current generation with adaptive ranges...")
+                    for worker in self.workers:
+                        if worker.metrics is not None:
+                            worker.performance_score = metric_config.compute_score(worker.metrics)
+
+                    logger.info(
+                        "♻️  Resetting historical best score to align with new adaptive bounds"
+                    )
+                    self.best_overall_score = 0.0
+                    self.best_overall_metrics = None
+                    self.best_overall_config = {}
+                    self.generations_without_improvement = 0
                 else:
                     logger.debug("Metric ranges already initialized, skipping update")
             except AttributeError as e:
@@ -574,6 +590,8 @@ class Population:
 
         if result.best_score > self.best_overall_score:
             self.best_overall_score = result.best_score
+            self.best_overall_metrics = best_worker.metrics
+            self.best_overall_config = best_worker.knob_config.copy()
             self.generations_without_improvement = 0
             logger.info("New best score: %.4f", self.best_overall_score)
         else:
@@ -780,15 +798,15 @@ class Population:
                 saturation = metric_config.detect_saturation(worker.metrics)
                 if saturation['any']:
                     saturated_workers.append(worker)
-        
+
         # If no saturation, nothing to do
         if not saturated_workers:
             return
-        
+
         # Find the best saturated worker (highest PRE-saturation score)
         best_saturated_worker = max(saturated_workers, key=lambda w: w.performance_score)
         best_saturated_pre_score = best_saturated_worker.performance_score
-        
+
         logger.info(
             "⚠️  Score saturation detected in %d/%d workers (generation %d)",
             len(saturated_workers), len(self.workers), self.current_generation
@@ -802,13 +820,13 @@ class Population:
         current_metrics = [w.metrics for w in self.workers if w.metrics is not None]
         ranges_expanded = metric_config.expand_ranges_for_metrics(
             current_metrics,
-            expansion_factor=0.5  # 50% headroom for continued improvement
+            expansion_factor=0.25  # 25% headroom for continued improvement
         )
-        
+
         if not ranges_expanded:
             logger.debug("Ranges not expanded, no rescoring needed")
             return
-        
+
         # Rescore all workers in current generation with new ranges
         logger.info("♻️  Rescoring current generation with expanded ranges...")
         for worker in self.workers:
@@ -816,41 +834,25 @@ class Population:
                 old_score = worker.performance_score
                 new_score = metric_config.compute_score(worker.metrics)
                 worker.performance_score = new_score
-                
+
                 if abs(new_score - old_score) > 0.5:  # Log significant changes
                     logger.debug(
                         "  Worker-%d: %.4f → %.4f (Δ%.4f)",
                         worker.worker_id, old_score, new_score, new_score - old_score
                     )
-        
-        # Get the POST-saturation score of the best saturated worker
-        best_saturated_post_score = best_saturated_worker.performance_score
-        
-        # Update best overall score ONLY if:
-        # 1. The best saturated worker's PRE-saturation score indicated improvement
-        #    (they hit the ceiling, showing they're better than previous best)
-        # 2. Use their POST-saturation score as the new best (fair comparison)
-        #
-        # NOTE: POST-saturation score may be lower than PRE-saturation due to
-        # expanded ranges, but it's the "true" score with proper normalization
-        if best_saturated_pre_score >= self.best_overall_score * 0.95:  # Within 5% indicates ceiling hit
-            logger.info(
-                "✨ Updating best score: %.4f → %.4f (Worker-%d POST-saturation)",
-                self.best_overall_score, best_saturated_post_score,
-                best_saturated_worker.worker_id
+
+        old_unscaled_best = self.best_overall_score
+        if self.best_overall_metrics is not None:
+            self.best_overall_score = metric_config.compute_score(
+                self.best_overall_metrics
             )
             logger.info(
-                "    (Worker-%d showed improvement by hitting saturation at %.4f)",
-                best_saturated_worker.worker_id, best_saturated_pre_score
+                "♻️  Rescored historical best score on expanded bounds: %.4f → %.4f",
+                old_unscaled_best, self.best_overall_score
             )
-            self.best_overall_score = best_saturated_post_score
-            self.generations_without_improvement = 0
-        else:
-            logger.debug(
-                "No best score update: saturated worker's PRE-score %.4f didn't "
-                "exceed previous best %.4f",
-                best_saturated_pre_score, self.best_overall_score
-            )
+
+        # record_generation() will natively handle comparing the current workers 
+        # (now rescored) against the historical best (also rescored).
 
     def get_best_configuration(self) -> tuple[Dict[str, Any], float]:
         """
@@ -861,8 +863,10 @@ class Population:
         tuple[Dict[str, Any], float]
             (best_config, best_score) tuple
         """
-        best_worker = get_best_worker(self.workers)
-        return best_worker.knob_config.copy(), best_worker.performance_score  # type: ignore
+        if not self.best_overall_config:
+            best_worker = get_best_worker(self.workers)
+            return best_worker.knob_config.copy(), best_worker.performance_score  # type: ignore
+        return self.best_overall_config.copy(), self.best_overall_score
 
     def get_population_summary(self) -> Dict[str, Any]:
         """
