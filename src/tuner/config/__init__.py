@@ -24,6 +24,7 @@ from src.tuner.config.tuner_config import (
     STANDARD_CONFIG,
     THOROUGH_CONFIG,
     RESEARCH_CONFIG,
+    EXTREME_CONFIG,
 )
 
 __all__ = [
@@ -41,4 +42,5 @@ __all__ = [
     "STANDARD_CONFIG",
     "THOROUGH_CONFIG",
     "RESEARCH_CONFIG",
+    "EXTREME_CONFIG",
 ]
