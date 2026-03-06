@@ -82,8 +82,11 @@ class PerformanceMetrics:
     latency_p50: float = 0.0
     latency_p95: float = 0.0
     latency_p99: float = 0.0
+    latency_unit: str = "ms"
 
-    throughput: float = 0.0  # Queries/second or TPS
+    throughput: float = 0.0
+    throughput_unit: str = "TPS"
+    
     total_queries: int = 0
     total_time: float = 0.0
 
@@ -102,7 +105,9 @@ class PerformanceMetrics:
             "latency_p50": self.latency_p50,
             "latency_p95": self.latency_p95,
             "latency_p99": self.latency_p99,
+            "latency_unit": self.latency_unit,
             "throughput": self.throughput,
+            "throughput_unit": self.throughput_unit,
             "total_queries": float(self.total_queries),
             "total_time": self.total_time,
             "error_rate": self.error_rate,
@@ -116,9 +121,10 @@ class PerformanceMetrics:
         """Human-readable representation"""
         return (
             f"PerformanceMetrics(\n"
-            f"  Latency: p50={self.latency_p50:.2f}ms, "
-            f"p95={self.latency_p95:.2f}ms, p99={self.latency_p99:.2f}ms\n"
-            f"  Throughput: {self.throughput:.2f} TPS/QPS\n"
+            f"  Latency: p50={self.latency_p50:.2f}{self.latency_unit}, "
+            f"p95={self.latency_p95:.2f}{self.latency_unit}, "
+            f"p99={self.latency_p99:.2f}{self.latency_unit}\n"
+            f"  Throughput: {self.throughput:.2f} {self.throughput_unit}\n"
             f"  Queries: {self.total_queries} in {self.total_time:.2f}s\n"
             f"  Errors: {self.error_rate*100:.2f}%\n"
             f"Memory: {self.memory_utilization*100:.1f}%\n"
@@ -158,9 +164,9 @@ class MetricConfig:
     latency_max : float
         Expected maximum latency (ms) - worst acceptable performance
     throughput_min : float
-        Expected minimum throughput (QPS) - worst acceptable performance
+        Expected minimum throughput (TPS) - worst acceptable performance
     throughput_max : float
-        Expected maximum throughput (QPS) - best case performance
+        Expected maximum throughput (TPS) - best case performance
     """
 
     workload_type: WorkloadType
@@ -285,7 +291,7 @@ class MetricConfig:
         logger.info(
             "Updated normalization ranges from %d observations:\n"
             "  Latency (%s): [%.2f, %.2f] ms\n"
-            "  Throughput: [%.2f, %.2f] QPS\n"
+            "  Throughput: [%.2f, %.2f] TPS\n"
             "  (using 5th/95th percentiles + %.0f%% padding)",
             len(historical_metrics), self.latency_metric,
             self.latency_min, self.latency_max,
@@ -321,7 +327,7 @@ class MetricConfig:
             - 'any': True if any component is saturated
         """
         saturation = {'latency': False, 'throughput': False, 'any': False}
-        
+
         # Check latency saturation by computing its normalized value
         latency = getattr(metrics, f"latency_{self.latency_metric}")
         if latency > 0:
@@ -333,7 +339,7 @@ class MetricConfig:
             )
             if latency_normalized >= saturation_threshold:
                 saturation['latency'] = True
-        
+
         # Check throughput saturation by computing its normalized value
         if metrics.throughput > 0:
             throughput_clamped = np.clip(
@@ -347,9 +353,9 @@ class MetricConfig:
             )
             if throughput_normalized >= saturation_threshold:
                 saturation['throughput'] = True
-        
+
         saturation['any'] = saturation['latency'] or saturation['throughput']
-        
+
         return saturation
 
     def expand_ranges_for_metrics(
@@ -377,7 +383,7 @@ class MetricConfig:
         """
         if not metrics_list:
             return False
-        
+
         latencies = [
             getattr(m, f"latency_{self.latency_metric}")
             for m in metrics_list
@@ -387,14 +393,14 @@ class MetricConfig:
             m.throughput for m in metrics_list
             if m.throughput > 0
         ]
-        
+
         if not latencies or not throughputs:
             return False
-        
+
         expanded = False
         old_lat_min, old_lat_max = self.latency_min, self.latency_max
         old_thr_min, old_thr_max = self.throughput_min, self.throughput_max
-        
+
         # Use percentiles for robustness (if enough samples)
         if len(latencies) >= 3:
             lat_p05 = float(np.percentile(latencies, 5))
@@ -402,52 +408,52 @@ class MetricConfig:
         else:
             lat_p05 = float(min(latencies))
             lat_p95 = float(max(latencies))
-        
+
         if len(throughputs) >= 3:
             thr_p05 = float(np.percentile(throughputs, 5))
             thr_p95 = float(np.percentile(throughputs, 95))
         else:
             thr_p05 = float(min(throughputs))
             thr_p95 = float(max(throughputs))
-        
+
         # Expand latency range if best performance exceeds current bounds
         if lat_p05 < self.latency_min:
             lat_range = self.latency_max - self.latency_min
             new_min = lat_p05 - (expansion_factor * lat_range)
             self.latency_min = float(max(0.1, new_min))
             expanded = True
-        
+
         if lat_p95 > self.latency_max:
             lat_range = self.latency_max - self.latency_min
             new_max = lat_p95 + (expansion_factor * lat_range)
             self.latency_max = float(new_max)
             expanded = True
-        
+
         # Expand throughput range if best performance exceeds current bounds
         if thr_p05 < self.throughput_min:
             thr_range = self.throughput_max - self.throughput_min
             new_min = thr_p05 - (expansion_factor * thr_range)
             self.throughput_min = float(max(0.1, new_min))
             expanded = True
-        
+
         if thr_p95 > self.throughput_max:
             thr_range = self.throughput_max - self.throughput_min
             new_max = thr_p95 + (expansion_factor * thr_range)
             self.throughput_max = float(new_max)
             expanded = True
-        
+
         if expanded:
             logger.info(
                 "⚡ Expanded normalization ranges due to saturation:\n"
                 "  Latency (%s): [%.2f, %.2f] → [%.2f, %.2f] ms\n"
-                "  Throughput: [%.2f, %.2f] → [%.2f, %.2f] QPS\n"
+                "  Throughput: [%.2f, %.2f] → [%.2f, %.2f] TPS\n"
                 "  (expansion: %.0f%% of range for headroom)",
                 self.latency_metric,
                 old_lat_min, old_lat_max, self.latency_min, self.latency_max,
                 old_thr_min, old_thr_max, self.throughput_min, self.throughput_max,
                 expansion_factor * 100
             )
-        
+
         return expanded
 
     def compute_score(self, metrics: PerformanceMetrics) -> float:
@@ -613,24 +619,24 @@ OLTP_METRIC_CONFIG = MetricConfig(
     weight_memory=0.05,       # Minor: Memory headroom
     weight_error=0.05,        # Minor: Error penalty
     latency_metric="p95",     # SLA-critical metric
-    latency_min=1.0,          # Fallback: 1ms
-    latency_max=1000.0,       # Fallback: 1s
+    latency_min=10.0,         # Fallback: 10ms
+    latency_max=200.0,        # Fallback: 200ms
     throughput_min=10.0,      # Fallback: 10 TPS
-    throughput_max=100000.0,  # Fallback: 100K TPS
+    throughput_max=1000.0,    # Fallback: 1000 TPS
 )
 
-# Priorities: Query execution time, Resource efficiency
+# Priorities: Outlier latency (P99) and Total Execution Time
 OLAP_METRIC_CONFIG = MetricConfig(
     workload_type=WorkloadType.OLAP,
-    weight_latency=0.58,      # Primary: Fast query completion
-    weight_throughput=0.22,   # Minor: Queries per hour
-    weight_memory=0.15,       # Important: Memory efficiency
-    weight_error=0.05,        # Minor: Error penalty
-    latency_metric="p50",     # Median query time
-    latency_min=10.0,         # Fallback: 10ms
-    latency_max=300000.0,     # Fallback: 5 minutes
-    throughput_min=0.1,       # Fallback: 0.1 QPS
-    throughput_max=1000.0,    # Fallback: 1K QPS
+    weight_latency=0.55,      # Primary: Worst-case query (P99) must be bounded
+    weight_throughput=0.30,   # Secondary: Total throughput (QphH)
+    weight_memory=0.10,       # Regularization: Safe memory allocation
+    weight_error=0.05,        # Necessity: Heavy penalty for fatal parameters
+    latency_metric="p99",     # Academic Standard for analytical optimization
+    latency_min=100.0,        # Fallback: 100ms
+    latency_max=20000.0,      # Fallback: 20s
+    throughput_min=10,        # Fallback: 10 QphH
+    throughput_max=1000.0,    # Fallback: 1000 QphH
 )
 
 # Balanced approach for hybrid workloads
@@ -641,10 +647,10 @@ MIXED_METRIC_CONFIG = MetricConfig(
     weight_memory=0.15,
     weight_error=0.10,
     latency_metric="p95",
-    latency_min=1.0,          # Fallback: 1ms
-    latency_max=5000.0,       # Fallback: 5s
-    throughput_min=1.0,       # Fallback: 1 QPS
-    throughput_max=50000.0,   # Fallback: 50K QPS
+    latency_min=100.0,       # Fallback: 100ms
+    latency_max=20000.0,     # Fallback: 20s
+    throughput_min=10,       # Fallback: 10 TPS
+    throughput_max=1000.0,   # Fallback: 1000 TPS
 )
 
 

@@ -73,6 +73,16 @@ class PBTConfig:
         regardless of cache state.
         Default: 42 (deterministic by default for fair comparison)
         
+    scale_factor : float
+        Database size scale multiplier. For OLAP (TPC-H), this defines the GB generated
+        by dbgen (e.g., 0.1 = ~100MB, 1.0 = ~1GB). For OLTP, this may govern table sizes.
+        Default: 1.0
+        
+    warmup_passes : int
+        Number of complete catalog warmup passes to execute silently before measurement. 
+        Highly relevant for analytical workloads rather than arbitrary duration constraints.
+        Default: 0
+        
     enable_snapshots : bool
         Whether to enable database snapshot restoration between generations.
         When True, workers' data directories are restored to a baseline state
@@ -102,6 +112,8 @@ class PBTConfig:
     evaluation_duration: float = 30.0
     warmup_duration: float = 30.0
     workload_seed: Optional[int] = 42
+    scale_factor: float = 1.0
+    warmup_passes: int = 0
     enable_snapshots: bool = False
     snapshot_restore_interval: int = 1
     random_seed: Optional[int] = None
@@ -145,6 +157,12 @@ class PBTConfig:
         if self.snapshot_restore_interval < 1:
             raise ValueError("snapshot_restore_interval must be at least 1")
 
+        if self.scale_factor <= 0:
+            raise ValueError("scale_factor must be positive")
+
+        if self.warmup_passes < 0:
+            raise ValueError("warmup_passes cannot be negative")
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -173,6 +191,8 @@ class PBTConfig:
             "evaluation_duration": self.evaluation_duration,
             "warmup_duration": self.warmup_duration,
             "workload_seed": self.workload_seed,
+            "scale_factor": self.scale_factor,
+            "warmup_passes": self.warmup_passes,
             "enable_snapshots": self.enable_snapshots,
             "snapshot_restore_interval": self.snapshot_restore_interval,
             "random_seed": self.random_seed,
@@ -205,6 +225,8 @@ RAPID_CONFIG = PBTConfig(
     evaluation_duration=15.0,
     warmup_duration=10.0,
     workload_seed=42,
+    scale_factor=0.01,
+    warmup_passes=0,
     enable_snapshots=False,
     verbose=True
 )
@@ -219,6 +241,8 @@ STANDARD_CONFIG = PBTConfig(
     evaluation_duration=30.0,
     warmup_duration=30.0,
     workload_seed=42,
+    scale_factor=0.1,
+    warmup_passes=1,
     enable_snapshots=True,
     snapshot_restore_interval=5,
     verbose=True
@@ -234,6 +258,8 @@ THOROUGH_CONFIG = PBTConfig(
     evaluation_duration=45.0,
     warmup_duration=60.0,
     workload_seed=42,
+    scale_factor=1.0,
+    warmup_passes=1,
     enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True
@@ -249,6 +275,25 @@ RESEARCH_CONFIG = PBTConfig(
     evaluation_duration=60.0,
     warmup_duration=60.0,
     workload_seed=42,
+    scale_factor=1.0,
+    warmup_passes=2,
+    enable_snapshots=True,
+    snapshot_restore_interval=1,
+    verbose=True
+)
+
+# Strategy: Heavy-duty benchmark requirements (>10GB analytical scaling)
+EXTREME_CONFIG = PBTConfig(
+    population_size=16,
+    num_generations=200,
+    exploit_quantile=0.2,
+    ready_interval=10,
+    num_parallel_workers=16,
+    evaluation_duration=300.0,
+    warmup_duration=120.0,
+    workload_seed=42,
+    scale_factor=10.0,
+    warmup_passes=2,
     enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True
