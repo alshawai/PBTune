@@ -49,10 +49,6 @@ class PBTConfig:
         (min_factor, max_factor) for perturbing numerical knobs during exploration.
         Default: (0.8, 1.2) means ±20% perturbation
         
-    resample_probability : float
-        Probability of resampling a knob completely instead of perturbing.
-        Default: 0.0 (pure perturbation, no resampling)
-        
     num_parallel_workers : int
         Number of parallel workers for evaluation. Should be <= population_size.
         Default: 4 (use all cores)
@@ -115,7 +111,6 @@ class PBTConfig:
     exploit_quantile: float = 0.2
     ready_interval: int = 1
     perturbation_factors: Tuple[float, float] = (0.8, 1.2)
-    resample_probability: float = 0.0
     num_parallel_workers: int = 4
     evaluation_duration: float = 30.0
     warmup_duration: float = 30.0
@@ -149,9 +144,6 @@ class PBTConfig:
             raise ValueError("perturbation min must be less than max")
         if self.perturbation_factors[0] <= 0:
             raise ValueError("perturbation factors must be positive")
-
-        if not 0.0 <= self.resample_probability <= 1.0:
-            raise ValueError("resample_probability must be between 0 and 1")
 
         if self.num_parallel_workers < 1:
             raise ValueError("num_parallel_workers must be at least 1")
@@ -196,7 +188,6 @@ class PBTConfig:
             "exploit_quantile": self.exploit_quantile,
             "ready_interval": self.ready_interval,
             "perturbation_factors": self.perturbation_factors,
-            "resample_probability": self.resample_probability,
             "num_parallel_workers": self.num_parallel_workers,
             "evaluation_duration": self.evaluation_duration,
             "warmup_duration": self.warmup_duration,
