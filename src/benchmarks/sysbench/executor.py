@@ -63,6 +63,21 @@ class SysbenchExecutor(BenchmarkExecutor):
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         subprocess.run(cmd + ["prepare"], check=True, stdout=subprocess.DEVNULL)
+
+        # Run VACUUM ANALYZE to stabilize statistics and prevent 'autoanalyze'
+        # from randomly triggering during benchmark
+        try:
+            conn = get_connection(config=db_config)
+            conn.autocommit = True
+            cursor = conn.cursor()
+            for i in range(1, self.tables + 1):
+                cursor.execute(f"VACUUM ANALYZE sbtest{i}")
+            cursor.close()
+            conn.close()
+            logger.debug("Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables.")
+        except Exception as e:
+            logger.warning("Failed to post-vacuum sysbench tables: %s", e)
+
         logger.info("Sysbench prepare complete.")
 
     def validate(self, db_config: DatabaseConfig) -> bool:
