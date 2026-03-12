@@ -25,6 +25,10 @@ from src.tuner.utils.snapshot_manager import (
     SnapshotMethod,
     detect_best_snapshot_method,
 )
+from src.tuner.utils.hardware_info import (
+    get_system_info,
+    log_system_info,
+)
 
 __all__ = [
     'KnobApplicator',
@@ -39,4 +43,6 @@ __all__ = [
     'SnapshotConfig',
     'SnapshotMethod',
     'detect_best_snapshot_method',
+    'get_system_info',
+    'log_system_info',
 ]
