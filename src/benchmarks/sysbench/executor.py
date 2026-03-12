@@ -92,7 +92,7 @@ class SysbenchExecutor(BenchmarkExecutor):
                 "SELECT count(*) FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
             )
-            count = cursor.fetchone()[0]
+            count = cursor.fetchone()[0]  # type: ignore
 
             if count < self.tables:
                 logger.debug("Sysbench tables missing (found %d, expected %d)", count, self.tables)
@@ -102,9 +102,9 @@ class SysbenchExecutor(BenchmarkExecutor):
 
             # Then check if they're actually populated (just sample table 1).
             cursor.execute("SELECT max(id) FROM sbtest1")
-            max_id = cursor.fetchone()[0]
+            max_id = cursor.fetchone()[0]  # type: ignore
 
-            # Sysbench insert might not be exactly equal to table_size if there were errors 
+            # Sysbench insert might not be exactly equal to table_size if there were errors
             # during prepare, but it should be close or equal
             if max_id is None or max_id < (self.table_size * 0.9):
                 logger.debug(
@@ -136,21 +136,14 @@ class SysbenchExecutor(BenchmarkExecutor):
         duration = kwargs.get("duration", 60.0)
         warmup = kwargs.get("warmup", 30.0)
 
-        if warmup > 0:
-            logger.debug("Sysbench warmup: %.0fs", warmup)
-            self._run_sysbench(
-                db_config,
-                duration=int(warmup),
-                seed=workload_seed,
-            )
-
         logger.debug(
-            "Sysbench measurement: %ss with %d threads (seed=%s)",
-            duration, self.threads, workload_seed,
+            "Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)",
+            duration, self.threads, warmup, workload_seed,
         )
         stdout, stderr, returncode = self._run_sysbench(
             db_config,
             duration=int(duration),
+            warmup=int(warmup),
             seed=workload_seed,
         )
 
@@ -163,7 +156,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             metrics.error_rate = 1.0
             return metrics
 
-        metrics = self._parse_output(stdout, logger)
+        metrics = self._parse_output(stdout)
         return metrics
 
     def _build_base_cmd(self, db_config: DatabaseConfig) -> list[str]:
@@ -185,6 +178,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         self,
         db_config: DatabaseConfig,
         duration: int,
+        warmup: int = 0,
         seed: Optional[int] = None,
     ) -> tuple[str, str, int]:
         """Spawn the sysbench process and wait for completion."""
@@ -193,6 +187,9 @@ class SysbenchExecutor(BenchmarkExecutor):
             f"--threads={self.threads}",
             "--report-interval=0",
         ]
+
+        if warmup > 0:
+            cmd.append(f"--warmup={warmup}")
 
         if seed is not None:
             cmd.append(f"--rand-seed={seed}")
@@ -209,7 +206,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         return stdout, stderr, process.returncode
 
     @staticmethod
-    def _parse_output(stdout: str, logger) -> PerformanceMetrics:
+    def _parse_output(stdout: str) -> PerformanceMetrics:
         """Extract TPS, p95 latency, and error rate from sysbench stdout."""
         metrics = PerformanceMetrics()
 
