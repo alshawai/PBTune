@@ -509,7 +509,6 @@ class Population:
     def exploit_and_explore(
         self,
         require_ready: bool = True,
-        verbose: bool = False,
         exclude_knobs: Optional[List[str]] = None
     ) -> int:
         """
@@ -540,7 +539,6 @@ class Population:
             perturbation_factors=self.config.perturbation_factors,
             current_generation=self.current_generation,
             require_ready=require_ready,
-            verbose=verbose,
             exclude_knobs=exclude_knobs
         )
 
@@ -591,7 +589,7 @@ class Population:
         if result.best_score > self.best_overall_score:
             self.best_overall_score = result.best_score
             self.best_overall_metrics = best_worker.metrics
-            self.best_overall_config = best_worker.knob_config.copy()
+            self.best_overall_config = best_worker.knob_config.copy()  # type: ignore
             self.generations_without_improvement = 0
             logger.info("New best score: %.4f", self.best_overall_score)
         else:
@@ -604,7 +602,7 @@ class Population:
         evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         require_ready: bool = True,
-        verbose: bool = False,
+        max_workers: Optional[int] = None,
     ) -> GenerationResult:
         """
         Execute one complete PBT generation.
@@ -623,8 +621,10 @@ class Population:
             Whether to evaluate workers in parallel
         require_ready : bool, default=True
             Only exploit-explore ready workers
-        verbose : bool, default=False
-            Enable verbose logging
+        max_workers : Optional[int], default=None
+            Maximum parallel workers for evaluation. When less than
+            population_size, workers evaluate in batches. If None,
+            defaults to population_size.
         
         Returns
         -------
@@ -657,11 +657,14 @@ class Population:
                     logger.debug("Stopping PostgreSQL instances for snapshot restoration")
                     for worker_id in range(len(self.workers)):
                         self.instance_manager.stop_instance(worker_id)
-                    
+
                     # Restore all worker databases from baseline snapshot
-                    logger.debug("Restoring %d worker databases from baseline", len(self.worker_data_dirs))
-                    self.snapshot_manager.restore_all_workers(self.worker_data_dirs)
-                    
+                    logger.debug(
+                        "Restoring %d worker databases from baseline",
+                        len(self.worker_data_dirs)  # type: ignore
+                    )
+                    self.snapshot_manager.restore_all_workers(self.worker_data_dirs)  # type: ignore
+
                     # Restart all PostgreSQL instances
                     logger.debug("Restarting PostgreSQL instances")
                     for worker_id in range(len(self.workers)):
@@ -704,7 +707,7 @@ class Population:
             else:
                 logger.warning("Snapshot restoration requested but instance_manager not available")
 
-        self.evaluate_generation(evaluate_fn, parallel=parallel)
+        self.evaluate_generation(evaluate_fn, parallel=parallel, max_workers=max_workers)
 
         self.update_metric_ranges_if_needed()
 
@@ -713,7 +716,6 @@ class Population:
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,
-            verbose=verbose,
             exclude_knobs=None  # No restrictions in multi-instance mode
         )
 
