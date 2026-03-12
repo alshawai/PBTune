@@ -80,6 +80,7 @@ from src.tuner.utils.logger_config import (
     ColorPalette
 )
 from src.tuner.utils.instance_manager import PostgresInstanceManager
+from src.tuner.utils.hardware_info import get_system_info, log_system_info
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -263,6 +264,8 @@ class PBTTuner:
             template_db_config=None if skip_schema_init else self.db_config,
             schema_provider=workload_executor,
         )
+
+        self.system_info = get_system_info()
 
         self.start_time: Optional[float] = None
         self.generation_history = []
@@ -476,6 +479,7 @@ class PBTTuner:
             Final tuning results
         """
         log_section_header(self.logger, "PBT PostgreSQL Tuner - Starting Optimization")
+        log_system_info(self.logger, self.system_info)
         self.logger.info("Knob Tier:       %s (%d knobs)", self.knob_tier, len(self.knob_space))
         self.logger.info("Population Size: %d", self.pbt_config.population_size)
         self.logger.info("Max Generations: %d", self.pbt_config.num_generations)
@@ -484,8 +488,10 @@ class PBTTuner:
         self.start_time = time.time()
 
         log_section_header(self.logger, "Setting Up PostgreSQL Instances")
-        self.logger.info("Creating %d PostgreSQL instances for parallel execution...",
-                   self.pbt_config.population_size)
+        self.logger.info(
+            "Creating %d PostgreSQL instances for parallel execution...",
+            self.pbt_config.population_size
+        )
 
         try:
             baseline_path = Path(
@@ -688,7 +694,8 @@ class PBTTuner:
                 'generations_without_improvement': int(
                     self.population.generations_without_improvement
                 ),
-            }
+            },
+            'system_info': self.system_info,
         }
 
         json_file = self.output_dir / f"pbt_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
