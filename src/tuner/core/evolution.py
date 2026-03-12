@@ -122,7 +122,6 @@ def execute_exploit_explore(
     perturbation_factors: Tuple[float, float] = (0.8, 1.2),
     current_generation: int = 0,
     require_ready: bool = True,
-    verbose: bool = True,
     exclude_knobs: Optional[List[str]] = None
 ) -> int:
     """
@@ -149,17 +148,9 @@ def execute_exploit_explore(
         Only exploit ready workers
         Default: True
     
-    verbose : bool
-        Enable verbose logging
-        Default: True
-    
     exclude_knobs : Optional[List[str]]
         Knobs to exclude from perturbation (keep constant)
         Used for two-stage PBT where restart knobs are frozen between restart intervals
-        
-    verbose : bool
-        Print exploitation details
-        Default: True
         
     Returns
     -------
@@ -197,25 +188,21 @@ def execute_exploit_explore(
     )
 
     if not pairs:
-        if verbose:
-            logger.info("No workers exploited (not enough ready workers)")
+        logger.debug("No workers exploited (not enough ready workers)")
         return 0
 
     for poor_idx, elite_idx in pairs:
         poor_worker = workers[poor_idx]
         elite_worker = workers[elite_idx]
 
-        if verbose:
-            poor_logger = WorkerLoggerAdapter(logger, {'worker_id': poor_worker.worker_id})
-            elite_logger = WorkerLoggerAdapter(logger, {'worker_id': elite_worker.worker_id})
 
-            logger.info(
-                "Worker-%d (score=%.4f) ← exploits Worker-%d (score=%.4f)",
-                poor_worker.worker_id,
-                poor_worker.performance_score,
-                elite_worker.worker_id,
-                elite_worker.performance_score
-            )
+        logger.info(
+            "Worker-%d (score=%.4f) ← exploits Worker-%d (score=%.4f)",
+            poor_worker.worker_id,
+            poor_worker.performance_score,
+            elite_worker.worker_id,
+            elite_worker.performance_score
+        )
 
         poor_worker.clone_from(
             elite_worker,
@@ -229,8 +216,7 @@ def execute_exploit_explore(
             exclude_knobs=exclude_knobs
         )
 
-        if verbose:
-            logger.info("  → Copied config and applied perturbation")
+        logger.debug("  → Copied config and applied perturbation")
 
     return len(pairs)
 

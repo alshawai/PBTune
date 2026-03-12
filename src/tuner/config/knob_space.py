@@ -473,8 +473,15 @@ class KnobSpace:
             knob_def = self.knobs[knob_name]
 
             if knob_def.knob_type == KnobType.INTEGER:
-                factor = rng.uniform(perturbation_factor[0], perturbation_factor[1])
-                new_value = int(value * factor)
+                if knob_def.scale == KnobScale.LOG and value > 0:
+                    log_factor = rng.uniform(
+                        np.log(perturbation_factor[0]),
+                        np.log(perturbation_factor[1]),
+                    )
+                    new_value = int(np.exp(np.log(value) + log_factor))
+                else:
+                    factor = rng.uniform(perturbation_factor[0], perturbation_factor[1])
+                    new_value = int(value * factor)
 
                 # Ensuring valid range...
                 if knob_def.min_value is not None:
@@ -485,8 +492,15 @@ class KnobSpace:
                 perturbed[knob_name] = new_value
 
             elif knob_def.knob_type == KnobType.REAL:
-                factor = rng.uniform(perturbation_factor[0], perturbation_factor[1])
-                new_value = value * factor
+                if knob_def.scale == KnobScale.LOG and value > 0:
+                    log_factor = rng.uniform(
+                        np.log(perturbation_factor[0]),
+                        np.log(perturbation_factor[1]),
+                    )
+                    new_value = np.exp(np.log(value) + log_factor)
+                else:
+                    factor = rng.uniform(perturbation_factor[0], perturbation_factor[1])
+                    new_value = value * factor
 
                 if knob_def.min_value is not None:
                     new_value = max(new_value, knob_def.min_value)

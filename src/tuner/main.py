@@ -219,7 +219,9 @@ class PBTTuner:
                 tables=self.sysbench_tables,
                 table_size=self.sysbench_table_size
             )  # type: ignore
-            self.snapshot_identifier = f"sysbench_t{self.sysbench_tables}_s{self.sysbench_table_size}"
+            self.snapshot_identifier = (
+                f"sysbench_t{self.sysbench_tables}_s{self.sysbench_table_size}"
+            )
         elif benchmark == 'tpch':
             self.logger.info(
                 "🔧 Using TPC-H benchmark (SF=%.1f) for analytical workload evaluation.",
@@ -423,7 +425,7 @@ class PBTTuner:
             self.evaluate_worker,
             parallel=True,
             require_ready=True,
-            verbose=True
+            max_workers=self.pbt_config.num_parallel_workers,
         )
 
         if self._restart_logged_this_gen:
