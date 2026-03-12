@@ -56,7 +56,6 @@ from src.tuner.config import (
     EXTREME_CONFIG,
 )
 from src.tuner.core.population import Population, PopulationConfig
-from src.tuner.core.evolution import get_best_worker
 from src.tuner.core.worker import Worker
 from src.tuner.evaluator.evaluator import (
     Evaluator,
@@ -198,14 +197,17 @@ class PBTTuner:
             warmup_passes=self.pbt_config.warmup_passes,
         )
 
-        self.scale_factor = pbt_config.scale_factor if scale_factor is None else scale_factor
+        self.scale_factor = (
+            pbt_config.scale_factor  # type: ignore
+            if scale_factor is None else scale_factor
+        )
         self.sysbench_tables = (
-            pbt_config.sysbench_tables
+            pbt_config.sysbench_tables  # type: ignore
             if sysbench_tables is None
             else sysbench_tables
         )
         self.sysbench_table_size = (
-            pbt_config.sysbench_table_size
+            pbt_config.sysbench_table_size  # type: ignore
             if sysbench_table_size is None
             else sysbench_table_size
         )
@@ -265,6 +267,8 @@ class PBTTuner:
 
         self.current_generation: int = 0
         self.restart_count: int = 0
+        self._restart_logged_this_gen: bool = False
+        self._last_logged_best_score: float = -1.0
 
         info_color = ColorPalette.get_level_color('INFO', 'ansi')
         self.logger.info(
@@ -351,7 +355,7 @@ class PBTTuner:
             )
 
             # Track restart occurrence (will be logged once per generation, not per worker)
-            if restart_occurred and not hasattr(self, '_restart_logged_this_gen'):
+            if restart_occurred and not self._restart_logged_this_gen:
                 self._restart_logged_this_gen = True
                 self.restart_count += 1
 
@@ -413,8 +417,7 @@ class PBTTuner:
 
         self.current_generation = generation
 
-        if hasattr(self, '_restart_logged_this_gen'):
-            del self._restart_logged_this_gen
+        self._restart_logged_this_gen = False
 
         result = self.population.train_generation(
             self.evaluate_worker,
@@ -423,13 +426,13 @@ class PBTTuner:
             verbose=True
         )
 
-        if hasattr(self, '_restart_logged_this_gen'):
+        if self._restart_logged_this_gen:
             self.logger.info("🟢 PostgreSQL restarted (total restarts: %d)", self.restart_count)
 
         # Notify user of new high score conditionally (handles dynamic rescales upwards too)
         _, current_global_best_score = self.population.get_best_configuration()
-        if getattr(self, '_last_logged_best_score', None) != current_global_best_score:
-            if current_global_best_score > getattr(self, '_last_logged_best_score', -1.0):
+        if self._last_logged_best_score != current_global_best_score:
+            if current_global_best_score > self._last_logged_best_score:
                 self.logger.info("🎉 NEW BEST SCORE: %.4f", current_global_best_score)
             self._last_logged_best_score = current_global_best_score
 
