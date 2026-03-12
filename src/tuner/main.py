@@ -660,6 +660,10 @@ class PBTTuner:
                 'knob_tier': self.knob_tier,
                 'num_knobs': len(self.knob_space),
                 'workload_type': self.workload_type.value,
+                'benchmark_name': self.benchmark_name,
+                'scale_factor': self.scale_factor,
+                'sysbench_tables': self.sysbench_tables,
+                'sysbench_table_size': self.sysbench_table_size,
                 'population_size': self.pbt_config.population_size,
                 'total_generations': self.population.current_generation,
                 'total_time_seconds': total_time,
@@ -732,17 +736,17 @@ Examples:
   # Quick test with minimal knobs (2-3 minutes)
   python -m src.tuner.main --tier minimal --config rapid
   
-  # Standard tuning session (10-15 minutes)
+  # Standard tuning session (20-30 minutes)
   python -m src.tuner.main --tier core --config standard
   
-  # Comprehensive tuning (30-60 minutes)
+  # Comprehensive tuning (45-60 minutes)
   python -m src.tuner.main --tier standard --config thorough
   
   # Custom configuration
   python -m src.tuner.main --tier minimal --population 8 --generations 50
 
 Keep in mind that actual execution time varies significantly based
-on your hardware and configuration.
+on your hardware, configuration, and workload/benchmark.
         """
     )
 
