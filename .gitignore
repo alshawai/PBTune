@@ -3,6 +3,7 @@ Draft*.md
 *.draft
 drafts/
 .prompts/
+.chats/
 notes/
 code-snippets/
 
