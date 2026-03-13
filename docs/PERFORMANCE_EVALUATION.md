@@ -1,5 +1,9 @@
 # Performance Evaluation System
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## Overview
 
 This document explains the **Performance Evaluation System** that measures how well PostgreSQL configurations perform under workload. The evaluation system consists of three main components:

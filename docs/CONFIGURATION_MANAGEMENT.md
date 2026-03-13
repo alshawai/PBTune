@@ -1,5 +1,9 @@
 # Configuration Management System
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## Overview
 
 This document explains the **Configuration Management System** that handles PostgreSQL knob (parameter) definitions, validation, and runtime application. The system consists of two main components:

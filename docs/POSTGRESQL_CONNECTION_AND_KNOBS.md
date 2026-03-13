@@ -1,5 +1,9 @@
 # PostgreSQL Connection and Configuration Parameters System
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## Overview
 
 This document describes the comprehensive system built for connecting to PostgreSQL databases and retrieving all tunable configuration parameters (knobs) for machine learning-based database optimization. The system is organized into four main modules: `config`, `database`, `knobs`, and `scripts`.
