@@ -1,5 +1,9 @@
 # Validation of Multi-Objective Metrics in ML-Driven Database Tuning
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## 1. Abstract
 
 This document outlines the theoretical foundation and academic validity of the multi-objective weighted performance metric used within the **Population-Based Training (PBT)** auto-tuner. Specifically, it analyzes the mathematical combination of Latency (P50/P95/P99), Throughput (TPS/QphH), Memory Efficiency, and an Error Penalty. We establish that our approach not only conforms to the highest standards of contemporary academic research (e.g., OtterTune, CDBTune) but advances "safe" tuning paradigms required for production database environments.
