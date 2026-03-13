@@ -1,5 +1,9 @@
 # Environment Setup Guide
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## Database Configuration
 
 This project uses environment variables to manage database credentials securely. Follow these steps to set up your environment:

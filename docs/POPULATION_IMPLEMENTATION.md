@@ -1,5 +1,9 @@
 # Population Class Implementation Summary
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## Overview
 
 The **Population class** is the orchestrator of the PBT algorithm. It manages a pool of Worker instances, coordinates parallel evaluations, and triggers exploit-explore steps.

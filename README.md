@@ -1,5 +1,7 @@
 # Population-Based Training for PostgreSQL Configuration Tuning
 
+> Last reviewed: 2026-03-13
+
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-316192.svg)](https://www.postgresql.org/) [![License: Academic Research](https://img.shields.io/badge/License-Academic%20Research-red.svg)](#license)
 
 > **Novel Application of Evolutionary Optimization for Autonomous Database Configuration**
@@ -167,7 +169,6 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component
 │   └── tuner_knobs/              # Tiered knob selections (minimal, core, standard)
 ├── results/                      # Optimization results (JSON + HTML logs)
 ├── workloads/                    # Workload definitions (OLTP, OLAP, custom)
-├── papers/                       # Research papers (gitignored - not included in repo)
 ├── notebooks/                    # Jupyter notebooks for analysis
 ├── tests/                        # Test suite (planned - see Future Work)
 └── requirements.txt              # Python dependencies
@@ -347,7 +348,7 @@ This framework intentionally supports a two-pronged benchmarking methodology:
 - **Academic Baselines**: For scientifically rigorous evaluations without Python overhead, use external C-binaries (e.g. `--benchmark sysbench`).
 - **Custom Prototyping**: For tuning proprietary application databases, use the internal JSON-based query templates.
 
-For full architectural details on this design, please read the [Benchmarking Documentation](docs/benchmarking.md).
+For full architectural details on this design, please read the [Benchmarking Documentation](./docs/BENCHMARKING.md).
 
 ### Custom Workloads
 
@@ -385,6 +386,8 @@ See the [workloads directory README](workloads/README.md) for full formatting de
 ## Documentation
 
 Comprehensive documentation available in [`docs/`](./docs/):
+
+- **[Documentation Index](./docs/README.md)** - Navigation map for all project docs
 
 ### Core System Components
 
@@ -426,7 +429,11 @@ This work builds upon several research directions:
 
 ### Relevant Papers
 
-See [`papers/`](./papers/) directory for full collection, including:
+See the curated analysis and references in:
+
+- [`docs/ALGORITHM_COMPARISON.md`](./docs/ALGORITHM_COMPARISON.md)
+- [`docs/COMPETITIVE_ANALYSIS.md`](./docs/COMPETITIVE_ANALYSIS.md)
+- [`docs/BENCHMARKING.md`](./docs/BENCHMARKING.md)
 
 - Auto DBMS Tuner (5 papers)
 - Reinforcement Learning for DB tuning (4 papers)
@@ -548,7 +555,7 @@ Be respectful, professional, and constructive. This is academic research—criti
 
 **Academic Research License (Non-Commercial)**
 
-Copyright © 2025 Data-Vanta Research Group
+Copyright © 2025-2026 Data-Vanta Research Group
 
 This software is provided for **academic research and educational purposes only**.
 
@@ -582,10 +589,10 @@ For **commercial licensing inquiries**, contact: [Ebrahim ElShawa](mailto:imalwa
 If you use this work in academic research, please cite:
 
 ```bibtex
-@software{pbt_postgres_tuning_2025,
+@software{pbt_postgres_tuning_2026,
   author = {[Your Name / Research Group]},
   title = {Population-Based Training for PostgreSQL Configuration Tuning},
-  year = {2025},
+  year = {2026},
   publisher = {GitHub},
   url = {https://github.com/Data-Vanta/ai-database-optimization},
   note = {Academic Research Software}
