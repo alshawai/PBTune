@@ -1,5 +1,9 @@
 # Custom Workload Files
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](../docs/README.md)
+
 This directory contains workload definitions for PBT PostgreSQL Tuner.
 
 ## File Format
@@ -248,4 +252,4 @@ pip install pyyaml
 - Check for typos in SQL statements
 - Verify database connection
 
-> Check `src/tuner/evaluator/evaluator.py` for implementation details and `docs/benchmarking.md` for the full architecture overview.
+> Check `src/tuner/evaluator/evaluator.py` for implementation details and [`../docs/BENCHMARKING.md`](../docs/BENCHMARKING.md) for the full architecture overview.

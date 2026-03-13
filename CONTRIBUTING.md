@@ -1,5 +1,9 @@
 # Contributing to PBT PostgreSQL Tuning
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./docs/README.md)
+
 Thank you for your interest in contributing to this academic research project! This document outlines guidelines for collaboration and contributions.
 
 ## 🎓 Project Status
@@ -82,7 +86,7 @@ If you're interested in:
 1. Open a GitHub issue with `collaboration` label
 2. Include: Your affiliation, research interests, proposed extension
 3. Email: imalwaysforlife@gmail.com for sensitive matters
-3. We'll discuss collaboration terms and co-authorship
+4. We'll discuss collaboration terms and co-authorship
 
 ### Citation Requirements
 
@@ -134,7 +138,11 @@ python -m src.tuner.main --tier minimal --config rapid --generations 5
 # Verify no errors in logs
 ```
 
-**Note**: Comprehensive test suite is planned but not yet implemented. For now, manual testing is required.
+**Note**: Automated test coverage is currently limited. Please run available checks plus manual validation.
+
+```bash
+pytest -q
+```
 
 ### Step 5: Commit
 
@@ -218,9 +226,14 @@ def compute_score(
 - **References**: Cite academic papers in IEEE/ACM format
 - **Examples**: Include runnable code examples where applicable
 
-## 🧪 Testing (Future Work)
+## 🧪 Testing Status
 
-Currently, the project lacks comprehensive test coverage. Planned testing infrastructure:
+Current testing infrastructure is intentionally lightweight:
+
+- **Shared fixtures**: `tests/conftest.py`
+- **Manual validation**: CLI smoke runs on local PostgreSQL instances
+
+Future expansions may include:
 
 - **Unit tests**: `pytest` for individual components
 - **Integration tests**: End-to-end PBT workflow validation

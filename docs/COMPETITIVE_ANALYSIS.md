@@ -1,5 +1,9 @@
 # Competitive Analysis: PBT vs. State-of-the-Art DB Auto-Tuners
 
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
+
 ## Your Novel Approach: Population-Based Training (PBT)
 
 **Core idea**: Simultaneously evaluate N database configurations in parallel, then use evolutionary exploit-explore to transfer knowledge from top performers to bottom performers. Derived from DeepMind's PBT paper (Jaderberg et al., 2017).

@@ -1,4 +1,8 @@
-# Population Based Training (PBT): Core Components
+# Population-Based Training (PBT): Core Components
+
+> Last reviewed: 2026-03-13
+
+See also: [Documentation Index](./README.md)
 
 ## Overview
 
