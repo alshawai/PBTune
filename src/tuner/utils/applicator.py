@@ -295,7 +295,7 @@ class KnobApplicator:
                     unit=row[3],
                     min_val=row[4],
                     max_val=row[5],
-                    enumvals=row[6].split(',') if row[6] else None,
+                    enumvals=row[6] if isinstance(row[6], list) else (row[6].split(',') if isinstance(row[6], str) else None),
                     boot_val=row[7],
                     reset_val=row[8]
                 )

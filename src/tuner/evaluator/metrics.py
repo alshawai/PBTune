@@ -77,6 +77,9 @@ class PerformanceMetrics:
         Total MB written to disk
     cache_hit_ratio : float
         Buffer cache hit ratio (0.0 to 1.0)
+    failure_type : Optional[str]
+        Optional failure classification for degraded/crashed evaluations.
+        None means healthy evaluation.
     """
 
     latency_p50: float = 0.0
@@ -86,7 +89,7 @@ class PerformanceMetrics:
 
     throughput: float = 0.0
     throughput_unit: str = "TPS"
-    
+
     total_queries: int = 0
     total_time: float = 0.0
 
@@ -98,8 +101,9 @@ class PerformanceMetrics:
     io_write_mb: float = 0.0
 
     cache_hit_ratio: float = 0.0
+    failure_type: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> Dict[str, float | str | None]:
         """Convert metrics to dictionary"""
         return {
             "latency_p50": self.latency_p50,
@@ -115,6 +119,7 @@ class PerformanceMetrics:
             "io_read_mb": self.io_read_mb,
             "io_write_mb": self.io_write_mb,
             "cache_hit_ratio": self.cache_hit_ratio,
+            "failure_type": self.failure_type,
         }
 
     def __repr__(self) -> str:
@@ -129,6 +134,7 @@ class PerformanceMetrics:
             f"  Errors: {self.error_rate*100:.2f}%\n"
             f"Memory: {self.memory_utilization*100:.1f}%\n"
             f"  Cache Hit: {self.cache_hit_ratio*100:.1f}%\n"
+            f"  Failure Type: {self.failure_type}\n"
             f")"
         )
 

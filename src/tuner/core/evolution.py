@@ -35,7 +35,6 @@ import logging
 import numpy as np
 
 from src.tuner.core.worker import Worker
-from src.tuner.utils.logger_config import WorkerLoggerAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,8 @@ logger = logging.getLogger(__name__)
 def truncation_selection(
     workers: List[Worker],
     exploit_quantile: float = 0.2,
-    require_ready: bool = True
+    require_ready: bool = True,
+    dead_config_threshold: float = 6.0,
 ) -> List[Tuple[int, int]]:
     """
     Identify which workers should exploit (copy from) which elite workers.
@@ -64,6 +64,11 @@ def truncation_selection(
     require_ready : bool
         If True, only consider ready workers for exploitation
         Default: True (prevents exploiting workers still warming up)
+
+    dead_config_threshold : float
+        Score threshold below which a worker is treated as a dead config.
+        Dead workers are always included in rescue (poor pool), bypassing
+        ready gating and quantile limits.
         
     Returns
     -------
@@ -81,25 +86,86 @@ def truncation_selection(
     - Avoids everyone converging to single best config
     - Matches original PBT paper    
     """
-    if require_ready:
-        eligible_workers = [w for w in workers if w.is_ready()]
-    else:
-        eligible_workers = workers
-
-    if len(eligible_workers) < 2:
+    if len(workers) < 2:
         return []
 
-    n_workers = len(eligible_workers)
-    quantile_size = max(1, int(n_workers * exploit_quantile))
+    dead_workers = [w for w in workers if w.performance_score < dead_config_threshold]
 
-    sorted_workers = sorted(
-        eligible_workers,
+    if require_ready:
+        ready_workers = [w for w in workers if w.is_ready()]
+    else:
+        ready_workers = workers
+
+    if len(ready_workers) < 2:
+        return []
+
+    quantile_size = max(1, int(len(ready_workers) * exploit_quantile))
+
+    ready_non_dead = [w for w in ready_workers if w.performance_score >= dead_config_threshold]
+    elite_candidates = ready_non_dead.copy()
+
+    if not elite_candidates:
+        elite_candidates = [w for w in workers if w.performance_score >= dead_config_threshold]
+        if require_ready and elite_candidates:
+            logger.warning(
+                "No ready non-dead workers available for elites; "
+                "falling back to non-dead workers regardless of readiness"
+            )
+
+    if not elite_candidates:
+        logger.warning("No non-dead workers available; skipping exploit-explore rescue")
+        return []
+
+    sorted_elites = sorted(
+        elite_candidates,
         key=lambda w: w.performance_score,
         reverse=True
     )
+    elite_workers = sorted_elites[:min(quantile_size, len(sorted_elites))]
 
-    elite_workers = sorted_workers[:quantile_size]
-    poor_workers = sorted_workers[-quantile_size:]
+    normal_poor_workers: List[Worker] = []
+    normal_quantile_size = 0
+    if ready_non_dead:
+        normal_quantile_size = quantile_size
+        sorted_ready_non_dead = sorted(
+            ready_non_dead,
+            key=lambda w: w.performance_score,
+            reverse=False
+        )
+        normal_poor_workers = sorted_ready_non_dead[:normal_quantile_size]
+
+    elite_worker_ids = {w.worker_id for w in elite_workers}
+    poor_workers: List[Worker] = []
+    seen_worker_ids = set()
+
+    target_poor_count = max(len(dead_workers), normal_quantile_size)
+    candidate_workers = dead_workers.copy()
+
+    if len(candidate_workers) < target_poor_count:
+        for worker in normal_poor_workers:
+            if worker.worker_id in {w.worker_id for w in candidate_workers}:
+                continue
+            candidate_workers.append(worker)
+            if len(candidate_workers) >= target_poor_count:
+                break
+
+    for worker in candidate_workers:
+        if worker.worker_id in seen_worker_ids:
+            continue
+        if worker.worker_id in elite_worker_ids:
+            continue
+        poor_workers.append(worker)
+        seen_worker_ids.add(worker.worker_id)
+
+    if not poor_workers:
+        return []
+
+    if dead_workers:
+        logger.info(
+            "Dead-config rescue candidates this generation: %d workers (threshold=%.2f)",
+            len(dead_workers),
+            dead_config_threshold
+        )
 
     worker_to_idx = {w.worker_id: i for i, w in enumerate(workers)}
     pairs = []
@@ -122,6 +188,7 @@ def execute_exploit_explore(
     perturbation_factors: Tuple[float, float] = (0.8, 1.2),
     current_generation: int = 0,
     require_ready: bool = True,
+    dead_config_threshold: float = 6.0,
     exclude_knobs: Optional[List[str]] = None
 ) -> int:
     """
@@ -147,6 +214,9 @@ def execute_exploit_explore(
     require_ready : bool
         Only exploit ready workers
         Default: True
+
+    dead_config_threshold : float
+        Score threshold used to force dead workers into exploit rescue pool.
     
     exclude_knobs : Optional[List[str]]
         Knobs to exclude from perturbation (keep constant)
@@ -184,7 +254,8 @@ def execute_exploit_explore(
     pairs = truncation_selection(
         workers=workers,
         exploit_quantile=exploit_quantile,
-        require_ready=require_ready
+        require_ready=require_ready,
+        dead_config_threshold=dead_config_threshold,
     )
 
     if not pairs:

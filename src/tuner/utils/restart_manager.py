@@ -246,6 +246,8 @@ class PostgresRestartManager:
         if self.config.method == 'auto':
             self.config.method = self._detect_restart_method()
 
+        self._startup_log_offset: Optional[int] = None
+
         self.logger.debug(
             "Initialized PostgresRestartManager with method: %s, data_dir: %s",
             self.config.method,
@@ -555,6 +557,9 @@ class PostgresRestartManager:
             time.sleep(5)
             self.logger.debug("Waited 5 seconds after stop for cleanup")
 
+            logfile = Path(self.config.data_dir) / 'logfile'
+            self._startup_log_offset = logfile.stat().st_size if logfile.exists() else 0
+
             # Start PostgreSQL without waiting for pg_ctl to complete
             # On Windows, pg_ctl with -l flag blocks until server is ready, which takes too long
             # We'll issue the start command and immediately proceed to connection validation
@@ -635,6 +640,15 @@ class PostgresRestartManager:
                 return True
             except psycopg2.OperationalError as e:
                 self.logger.debug("Connection attempt %d failed: %s", attempt + 1, str(e)[:100])
+
+                startup_fatal = self._read_startup_fatal_error()
+                if startup_fatal:
+                    self.logger.error(
+                        "Detected PostgreSQL startup-fatal condition during restart validation: %s",
+                        startup_fatal,
+                    )
+                    return False
+
                 if attempt < self.config.max_retries - 1:
                     time.sleep(self.config.retry_delay)
                 continue
@@ -648,6 +662,46 @@ class PostgresRestartManager:
 
         self.logger.error("Could not connect after %d attempts", self.config.max_retries)
         return False
+
+    def _read_startup_fatal_error(self) -> Optional[str]:
+        """Return a fatal startup error line from the PostgreSQL logfile if present.
+
+        This enables fail-fast behavior when PostgreSQL rejects an invalid
+        configuration at startup (instead of waiting all connection retries).
+        """
+        if not self.config.data_dir:
+            return None
+
+        logfile = Path(self.config.data_dir) / 'logfile'
+        if not logfile.exists():
+            return None
+
+        try:
+            with logfile.open('r', encoding='utf-8', errors='ignore') as handle:
+                if self._startup_log_offset is not None:
+                    handle.seek(min(self._startup_log_offset, logfile.stat().st_size))
+                lines = handle.readlines()[-300:]
+
+            for line in reversed(lines):
+                text = line.strip()
+                upper = text.upper()
+
+                if "FATAL:" not in upper:
+                    continue
+
+                # Emitted during shutdown, not startup validation.
+                if "TERMINATING CONNECTION DUE TO ADMINISTRATOR COMMAND" in upper:
+                    continue
+
+                # Ignore transient startup-state noise that should be retried.
+                if "STARTING UP" in upper or "CONSISTENT RECOVERY STATE" in upper:
+                    continue
+
+                return text
+        except Exception as e:
+            self.logger.debug("Could not inspect startup logfile for fatal errors: %s", e)
+
+        return None
 
     def _validate_restart(self) -> bool:
         """

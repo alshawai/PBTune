@@ -25,6 +25,7 @@ from sqlalchemy.engine import Engine
 
 from src.config.database import get_db_config, DatabaseConfig
 from src.database.connection import get_connection, get_engine
+from src.knobs.policy import annotate_autotuning_policy
 
 
 class KnobCategory(Enum):
@@ -468,7 +469,7 @@ class PostgreSQLKnobRetriever:
             ["internal", "postmaster"]
         )
 
-        return all_params
+        return annotate_autotuning_policy(all_params)
 
     def save_all_knobs(self, filepath: str, include_metadata: bool = True) -> None:
         """

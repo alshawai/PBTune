@@ -172,10 +172,23 @@ class PostgresInstanceManager:
                 )
 
                 if self._is_instance_running(data_dir):
-                    logger.debug("Instance already running, skipping start")
-                else:
-                    self._start_instance_internal(data_dir)
-                    time.sleep(2)  # Give PostgreSQL time to start
+                    logger.debug(
+                        "Stopping reused instance before startup to clear persisted overrides"
+                    )
+                    subprocess.run(
+                        [self.pg_ctl, '-D', str(data_dir), 'stop', '-m', 'fast'],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    time.sleep(1)
+
+                self._reset_persisted_overrides(data_dir)
+                self._kill_stale_port_holder(port)
+                self._start_instance_internal(data_dir)
+
+                self._wait_for_instance_ready(port)
 
                 if self.template_db_config:
                     self._ensure_postgres_user_exists(port)
@@ -220,6 +233,86 @@ class PostgresInstanceManager:
             self.instances[worker_id] = instance
 
         return list(self.instances.values())
+
+    def _reset_persisted_overrides(self, data_dir: Path) -> None:
+        """Clear persisted ALTER SYSTEM overrides before reusing an instance.
+
+        Reused worker data directories can carry forward extreme values in
+        postgresql.auto.conf from prior runs. Clearing that file forces startup
+        back to the safe base configuration in postgresql.conf.
+        """
+        auto_conf = data_dir / 'postgresql.auto.conf'
+        if not auto_conf.exists():
+            return
+
+        backup_path = data_dir / 'postgresql.auto.conf.pre_reuse_backup'
+        shutil.copy2(auto_conf, backup_path)
+
+        with open(auto_conf, 'w', encoding='utf-8') as handle:
+            handle.write("# Cleared before instance reuse to remove stale ALTER SYSTEM overrides.\n")
+
+        logger.debug(
+            "Cleared persisted overrides in %s (backup at %s)",
+            auto_conf,
+            backup_path,
+        )
+
+    def _wait_for_instance_ready(
+        self,
+        port: int,
+        max_attempts: int = 15,
+        delay_seconds: float = 2.0,
+    ) -> None:
+        """Wait until a PostgreSQL instance accepts local connections.
+
+        This is primarily used in the reused-instance path where start is async
+        and fixed sleeps are not reliable under load.
+        """
+        current_user = getpass.getuser()
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            test_configs = [
+                DatabaseConfig(
+                    host='localhost',
+                    port=str(port),
+                    dbname='postgres',
+                    user=current_user,
+                    password=''
+                )
+            ]
+
+            if self.template_db_config and self.template_db_config.user != current_user:
+                test_configs.append(
+                    DatabaseConfig(
+                        host='localhost',
+                        port=str(port),
+                        dbname=self.template_db_config.dbname,
+                        user=self.template_db_config.user,
+                        password=self.template_db_config.password or ''
+                    )
+                )
+
+            for test_config in test_configs:
+                try:
+                    conn = get_connection(config=test_config)
+                    conn.close()
+                    if attempt > 1:
+                        logger.debug(
+                            "Instance on port %d became ready after %d attempts",
+                            port,
+                            attempt,
+                        )
+                    return
+                except Exception as e:
+                    last_error = e
+
+            time.sleep(delay_seconds)
+
+        raise RuntimeError(
+            f"Instance on port {port} did not become ready after "
+            f"{max_attempts} attempts: {last_error}"
+        )
     
     def _is_valid_instance(self, data_dir: Path, expected_port: int) -> bool:
         """
@@ -756,10 +849,11 @@ unix_socket_directories = '/tmp'
         
         try:
             result = subprocess.run(
-                [self.pg_ctl, '-D', str(instance.data_dir), 'stop', '-m', mode],
+                [self.pg_ctl, '-D', str(instance.data_dir), 'stop', '-m', mode],  # type: ignore
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                check=False,
             )
             if result.returncode not in [0, 1]:  # 1 = not running
                 logger.warning("pg_ctl stop returned %d: %s", result.returncode, result.stderr)
@@ -784,7 +878,39 @@ unix_socket_directories = '/tmp'
                 success = False
         
         return success
-    
+
+    def recover_instance(self, worker_id: int) -> bool:
+        """Recover a worker instance from potentially bad persisted config.
+
+        This is designed for dead-config rescue workflow where a sampled
+        configuration prevented startup.
+        """
+        if worker_id not in self.instances:
+            logger.error("No instance configured for worker-%d", worker_id)
+            return False
+
+        instance = self.instances[worker_id]
+
+        self.stop_instance(worker_id, mode='immediate')
+        self._kill_stale_port_holder(instance.port)
+        self._reset_persisted_overrides(instance.data_dir)
+
+        try:
+            self._start_instance_internal(instance.data_dir)
+            self._wait_for_instance_ready(instance.port)
+            self._initialize_schema(instance.port, instance.data_dir)
+            instance.running = True
+            logger.info(
+                "Recovered instance for worker-%d on port %d",
+                worker_id,
+                instance.port,
+            )
+            return True
+        except Exception as e:
+            instance.running = False
+            logger.error("Failed to recover instance for worker-%d: %s", worker_id, e)
+            return False
+
     def stop_all(self, mode: str = 'fast') -> bool:
         """Stop all running instances."""
         logger.info("Stopping all %d instances...", len(self.instances))

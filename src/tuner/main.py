@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
 import numpy as np
+import psycopg2
 
 from src.config.database import DatabaseConfig
 from src.tuner.utils.snapshot_manager import SnapshotManager, SnapshotConfig
@@ -250,6 +251,7 @@ class PBTTuner:
             convergence_threshold=0.05,
             max_generations=self.pbt_config.num_generations,
             early_stopping_patience=10,
+            dead_config_threshold=self.pbt_config.dead_config_threshold,
         )
 
         self.population = Population(
@@ -349,9 +351,10 @@ class PBTTuner:
         Tuple[PerformanceMetrics, float]
             (metrics, score)
         """
+        worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+
         try:
             self.evaluator.worker_id = f"Worker-{worker.worker_id}"
-            worker_logger = get_logger(__name__, worker_id=worker.worker_id)
 
             metrics, score, restart_occurred = self.evaluator.evaluate_worker(
                 worker,
@@ -386,23 +389,84 @@ class PBTTuner:
 
             return metrics, score
 
-        except (ConnectionError, TimeoutError, RuntimeError) as e:
-            worker_logger = get_logger(__name__, worker_id=worker.worker_id)
-            worker_logger.error("Evaluation failed: %s", e)
-            fallback_metrics = PerformanceMetrics(
-                latency_p50=1000.0,
-                latency_p95=2000.0,
-                latency_p99=3000.0,
-                throughput=1.0,
-                memory_utilization=1.0,
-                io_read_mb=0.0,
-                io_write_mb=0.0,
-                cache_hit_ratio=0.0,
-                error_rate=1.0,
-                total_queries=0,
-                total_time=1.0,
+        except (ConnectionError, psycopg2.Error) as e:
+            if self.instance_manager is not None:
+                recovered = self.instance_manager.recover_instance(worker.worker_id)
+                if recovered:
+                    worker_logger.info(
+                        "[DEAD_CONFIG] Immediate instance recovery succeeded after connection failure"
+                    )
+                else:
+                    worker_logger.error(
+                        "[DEAD_CONFIG] Immediate instance recovery failed after connection failure"
+                    )
+
+            return self._build_failure_result(
+                worker_logger=worker_logger,
+                reason="connection",
+                exception=e,
+                failure_type="crash_dead",
+                score=self.pbt_config.dead_config_score,
             )
-            return fallback_metrics, 0.0
+
+        except TimeoutError as e:
+            return self._build_failure_result(
+                worker_logger=worker_logger,
+                reason="timeout",
+                exception=e,
+                failure_type="crash_timeout",
+                score=self.pbt_config.crash_score,
+            )
+
+        except RuntimeError as e:
+            return self._build_failure_result(
+                worker_logger=worker_logger,
+                reason="runtime",
+                exception=e,
+                failure_type="crash_runtime",
+                score=self.pbt_config.crash_score,
+            )
+
+        except Exception as e:
+            worker_logger.error(
+                "Unexpected error evaluating worker %s: %s",
+                worker.worker_id,
+                e,
+                exc_info=True
+            )
+            return self._build_failure_result(
+                worker_logger=worker_logger,
+                reason="unexpected",
+                exception=e,
+                failure_type="crash_unexpected",
+                score=self.pbt_config.crash_score,
+            )
+
+    def _build_failure_result(
+        self,
+        worker_logger: logging.Logger,
+        reason: str,
+        exception: Exception,
+        failure_type: str,
+        score: float,
+    ) -> Tuple[PerformanceMetrics, float]:
+        """Build standardized fallback metrics and score for failed worker evaluations."""
+        worker_logger.warning("[DEAD_CONFIG] Evaluation failed (%s): %s", reason, exception)
+        fallback_metrics = PerformanceMetrics(
+            latency_p50=9999.0,
+            latency_p95=9999.0,
+            latency_p99=9999.0,
+            throughput=0.0,
+            memory_utilization=1.0,
+            io_read_mb=0.0,
+            io_write_mb=0.0,
+            cache_hit_ratio=0.0,
+            error_rate=1.0,
+            total_queries=0,
+            total_time=1.0,
+            failure_type=failure_type,
+        )
+        return fallback_metrics, score
 
     def run_generation(self, generation: int) -> Dict[str, Any]:
         """
@@ -451,6 +515,24 @@ class PBTTuner:
             'converged': result.converged,
             'restart_count': self.restart_count,
             'timestamp': datetime.now().isoformat(),
+            'worker_scores': [
+                {
+                    'worker_id': w.worker_id,
+                    'score': (
+                        float(w.performance_score)
+                        if w.performance_score is not None else None
+                    ),
+                    'metrics': w.metrics.to_dict() if w.metrics else None,
+                }
+                for w in self.population.workers
+            ],
+            'worker_configs': [
+                {
+                    'worker_id': w.worker_id,
+                    'config': convert_numpy_types(w.knob_config),
+                }
+                for w in self.population.workers
+            ],
         }
 
         self.generation_history.append(gen_summary)
@@ -531,6 +613,7 @@ class PBTTuner:
             user=self.db_config.user,
             password=self.db_config.password
         )
+        self.population.instance_manager = self.instance_manager
         self.logger.info(
             "✓ Initialized %d workers with dedicated instances\n",
             len(self.population.workers)
