@@ -68,6 +68,12 @@ class PopulationConfig:
         Maximum number of generations before stopping
     early_stopping_patience : int
         Generations to wait without improvement before early stopping
+    dead_config_threshold : float
+        Score threshold below which workers are classified as dead configs
+        for end-of-generation rescue handling.
+    resample_min_change_ratio : float
+        Minimum fraction of knobs that should differ between old and fallback
+        resampled configs in all-dead rescue.
     """
     population_size: int = 8
     ready_interval: int = 3
@@ -76,6 +82,8 @@ class PopulationConfig:
     convergence_threshold: float = 0.5
     max_generations: int = 100
     early_stopping_patience: int = 10
+    dead_config_threshold: float = 6.0
+    resample_min_change_ratio: float = 0.6
 
 
 @dataclass
@@ -432,6 +440,165 @@ class Population:
 
         logger.info("Generation %s evaluation complete", self.current_generation)
 
+    @staticmethod
+    def _config_change_ratio(old_config: Dict[str, Any], new_config: Dict[str, Any]) -> float:
+        """Return fraction of knob entries whose values changed."""
+        all_keys = set(old_config.keys()) | set(new_config.keys())
+        if not all_keys:
+            return 0.0
+
+        changed = sum(1 for key in all_keys if old_config.get(key) != new_config.get(key))
+        return changed / len(all_keys)
+
+    def _choose_diverse_resample_config(
+        self,
+        previous_config: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        min_change_ratio: float,
+    ) -> tuple[Dict[str, Any], float]:
+        """Pick and remove the most-diverse candidate from a shared candidate pool."""
+        if not candidates:
+            fallback = self.knob_space.sample_random_config()
+            return fallback, self._config_change_ratio(previous_config, fallback)
+
+        best_index = 0
+        best_ratio = -1.0
+        for index, candidate in enumerate(candidates):
+            ratio = self._config_change_ratio(previous_config, candidate)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_index = index
+
+        selected = candidates.pop(best_index)
+        if best_ratio >= min_change_ratio:
+            return selected, best_ratio
+
+        # Fallback one-shot perturbation if all pool candidates are too similar.
+        perturbed = self.knob_space.perturb_config(
+            previous_config,
+            perturbation_factor=(0.5, 1.5),
+            seed=((self.current_generation + 1) * 1000) + len(previous_config),
+        )
+        perturbed_ratio = self._config_change_ratio(previous_config, perturbed)
+        if perturbed_ratio > best_ratio:
+            return perturbed, perturbed_ratio
+
+        return selected, best_ratio
+
+    def rescue_dead_workers(
+        self,
+        evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
+    ) -> int:
+        """Immediately rescue dead workers by exploiting alive configs.
+
+        Rescue flow:
+        1. Detect dead workers from failure-tagged metrics and low score.
+        2. If alive donors exist, clone an alive worker's config.
+        3. Otherwise, resample a fresh random config for next-generation escape.
+        4. Recover the worker's PostgreSQL instance.
+        """
+        dead_workers = [
+            worker
+            for worker in self.workers
+            if worker.metrics is not None
+            and worker.metrics.failure_type is not None
+            and worker.performance_score < self.config.dead_config_threshold
+        ]
+        if not dead_workers:
+            return 0
+
+        alive_workers = [
+            worker
+            for worker in self.workers
+            if worker.metrics is not None
+            and worker.metrics.failure_type is None
+            and worker.performance_score >= self.config.dead_config_threshold
+        ]
+        if not alive_workers:
+            logger.warning(
+                "Dead-config rescue fallback: no alive workers available; resampling %d dead workers for next generation",
+                len(dead_workers),
+            )
+
+            seed_base = (self.current_generation + 1) * 1000
+            candidate_pool_size = max(len(dead_workers) * 4, len(dead_workers))
+            lhs_candidates = self.knob_space.sample_diverse_configs(
+                num_samples=candidate_pool_size,
+                seed=seed_base,
+            )
+            min_change_ratio = max(0.0, min(1.0, self.config.resample_min_change_ratio))
+
+            resampled = 0
+            for dead_worker in dead_workers:
+                dead_logger = get_logger(__name__, worker_id=dead_worker.worker_id)
+                previous_config = dead_worker.get_config_copy()
+                selected_config, change_ratio = self._choose_diverse_resample_config(
+                    previous_config,
+                    lhs_candidates,
+                    min_change_ratio,
+                )
+                dead_worker.knob_config = selected_config
+                dead_worker.performance_score = 0.0
+                dead_worker.metrics = None
+
+                dead_worker.parent_id = None
+                dead_worker.generation_created = self.current_generation + 1
+                config_changed = dead_worker.knob_config != previous_config
+
+                if self.instance_manager is not None:
+                    if not self.instance_manager.recover_instance(dead_worker.worker_id):
+                        dead_logger.error(
+                            "[DEAD_CONFIG] Fallback resample could not recover worker instance"
+                        )
+                    else:
+                        dead_logger.info(
+                            "[DEAD_CONFIG] Recovered instance after all-dead fallback resample"
+                        )
+
+                dead_logger.info(
+                    "[DEAD_CONFIG] Resample outcome: changed_config=%s changed_ratio=%.3f",
+                    config_changed,
+                    change_ratio,
+                )
+
+                dead_logger.warning(
+                    "[DEAD_CONFIG] No alive donor available; resampled a fresh configuration for next generation"
+                )
+                resampled += 1
+
+            return resampled
+
+        alive_workers = sorted(alive_workers, key=lambda worker: worker.performance_score, reverse=True)
+
+        rescued = 0
+        for index, dead_worker in enumerate(dead_workers):
+            donor = alive_workers[index % len(alive_workers)]
+            dead_logger = get_logger(__name__, worker_id=dead_worker.worker_id)
+
+            dead_logger.warning(
+                "[DEAD_CONFIG] Triggering immediate rescue: exploit Worker-%d (score=%.4f)",
+                donor.worker_id,
+                donor.performance_score,
+            )
+
+            dead_worker.clone_from(donor, self.current_generation)
+
+            if self.instance_manager is not None:
+                if not self.instance_manager.recover_instance(dead_worker.worker_id):
+                    dead_logger.error(
+                        "[DEAD_CONFIG] Instance recovery failed during immediate rescue"
+                    )
+                    continue
+
+                rescued += 1
+                dead_logger.info(
+                    "[DEAD_CONFIG] Instance recovered. Will be re-evaluated in next generation."
+                )
+            else:
+                rescued += 1  # If no instance manager, just count as rescued
+
+        return rescued
+
     def update_metric_ranges_if_needed(self) -> None:
         """
         Update metric normalization ranges after initial exploration phase.
@@ -451,8 +618,13 @@ class Population:
             return
 
         all_metrics: List[PerformanceMetrics] = []
+        excluded_failure_metrics = 0
         for worker in self.workers:
-            all_metrics.extend(worker.performance_history)
+            for metric in worker.performance_history:
+                if metric.failure_type is None:
+                    all_metrics.append(metric)
+                else:
+                    excluded_failure_metrics += 1
 
         # Need samples from multiple generations to capture variability
         # Minimum: 2 generations worth of data (2 * population_size)
@@ -465,6 +637,12 @@ class Population:
                 len(all_metrics), min_samples_needed, self.current_generation
             )
             return
+
+        if excluded_failure_metrics > 0:
+            logger.debug(
+                "Excluded %d failure-tagged metrics from adaptive normalization updates",
+                excluded_failure_metrics
+            )
 
         logger.info(
             "Updating normalization ranges from %d observations across %d workers",
@@ -539,6 +717,7 @@ class Population:
             perturbation_factors=self.config.perturbation_factors,
             current_generation=self.current_generation,
             require_ready=require_ready,
+            dead_config_threshold=self.config.dead_config_threshold,
             exclude_knobs=exclude_knobs
         )
 
@@ -708,6 +887,10 @@ class Population:
                 logger.warning("Snapshot restoration requested but instance_manager not available")
 
         self.evaluate_generation(evaluate_fn, parallel=parallel, max_workers=max_workers)
+
+        rescued = self.rescue_dead_workers(evaluate_fn)
+        if rescued > 0:
+            logger.info("Immediate dead-config rescue recovered %d workers", rescued)
 
         self.update_metric_ranges_if_needed()
 

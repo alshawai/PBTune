@@ -104,6 +104,20 @@ class PBTConfig:
     sysbench_table_size : int
         Number of rows per table for Sysbench workload.
         Default: 100000
+
+    dead_config_threshold : float
+        Score threshold below which a worker is considered dead and marked
+        for end-of-generation rescue logic.
+        Default: 6.0
+
+    dead_config_score : float
+        Score assigned to unrecoverable dead configurations (e.g., connection failures).
+        Default: 1.0
+
+    crash_score : float
+        Score assigned to crash/timeout style failures that are severe but potentially
+        less catastrophic than complete connection death.
+        Default: 5.0
     """
 
     population_size: int = 4
@@ -123,6 +137,9 @@ class PBTConfig:
     verbose: bool = True
     sysbench_tables: int = 10
     sysbench_table_size: int = 100000
+    dead_config_threshold: float = 6.0
+    dead_config_score: float = 1.0
+    crash_score: float = 5.0
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -165,6 +182,14 @@ class PBTConfig:
         if self.warmup_passes < 0:
             raise ValueError("warmup_passes cannot be negative")
 
+        if not 0.0 < self.dead_config_score < self.crash_score:
+            raise ValueError("dead_config_score must be > 0 and less than crash_score")
+
+        if not self.crash_score < self.dead_config_threshold < 100.0:
+            raise ValueError(
+                "dead_config_threshold must be greater than crash_score and less than 100"
+            )
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -200,6 +225,9 @@ class PBTConfig:
             "verbose": self.verbose,
             "sysbench_tables": self.sysbench_tables,
             "sysbench_table_size": self.sysbench_table_size,
+            "dead_config_threshold": self.dead_config_threshold,
+            "dead_config_score": self.dead_config_score,
+            "crash_score": self.crash_score,
         }
 
     def __repr__(self) -> str:
@@ -213,7 +241,10 @@ class PBTConfig:
             f"(bottom {n} copy from top {n}),\n"
             f"  ready_interval={self.ready_interval},\n"
             f"  perturbation_factors={self.perturbation_factors},\n"
-            f"  num_parallel_workers={self.num_parallel_workers}\n"
+            f"  num_parallel_workers={self.num_parallel_workers},\n"
+            f"  dead_config_threshold={self.dead_config_threshold},\n"
+            f"  dead_config_score={self.dead_config_score},\n"
+            f"  crash_score={self.crash_score}\n"
             f")"
         )
 
