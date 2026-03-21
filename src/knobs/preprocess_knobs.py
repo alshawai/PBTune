@@ -25,9 +25,69 @@ from pathlib import Path
 from typing import Optional, Dict
 import pandas as pd
 
+from src.knobs.policy import (
+    SUPPORTED_AUTOTUNING_VARTYPES,
+    apply_bounds_safety_gate,
+    ensure_autotuning_policy_annotations,
+)
 from src.knobs.retrieval import PostgreSQLKnobRetriever
 from src.knobs.knob_metadata import KNOB_TUNING_METADATA, IMPACT_TIERS
+from src.tuner.utils.logger_config import setup_logging, get_logger
 
+setup_logging()
+
+logger = get_logger(__name__)
+
+
+def _log_source_policy_exclusions(df: pd.DataFrame) -> None:
+    """Emit aggregated audit summary for source-stage policy exclusions."""
+    excluded_source = df[~df["eligible_for_autotuning"]]
+    if excluded_source.empty:
+        return
+
+    reason_counts = (
+        excluded_source["autotuning_exclusion_reason_code"]
+        .fillna("unspecified")
+        .value_counts()
+        .sort_index()
+    )
+    logger.warning(
+        "source_policy_exclusions total=%d reasons=%s",
+        len(excluded_source),
+        ", ".join(
+            f"{reason}:{count}" for reason, count in reason_counts.items()
+        ),
+    )
+
+
+import ast
+
+def _clean_enumvals(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove environment-specific aliases and unsafe OS constraints from enums.
+    
+    This ensures that the tuner doesn't blindly sample values that are
+    essentially aliases (like 'on' -> 'pglz' for wal_compression) or
+    values known to crash most baseline UNIX systems (like 'io_uring').
+    """
+    df = df.copy()
+    
+    exclusions = {
+        "wal_compression": {"on"},
+        "io_method": {"io_uring", "posix"}
+    }
+    
+    for knob, ex_set in exclusions.items():
+        if knob in df["name"].values:
+            idx = df.index[df["name"] == knob].tolist()[0]
+            val = df.at[idx, "enumvals"]
+            if isinstance(val, str) and val.startswith("["):
+                try:
+                    lst = ast.literal_eval(val)
+                    lst = [x for x in lst if x not in ex_set]
+                    df.at[idx, "enumvals"] = str(lst)
+                except Exception:
+                    pass
+    return df
 
 def load_raw_knobs(csv_path: Optional[str] = None) -> pd.DataFrame:
     """
@@ -45,11 +105,13 @@ def load_raw_knobs(csv_path: Optional[str] = None) -> pd.DataFrame:
     """
     if csv_path and os.path.exists(csv_path):
         print(f"Loading raw knobs from {csv_path}")
-        return pd.read_csv(csv_path)
+        df = pd.read_csv(csv_path)
     else:
         print("Retrieving knobs from PostgreSQL...")
         retriever = PostgreSQLKnobRetriever()
-        return retriever.get_all_knobs_with_metadata()
+        df = retriever.get_all_knobs_with_metadata()
+
+    return _clean_enumvals(ensure_autotuning_policy_annotations(df))
 
 
 def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
@@ -66,24 +128,47 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Knobs with added tuning columns
     """
-    df["tuning_min"] = None
-    df["tuning_max"] = None
-    df["scale"] = "linear"
-    df["impact_tier"] = "extensive"
-    df["tuning_priority"] = 5
-    df["tuning_notes"] = ""
+    df_with_defaults = df.copy()
+    df_with_defaults["tuning_min"] = None
+    df_with_defaults["tuning_max"] = None
+    df_with_defaults["scale"] = "linear"
+    df_with_defaults["impact_tier"] = "extensive"
+    df_with_defaults["tuning_priority"] = 5
+    df_with_defaults["tuning_notes"] = ""
 
-    for knob_name, metadata in KNOB_TUNING_METADATA.items():
-        if knob_name in df["name"].values:
-            idx = df[df["name"] == knob_name].index[0]
-            df.at[idx, "tuning_min"] = metadata.tuning_min
-            df.at[idx, "tuning_max"] = metadata.tuning_max
-            df.at[idx, "scale"] = metadata.scale
-            df.at[idx, "impact_tier"] = metadata.impact_tier
-            df.at[idx, "tuning_priority"] = metadata.tuning_priority
-            df.at[idx, "tuning_notes"] = metadata.notes
+    metadata_rows = [
+        {
+            "name": knob_name,
+            "tuning_min_meta": metadata.tuning_min,
+            "tuning_max_meta": metadata.tuning_max,
+            "scale_meta": metadata.scale,
+            "impact_tier_meta": metadata.impact_tier,
+            "tuning_priority_meta": metadata.tuning_priority,
+            "tuning_notes_meta": metadata.notes,
+        }
+        for knob_name, metadata in KNOB_TUNING_METADATA.items()
+    ]
+    metadata_df = pd.DataFrame(metadata_rows)
 
-    return df
+    merged = df_with_defaults.merge(metadata_df, on="name", how="left")
+
+    merged["tuning_min"] = merged["tuning_min_meta"].combine_first(merged["tuning_min"])
+    merged["tuning_max"] = merged["tuning_max_meta"].combine_first(merged["tuning_max"])
+    merged["scale"] = merged["scale_meta"].combine_first(merged["scale"])
+    merged["impact_tier"] = merged["impact_tier_meta"].combine_first(merged["impact_tier"])
+    merged["tuning_priority"] = merged["tuning_priority_meta"].combine_first(merged["tuning_priority"])
+    merged["tuning_notes"] = merged["tuning_notes_meta"].combine_first(merged["tuning_notes"])
+
+    return merged.drop(
+        columns=[
+            "tuning_min_meta",
+            "tuning_max_meta",
+            "scale_meta",
+            "impact_tier_meta",
+            "tuning_priority_meta",
+            "tuning_notes_meta",
+        ]
+    )
 
 
 def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
@@ -91,9 +176,9 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     Filter to knobs that are actually tunable.
     
     Criteria:
-    1. Not 'internal' context (cannot be changed)
-    2. Numeric (integer/real) or boolean type (easier to tune than strings)
-    3. Either has tuning metadata OR is runtime modifiable
+    1. Marked as eligible by source-stage autotuning policy classification
+    2. Numeric (integer/real), boolean, or enum type (or explicitly curated via metadata)
+    3. Passes bounds safety gate (curated metadata or bounded native max)
     
     Parameters
     ----------
@@ -105,15 +190,32 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Filtered to tunable knobs only
     """
-    tunable = df[df["context"] != "internal"].copy()
+    df = ensure_autotuning_policy_annotations(df)
+
+    tunable = df[df["eligible_for_autotuning"]].copy()
 
     has_metadata = tunable["name"].isin(KNOB_TUNING_METADATA.keys())
-    is_numeric_or_bool = tunable["vartype"].isin(["integer", "real", "bool"])
+    is_supported_vartype = tunable["vartype"].isin(SUPPORTED_AUTOTUNING_VARTYPES)
 
-    tunable = tunable[has_metadata | is_numeric_or_bool].copy()
+    tunable = tunable[has_metadata | is_supported_vartype].copy()
+
+    tunable, excluded_details = apply_bounds_safety_gate(tunable)
+    if not excluded_details.empty:
+        logger.warning(
+            "autotuning_bounds_exclusion reason_code=uncurated_intmax_sentinel count=%d",
+            len(excluded_details),
+        )
+        for _, row in excluded_details.iterrows():
+            logger.warning(
+                "  > knob=%s max_val=%s vartype=%s context=%s",
+                row["name"],
+                row["max_val"],
+                row["vartype"],
+                row["context"],
+            )
 
     tunable["requires_restart"] = tunable["context"] == "postmaster"
-    tunable["has_tuning_metadata"] = has_metadata
+    tunable["has_tuning_metadata"] = tunable["name"].isin(KNOB_TUNING_METADATA.keys())
 
     return tunable
 
@@ -140,7 +242,8 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     core_knobs = IMPACT_TIERS["core"]
     tiers["core"] = df[df["name"].isin(core_knobs)].copy()
 
-    tiers["standard"] = df[df["has_tuning_metadata"]].copy()
+    standard_knobs = IMPACT_TIERS["standard"]
+    tiers["standard"] = df[df["name"].isin(standard_knobs)].copy()
 
     tiers["extensive"] = df.copy()
 
@@ -187,6 +290,8 @@ def preprocess_and_save_knobs(
     print(f"  Added metadata for {with_metadata_count} knobs")
 
     print("\n[3/4] Filtering to tunable knobs...")
+    _log_source_policy_exclusions(df_with_metadata)
+
     df_tunable = filter_tunable_knobs(df_with_metadata)
     print(f"  Filtered to {len(df_tunable)} tunable knobs")
     print(f"    - Requires restart: {df_tunable['requires_restart'].sum()}")
