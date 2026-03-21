@@ -256,11 +256,23 @@ class TPCHExecutor(BenchmarkExecutor):
                         f"Failed to establish healthy connection after {max_conn_retries} attempts"
                     ) from e
 
+        # Enforce safety timeout to prevent bad configs from hanging indefinitely.
+        base_timeout_ms = 300000  # 5 minutes
+        statement_timeout_ms = int(base_timeout_ms * self.scale_factor)
+
+        cursor = conn.cursor()
+        cursor.execute(f"SET statement_timeout = {statement_timeout_ms}")
+        cursor.close()
+        logger.debug(
+            "Enforcing failsafe statement_timeout=%ds for TPC-H execution (SF=%.1f)",
+            statement_timeout_ms // 1000, self.scale_factor
+        )
+
         query_indices = list(range(len(self.queries)))
 
         if warmup_passes > 0:
             logger.debug("TPC-H warmup: Executing %d cache warming pass(es)", warmup_passes)
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # type: ignore
             for _ in range(warmup_passes):
                 for idx in query_indices:
                     try:
@@ -295,12 +307,12 @@ class TPCHExecutor(BenchmarkExecutor):
                 total_queries += 1
             except Exception as e:
                 errors += 1
-                total_queries += 1
-                logger.debug(
-                    "Query Q%d failed (%.0fms): %s",
+                logger.warning(
+                    "Query Q%d failed (%.0fms): %s. Fast-failing remaining queries to avoid reward hacking.",
                     idx + 1,
                     (time.time() - query_start) * 1000.0, e
                 )
+                break
 
         cursor.close()
 
@@ -309,7 +321,24 @@ class TPCHExecutor(BenchmarkExecutor):
 
         total_time = time.time() - measurement_start
 
-        # Compute metrics
+        # If any query failed, bomb the metrics to prevent reward hacking
+        if errors > 0:
+            logger.warning(
+                "TPC-H evaluation failed %d queries. Assigning fatal penalty.", errors
+            )
+            return PerformanceMetrics(
+                latency_p50=999999.9,
+                latency_p95=999999.9,
+                latency_p99=999999.9,
+                throughput=0.0,
+                memory_utilization=100.0,
+                error_rate=100.0,
+                total_queries=len(self.queries),
+                total_time=total_time,
+                failure_type="query_failed_or_timeout"
+            )
+
+        # Compute metrics for a fully successful run
         metrics = PerformanceMetrics()
         metrics.total_queries = total_queries
         metrics.total_time = total_time
@@ -327,7 +356,7 @@ class TPCHExecutor(BenchmarkExecutor):
             logger.warning("No successful queries during measurement")
 
         if total_queries > 0:
-            metrics.error_rate = errors / total_queries
+            metrics.error_rate = 0.0  # Since errors > 0 are already caught above
 
         logger.debug(
             "TPC-H results: %d queries in %.1fs, "

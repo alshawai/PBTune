@@ -148,13 +148,13 @@ class SysbenchExecutor(BenchmarkExecutor):
         )
 
         if returncode != 0:
+            failure_detail = (stderr or stdout or "sysbench exited without output").strip()
             logger.error(
                 "Sysbench failed (exit %d): %s",
-                returncode, stderr,
+                returncode,
+                failure_detail,
             )
-            metrics = PerformanceMetrics()
-            metrics.error_rate = 1.0
-            return metrics
+            raise RuntimeError(f"Sysbench failed (exit {returncode}): {failure_detail}")
 
         metrics = self._parse_output(stdout)
         return metrics
@@ -202,7 +202,12 @@ class SysbenchExecutor(BenchmarkExecutor):
             stderr=subprocess.PIPE,
             text=True,
         )
-        stdout, stderr = process.communicate()
+        try:
+            stdout, stderr = process.communicate(timeout=duration + warmup + 15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            return "", "Sysbench timeout expired", -1
         return stdout, stderr, process.returncode
 
     @staticmethod
