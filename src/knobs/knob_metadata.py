@@ -80,7 +80,7 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
 
     "work_mem": TuningMetadata(
         tuning_min=4096,  # 4MB (kB)
-        tuning_max=262144,  # 256MB
+        tuning_max=65536,
         scale="log",
         impact_tier="minimal",
         tuning_priority=1,
@@ -107,7 +107,7 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
 
     "maintenance_work_mem": TuningMetadata(
         tuning_min=65536,  # 64MB (kB)
-        tuning_max=2097152,  # 2GB
+        tuning_max=262144,
         scale="log",
         impact_tier="core",
         tuning_priority=2,
@@ -160,7 +160,7 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
     ),
 
     "max_connections": TuningMetadata(
-        tuning_min=10,
+        tuning_min=50,
         tuning_max=200,
         scale="linear",
         impact_tier="core",
@@ -175,6 +175,120 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         impact_tier="core",
         tuning_priority=3,
         notes="Max background workers. Requires restart. Must be >= max_parallel_workers."
+    ),
+
+    "maintenance_io_concurrency": TuningMetadata(
+        tuning_min=0,
+        tuning_max=200,
+        scale="linear",
+        impact_tier="standard",
+        tuning_priority=3,
+        notes="Maintenance I/O concurrency for VACUUM/CREATE INDEX, " \
+        "similar semantics to effective_io_concurrency."
+    ),
+
+    "io_workers": TuningMetadata(
+        tuning_min=1,
+        tuning_max=16,
+        scale="linear",
+        impact_tier="standard",
+        tuning_priority=3,
+        notes="I/O worker count (PG17+); bounded to practical CPU-core-aligned range."
+    ),
+
+    "max_parallel_apply_workers_per_subscription": TuningMetadata(
+        tuning_min=0,
+        tuning_max=8,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="Logical replication apply parallelism; low-impact for " \
+        "non-replication benchmarks but safely tunable."
+    ),
+
+    "hash_mem_multiplier": TuningMetadata(
+        tuning_min=1.0,
+        tuning_max=8.0,
+        scale="linear",
+        impact_tier="standard",
+        tuning_priority=3,
+        notes="Hash operation memory multiplier; bounded to avoid " \
+        "aggressive memory oversubscription."
+    ),
+
+    "autovacuum_worker_slots": TuningMetadata(
+        tuning_min=1,
+        tuning_max=16,
+        scale="linear",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="Autovacuum worker slot capacity; aligned with practical worker process limits."
+    ),
+
+    "max_wal_senders": TuningMetadata(
+        tuning_min=0,
+        tuning_max=10,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="WAL sender process cap; safely bounded for " \
+        "environments without heavy replication fanout."
+    ),
+
+    "max_logical_replication_workers": TuningMetadata(
+        tuning_min=0,
+        tuning_max=10,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="Logical replication worker cap; bounded for " \
+        "stability in non-replication-centric tuning runs."
+    ),
+
+    "superuser_reserved_connections": TuningMetadata(
+        tuning_min=0,
+        tuning_max=5,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="Reserved connection slots for superusers; " \
+        "tuned conservatively to prevent starvation."
+    ),
+
+    "reserved_connections": TuningMetadata(
+        tuning_min=0,
+        tuning_max=5,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="Reserved connection slots; conservative bounds preserve user connection capacity."
+    ),
+
+    "notify_buffers": TuningMetadata(
+        tuning_min=4,
+        tuning_max=64,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="LISTEN/NOTIFY buffers (pages); bounded for safe memory footprint."
+    ),
+
+    "multixact_member_buffers": TuningMetadata(
+        tuning_min=4,
+        tuning_max=64,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="MultiXact member SLRU buffers (pages); bounded for stable memory usage."
+    ),
+
+    "multixact_offset_buffers": TuningMetadata(
+        tuning_min=4,
+        tuning_max=64,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="MultiXact offset SLRU buffers (pages); bounded for stable memory usage."
     ),
 
     "seq_page_cost": TuningMetadata(
@@ -250,7 +364,7 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
     ),
 
     "parallel_setup_cost": TuningMetadata(
-        tuning_min=0.0,
+        tuning_min=1.0,
         tuning_max=10000.0,
         scale="log",
         impact_tier="standard",
@@ -259,12 +373,327 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
     ),
 
     "parallel_tuple_cost": TuningMetadata(
-        tuning_min=0.0,
-        tuning_max=1.0,
+        tuning_min=0.0001,
+        tuning_max=10.0,
         scale="log",
         impact_tier="standard",
         tuning_priority=4,
         notes="Cost of transferring tuples between workers."
+    ),
+
+    "bgwriter_delay": TuningMetadata(
+        tuning_min=10,
+        tuning_max=2000,
+        scale="log",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="ms between bgwriter rounds.",
+    ),
+
+    "bgwriter_lru_maxpages": TuningMetadata(
+        tuning_min=0,
+        tuning_max=1000,
+        scale="linear",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="pages per bgwriter round.",
+    ),
+
+    "bgwriter_flush_after": TuningMetadata(
+        tuning_min=0,
+        tuning_max=256,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="pages written by bgwriter before OS flush.",
+    ),
+
+    "bgwriter_lru_multiplier": TuningMetadata(
+        tuning_min=0.0,
+        tuning_max=10.0,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="multiplier for pages to write based on recent usage.",
+    ),
+
+    "wal_writer_delay": TuningMetadata(
+        tuning_min=1,
+        tuning_max=5000,
+        scale="log",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="ms between WAL flushes.",
+    ),
+
+    "commit_delay": TuningMetadata(
+        tuning_min=0,
+        tuning_max=10000,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="microseconds to wait for group commit.",
+    ),
+
+    "commit_siblings": TuningMetadata(
+        tuning_min=0,
+        tuning_max=20,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="concurrent active transactions to trigger commit_delay.",
+    ),
+
+    "checkpoint_flush_after": TuningMetadata(
+        tuning_min=0,
+        tuning_max=256,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="pages written by checkpointer before OS flush.",
+    ),
+
+    "vacuum_cost_limit": TuningMetadata(
+        tuning_min=1,
+        tuning_max=2000,
+        scale="linear",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="aggregate cost cap for vacuum.",
+    ),
+
+    "vacuum_cost_page_dirty": TuningMetadata(
+        tuning_min=0,
+        tuning_max=1000,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="cost of dirtying a page.",
+    ),
+
+    "vacuum_cost_page_hit": TuningMetadata(
+        tuning_min=0,
+        tuning_max=100,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="cost of vacuuming a buffer-hit page.",
+    ),
+
+    "vacuum_cost_page_miss": TuningMetadata(
+        tuning_min=0,
+        tuning_max=1000,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="cost of vacuuming a disk-read page.",
+    ),
+
+    "autovacuum_vacuum_cost_limit": TuningMetadata(
+        tuning_min=-1,
+        tuning_max=2000,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="per-worker autovacuum cost limit.",
+    ),
+
+    "autovacuum_vacuum_cost_delay": TuningMetadata(
+        tuning_min=-1.0,
+        tuning_max=50.0,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="ms delay after cost limit is hit.",
+    ),
+
+    "autovacuum_vacuum_scale_factor": TuningMetadata(
+        tuning_min=0.01,
+        tuning_max=0.5,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="fraction of table modified for vacuum.",
+    ),
+
+    "autovacuum_analyze_scale_factor": TuningMetadata(
+        tuning_min=0.01,
+        tuning_max=0.5,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="fraction of table modified for analyze.",
+    ),
+
+    "autovacuum_vacuum_insert_scale_factor": TuningMetadata(
+        tuning_min=0.01,
+        tuning_max=0.5,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="fraction of table inserted for vacuum.",
+    ),
+
+    "vacuum_buffer_usage_limit": TuningMetadata(
+        tuning_min=128,
+        tuning_max=2048,  # 16MB in 8k pages
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="buffer usage limit for vacuum (pages).",
+    ),
+
+    "commit_timestamp_buffers": TuningMetadata(
+        tuning_min=0,
+        tuning_max=1024,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="SLRU buffers for commit timestamps (must be multiple of 16).",
+    ),
+
+    "serializable_buffers": TuningMetadata(
+        tuning_min=16,
+        tuning_max=1024,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="SLRU buffers for serializable transactions (must be multiple of 16).",
+    ),
+
+    "subtransaction_buffers": TuningMetadata(
+        tuning_min=0,
+        tuning_max=1024,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="SLRU buffers for subtransactions (must be multiple of 16).",
+    ),
+
+    "transaction_buffers": TuningMetadata(
+        tuning_min=0,
+        tuning_max=1024,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="SLRU buffers for transactions (must be multiple of 16).",
+    ),
+
+    "io_combine_limit": TuningMetadata(
+        tuning_min=1,
+        tuning_max=128,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="I/O combine limit.",
+    ),
+
+    "io_max_combine_limit": TuningMetadata(
+        tuning_min=1,
+        tuning_max=128,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="Max I/O combine limit.",
+    ),
+
+    "io_max_concurrency": TuningMetadata(
+        tuning_min=-1,
+        tuning_max=256,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="Max I/O concurrency.",
+    ),
+
+    "backend_flush_after": TuningMetadata(
+        tuning_min=0,
+        tuning_max=256,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="pages written by backend before OS flush.",
+    ),
+
+    "min_parallel_table_scan_size": TuningMetadata(
+        tuning_min=0,
+        tuning_max=65536,
+        scale="log",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="pages required to trigger parallel table scan.",
+    ),
+
+    "min_parallel_index_scan_size": TuningMetadata(
+        tuning_min=0,
+        tuning_max=16384,
+        scale="log",
+        impact_tier="standard",
+        tuning_priority=4,
+        notes="pages required to trigger parallel index scan.",
+    ),
+
+    "geqo_effort": TuningMetadata(
+        tuning_min=1,
+        tuning_max=10,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="GEQO effort level.",
+    ),
+
+    "geqo_seed": TuningMetadata(
+        tuning_min=0.0,
+        tuning_max=1.0,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="GEQO random seed.",
+    ),
+
+    "geqo_selection_bias": TuningMetadata(
+        tuning_min=1.5,
+        tuning_max=2.0,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="GEQO selection bias.",
+    ),
+
+    "cursor_tuple_fraction": TuningMetadata(
+        tuning_min=0.0,
+        tuning_max=1.0,
+        scale="linear",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="planner estimator for cursor retrieval fraction.",
+    ),
+
+    "recursive_worktable_factor": TuningMetadata(
+        tuning_min=0.1,
+        tuning_max=100.0,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=5,
+        notes="planner multiplier for recursive queries.",
+    ),
+
+    "vacuum_freeze_min_age": TuningMetadata(
+        tuning_min=0,
+        tuning_max=100000000,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="minimum age before freezing tuples.",
+    ),
+
+    "vacuum_multixact_freeze_min_age": TuningMetadata(
+        tuning_min=0,
+        tuning_max=100000000,
+        scale="log",
+        impact_tier="extensive",
+        tuning_priority=4,
+        notes="minimum age before freezing multixacts.",
     ),
 
     "autovacuum": TuningMetadata(
@@ -296,7 +725,7 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
 
     "temp_buffers": TuningMetadata(
         tuning_min=1024,  # 8MB (8kB blocks)
-        tuning_max=16384,  # 128MB
+        tuning_max=4096,  # 32MB (constrained)
         scale="log",
         impact_tier="standard",
         tuning_priority=4,
@@ -349,16 +778,18 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
 
 # Tier definitions
 IMPACT_TIERS = {
-    "minimal": ["shared_buffers", "effective_cache_size", "work_mem", 
-                "random_page_cost", "max_parallel_workers_per_gather"],
+    "minimal": [
+        k for k, v in KNOB_TUNING_METADATA.items() if v.impact_tier == "minimal"
+    ],
 
-    "core": ["shared_buffers", "effective_cache_size", "work_mem", 
-             "random_page_cost", "max_parallel_workers_per_gather",
-             "maintenance_work_mem", "wal_buffers", "effective_io_concurrency",
-             "default_statistics_target", "checkpoint_timeout",
-             "checkpoint_completion_target", "max_connections", "max_worker_processes"],
-
-    "standard": list(KNOB_TUNING_METADATA.keys()),  # All knobs with metadata
+    "core": [
+        k for k, v in KNOB_TUNING_METADATA.items()
+        if v.impact_tier in ("minimal", "core")
+    ],
+    "standard": [
+        k for k, v in KNOB_TUNING_METADATA.items()
+        if v.impact_tier in ("minimal", "core", "standard")
+    ],
 
     "extensive": None,  # Will include all tunable knobs from pg_settings
 }
@@ -369,4 +800,4 @@ def get_knobs_by_tier(tier: str) -> list:
     tier_lower = tier.lower()
     if tier_lower not in IMPACT_TIERS:
         raise ValueError(f"Unknown tier: {tier}. Must be one of {list(IMPACT_TIERS.keys())}")
-    return IMPACT_TIERS[tier_lower]
+    return IMPACT_TIERS[tier_lower]  # type: ignore

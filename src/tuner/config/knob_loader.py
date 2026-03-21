@@ -16,6 +16,7 @@ This approach provides:
 - Separation of data retrieval from optimization logic
 """
 
+import ast
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import pandas as pd
@@ -55,12 +56,81 @@ def parse_enumvals(enumvals_str: Any) -> Optional[List[str]]:
     if pd.isna(enumvals_str) or enumvals_str == "":
         return None
 
+    if isinstance(enumvals_str, list):
+        return [str(value) for value in enumvals_str]
+
     if isinstance(enumvals_str, str):
-        # Remove braces and split
-        clean = enumvals_str.strip("{}")
-        return [v.strip() for v in clean.split(",") if v.strip()]
+        try:
+            parsed = ast.literal_eval(enumvals_str)
+        except (ValueError, SyntaxError):
+            parsed = None
+
+        if isinstance(parsed, list):
+            return [str(value) for value in parsed]
+
+        if enumvals_str.startswith("{") and enumvals_str.endswith("}"):
+            clean = enumvals_str[1:-1]
+            return [value.strip().strip("\"'") for value in clean.split(",") if value.strip()]
+
+        return [enumvals_str]
 
     return None
+
+
+def _parse_numeric_bound(raw_value: Any, knob_type: KnobType) -> Optional[float | int]:
+    """Parse a numeric bound from CSV data if present."""
+    if pd.isna(raw_value):
+        return None
+
+    if knob_type == KnobType.REAL:
+        return float(raw_value)
+    return int(float(raw_value))
+
+
+def _resolve_numeric_bounds(
+    row: pd.Series,
+    knob_type: KnobType
+) -> tuple[Optional[float | int], Optional[float | int]]:
+    """Resolve effective numeric bounds by intersecting curated and native limits."""
+    native_min = _parse_numeric_bound(row.get("min_val"), knob_type)
+    native_max = _parse_numeric_bound(row.get("max_val"), knob_type)
+    tuning_min = _parse_numeric_bound(row.get("tuning_min"), knob_type)
+    tuning_max = _parse_numeric_bound(row.get("tuning_max"), knob_type)
+
+    min_candidates = [value for value in (native_min, tuning_min) if value is not None]
+    max_candidates = [value for value in (native_max, tuning_max) if value is not None]
+
+    min_value = max(min_candidates) if min_candidates else None
+    max_value = min(max_candidates) if max_candidates else None
+
+    if (
+        min_value is not None
+        and max_value is not None
+        and min_value > max_value
+    ):
+        min_value = native_min if native_min is not None else tuning_min
+        max_value = native_max if native_max is not None else tuning_max
+
+    return min_value, max_value
+
+
+INTEGER_STEP_OVERRIDES = {
+    "commit_timestamp_buffers": 16,
+    "multixact_member_buffers": 16,
+    "multixact_offset_buffers": 16,
+    "notify_buffers": 16,
+    "serializable_buffers": 16,
+    "subtransaction_buffers": 16,
+    "transaction_buffers": 16,
+}
+
+
+def _infer_integer_step(row: pd.Series, knob_type: KnobType) -> Optional[int]:
+    """Infer integer step alignment for knobs with discrete valid grids."""
+    if knob_type != KnobType.INTEGER:
+        return None
+
+    return INTEGER_STEP_OVERRIDES.get(str(row["name"]))
 
 
 def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
@@ -96,17 +166,10 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
         max_value = None
 
         if knob_type in [KnobType.INTEGER, KnobType.REAL]:
-            if pd.notna(row.get("tuning_min")):
-                min_value = row["tuning_min"]
-            elif pd.notna(row.get("min_val")):
-                min_value = float(row["min_val"]) if knob_type == KnobType.REAL else int(row["min_val"])
-
-            if pd.notna(row.get("tuning_max")):
-                max_value = row["tuning_max"]
-            elif pd.notna(row.get("max_val")):
-                max_value = float(row["max_val"]) if knob_type == KnobType.REAL else int(row["max_val"])
+            min_value, max_value = _resolve_numeric_bounds(row, knob_type)
 
         enumvals = parse_enumvals(row.get("enumvals"))
+        integer_step = _infer_integer_step(row, knob_type)
 
         default = row.get("boot_val") or row.get("value")
         if knob_type == KnobType.INTEGER and default is not None:
@@ -131,6 +194,7 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
             default=default,
             unit=row.get("unit") if pd.notna(row.get("unit")) else None,
             enum_values=enumvals,
+            step=integer_step,
             description=row.get("description", ""),
             category=row.get("custom_category", "other"),
             restart_required=row.get("requires_restart", False),
