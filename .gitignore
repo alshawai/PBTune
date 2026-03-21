@@ -1,9 +1,13 @@
+# AI related files
+.prompts/
+.chats/
+.claude/
+CLAUDE.md
+
 # Drafts and documentation
 Draft*.md
 *.draft
 drafts/
-.prompts/
-.chats/
 notes/
 code-snippets/
 

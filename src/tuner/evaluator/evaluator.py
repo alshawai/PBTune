@@ -31,6 +31,7 @@ from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 import json
 import logging
+import math
 import time
 import random
 import subprocess
@@ -39,6 +40,7 @@ from queue import Queue
 import yaml
 import numpy as np
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extensions import connection as PostgresConnection, register_adapter, AsIs
 import psutil
 
@@ -60,7 +62,7 @@ from src.tuner.utils.restart_manager import (
 from src.tuner.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.tuner.utils.logger_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Register numpy type adapters for psycopg2
 register_adapter(np.int64, lambda x: AsIs(int(x)))
@@ -93,6 +95,9 @@ class EvaluatorConfig:
         Batch restarts every N generations (default: 10)
     restart_config : Optional[RestartConfig]
         Configuration for restart manager (default: None = auto-detect)
+    vacuum_analyze_timeout_seconds : float
+        Per-worker timeout for post-workload VACUUM ANALYZE safety maintenance.
+        Prevents generation stalls when maintenance blocks or runs too long.
     """
     workload_type: WorkloadType
     metric_config: MetricConfig
@@ -105,6 +110,7 @@ class EvaluatorConfig:
     restart_config: Optional[RestartConfig] = None
     workload_seed: int = 42
     warmup_passes: int = 0
+    vacuum_analyze_timeout_seconds: float = 45.0
 
 
 class WorkloadExecutor:
@@ -216,7 +222,7 @@ class WorkloadExecutor:
             "SELECT count(*) FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
         )
-        count = cursor.fetchone()[0]
+        count = cursor.fetchone()[0]  # type: ignore
         cursor.close()
         conn.close()
         return count >= self.num_tables
@@ -642,8 +648,6 @@ class Evaluator:
         self.workload_executor = workload_executor
         self.worker_id = worker_id or "Evaluator"
 
-        self.logger = logging.getLogger(__name__)
-
         self.restart_cost_model = RestartCostModel(
             base_restart_time=7.0,
             cache_warmup_ratio=0.1,
@@ -655,7 +659,7 @@ class Evaluator:
             rollback_on_error=False
         )
 
-        self.logger.debug(
+        logger.debug(
             "✓ Created Evaluator: workload=%s, duration=%ss",
             config.workload_type.value.upper(),
             config.measurement_duration
@@ -696,7 +700,7 @@ class Evaluator:
                 connection = get_connection(config=db_config or self.config.db_config)
                 connection.autocommit = False
                 if attempt > 1:
-                    self.logger.info("Connection established after %d attempts", attempt)
+                    logger.info("Connection established after %d attempts", attempt)
                 return connection
             except psycopg2.Error as e:
                 last_error = e
@@ -704,11 +708,13 @@ class Evaluator:
 
                 # Check if it's a recoverable error (instance still recovering)
                 if (
+                    "starting up" in error_msg or
                     "not yet accepting connections" in error_msg or
-                    "consistent recovery state" in error_msg
+                    "consistent recovery state" in error_msg or
+                    ("connection refused" in error_msg and "is the server running" in error_msg)
                 ):
                     if attempt < max_retries:
-                        self.logger.warning(
+                        logger.warning(
                             "Database recovering, retry %d/%d in %.1fs...",
                             attempt,
                             max_retries,
@@ -718,10 +724,10 @@ class Evaluator:
                         continue
 
                 # Non-recoverable error or last attempt
-                self.logger.error("Failed to connect to PostgreSQL: %s", e)
+                logger.error("Failed to connect to PostgreSQL: %s", e)
                 raise
 
-        self.logger.error("Failed to connect after %d attempts: %s", max_retries, last_error)
+        logger.error("Failed to connect after %d attempts: %s", max_retries, last_error)
         raise last_error  # type: ignore
 
     def disconnect(
@@ -746,13 +752,13 @@ class Evaluator:
                     worker_logger = get_logger(__name__, worker_id=worker_id)
                     worker_logger.debug("Disconnected from PostgreSQL")
                 else:
-                    self.logger.debug("Disconnected from PostgreSQL")
+                    logger.debug("Disconnected from PostgreSQL")
             except Exception as e:
                 if worker_id is not None:
                     worker_logger = get_logger(__name__, worker_id=worker_id)
                     worker_logger.warning("Error closing connection: %s", e)
                 else:
-                    self.logger.warning("Error closing connection: %s", e)
+                    logger.warning("Error closing connection: %s", e)
 
     def apply_configuration(
         self,
@@ -800,9 +806,9 @@ class Evaluator:
         restart_occurred = False
 
         # Create worker logger for consistent [Worker-X] formatting and colors
-        logger = (
+        worker_logger = (
             get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None else self.logger
+            if worker_id is not None else logger
         )
 
         try:
@@ -812,7 +818,7 @@ class Evaluator:
 
             # If restart-required params changed, check if we should restart this generation
             if result.restart_required and len(result.restart_required) > 0:
-                logger.info(
+                worker_logger.info(
                     "Restart required for %d parameters: %s",
                     len(result.restart_required),
                     list(result.restart_required)
@@ -823,19 +829,23 @@ class Evaluator:
 
                 if should_restart:
                     if restart_manager:
-                        logger.info(
+                        worker_logger.info(
                             "Restarting (generation %d is restart interval)",
                             generation
                         )
                         restart_occurred = self._perform_restart(
                             connection, restart_manager, worker_log_id, worker_id=worker_id
                         )
+                        if not restart_occurred:
+                            raise ConnectionError(
+                                "PostgreSQL restart failed; worker marked as dead-config candidate"
+                            )
                     else:
-                        logger.warning(
+                        worker_logger.warning(
                             "Restart needed but restart_manager not configured"
                         )
                 else:
-                    logger.info(
+                    worker_logger.info(
                         "Deferring restart (will restart at generation %d)",
                         ((generation // restart_interval) + 1) * restart_interval
                         if generation is not None else restart_interval
@@ -844,9 +854,13 @@ class Evaluator:
                 restart_occurred = self._perform_restart(
                     connection, restart_manager, worker_log_id, worker_id=worker_id
                 )
+                if not restart_occurred:
+                    raise ConnectionError(
+                        "Forced PostgreSQL restart failed; worker marked as dead-config candidate"
+                    )
 
         except Exception as e:
-            logger.error("Failed to apply configuration: %s", e)
+            worker_logger.error("Failed to apply configuration: %s", e)
             raise
 
         return restart_occurred
@@ -878,12 +892,12 @@ class Evaluator:
             True if restart succeeded
         """
         # Create worker logger for consistent [Worker-X] formatting and colors
-        logger = (
+        worker_logger = (
             get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None else self.logger
+            if worker_id is not None else logger
         )
 
-        logger.info("Restarting PostgreSQL instance...")
+        worker_logger.info("Restarting PostgreSQL instance...")
 
         try:
             # Close connection before restart
@@ -895,7 +909,7 @@ class Evaluator:
 
             # Restart the instance
             if restart_manager.restart():
-                logger.info("Restart successful")
+                worker_logger.info("Restart successful")
 
                 # Reset statistics after restart
                 try:
@@ -906,17 +920,17 @@ class Evaluator:
                     cursor.close()
                     temp_conn.commit()
                     temp_conn.close()
-                    logger.debug("Reset PostgreSQL statistics")
+                    worker_logger.debug("Reset PostgreSQL statistics")
                 except Exception as e:
-                    logger.warning("Failed to reset statistics: %s", e)
+                    worker_logger.warning("Failed to reset statistics: %s", e)
 
                 return True
             else:
-                logger.error("Restart failed")
+                worker_logger.error("Restart failed")
                 return False
 
         except Exception as e:
-            logger.error("Restart failed with exception: %s", e)
+            worker_logger.error("Restart failed with exception: %s", e)
             return False
 
     def _verify_configuration(
@@ -946,9 +960,9 @@ class Evaluator:
             Parameter name -> verification status
         """
         # Create worker logger for consistent [Worker-X] formatting and colors
-        logger = (
+        worker_logger = (
             get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None else self.logger
+            if worker_id is not None else logger
         )
         verification = {}
         mismatches = []
@@ -960,34 +974,55 @@ class Evaluator:
                 try:
                     # Query current value
                     cursor.execute(
-                        "SELECT setting, unit FROM pg_settings WHERE name = %s",
+                        "SELECT setting, unit, vartype FROM pg_settings WHERE name = %s",
                         (param_name,)
                     )
                     result = cursor.fetchone()
 
                     if not result:
-                        self.logger.warning(
+                        worker_logger.warning(
                             "[%s] Parameter '%s' not found in pg_settings",
                             worker_log_id, param_name
                         )
                         verification[param_name] = False
                         continue
 
-                    current_value_str, unit = result
+                    current_value_str, unit, vartype = result
 
                     # Convert current value to comparable type
                     if isinstance(expected_value, bool):
                         current_value = current_value_str.lower() in ('on', 'true', '1')
                         match = current_value == expected_value
                     elif isinstance(expected_value, (int, float)):
-                        # Convert both to float for consistent comparison
                         current_value = float(current_value_str)
                         expected_float = float(expected_value)
-                        # Use tolerance for floating-point comparison
-                        match = abs(current_value - expected_float) < 0.01
+
+                        # pg_settings may coerce or quantize numeric settings on apply.
+                        # Compare by PostgreSQL vartype semantics, not a fixed tiny delta.
+                        if vartype == 'integer':
+                            current_int = int(round(current_value))
+                            expected_int = int(round(expected_float))
+                            current_value = current_int
+                            match = current_int == expected_int
+                        else:
+                            abs_tolerance = max(0.01, abs(expected_float) * 1e-6)
+                            match = math.isclose(
+                                current_value,
+                                expected_float,
+                                rel_tol=1e-6,
+                                abs_tol=abs_tolerance,
+                            )
                     else:
                         current_value = current_value_str
-                        match = str(current_value) == str(expected_value)
+                        # `wal_compression` became an enum on new versions of postgres (on -> pglz)
+                        if (
+                            param_name == "wal_compression" and
+                            str(expected_value).lower() in ("on", "true")
+                            and str(current_value).lower() in ("on", "pglz")
+                        ):
+                            match = True
+                        else:
+                            match = str(current_value) == str(expected_value)
 
                     verification[param_name] = match
 
@@ -997,7 +1032,7 @@ class Evaluator:
                         )
 
                 except Exception as e:
-                    logger.warning(
+                    worker_logger.warning(
                         "Failed to verify parameter '%s': %s",
                         param_name, e
                     )
@@ -1010,20 +1045,20 @@ class Evaluator:
             total_count = len(verification)
 
             if verified_count == total_count:
-                logger.debug(
+                worker_logger.debug(
                     "Configuration verified: %d/%d parameters correct",
                     verified_count, total_count
                 )
             else:
-                logger.warning(
+                worker_logger.warning(
                     "Configuration mismatch: %d/%d parameters verified",
                     verified_count, total_count
                 )
                 for mismatch in mismatches:
-                    logger.warning("  %s", mismatch)
+                    worker_logger.warning("  %s", mismatch)
 
         except Exception as e:
-            logger.error(
+            worker_logger.error(
                 "Configuration verification failed: %s",
                 e
             )
@@ -1054,7 +1089,7 @@ class Evaluator:
             cursor.close()
             return int(result[0]) if result else None  # type: ignore
         except psycopg2.Error as e:
-            self.logger.warning("Failed to get PostgreSQL PID: %s", e)
+            logger.warning("Failed to get PostgreSQL PID: %s", e)
             return None
 
     def _get_postmaster_pid(self, port: int, worker_id: Optional[int] = None) -> Optional[int]:
@@ -1094,7 +1129,7 @@ class Evaluator:
                                     proc.info['pid'], port
                                 )
                             else:
-                                self.logger.debug(
+                                logger.debug(
                                     "Found postmaster PID %d for port %d", 
                                     proc.info['pid'], port
                                 )
@@ -1103,9 +1138,9 @@ class Evaluator:
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
 
-            self.logger.warning("Could not find PostgreSQL postmaster for port %d", port)
+            logger.warning("Could not find PostgreSQL postmaster for port %d", port)
         except Exception as e:
-            self.logger.warning("Error finding postmaster PID: %s", e)
+            logger.warning("Error finding postmaster PID: %s", e)
 
         return None
 
@@ -1147,13 +1182,13 @@ class Evaluator:
                     len(processes), len(children), postmaster_pid
                 )
             else:
-                self.logger.debug(
+                logger.debug(
                     "Found %d PostgreSQL processes (1 postmaster + %d backends) for PID %d",
                     len(processes), len(children), postmaster_pid
                 )
 
         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-            self.logger.warning("Failed to get PostgreSQL processes: %s", e)
+            logger.warning("Failed to get PostgreSQL processes: %s", e)
 
         return processes
 
@@ -1186,7 +1221,7 @@ class Evaluator:
         using PostgreSQL's built-in statistics (more accurate than psutil on Windows).
         """
         if not connection or connection.closed:
-            self.logger.warning("Connection not available for system metrics collection")
+            logger.warning("Connection not available for system metrics collection")
             return {
                 'memory_utilization': 0.0,
                 'cache_hit_ratio': 0.0
@@ -1225,7 +1260,7 @@ class Evaluator:
                                 memory_mb, memory_pct, len(postgres_processes)
                             )
                         else:
-                            self.logger.debug(
+                            logger.debug(
                                 "Memory: %.1fMB (%.1f%%) across %d processes",
                                 memory_mb, memory_pct, len(postgres_processes)
                             )
@@ -1233,7 +1268,7 @@ class Evaluator:
                         metrics['memory_utilization'] = 0.0
 
                 except Exception as e:
-                    self.logger.warning("Failed to collect memory metrics: %s", e)
+                    logger.warning("Failed to collect memory metrics: %s", e)
                     metrics['memory_utilization'] = 0.0
             else:
                 metrics['memory_utilization'] = 0.0
@@ -1253,7 +1288,7 @@ class Evaluator:
                 result = cursor.fetchone()
                 metrics['cache_hit_ratio'] = float(result[0] or 0.0)  # type: ignore
             except psycopg2.Error as e:
-                self.logger.warning("Failed to query cache hit ratio: %s", e)
+                logger.warning("Failed to query cache hit ratio: %s", e)
                 metrics['cache_hit_ratio'] = 0.0
             finally:
                 cursor.close()
@@ -1268,35 +1303,119 @@ class Evaluator:
         worker_id: Optional[int] = None
     ) -> None:
         """
-        Run VACUUM ANALYZE after DML-heavy workloads to prevent table bloat.
+        Run bounded post-workload maintenance after DML-heavy workloads.
         
-        Only executes for OLTP and mixed workloads that contain
-        UPDATE/DELETE/INSERT operations which create dead tuples.
+        Full-database VACUUM ANALYZE is too expensive for short sysbench-style
+        generations and frequently times out while scanning toast/system tables.
+        Instead, analyze only user tables that were actually modified.
         """
         # Skip for read-only workloads (OLAP, TPC-H)
         if self.config.workload_type.value in ('olap', 'tpch'):
             return
         
-        logger = (
+        worker_logger = (
             get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None else self.logger
+            if worker_id is not None else logger
         )
-        
+
+        timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
+        if timeout_seconds <= 0:
+            worker_logger.debug("Skipping post-workload VACUUM ANALYZE (timeout disabled)")
+            return
+
         try:
             conn = get_connection(config=db_config)
             conn.autocommit = True  # VACUUM cannot run inside a transaction
             cursor = conn.cursor()
-            
+
+            statement_timeout_ms = int(timeout_seconds * 1000)
+            lock_timeout_ms = max(1000, statement_timeout_ms // 4)
+            cursor.execute("SET statement_timeout = %s", (statement_timeout_ms,))
+            cursor.execute("SET lock_timeout = %s", (lock_timeout_ms,))
+
+            cursor.execute(
+                """
+                SELECT schemaname, relname
+                FROM pg_stat_user_tables
+                WHERE n_mod_since_analyze > 0 OR n_dead_tup > 0
+                ORDER BY n_mod_since_analyze DESC, n_dead_tup DESC
+                """
+            )
+            tables = cursor.fetchall() or []
+
+            if not tables:
+                worker_logger.debug("Skipping post-workload maintenance (no modified user tables)")
+                cursor.close()
+                conn.close()
+                return
+
+            worker_logger.debug(
+                "Running post-workload VACUUM ANALYZE on %d modified tables (statement_timeout=%sms, lock_timeout=%sms)",
+                len(tables),
+                statement_timeout_ms,
+                lock_timeout_ms,
+            )
+
             start = time.time()
-            cursor.execute("VACUUM ANALYZE")
+            for schema_name, table_name in tables:
+                table_start = time.time()
+                try:
+                    cursor.execute(
+                        sql.SQL("VACUUM ANALYZE {}.{}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(table_name),
+                        )
+                    )
+                    worker_logger.debug(
+                        "VACUUM ANALYZE completed for %s.%s in %.2fs",
+                        schema_name,
+                        table_name,
+                        time.time() - table_start,
+                    )
+                except Exception as table_error:
+                    worker_logger.warning(
+                        "Post-workload maintenance failed for %s.%s: %s",
+                        schema_name,
+                        table_name,
+                        table_error,
+                    )
+
             elapsed = time.time() - start
-            
-            logger.debug("VACUUM ANALYZE completed in %.2fs", elapsed)
+
+            worker_logger.debug("Post-workload VACUUM ANALYZE completed in %.2fs", elapsed)
             cursor.close()
             conn.close()
-            
+
         except Exception as e:
-            logger.warning("Post-workload VACUUM ANALYZE failed: %s", e)
+            worker_logger.warning("Post-workload VACUUM ANALYZE failed: %s", e)
+
+    def _ensure_benchmark_ready(
+        self,
+        db_config: DatabaseConfig,
+        worker_logger: Optional[logging.Logger] = None,
+    ) -> None:
+        """Validate benchmark state before execution and repair it if needed."""
+        if not isinstance(self.workload_executor, BenchmarkExecutor):
+            return
+
+        worker_logger = worker_logger or logger
+
+        try:
+            benchmark_ready = self.workload_executor.validate(db_config)
+        except Exception as e:
+            worker_logger.warning("Benchmark validation raised %s; attempting prepare()", e)
+            benchmark_ready = False
+
+        if benchmark_ready:
+            return
+
+        worker_logger.warning("Benchmark state invalid; running prepare() before workload execution")
+        self.workload_executor.prepare(db_config)
+
+        if not self.workload_executor.validate(db_config):
+            raise RuntimeError("Benchmark validation still failing after prepare()")
+
+        worker_logger.info("Benchmark state re-prepared successfully")
 
     def evaluate_worker(
         self,
@@ -1421,6 +1540,7 @@ class Evaluator:
                         worker_logger.debug("Failed to capture initial stats: %s", e)
 
                 if isinstance(self.workload_executor, BenchmarkExecutor):
+                    self._ensure_benchmark_ready(worker.db_config, worker_logger=worker_logger)
                     metrics = self.workload_executor.execute(
                         db_config=worker.db_config,
                         worker_id=worker.worker_id,
@@ -1474,7 +1594,7 @@ class Evaluator:
 
             except Exception as e:
                 worker_logger.error("Workload execution failed: %s", e)
-                metrics = PerformanceMetrics()
+                raise RuntimeError(f"Workload execution failed: {e}") from e
 
             system_metrics = self.collect_system_metrics(
                 connection,
