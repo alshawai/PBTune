@@ -115,7 +115,7 @@ def main():
     print("\n7. Exporting All Knobs:")
     print("-" * 23)
     output_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "data", "postgresql_all_knobs_demo.csv"
+        os.path.dirname(__file__), "..", "..", "data", "postgresql_all_knobs.csv"
     )
     output_path = os.path.normpath(output_path)
     retriever.save_all_knobs(output_path, include_metadata=True)
