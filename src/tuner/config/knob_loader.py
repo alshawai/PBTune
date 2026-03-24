@@ -198,6 +198,12 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
             description=row.get("description", ""),
             category=row.get("custom_category", "other"),
             restart_required=row.get("requires_restart", False),
+            hardware_relative=bool(row.get("hardware_relative", False)),
+            resource_type=(
+                row.get("resource_type")
+                if pd.notna(row.get("resource_type")) and
+                row.get("resource_type") != "" else None
+            ),
         )
 
         knob_definitions.append(knob_def)

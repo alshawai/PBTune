@@ -21,6 +21,7 @@ preprocess_and_save_knobs()
 """
 
 import os
+import ast
 from pathlib import Path
 from typing import Optional, Dict
 import pandas as pd
@@ -60,7 +61,6 @@ def _log_source_policy_exclusions(df: pd.DataFrame) -> None:
     )
 
 
-import ast
 
 def _clean_enumvals(df: pd.DataFrame) -> pd.DataFrame:
     """Remove environment-specific aliases and unsafe OS constraints from enums.
@@ -70,12 +70,12 @@ def _clean_enumvals(df: pd.DataFrame) -> pd.DataFrame:
     values known to crash most baseline UNIX systems (like 'io_uring').
     """
     df = df.copy()
-    
+
     exclusions = {
         "wal_compression": {"on"},
         "io_method": {"io_uring", "posix"}
     }
-    
+
     for knob, ex_set in exclusions.items():
         if knob in df["name"].values:
             idx = df.index[df["name"] == knob].tolist()[0]
@@ -135,6 +135,8 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
     df_with_defaults["impact_tier"] = "extensive"
     df_with_defaults["tuning_priority"] = 5
     df_with_defaults["tuning_notes"] = ""
+    df_with_defaults["hardware_relative"] = False
+    df_with_defaults["resource_type"] = ""
 
     metadata_rows = [
         {
@@ -145,6 +147,8 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
             "impact_tier_meta": metadata.impact_tier,
             "tuning_priority_meta": metadata.tuning_priority,
             "tuning_notes_meta": metadata.notes,
+            "hardware_relative_meta": metadata.hardware_relative,
+            "resource_type_meta": metadata.resource_type,
         }
         for knob_name, metadata in KNOB_TUNING_METADATA.items()
     ]
@@ -156,8 +160,13 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
     merged["tuning_max"] = merged["tuning_max_meta"].combine_first(merged["tuning_max"])
     merged["scale"] = merged["scale_meta"].combine_first(merged["scale"])
     merged["impact_tier"] = merged["impact_tier_meta"].combine_first(merged["impact_tier"])
-    merged["tuning_priority"] = merged["tuning_priority_meta"].combine_first(merged["tuning_priority"])
-    merged["tuning_notes"] = merged["tuning_notes_meta"].combine_first(merged["tuning_notes"])
+    merged["tuning_priority"] = merged[
+        "tuning_priority_meta"].combine_first(merged["tuning_priority"])
+    merged["tuning_notes"] = merged[
+        "tuning_notes_meta"].combine_first(merged["tuning_notes"])
+    merged["hardware_relative"] = merged[
+        "hardware_relative_meta"].combine_first(merged["hardware_relative"])
+    merged["resource_type"] = merged["resource_type_meta"].combine_first(merged["resource_type"])
 
     return merged.drop(
         columns=[
@@ -167,6 +176,8 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
             "impact_tier_meta",
             "tuning_priority_meta",
             "tuning_notes_meta",
+            "hardware_relative_meta",
+            "resource_type_meta",
         ]
     )
 
