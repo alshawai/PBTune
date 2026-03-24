@@ -36,6 +36,7 @@ Features:
 import argparse
 import json
 import sys
+import math
 import time
 import logging
 from pathlib import Path
@@ -81,7 +82,7 @@ from src.tuner.utils.logger_config import (
     ColorPalette
 )
 from src.tuner.utils.instance_manager import PostgresInstanceManager
-from src.tuner.utils.hardware_info import get_system_info, log_system_info
+from src.tuner.utils.hardware_info import get_system_info, log_system_info, detect_worker_resources
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -131,18 +132,10 @@ class PBTTuner:
         self,
         knob_tier: str = "minimal",
         pbt_config: Optional[PBTConfig] = None,
-        workload_type: WorkloadType = WorkloadType.OLTP,
-        output_dir: str = "results",
-        workload_file: Optional[str] = None,
-        force_recreate_instances: bool = False,
-        cleanup_instances: bool = False,
-        skip_schema_init: bool = False,
-        force_recreate_baseline: bool = False,
         benchmark: Optional[str] = None,
-        scale_factor: Optional[float] = None,
-        sysbench_tables: Optional[int] = None,
-        sysbench_table_size: Optional[int] = None,
-        logger: Optional[logging.Logger] = None,
+        workload_type: WorkloadType = WorkloadType.OLTP,
+        workload_file: Optional[str] = None,
+        **kwargs
     ):
         """
         Initialize PBT Tuner.
@@ -153,34 +146,51 @@ class PBTTuner:
             Knob space tier: 'minimal', 'core', 'standard', 'extensive'
         pbt_config : Optional[PBTConfig]
             PBT hyperparameters. If None, uses STANDARD_CONFIG
+        benchmark : Optional[str]
+            Benchmark name for workload executor ('sysbench', 'tpch', or None for custom)
         workload_type : WorkloadType
             Workload type for optimization
-        output_dir : str
-            Directory for saving results
         workload_file : Optional[str]
             Path to custom workload file (JSON/YAML). If provided, overrides workload_type.
-        force_recreate_instances : bool
-            Force recreation of PostgreSQL instances
-        cleanup_instances : bool
-            Remove instance data after completion
-        skip_schema_init : bool
-            Skip schema initialization from template database
-        force_recreate_baseline : bool
-            Force recreation of baseline snapshot even if it exists
+        **kwargs
+            Additional keyword arguments for configuration.
+                - force_recreate_instances: bool (default: False)
+                    Force recreate PostgreSQL instances
+                - force_recreate_baseline: bool (default: False)
+                    Force recreate baseline snapshot
+                - cleanup_instances: bool (default: False)
+                    Whether to clean up instance data after tuning
+                - warm_start_path: Optional[str] (default: None)
+                    Path to previous best_config.json for warm-starting
+                - output_dir: str (default: "results")
+                    Directory to save results
+                - timestamp: str (default: current timestamp)
+                    Timestamp for result files (format: YYYYMMDD_HHMM)
+                - logger: Optional[logging.Logger] (default: None)
+                    Custom logger instance. If None, a default logger is created.
         """
         self.knob_tier = knob_tier
         self.pbt_config = pbt_config or STANDARD_CONFIG
-        self.workload_type = workload_type
-        self.workload_file = workload_file
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.force_recreate_instances = force_recreate_instances
-        self.cleanup_instances = cleanup_instances
-        self.force_recreate_baseline = force_recreate_baseline
-        self.logger = logger or get_logger(__name__)
+
+        self.force_recreate_instances = kwargs.get('force_recreate_instances', False)
+        self.force_recreate_baseline = kwargs.get('force_recreate_baseline', False)
+
+        self.cleanup_instances = kwargs.get('cleanup_instances', False)
+
+        self.warm_start_path = kwargs.get('warm_start_path', None)
+        self.warm_start_provenance = {"enabled": False}
+
+        self.output_dir = Path(kwargs.get('output_dir', "results"))
+        self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
+        self.logger = kwargs.get('logger', get_logger(__name__))
 
         self.logger.debug("Loading knob space: %s", knob_tier.upper())
         self.knob_space = get_knob_space(knob_tier)
+
+        self.logger.debug("  Detecting hardware resources...")
+        worker_resources = detect_worker_resources(self.pbt_config.num_parallel_workers)
+        self.knob_space.resolve_hardware_ranges(worker_resources)
+
         self.logger.debug("✓ Loaded %d knobs\n", len(self.knob_space))
 
         self.db_config = DatabaseConfig.from_env()
@@ -199,47 +209,51 @@ class PBTTuner:
             warmup_passes=self.pbt_config.warmup_passes,
         )
 
-        self.scale_factor = (
-            pbt_config.scale_factor  # type: ignore
-            if scale_factor is None else scale_factor
-        )
-        self.sysbench_tables = (
-            pbt_config.sysbench_tables  # type: ignore
-            if sysbench_tables is None
-            else sysbench_tables
-        )
-        self.sysbench_table_size = (
-            pbt_config.sysbench_table_size  # type: ignore
-            if sysbench_table_size is None
-            else sysbench_table_size
-        )
+        info_color = ColorPalette.get_level_color('INFO', 'ansi')
 
         if benchmark == 'sysbench':
-            self.logger.info("🔧 Using external Sysbench C-binary for rigorous benchmarking.")
             self.benchmark_name = 'sysbench'
-            workload_executor = SysbenchExecutor(
-                tables=self.sysbench_tables,
-                table_size=self.sysbench_table_size
-            )  # type: ignore
-            self.snapshot_identifier = (
-                f"sysbench_t{self.sysbench_tables}_s{self.sysbench_table_size}"
-            )
-        elif benchmark == 'tpch':
+            self.workload_type = WorkloadType.OLTP
+
             self.logger.info(
-                "🔧 Using TPC-H benchmark (SF=%.1f) for analytical workload evaluation.",
-                self.scale_factor
+                "%s%sUsing external Sysbench C-binary for rigorous benchmarking.%s",
+                ColorCode.BOLD, info_color, ColorCode.RESET
             )
+            workload_executor = SysbenchExecutor(
+                tables=self.pbt_config.sysbench_tables,
+                table_size=self.pbt_config.sysbench_table_size
+            )
+            self.snapshot_identifier = (
+                f"sysbench_t{self.pbt_config.sysbench_tables}_"
+                f"s{self.pbt_config.sysbench_table_size}"
+            )
+
+        elif benchmark == 'tpch':
+            self.benchmark_name = 'tpch'
+            self.workload_type = WorkloadType.OLAP
+
+            self.logger.info(
+                "%s%sUsing TPC-H benchmark for analytical workload evaluation.%s",
+                ColorCode.BOLD, info_color, ColorCode.RESET
+            )
+            workload_executor = TPCHExecutor(scale_factor=self.pbt_config.scale_factor)
+            self.snapshot_identifier = f"tpch_sf{self.pbt_config.scale_factor}"
+
             self.logger.debug(
                 "💡 TPC-H is a read-only OLAP benchmark; no need for snapshot restorations."
             )
             self.pbt_config.enable_snapshots = False
-            self.benchmark_name = 'tpch'
-            workload_executor = TPCHExecutor(scale_factor=self.scale_factor)  # type: ignore
-            self.snapshot_identifier = f"tpch_sf{self.scale_factor}"
-        else:
+
+        else:  # Custom workload (defined by workload_file)
             self.benchmark_name = workload_type.value
+            self.workload_type = workload_type
+
+            self.logger.info(
+                "%s%sUsing custom workload executor defined in %s.%s",
+                ColorCode.BOLD, info_color, workload_file, ColorCode.RESET
+            )
             workload_executor = self._create_workload_executor(workload_type, workload_file)
-            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.scale_factor}"
+            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.scale_factor}"
 
         self.evaluator = Evaluator(self.evaluator_config, workload_executor)
 
@@ -263,7 +277,7 @@ class PBTTuner:
         self.instance_manager = PostgresInstanceManager(
             base_dir=Path(f'./pg_instances/{self.benchmark_name}'),
             base_port=5440,
-            template_db_config=None if skip_schema_init else self.db_config,
+            template_db_config=None if kwargs.get('skip_schema_init') else self.db_config,
             schema_provider=workload_executor,
         )
 
@@ -277,7 +291,6 @@ class PBTTuner:
         self._restart_logged_this_gen: bool = False
         self._last_logged_best_score: float = -1.0
 
-        info_color = ColorPalette.get_level_color('INFO', 'ansi')
         self.logger.info(
             "%s%sPBT Database Tuner Initialization Complete!%s",
             ColorCode.BOLD, info_color, ColorCode.RESET
@@ -603,8 +616,20 @@ class PBTTuner:
             self.logger.error("❌ Failed to setup instances: %s", e)
             raise
 
-        self.logger.debug("Initializing population with random configurations...")
-        self.population.initialize()
+        self.logger.info("Initializing population...")
+        if self.warm_start_path:
+            self.logger.debug("Warm-starting from %s", self.warm_start_path)
+            warm_configs = self._build_warm_start_configs(
+                warm_start_path=Path(self.warm_start_path),
+                population_size=self.pbt_config.population_size,
+                seed=42,
+            )
+            self.population.initialize(
+                initial_configs=warm_configs,
+                random_seed=42
+            )
+        else:
+            self.population.initialize(random_seed=42)
 
         self.logger.debug("Assigning instance configurations to workers...")
         self.population.setup_worker_instances(
@@ -735,7 +760,10 @@ class PBTTuner:
         results = {
             'generation': generation,
             'best_score': float(self.best_score) if self.best_score else 0.0,
-            'best_config': convert_numpy_types(self.best_config),
+            'best_config': convert_numpy_types(
+                self.knob_space.config_to_fractions(self.best_config)
+                if self.best_config else {}
+            ),
             'elapsed_time': time.time() - self.start_time if self.start_time else 0,
         }
 
@@ -746,8 +774,8 @@ class PBTTuner:
 
     def save_final_results(self, total_time: float) -> Dict[str, Any]:
         """Save final tuning results"""
-
         best_metrics = self.population.best_overall_metrics
+        worker_resources = self.knob_space.worker_resources
 
         results = {
             'tuning_session': {
@@ -755,9 +783,9 @@ class PBTTuner:
                 'num_knobs': len(self.knob_space),
                 'workload_type': self.workload_type.value,
                 'benchmark_name': self.benchmark_name,
-                'scale_factor': self.scale_factor,
-                'sysbench_tables': self.sysbench_tables,
-                'sysbench_table_size': self.sysbench_table_size,
+                'scale_factor': self.pbt_config.scale_factor,
+                'sysbench_tables': self.pbt_config.sysbench_tables,
+                'sysbench_table_size': self.pbt_config.sysbench_table_size,
                 'population_size': self.pbt_config.population_size,
                 'total_generations': self.population.current_generation,
                 'total_time_seconds': total_time,
@@ -765,11 +793,20 @@ class PBTTuner:
             },
             'best_configuration': {
                 'score': float(self.best_score) if self.best_score else 0.0,
-                'knobs': convert_numpy_types(self.best_config),
+                'knobs': convert_numpy_types(
+                    self.knob_space.config_to_fractions(self.best_config)
+                    if self.best_config else {}
+                ),
+                'metrics': convert_numpy_types(
+                    best_metrics.to_dict() if best_metrics else {}
+                ),
             },
-            'best_configuration_metrics': convert_numpy_types(
-                best_metrics.to_dict() if best_metrics else {}
-            ),
+            'worker_resources': {
+                'ram_bytes': worker_resources.ram_bytes,  # type: ignore
+                'cpu_cores': worker_resources.cpu_cores,  # type: ignore
+                'disk_type': worker_resources.disk_type  # type: ignore
+            },
+            'warm_start': self.warm_start_provenance,
             'generation_history': convert_numpy_types(self.generation_history),
             'convergence': {
                 'converged': bool(self.population.history[-1].converged)
@@ -790,10 +827,104 @@ class PBTTuner:
         best_config_file = self.output_dir / "best_config.json"
 
         with open(best_config_file, 'w', encoding='utf-8') as f:
-            json.dump(convert_numpy_types(self.best_config), f, indent=2)
+            json.dump(
+                convert_numpy_types(self.knob_space.config_to_fractions(self.best_config)
+                if self.best_config else {}),
+                f,
+                indent=2
+            )
         self.logger.info("💾 Saved best config to %s", best_config_file)
 
         return results
+
+    def _compute_warm_start_perturbation_factors(
+        self,
+        num_variants: int,
+    ) -> List[Tuple[float, float]]:
+        """Compute graduated perturbation factors for warm-start variants."""
+        if num_variants == 0:
+            return []
+        if num_variants == 1:
+            return [(0.65, 1.35)]
+        factors = []
+        for i in range(num_variants):
+            t = i / (num_variants - 1)
+            spread = 0.20 + t * 0.30
+            factors.append((round(1.0 - spread, 4), round(1.0 + spread, 4)))
+        return factors
+
+    def _build_warm_start_configs(
+        self,
+        warm_start_path: Path,
+        population_size: int,
+        seed: int,
+    ) -> List[Dict[str, Any]]:
+        """Build initial configs from a previous best_config.json."""
+        with open(Path(self.warm_start_path), 'r', encoding='utf-8') as f:  # type: ignore
+            best_config_frac = json.load(f)
+
+        for knob_name, knob_val in best_config_frac.items():
+            if knob_name in self.knob_space.knobs:
+                knob = self.knob_space.knobs[knob_name]
+                if knob.hardware_relative:
+                    # `max_worker_processes` is the only fraction with a valid range of [0, 2].
+                    # All other hardware-relative knobs must be in [0, 1].
+                    frac_max = 2.0 if knob.name == "max_worker_processes" else 1.0
+                    if knob_val > frac_max:
+                        raise ValueError(
+                            "Warm-start config contains absolute value for hardware-"
+                            f"relative knob {knob_name}. Expected fraction <= {frac_max}."
+                        )
+
+        base_config = self.knob_space.fractions_to_config(best_config_frac)
+
+        missing_knobs = [k for k in self.knob_space.knobs if k not in base_config]
+        if missing_knobs:
+            self.logger.warning(
+                "Warm-start config missing knobs, filling in with random values: %s",
+                missing_knobs
+            )
+            template = self.knob_space.sample_random_config(seed=seed)
+            for k in missing_knobs:
+                base_config[k] = template[k]
+
+        dropped_knobs = [k for k in base_config if k not in self.knob_space.knobs]
+        if dropped_knobs:
+            self.logger.warning("Warm-start config dropping extra knobs: %s", dropped_knobs)
+            for k in dropped_knobs:
+                del base_config[k]
+
+        is_valid, errors = self.knob_space.validate_config(base_config)
+        if not is_valid:
+            self.logger.warning(
+                "Warm-start base config validation issues: %s. "
+                "Attempting to repair dependencies.",
+                errors
+            )
+        base_config = self.knob_space.repair_config_dependencies(base_config)
+
+        num_warm_start = math.ceil(population_size / 2)
+
+        warm_configs = [base_config]
+        factors = self._compute_warm_start_perturbation_factors(num_warm_start - 1)
+
+        for i, (f_min, f_max) in enumerate(factors):
+            perturbed = self.knob_space.perturb_config(
+                base_config,
+                perturbation_factor=(f_min, f_max),
+                seed=seed + i,
+            )
+            warm_configs.append(perturbed)
+
+        self.warm_start_provenance = {
+            "enabled": True,
+            "source_path": str(warm_start_path),
+            "num_warm_start_workers": num_warm_start,
+            "num_lhs_workers": population_size - num_warm_start,
+            "perturbation_factors": factors
+        }
+
+        return warm_configs
 
     def print_final_summary(self, results: Dict[str, Any]):
         """Print final summary of tuning session"""
@@ -852,6 +983,13 @@ on your hardware, configuration, and workload/benchmark.
         default='minimal',
         choices=['minimal', 'core', 'standard', 'extensive'],
         help='Knob space tier (default: minimal)'
+    )
+
+    config_group.add_argument(
+        '--warm-start',
+        type=str,
+        metavar='PATH',
+        help='Path to saved configs from a previous run for warm-starting'
     )
 
     config_group.add_argument(
@@ -1025,6 +1163,7 @@ def main():
         'extreme': EXTREME_CONFIG,
     }
     pbt_config = config_map[args.config]
+    config_dict = pbt_config.to_dict()
 
     if (
         args.population
@@ -1036,7 +1175,6 @@ def main():
         or args.sysbench_tables
         or args.sysbench_table_size
     ):
-        config_dict = pbt_config.to_dict()
         if args.population:
             config_dict['population_size'] = args.population
         if args.generations:
@@ -1072,18 +1210,17 @@ def main():
         tuner = PBTTuner(
             knob_tier=args.tier,
             pbt_config=pbt_config,
-            workload_type=workload_type,
-            output_dir=args.output_dir,
-            workload_file=args.workload_file,
             benchmark=args.benchmark,
-            scale_factor=args.scale_factor,
-            sysbench_tables=args.sysbench_tables,
-            sysbench_table_size=args.sysbench_table_size,
+            workload_type=workload_type,
+            workload_file=args.workload_file,
             force_recreate_instances=args.force_recreate_instances,
-            cleanup_instances=args.cleanup_instances,
-            skip_schema_init=args.skip_schema_init,
             force_recreate_baseline=args.force_recreate_baseline,
-            logger=logger
+            cleanup_instances=args.cleanup_instances,
+            warm_start_path=args.warm_start,
+            skip_schema_init=args.skip_schema_init,
+            output_dir=args.output_dir,
+            logger=logger,
+            timestamp=timestamp
         )
 
         tuner.run()
