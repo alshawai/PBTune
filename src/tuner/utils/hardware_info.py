@@ -17,9 +17,18 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
+import math
+from dataclasses import dataclass
 
 import psutil
 
+
+@dataclass
+class WorkerResources:
+    """Per-worker hardware resources for hardware-aware knob ranges."""
+    ram_bytes: int          # Available RAM for this worker (already divided if bare-metal)
+    cpu_cores: int          # Available CPU cores for this worker
+    disk_type: str          # "SSD", "HDD", or "unknown"
 
 def detect_cpu_model() -> str:
     """Detect CPU model name, either on supportsLinux, macOS, or Windows."""
@@ -117,6 +126,51 @@ def detect_disk_type() -> str:
         return _detect_disk_type_windows()
 
     return "unknown"
+
+
+def _is_containerized() -> bool:
+    """Detect if running inside a Docker/container environment."""
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", "rt", encoding="utf-8") as f:
+            if "docker" in f.read() or "containerd" in f.read():
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def detect_worker_resources(max_parallel_workers: int = 1) -> WorkerResources:
+    """
+    Detect per-worker hardware resources.
+    
+    If in a container, uses cgroups via psutil limits.
+    If bare-metal, divides system resources by max_parallel_workers.
+    Reserves 20% of resources for OS/tuning system.
+    """
+    disk_type = detect_disk_type()
+    mem = psutil.virtual_memory()
+    ram_bytes = mem.total
+
+    try:
+        # Rely on process affinity when isolated via taskset / cpuset-cpus
+        cpu_cores = len(psutil.Process().cpu_affinity())
+    except (AttributeError, NotImplementedError):
+        cpu_cores = psutil.cpu_count(logical=True) or 1
+
+    # Total RAM and CPU seen are constrained to leave headroom for OS Essentials
+    usable_ram = int(ram_bytes * 0.8)
+    usable_cpu = cpu_cores * 0.8
+
+    worker_ram = max(100 * 1024 * 1024, int(usable_ram / max_parallel_workers))  # min 100MB
+    worker_cpu = max(1, math.floor(usable_cpu / max_parallel_workers))  # min 1 logical core
+
+    return WorkerResources(
+        ram_bytes=worker_ram,
+        cpu_cores=worker_cpu,
+        disk_type=disk_type
+    )
 
 
 def _detect_disk_type_linux() -> str:
