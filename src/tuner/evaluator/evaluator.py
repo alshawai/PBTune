@@ -33,7 +33,6 @@ import json
 import logging
 import math
 import time
-import random
 import subprocess
 import threading
 from queue import Queue
@@ -95,6 +94,8 @@ class EvaluatorConfig:
         Batch restarts every N generations (default: 10)
     restart_config : Optional[RestartConfig]
         Configuration for restart manager (default: None = auto-detect)
+    random_seed : Optional[int]
+        Optional random seed for reproducibility (default: None)
     vacuum_analyze_timeout_seconds : float
         Per-worker timeout for post-workload VACUUM ANALYZE safety maintenance.
         Prevents generation stalls when maintenance blocks or runs too long.
@@ -108,7 +109,7 @@ class EvaluatorConfig:
     enable_restart: bool = False
     restart_interval: int = 10
     restart_config: Optional[RestartConfig] = None
-    workload_seed: int = 42
+    random_seed: Optional[int] = None
     warmup_passes: int = 0
     vacuum_analyze_timeout_seconds: float = 45.0
 
@@ -153,22 +154,24 @@ class WorkloadExecutor:
         self.table_size = table_size
         self.num_tables = num_tables
         self.num_threads = num_threads
+        # Placeholder, will be seeded in execute() if random_seed is provided
+        self.rng = np.random.default_rng()
 
     def _instantiate_query(self, template: str) -> str:
         """Instantiate query template with random parameters."""
-        table_idx = random.randint(1, self.num_tables)
-        table2_idx = random.randint(1, self.num_tables)
+        table_idx = self.rng.integers(1, self.num_tables)
+        table2_idx = self.rng.integers(1, self.num_tables)
         params = {
             'table': f'sbtest{table_idx}',
             'table2': f'sbtest{table2_idx}',
-            'id': random.randint(1, self.table_size),
-            'k_val': random.randint(1, self.table_size),
-            'threshold': random.randint(self.table_size // 4, 3 * self.table_size // 4),
-            'low': random.randint(1, self.table_size // 2),
-            'high': random.randint(self.table_size // 2, self.table_size),
-            'low_k': random.randint(1, self.table_size // 2),
-            'high_k': random.randint(self.table_size // 2, self.table_size),
-            'offset': random.randint(0, self.table_size - 1),
+            'id': self.rng.integers(1, self.table_size + 1),
+            'k_val': self.rng.integers(1, self.table_size + 1),
+            'threshold': self.rng.integers(self.table_size // 4, 3 * self.table_size // 4),
+            'low': self.rng.integers(1, self.table_size // 2),
+            'high': self.rng.integers(self.table_size // 2, self.table_size),
+            'low_k': self.rng.integers(1, self.table_size // 2),
+            'high_k': self.rng.integers(self.table_size // 2, self.table_size),
+            'offset': self.rng.integers(0, self.table_size),
         }
         try:
             return template.format(**params)
@@ -233,21 +236,39 @@ class WorkloadExecutor:
         duration: float,
         warmup: float = 30.0,
         worker_id: Optional[int] = None,
-        workload_seed: Optional[int] = None
+        random_seed: Optional[int] = None
     ) -> PerformanceMetrics:
-        """Execute template queries with optional concurrent execution.
-        
-        If workload_seed is provided, random is seeded at the start to ensure
-        all workers execute the exact same query sequence for fair comparison.
+        """
+        Execute template queries with optional concurrent execution.
+
+        Parameters
+        ----------
+        connection : PostgresConnection
+            Active database connection to execute queries on
+        duration : float
+            Duration of the measurement period
+        warmup : float
+            Warmup period duration
+        worker_id : Optional[int]
+            Worker ID for logging differentiation
+        random_seed : Optional[int]
+            Optional random seed for reproducibility
+
+        Returns
+        -------
+            PerformanceMetrics
+                Collected metrics from the execution
         """
         work_logger = (
             get_logger(__name__, worker_id=worker_id)
             if worker_id is not None else logger
         )
 
-        if workload_seed is not None:
-            random.seed(workload_seed)
-            work_logger.debug("Seeded random with %d for reproducible workload", workload_seed)
+        # Use a dedicated random instance for reproducibility without affecting global RNG
+        self.rng = np.random.default_rng(random_seed) if random_seed is not None else np.random
+
+        if random_seed is not None:
+            work_logger.debug("Seeded random with %d for reproducible workload", random_seed)
 
         cursor = connection.cursor()
 
@@ -255,7 +276,7 @@ class WorkloadExecutor:
             work_logger.debug("Template query warmup: %.1fs", warmup)
             warmup_end = time.time() + warmup
             while time.time() < warmup_end:
-                template = random.choices(self.queries, weights=self.weights)[0]
+                template = self.rng.choice(self.queries, p=self.weights)
                 query = self._instantiate_query(template)
                 try:
                     cursor.execute(query)
@@ -310,7 +331,7 @@ class WorkloadExecutor:
                 thread_cursor = thread_conn.cursor()
 
                 while not stop_event.is_set():
-                    template = random.choices(self.queries, weights=self.weights)[0]
+                    template = self.rng.choice(self.queries, p=self.weights)  # type: ignore
                     query = self._instantiate_query(template)
                     query_start = time.time()
 
@@ -398,7 +419,7 @@ class WorkloadExecutor:
         error_count = 0
 
         while (time.time() - start_time) < duration:
-            template = random.choices(self.queries, weights=self.weights)[0]
+            template = self.rng.choice(self.queries, p=self.weights)  # type: ignore
             query = self._instantiate_query(template)
             query_start = time.time()
 
@@ -1544,7 +1565,7 @@ class Evaluator:
                     metrics = self.workload_executor.execute(
                         db_config=worker.db_config,
                         worker_id=worker.worker_id,
-                        workload_seed=self.config.workload_seed,
+                        random_seed=self.config.random_seed,
                         duration=self.config.measurement_duration,
                         warmup=self.config.warmup_duration,
                         warmup_passes=self.config.warmup_passes
@@ -1555,7 +1576,7 @@ class Evaluator:
                         duration=self.config.measurement_duration,
                         warmup=self.config.warmup_duration,
                         worker_id=worker.worker_id,
-                        workload_seed=self.config.workload_seed
+                        random_seed=self.config.random_seed
                     )
 
                 stats_after = None

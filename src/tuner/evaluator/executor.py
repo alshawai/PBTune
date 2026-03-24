@@ -39,7 +39,6 @@ class BenchmarkExecutor(ABC):
         self,
         db_config: DatabaseConfig,
         worker_id: Optional[int] = None,
-        workload_seed: Optional[int] = None,
         **kwargs
     ) -> PerformanceMetrics:
         """
@@ -53,14 +52,22 @@ class BenchmarkExecutor(ABC):
             Database connection parameters
         worker_id : Optional[int]
             Worker ID for logging differentiation
-        workload_seed : Optional[int]
+        random_seed : Optional[int]
             Random seed for workload generation (fairness)
         **kwargs
-            Arbitrary execution constraints (e.g., duration, warmup, warmup_passes)
+            Arbitrary execution constraints (e.g., duration, warmup,
+            warmup_passes, random_seed, etc.)
 
         Returns
         -------
         PerformanceMetrics
             Collected metrics from the execution
+
+        Notes
+        -----
+        Executing TPC-H Power Test doesn't require a fixed duration, 
+        but instead runs a fixed set of queries. It also doesn't need
+        a random seed since the queries are static. Sysbench, on the other
+        hand, typically runs for a fixed duration and can benefit from a
+        random seed for reproducibility.
         """
-        pass
