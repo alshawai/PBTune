@@ -26,6 +26,7 @@ from src.tuner.utils.snapshot_manager import (
     detect_best_snapshot_method,
 )
 from src.tuner.utils.hardware_info import (
+    WorkerResources,
     get_system_info,
     log_system_info,
 )
@@ -45,4 +46,5 @@ __all__ = [
     'detect_best_snapshot_method',
     'get_system_info',
     'log_system_info',
+    'WorkerResources',
 ]
