@@ -127,24 +127,23 @@ class SysbenchExecutor(BenchmarkExecutor):
         self,
         db_config: DatabaseConfig,
         worker_id: Optional[int] = None,
-        workload_seed: Optional[int] = None,
         **kwargs
     ) -> PerformanceMetrics:
-
         logger = get_logger(__name__, worker_id=worker_id)
 
         duration = kwargs.get("duration", 60.0)
         warmup = kwargs.get("warmup", 30.0)
+        random_seed = kwargs.get("random_seed", None)
 
         logger.debug(
             "Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)",
-            duration, self.threads, warmup, workload_seed,
+            duration, self.threads, warmup, random_seed,
         )
         stdout, stderr, returncode = self._run_sysbench(
             db_config,
             duration=int(duration),
             warmup=int(warmup),
-            seed=workload_seed,
+            seed=random_seed,
         )
 
         if returncode != 0:

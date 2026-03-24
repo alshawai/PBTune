@@ -209,6 +209,10 @@ class Worker:
         else:
             self.knob_config = copy.deepcopy(other.knob_config)
 
+        # Enforce memory budget validation after mixing configurations
+        if self.knob_config:
+            self.knob_config = self.knob_space.repair_config_dependencies(self.knob_config)
+
         self.parent_id = other.worker_id
         self.generation_created = current_generation
 

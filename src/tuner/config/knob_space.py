@@ -27,9 +27,37 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union, Tuple
 from enum import Enum
 import numpy as np
-from src.tuner.utils.logger_config import get_logger
+from src.tuner.utils import WorkerResources
+from src.tuner.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+# Hardware-relative specifications for converting fractions to absolute values
+HARDWARE_RELATIVE_SPECS = {
+    # RAM-Relative Knobs: (Fraction Min, Fraction Max)
+    "shared_buffers": (0.15, 0.40),
+    "effective_cache_size": (0.40, 0.75),
+    "work_mem": (0.001, 0.02),
+    "maintenance_work_mem": (0.01, 0.05),
+
+    # CPU-Relative Knobs: (Fraction Min, Fraction Max, Floor Min)
+    "max_worker_processes": (0.50, 2.0, 4),
+    "max_parallel_workers": (0.25, 1.0, 0),
+    "max_parallel_workers_per_gather": (0.0, 0.50, 0),
+    "max_parallel_maintenance_workers": (0.0, 0.50, 0),
+    "io_workers": (0.125, 1.0, 1),
+}
+
+
+# Disk-Type-Conditional Ranges (absolute values, not fractions)
+DISK_TYPE_CONDITIONAL_RANGES = {
+    # SSD Range, HDD Range, Unknown Range
+    "effective_io_concurrency": {"SSD": (100, 200), "HDD": (1, 4), "unknown": (1, 200)},
+    "maintenance_io_concurrency": {"SSD": (100, 200), "HDD": (1, 4), "unknown": (1, 200)},
+    "random_page_cost": {"SSD": (1.0, 1.5), "HDD": (3.0, 4.0), "unknown": (0.1, 4.0)},
+    "seq_page_cost": {"SSD": (0.1, 1.0), "HDD": (1.0, 2.0), "unknown": (0.1, 2.0)},
+}
 
 
 class KnobType(Enum):
@@ -92,6 +120,8 @@ class KnobDefinition:
     category: str = "other"
     restart_required: bool = False
     step: Optional[int] = None
+    hardware_relative: bool = False
+    resource_type: Optional[str] = None  # "ram", "cpu", or "disk_type"
 
     def _normalize_integer(self, value: Any) -> int:
         """Clamp and align integer values to the valid discrete grid."""
@@ -257,6 +287,164 @@ class KnobSpace:
             List of knob definitions
         """
         self.knobs = {knob.name: knob for knob in knob_definitions}
+        self.worker_resources: Optional[WorkerResources] = None
+
+    def _get_bytes_per_unit(self, knob: "KnobDefinition") -> int:
+        """Parse unit string to bytes."""
+        if knob.unit == "8kB":
+            return 8192
+        elif knob.unit == "kB":
+            return 1024
+        elif knob.unit == "MB":
+            return 1024 * 1024
+        elif knob.unit == "GB":
+            return 1024 * 1024 * 1024
+        return 1
+
+    def resolve_hardware_ranges(self, resources: WorkerResources) -> None:
+        """Override min/max for hardware-relative knobs using detected resources."""
+        self.worker_resources = resources
+
+        for name, knob in self.knobs.items():
+            if not knob.hardware_relative:
+                continue
+
+            if knob.resource_type == "ram" and name in HARDWARE_RELATIVE_SPECS:
+                f_min, f_max = HARDWARE_RELATIVE_SPECS[name]  # type: ignore
+                bytes_per_unit = self._get_bytes_per_unit(knob)
+                knob.min_value = int(resources.ram_bytes * f_min / bytes_per_unit)
+                knob.max_value = int(resources.ram_bytes * f_max / bytes_per_unit)
+                logger.debug(
+                    "Resolved %s range to [%s, %s] for %s %s",
+                    name,
+                    knob.min_value,
+                    knob.max_value,
+                    int(resources.ram_bytes / bytes_per_unit),
+                    knob.unit or "units"
+                )
+
+            elif knob.resource_type == "cpu" and name in HARDWARE_RELATIVE_SPECS:
+                f_min, f_max, floor_min = HARDWARE_RELATIVE_SPECS[name]  # type: ignore
+                knob.min_value = max(floor_min, round(resources.cpu_cores * f_min))
+                knob.max_value = max(floor_min, round(resources.cpu_cores * f_max))
+                logger.debug(
+                    "Resolved %s range to [%s, %s] for %s CPUs",
+                    name,
+                    knob.min_value,
+                    knob.max_value,
+                    resources.cpu_cores
+                )
+
+            elif knob.resource_type == "disk_type" and name in DISK_TYPE_CONDITIONAL_RANGES:
+                ranges = DISK_TYPE_CONDITIONAL_RANGES[name]
+                disk_type = resources.disk_type if resources.disk_type in ranges else "unknown"
+                min_val, max_val = ranges[disk_type]
+                knob.min_value = min_val
+                knob.max_value = max_val
+                logger.debug(
+                    "Resolved %s range to [%s, %s] for %s disk",
+                    name,
+                    min_val,
+                    max_val,
+                    disk_type
+                )
+
+    def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert absolute config values to fractional representation for serialization.
+        
+        Parameters
+        ----------
+        config : Dict[str, Any]
+            Absolute configuration values
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Fractional configuration values
+
+        Notes
+        -----
+        - Hardware-relative knobs are converted to fractions of total resources
+        - Non-hardware-relative knobs are kept as absolute values
+        - Returns a dict with the same keys as the input config (even for knobs not in the knob space)
+        """
+        fractional_config = {}
+        for name, value in config.items():
+            if name not in self.knobs:
+                fractional_config[name] = value
+                continue
+
+            knob = self.knobs[name]
+            if (
+                not knob.hardware_relative
+                or knob.resource_type == "disk_type"
+                or self.worker_resources is None
+            ):
+                fractional_config[name] = value
+                continue
+
+            if knob.resource_type == "ram" and name in HARDWARE_RELATIVE_SPECS:
+                bytes_per_unit = self._get_bytes_per_unit(knob)
+                fraction = (value * bytes_per_unit) / self.worker_resources.ram_bytes
+                fractional_config[name] = fraction
+
+            elif knob.resource_type == "cpu":
+                fraction = value / self.worker_resources.cpu_cores
+                fractional_config[name] = fraction
+            else:
+                fractional_config[name] = value
+
+        return fractional_config
+
+    def fractions_to_config(self, fractions: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert fractional representation back to absolute values for this hardware.
+        
+        Parameters
+        ----------
+        fractions : Dict[str, Any]
+            Fractional configuration values
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Absolute configuration values
+        
+        Notes
+        -----
+        - Hardware-relative knobs are converted to absolute values based on total resources
+        - Non-hardware-relative knobs are kept as absolute values
+        - Returns a dict with the same keys as the input config (even for knobs not in the knob space)
+        """
+        config = {}
+        for name, frac_val in fractions.items():
+            if name not in self.knobs:
+                config[name] = frac_val
+                continue
+
+            knob = self.knobs[name]
+            # Disk type knobs are absolute in fraction representation
+            if (
+                not knob.hardware_relative or
+                knob.resource_type == "disk_type" or
+                self.worker_resources is None
+            ):
+                config[name] = frac_val
+                continue
+
+            if knob.resource_type == "ram" and name in HARDWARE_RELATIVE_SPECS:
+                bytes_per_unit = self._get_bytes_per_unit(knob)
+                abs_val = (frac_val * self.worker_resources.ram_bytes) / bytes_per_unit
+                config[name] = knob.normalize_value(abs_val)
+
+            elif knob.resource_type == "cpu":
+                abs_val = frac_val * self.worker_resources.cpu_cores
+                config[name] = knob.normalize_value(abs_val)
+            else:
+                config[name] = frac_val
+
+        return config
 
     def __len__(self) -> int:
         """Return number of knobs in the space"""
@@ -353,9 +541,73 @@ class KnobSpace:
 
         return (len(errors) == 0, errors)
 
-    def repair_config_dependencies(self, config: Dict[str, Any], worker_id: Optional[int] = None) -> Dict[str, Any]:
-        """Repair known cross-knob combinations that can make PostgreSQL unstartable."""
-        worker_logger = get_logger(__name__, worker_id=worker_id) if worker_id is not None else logger
+    def _repair_memory_budget(
+        self,
+        config: Dict[str, Any],
+        budget_bytes: int
+    ) -> Dict[str, Any]:
+        """Proportionally scale down memory allocations to fit budget."""
+        sb_bytes = config.get("shared_buffers", 0) * 8192
+        wm_bytes = config.get("work_mem", 0) * 1024
+        mwm_bytes = config.get("maintenance_work_mem", 0) * 1024
+        max_conn = config.get("max_connections", 100)
+
+        total = sb_bytes + (max_conn * wm_bytes) + mwm_bytes
+
+        if total <= budget_bytes:
+            return config
+
+        scale = budget_bytes / total   # < 1.0
+
+        # Scale all memory allocations uniformly (preserves ratios)
+        if "shared_buffers" in config and "shared_buffers" in self.knobs:
+            config["shared_buffers"] = self.knobs[
+                "shared_buffers"].normalize_value(config["shared_buffers"] * scale)
+        if "work_mem" in config and "work_mem" in self.knobs:
+            config["work_mem"] = self.knobs[
+                "work_mem"].normalize_value(config["work_mem"] * scale)
+        if "maintenance_work_mem" in config and "maintenance_work_mem" in self.knobs:
+            config["maintenance_work_mem"] = self.knobs[
+                "maintenance_work_mem"].normalize_value(config["maintenance_work_mem"] * scale)
+        if "max_connections" in config and "max_connections" in self.knobs:
+            config["max_connections"] = self.knobs[
+                "max_connections"].normalize_value(config["max_connections"] * scale)
+
+        return config
+
+    def repair_config_dependencies(
+            self,
+            config: Dict[str, Any],
+            worker_id: Optional[int] = None,
+            budget_ram_bytes: Optional[int] = None
+        ) -> Dict[str, Any]:
+        """
+        Repair configuration to satisfy known dependencies and constraints between knobs.
+        
+        Parameters
+        ----------
+        config : Dict[str, Any]
+            Configuration to repair
+        worker_id : Optional[int]
+            ID of the worker (for logging)
+        budget_ram_bytes : Optional[int]
+            Memory budget in bytes
+
+        Returns
+        -------
+        Dict[str, Any]
+            Repaired configuration
+        
+        Notes
+        -----
+        This method applies a series of heuristic rules to fix common invalid combinations of knobs.
+        It also ensures that any repaired numerical values are normalized to valid discrete steps and bounds.
+        If a memory budget is provided, it will also adjust memory-related knobs to fit within the budget.
+        """
+        worker_logger = (
+            get_logger(__name__, worker_id=worker_id)
+            if worker_id is not None else logger
+        )
         repaired = dict(config)
 
         wal_level = repaired.get("wal_level")
@@ -467,6 +719,12 @@ class KnobSpace:
             if k in self.knobs and self.knobs[k].knob_type in (KnobType.INTEGER, KnobType.REAL):
                 repaired[k] = self.knobs[k].normalize_value(v)
 
+        # Apply memory budget constraint
+        db_budget = int(self.worker_resources.ram_bytes * 0.8) if self.worker_resources else None
+        budget = budget_ram_bytes if budget_ram_bytes is not None else db_budget
+        if budget is not None:
+            repaired = self._repair_memory_budget(repaired, budget)
+
         return repaired
 
     def sample_random_config(self, seed: Optional[int] = None) -> Dict[str, Any]:
@@ -545,8 +803,12 @@ class KnobSpace:
             for i in range(num_samples):
                 u = rng.uniform(intervals[i], intervals[i + 1])
 
-                if knob_def.scale == KnobScale.LOG and knob_def.min_value is not None and knob_def.min_value > 0:
-                    log_min = np.log(knob_def.min_value)  # type: ignore
+                if (
+                    knob_def.scale == KnobScale.LOG and
+                    knob_def.min_value is not None and
+                    knob_def.min_value > 0
+                ):
+                    log_min = np.log(knob_def.min_value)
                     log_max = np.log(knob_def.max_value)  # type: ignore
                     log_value = log_min + u * (log_max - log_min)
                     value = np.exp(log_value)

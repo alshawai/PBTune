@@ -199,7 +199,11 @@ class Population:
             self.config.exploit_quantile
         )
 
-    def initialize(self, initial_configs: Optional[List[Dict[str, Any]]] = None) -> None:
+    def initialize(
+        self,
+        initial_configs: Optional[List[Dict[str, Any]]] = None,
+        random_seed: Optional[int] = None
+    ) -> None:
         """
         Initialize the worker population.
         
@@ -209,28 +213,41 @@ class Population:
         Parameters
         ----------
         initial_configs : Optional[List[Dict[str, Any]]]
-            Optional list of initial configurations. If provided, must match
-            population_size. If None, workers are initialized with random configs.
+            Optional list of initial configurations. Can be shorter than population_size
+            (for partial seeding), in which case the rest are filled via LHS.
+        seed : Optional[int], default=None
+            Random seed for sampling.
         
         Raises
         ------
         ValueError
-            If initial_configs is provided but length doesn't match population_size
+            If initial_configs is provided but length is greater than population_size
         
         Note
         ----
         After calling this, call setup_worker_instances() to assign instance configs.
         """
         if initial_configs is not None:
-            if len(initial_configs) != self.config.population_size:
+            if len(initial_configs) > self.config.population_size:
                 raise ValueError(
-                    f"initial_configs length ({len(initial_configs)}) must match "
+                    f"initial_configs length ({len(initial_configs)}) cannot exceed "
                     f"population_size ({self.config.population_size})"
                 )
+            num_lhs_needed = self.config.population_size - len(initial_configs)
+            if num_lhs_needed > 0:
+                logger.debug(
+                    "Partial seeding: %d configs provided, filling %d configs with LHS",
+                    len(initial_configs), num_lhs_needed
+                )
+                lhs_configs = self.knob_space.sample_diverse_configs(
+                    num_samples=num_lhs_needed,
+                    seed=random_seed
+                )
+                initial_configs = initial_configs + lhs_configs
         else:
             initial_configs = self.knob_space.sample_diverse_configs(
                 num_samples=self.config.population_size,
-                seed=42  # Fixed seed for reproducibility across runs
+                seed=random_seed
             )
 
         self.workers = []
