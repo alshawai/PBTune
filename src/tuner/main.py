@@ -135,6 +135,7 @@ class PBTTuner:
         benchmark: Optional[str] = None,
         workload_type: WorkloadType = WorkloadType.OLTP,
         workload_file: Optional[str] = None,
+        random_seed: Optional[int] = None,
         **kwargs
     ):
         """
@@ -152,6 +153,8 @@ class PBTTuner:
             Workload type for optimization
         workload_file : Optional[str]
             Path to custom workload file (JSON/YAML). If provided, overrides workload_type.
+        random_seed : Optional[int]
+            Seed for random number generation (default: 42)
         **kwargs
             Additional keyword arguments for configuration.
                 - force_recreate_instances: bool (default: False)
@@ -171,6 +174,7 @@ class PBTTuner:
         """
         self.knob_tier = knob_tier
         self.pbt_config = pbt_config or STANDARD_CONFIG
+        self.random_seed = random_seed
 
         self.force_recreate_instances = kwargs.get('force_recreate_instances', False)
         self.force_recreate_baseline = kwargs.get('force_recreate_baseline', False)
@@ -206,6 +210,7 @@ class PBTTuner:
             cooldown_duration=3.0,
             enable_restart=True,
             restart_interval=10,
+            random_seed=random_seed,
             warmup_passes=self.pbt_config.warmup_passes,
         )
 
@@ -626,10 +631,10 @@ class PBTTuner:
             )
             self.population.initialize(
                 initial_configs=warm_configs,
-                random_seed=42
+                random_seed=self.random_seed
             )
         else:
-            self.population.initialize(random_seed=42)
+            self.population.initialize(random_seed=self.random_seed)
 
         self.logger.debug("Assigning instance configurations to workers...")
         self.population.setup_worker_instances(
@@ -1001,6 +1006,13 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     config_group.add_argument(
+        '--random-seed',
+        type=int,
+        default=42,
+        help='Global random seed for reproducible tuning'
+    )
+
+    config_group.add_argument(
         '--population',
         type=int,
         help='Population size (overrides config)'
@@ -1192,7 +1204,9 @@ def main():
         if args.sysbench_table_size:
             config_dict['sysbench_table_size'] = args.sysbench_table_size
 
-        pbt_config = PBTConfig(**config_dict)
+    config_dict['random_seed'] = args.random_seed
+
+    pbt_config = PBTConfig(**config_dict)
 
     workload_map = {
         'oltp': WorkloadType.OLTP,
@@ -1213,6 +1227,7 @@ def main():
             benchmark=args.benchmark,
             workload_type=workload_type,
             workload_file=args.workload_file,
+            random_seed=args.random_seed,
             force_recreate_instances=args.force_recreate_instances,
             force_recreate_baseline=args.force_recreate_baseline,
             cleanup_instances=args.cleanup_instances,

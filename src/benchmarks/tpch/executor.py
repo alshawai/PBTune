@@ -1,5 +1,4 @@
 import time
-import random
 from typing import Optional, List
 from pathlib import Path
 import io
@@ -173,7 +172,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
                 "WHERE table_name = '_tpch_metadata')"
             )
-            if not cursor.fetchone()[0]:
+            if not cursor.fetchone()[0]:  # type: ignore
                 logger.debug("TPC-H validation failed: metadata table missing")
                 cursor.close()
                 conn.close()
@@ -200,7 +199,7 @@ class TPCHExecutor(BenchmarkExecutor):
                     "WHERE table_name = %s)",
                     (table_name,)
                 )
-                if not cursor.fetchone()[0]:
+                if not cursor.fetchone()[0]:  # type: ignore
                     logger.debug("TPC-H table missing: %s", table_name)
                     cursor.close()
                     conn.close()
@@ -219,17 +218,11 @@ class TPCHExecutor(BenchmarkExecutor):
         self,
         db_config: DatabaseConfig,
         worker_id: Optional[int] = None,
-        workload_seed: Optional[int] = None,
         **kwargs
     ) -> PerformanceMetrics:
-        """
-        Execute TPC-H queries sequentially and measure latency.
-        """
         logger = get_logger(__name__, worker_id=worker_id)
-        warmup_passes = kwargs.get("warmup_passes", 0)
 
-        if workload_seed is not None:
-            random.seed(workload_seed)
+        warmup_passes = kwargs.get("warmup_passes", 0)
 
         # Establish connection with health check and retry
         max_conn_retries = 3
@@ -260,7 +253,7 @@ class TPCHExecutor(BenchmarkExecutor):
         base_timeout_ms = 300000  # 5 minutes
         statement_timeout_ms = int(base_timeout_ms * self.scale_factor)
 
-        cursor = conn.cursor()
+        cursor = conn.cursor()  # type: ignore
         cursor.execute(f"SET statement_timeout = {statement_timeout_ms}")
         cursor.close()
         logger.debug(
@@ -282,7 +275,7 @@ class TPCHExecutor(BenchmarkExecutor):
                         logger.debug("Warmup query Q%d failed: %s", idx + 1, e)
             cursor.close()
 
-            if conn.closed:
+            if conn.closed:  # type: ignore
                 logger.warning("Connection lost during warmup — reconnecting for measurement")
                 conn = get_connection(db_config)
                 conn.autocommit = True
@@ -294,7 +287,7 @@ class TPCHExecutor(BenchmarkExecutor):
         latencies: List[float] = []
         errors = 0
         total_queries = 0
-        cursor = conn.cursor()
+        cursor = conn.cursor()  # type: ignore
         measurement_start = time.time()
 
         for idx in query_indices:
@@ -308,7 +301,8 @@ class TPCHExecutor(BenchmarkExecutor):
             except Exception as e:
                 errors += 1
                 logger.warning(
-                    "Query Q%d failed (%.0fms): %s. Fast-failing remaining queries to avoid reward hacking.",
+                    "Query Q%d failed (%.0fms): %s. Fast-failing "
+                    "remaining queries to avoid reward hacking.",
                     idx + 1,
                     (time.time() - query_start) * 1000.0, e
                 )
@@ -316,8 +310,8 @@ class TPCHExecutor(BenchmarkExecutor):
 
         cursor.close()
 
-        if not conn.closed:
-            conn.close()
+        if not conn.closed:  # type: ignore
+            conn.close()  # type: ignore
 
         total_time = time.time() - measurement_start
 
