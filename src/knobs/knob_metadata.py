@@ -58,6 +58,8 @@ class TuningMetadata:
     impact_tier: str = "extensive"
     tuning_priority: int = 5
     notes: str = ""
+    hardware_relative: bool = False
+    resource_type: str = ""  # "ram", "cpu", "disk_type", or ""
 
 KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
     "shared_buffers": TuningMetadata(
@@ -66,7 +68,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="log",
         impact_tier="minimal",
         tuning_priority=1,
-        notes="Most impactful knob. Log scale because doubling matters more than addition."
+        notes="Most impactful knob. Log scale because doubling matters more than addition.",
+        hardware_relative=True,
+        resource_type="ram"
     ),
 
     "effective_cache_size": TuningMetadata(
@@ -75,7 +79,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="log",
         impact_tier="minimal",
         tuning_priority=1,
-        notes="Planner's OS cache estimate. Doesn't allocate memory, only affects plans."
+        notes="Planner's OS cache estimate. Doesn't allocate memory, only affects plans.",
+        hardware_relative=True,
+        resource_type="ram"
     ),
 
     "work_mem": TuningMetadata(
@@ -84,7 +90,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="log",
         impact_tier="minimal",
         tuning_priority=1,
-        notes="Per-operation memory. Total can be work_mem * connections * operations_per_query"
+        notes="Per-operation memory. Total can be work_mem * connections * operations_per_query",
+        hardware_relative=True,
+        resource_type="ram"
     ),
 
     "random_page_cost": TuningMetadata(
@@ -93,7 +101,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="minimal",
         tuning_priority=1,
-        notes="Critical for index vs seqscan decisions. SSD: 1.0-1.5, HDD: 3.0-4.0"
+        notes="Critical for index vs seqscan decisions. SSD: 1.0-1.5, HDD: 3.0-4.0",
+        hardware_relative=True,
+        resource_type="disk_type"
     ),
 
     "max_parallel_workers_per_gather": TuningMetadata(
@@ -102,7 +112,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="minimal",
         tuning_priority=1,
-        notes="Parallelism for analytical queries. Limited by CPU cores."
+        notes="Parallelism for analytical queries. Limited by CPU cores.",
+        hardware_relative=True,
+        resource_type="cpu"
     ),
 
     "maintenance_work_mem": TuningMetadata(
@@ -111,7 +123,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="log",
         impact_tier="core",
         tuning_priority=2,
-        notes="For VACUUM, CREATE INDEX. Can be larger than work_mem."
+        notes="For VACUUM, CREATE INDEX. Can be larger than work_mem.",
+        hardware_relative=True,
+        resource_type="ram"
     ),
 
     "wal_buffers": TuningMetadata(
@@ -129,7 +143,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="core",
         tuning_priority=2,
-        notes="Expected concurrent I/O. SSD: 100-200, HDD: 1-2"
+        notes="Expected concurrent I/O. SSD: 100-200, HDD: 1-2",
+        hardware_relative=True,
+        resource_type="disk_type"
     ),
 
     "default_statistics_target": TuningMetadata(
@@ -174,7 +190,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="core",
         tuning_priority=3,
-        notes="Max background workers. Requires restart. Must be >= max_parallel_workers."
+        notes="Max background workers. Requires restart. Must be >= max_parallel_workers.",
+        hardware_relative=True,
+        resource_type="cpu"
     ),
 
     "maintenance_io_concurrency": TuningMetadata(
@@ -184,7 +202,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         impact_tier="standard",
         tuning_priority=3,
         notes="Maintenance I/O concurrency for VACUUM/CREATE INDEX, " \
-        "similar semantics to effective_io_concurrency."
+        "similar semantics to effective_io_concurrency.",
+        hardware_relative=True,
+        resource_type="disk_type"
     ),
 
     "io_workers": TuningMetadata(
@@ -193,7 +213,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="standard",
         tuning_priority=3,
-        notes="I/O worker count (PG17+); bounded to practical CPU-core-aligned range."
+        notes="I/O worker count (PG17+); bounded to practical CPU-core-aligned range.",
+        hardware_relative=True,
+        resource_type="cpu"
     ),
 
     "max_parallel_apply_workers_per_subscription": TuningMetadata(
@@ -297,7 +319,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="standard",
         tuning_priority=3,
-        notes="Cost of sequential page fetch. Usually kept at 1.0 as baseline."
+        notes="Cost of sequential page fetch. Usually kept at 1.0 as baseline.",
+        hardware_relative=True,
+        resource_type="disk_type"
     ),
 
     "cpu_tuple_cost": TuningMetadata(
@@ -351,7 +375,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="standard",
         tuning_priority=3,
-        notes="Max parallel workers system-wide. Must be <= max_worker_processes."
+        notes="Max parallel workers system-wide. Must be <= max_worker_processes.",
+        hardware_relative=True,
+        resource_type="cpu"
     ),
 
     "max_parallel_maintenance_workers": TuningMetadata(
@@ -360,7 +386,9 @@ KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = {
         scale="linear",
         impact_tier="standard",
         tuning_priority=3,
-        notes="Max parallel workers for maintenance (CREATE INDEX, VACUUM)."
+        notes="Max parallel workers for maintenance (CREATE INDEX, VACUUM).",
+        hardware_relative=True,
+        resource_type="cpu"
     ),
 
     "parallel_setup_cost": TuningMetadata(

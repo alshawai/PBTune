@@ -63,7 +63,7 @@ class PBTConfig:
         Ensures database caches are populated for fair comparison.
         Default: 30.0 seconds
         
-    workload_seed : Optional[int]
+    random_seed : Optional[int]
         Seed for workload query selection randomness. When set, all workers
         will execute the exact same sequence of queries, ensuring fair comparison
         regardless of cache state.
@@ -128,12 +128,11 @@ class PBTConfig:
     num_parallel_workers: int = 4
     evaluation_duration: float = 30.0
     warmup_duration: float = 30.0
-    workload_seed: Optional[int] = 42
+    random_seed: Optional[int] = 42
     scale_factor: float = 1.0
     warmup_passes: int = 0
     enable_snapshots: bool = False
     snapshot_restore_interval: int = 1
-    random_seed: Optional[int] = None
     verbose: bool = True
     sysbench_tables: int = 10
     sysbench_table_size: int = 100000
@@ -216,12 +215,11 @@ class PBTConfig:
             "num_parallel_workers": self.num_parallel_workers,
             "evaluation_duration": self.evaluation_duration,
             "warmup_duration": self.warmup_duration,
-            "workload_seed": self.workload_seed,
+            "random_seed": self.random_seed,
             "scale_factor": self.scale_factor,
             "warmup_passes": self.warmup_passes,
             "enable_snapshots": self.enable_snapshots,
             "snapshot_restore_interval": self.snapshot_restore_interval,
-            "random_seed": self.random_seed,
             "verbose": self.verbose,
             "sysbench_tables": self.sysbench_tables,
             "sysbench_table_size": self.sysbench_table_size,
@@ -258,7 +256,7 @@ RAPID_CONFIG = PBTConfig(
     num_parallel_workers=4,
     evaluation_duration=15.0,
     warmup_duration=10.0,
-    workload_seed=42,
+    random_seed=42,
     scale_factor=0.01,
     sysbench_tables=2,
     sysbench_table_size=10000,
@@ -276,7 +274,7 @@ STANDARD_CONFIG = PBTConfig(
     num_parallel_workers=4,
     evaluation_duration=30.0,
     warmup_duration=30.0,
-    workload_seed=42,
+    random_seed=42,
     scale_factor=0.1,
     sysbench_tables=10,
     sysbench_table_size=100000,
@@ -295,7 +293,7 @@ THOROUGH_CONFIG = PBTConfig(
     num_parallel_workers=4,
     evaluation_duration=45.0,
     warmup_duration=60.0,
-    workload_seed=42,
+    random_seed=42,
     scale_factor=1.0,
     sysbench_tables=20,
     sysbench_table_size=200000,
@@ -314,7 +312,7 @@ RESEARCH_CONFIG = PBTConfig(
     num_parallel_workers=16,
     evaluation_duration=60.0,
     warmup_duration=60.0,
-    workload_seed=42,
+    random_seed=42,
     scale_factor=1.0,
     sysbench_tables=50,
     sysbench_table_size=500000,
@@ -333,7 +331,7 @@ EXTREME_CONFIG = PBTConfig(
     num_parallel_workers=16,
     evaluation_duration=300.0,
     warmup_duration=120.0,
-    workload_seed=42,
+    random_seed=42,
     scale_factor=10.0,
     sysbench_tables=100,
     sysbench_table_size=1000000,
