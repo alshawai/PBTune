@@ -1,0 +1,12 @@
+{
+  "generation": 4,
+  "best_score": 87.11274186425551,
+  "best_config": {
+    "effective_cache_size": 0.5080280827083955,
+    "max_parallel_workers_per_gather": 0.3333333333333333,
+    "random_page_cost": 1.1672857586406453,
+    "shared_buffers": 0.17360157991878628,
+    "work_mem": 0.005686485790634049
+  },
+  "elapsed_time": 116.62323522567749
+}
