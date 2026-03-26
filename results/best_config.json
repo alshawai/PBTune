@@ -1,7 +1,0 @@
-{
-  "effective_cache_size": 351743,
-  "max_parallel_workers_per_gather": 0,
-  "random_page_cost": 2.411753986299173,
-  "shared_buffers": 19708,
-  "work_mem": 13594
-}
