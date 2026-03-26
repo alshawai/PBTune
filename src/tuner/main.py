@@ -166,7 +166,8 @@ class PBTTuner:
                 - warm_start_path: Optional[str] (default: None)
                     Path to previous best_config.json for warm-starting
                 - output_dir: str (default: "results")
-                    Directory to save results
+                    Base output directory. Results are organized into
+                    {output_dir}/{workload_type}/pbt_runs/{knob_tier}/
                 - timestamp: str (default: current timestamp)
                     Timestamp for result files (format: YYYYMMDD_HHMM)
                 - logger: Optional[logging.Logger] (default: None)
@@ -184,7 +185,6 @@ class PBTTuner:
         self.warm_start_path = kwargs.get('warm_start_path', None)
         self.warm_start_provenance = {"enabled": False}
 
-        self.output_dir = Path(kwargs.get('output_dir', "results"))
         self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
         self.logger = kwargs.get('logger', get_logger(__name__))
 
@@ -259,6 +259,14 @@ class PBTTuner:
             )
             workload_executor = self._create_workload_executor(workload_type, workload_file)
             self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.scale_factor}"
+
+        self.output_dir = (
+            Path(kwargs.get('output_dir', "results"))
+            / self.workload_type.value
+            / "pbt_runs"
+            / self.knob_tier
+        )
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.evaluator = Evaluator(self.evaluator_config, workload_executor)
 
@@ -760,7 +768,11 @@ class PBTTuner:
 
     def save_intermediate_results(self, generation: int):
         """Save intermediate results during training"""
-        filename = self.output_dir / f"intermediate_gen{generation}.json"
+        interim_output_dir = (
+            self.output_dir / "intermediate_generations" / f"session_{self.timestamp}"
+        )
+        interim_output_dir.mkdir(parents=True, exist_ok=True)
+        filename = interim_output_dir / f"intermediate_gen{generation}.json"
 
         results = {
             'generation': generation,
@@ -794,7 +806,7 @@ class PBTTuner:
                 'population_size': self.pbt_config.population_size,
                 'total_generations': self.population.current_generation,
                 'total_time_seconds': total_time,
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': self.timestamp,
             },
             'best_configuration': {
                 'score': float(self.best_score) if self.best_score else 0.0,
@@ -823,13 +835,17 @@ class PBTTuner:
             'system_info': self.system_info,
         }
 
-        json_file = self.output_dir / f"pbt_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        tuning_output_dir = self.output_dir / "tuning_sessions"
+        tuning_output_dir.mkdir(parents=True, exist_ok=True)
+        json_file = tuning_output_dir / f"pbt_results_{self.timestamp}.json"
 
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2)
         self.logger.info("💾 Saved results to %s", json_file)
 
-        best_config_file = self.output_dir / "best_config.json"
+        best_config_output_dir = self.output_dir / "best_configs"
+        best_config_output_dir.mkdir(parents=True, exist_ok=True)
+        best_config_file = best_config_output_dir / f"best_config_{self.timestamp}.json"
 
         with open(best_config_file, 'w', encoding='utf-8') as f:
             json.dump(
@@ -1134,7 +1150,10 @@ on your hardware, configuration, and workload/benchmark.
         '--output-dir',
         type=str,
         default='results',
-        help='Output directory for results (default: results)'
+        help=(
+            'Base output directory (default: results). Results are organized into'
+            '{output_dir}/{workload}/pbt_runs/{tier}/'
+        )
     )
 
     return parser.parse_args()
@@ -1143,11 +1162,16 @@ on your hardware, configuration, and workload/benchmark.
 def main():
     """Main entry point"""
     args = parse_args()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Compute structured log directory: {base}/{workload}/pbt_runs/{tier}/
+    workload_for_dir = 'olap' if args.benchmark == 'tpch' else args.workload
+    log_output_dir = (
+        Path(args.output_dir) / workload_for_dir / "pbt_runs" / args.tier
+    )
+    log_output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = output_dir / 'pbt_tuning.html'
+    output_file = log_output_dir / f'pbt_tuning_{timestamp}.html'
 
     print_startup_banner()
 
