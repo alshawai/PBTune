@@ -195,8 +195,12 @@ def generate_data(dbgen_path: Path, scale_factor: float = 1.0) -> Path:
         "partsupp.tbl", "supplier.tbl", "nation.tbl", "region.tbl",
     ]
     for fname in expected_files:
-        if not (output_dir / fname).exists():
+        fpath = output_dir / fname
+        if not fpath.exists():
             raise RuntimeError(f"Expected data file missing: {fname}")
+        # dbgen sometimes generates files with no read permission;
+        # ensure they are readable for COPY STDIN.
+        fpath.chmod(0o644)
 
     # Write marker so we don't regenerate
     marker.write_text(f"SF={scale_factor}\n")
