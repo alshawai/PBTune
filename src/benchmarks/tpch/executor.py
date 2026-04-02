@@ -2,6 +2,7 @@ import time
 from typing import Optional, List
 from pathlib import Path
 import io
+import logging
 
 import numpy as np
 
@@ -12,6 +13,28 @@ from src.tuner.utils.logger_config import get_logger
 from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.benchmarks.tpch import QUERIES_DIR, SCHEMA_SQL, INDEXES_SQL
 from src.benchmarks.tpch.setup_dbgen import find_or_build_dbgen, generate_data
+
+
+def _log_pg_error(logger: logging.Logger, query_label: str, exc: Exception) -> None:
+    """Extract and log PostgreSQL diagnostic info from a psycopg2 exception."""
+    try:
+        import psycopg2
+        if isinstance(exc, psycopg2.Error):
+            diag = exc.diag
+            parts = [f"{query_label} PostgreSQL error"]
+            if exc.pgcode:
+                parts.append(f" [{exc.pgcode}]")
+            if diag.message_primary:
+                parts.append(f": {diag.message_primary}")
+            if diag.message_detail:
+                parts.append(f" — {diag.message_detail}")
+            if diag.message_hint:
+                parts.append(f" (hint: {diag.message_hint})")
+            logger.warning("".join(parts))
+            return
+    except ImportError:
+        pass
+    logger.warning("%s failed: %s", query_label, exc)
 
 
 class TPCHExecutor(BenchmarkExecutor):
@@ -272,7 +295,24 @@ class TPCHExecutor(BenchmarkExecutor):
                         cursor.execute(self.queries[idx])
                         cursor.fetchall()
                     except Exception as e:
-                        logger.debug("Warmup query Q%d failed: %s", idx + 1, e)
+                        _log_pg_error(logger, f"Warmup Q{idx + 1}", e)
+                        logger.warning(
+                            "Aborting warmup — Assigning fatal penalty."
+                        )
+                        if not conn.closed:  # type: ignore
+                            conn.close()  # type: ignore
+
+                        return PerformanceMetrics(
+                            latency_p50=99999.9,
+                            latency_p95=99999.9,
+                            latency_p99=99999.9,
+                            throughput=0.0,
+                            memory_utilization=100.0,
+                            error_rate=100.0,
+                            total_queries=len(self.queries),
+                            total_time=0.0,
+                            failure_type="warmup_failed"
+                        )
             cursor.close()
 
             if conn.closed:  # type: ignore
@@ -300,11 +340,9 @@ class TPCHExecutor(BenchmarkExecutor):
                 total_queries += 1
             except Exception as e:
                 errors += 1
+                _log_pg_error(logger, f"Q{idx + 1}", e)
                 logger.warning(
-                    "Query Q%d failed (%.0fms): %s. Fast-failing "
-                    "remaining queries to avoid reward hacking.",
-                    idx + 1,
-                    (time.time() - query_start) * 1000.0, e
+                    "Fast-failing remaining queries to avoid reward hacking."
                 )
                 break
 
@@ -316,18 +354,27 @@ class TPCHExecutor(BenchmarkExecutor):
         total_time = time.time() - measurement_start
 
         # If any query failed, bomb the metrics to prevent reward hacking
-        if errors > 0:
-            logger.warning(
-                "TPC-H evaluation failed %d queries. Assigning fatal penalty.", errors
-            )
+        expected_queries = len(self.queries)
+        if errors > 0 or total_queries < expected_queries:
+            if errors == 0:
+                logger.warning(
+                    "TPC-H incomplete: only %d/%d queries executed "
+                    "(no exception caught). Assigning fatal penalty.",
+                    total_queries, expected_queries
+                )
+            else:
+                logger.warning(
+                    "TPC-H evaluation failed %d queries. Assigning fatal penalty.",
+                    errors
+                )
             return PerformanceMetrics(
-                latency_p50=999999.9,
-                latency_p95=999999.9,
-                latency_p99=999999.9,
+                latency_p50=99999.9,
+                latency_p95=99999.9,
+                latency_p99=99999.9,
                 throughput=0.0,
                 memory_utilization=100.0,
                 error_rate=100.0,
-                total_queries=len(self.queries),
+                total_queries=expected_queries,
                 total_time=total_time,
                 failure_type="query_failed_or_timeout"
             )
