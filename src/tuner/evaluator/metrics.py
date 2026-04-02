@@ -499,6 +499,10 @@ class MetricConfig:
         
         Final score = Σ(weight_i * normalized_component_i)
         """
+        # Force score to 0.0 for dead workers (those that failed workload execution)
+        if metrics.failure_type is not None:
+            return 0.0
+
         score = 0.0
 
         latency = getattr(metrics, f"latency_{self.latency_metric}")

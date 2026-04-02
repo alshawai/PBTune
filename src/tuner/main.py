@@ -887,15 +887,28 @@ class PBTTuner:
         for knob_name, knob_val in best_config_frac.items():
             if knob_name in self.knob_space.knobs:
                 knob = self.knob_space.knobs[knob_name]
-                if knob.hardware_relative:
-                    # `max_worker_processes` is the only fraction with a valid range of [0, 2].
-                    # All other hardware-relative knobs must be in [0, 1].
-                    frac_max = 2.0 if knob.name == "max_worker_processes" else 1.0
-                    if knob_val > frac_max:
-                        raise ValueError(
-                            "Warm-start config contains absolute value for hardware-"
-                            f"relative knob {knob_name}. Expected fraction <= {frac_max}."
-                        )
+                if knob.hardware_relative and knob.resource_type != "disk_type":
+                    # Compute the RAW (unclamped) absolute value to detect
+                    # whether the fraction is actually an absolute value.
+                    # We cannot use fractions_to_config() because it clamps
+                    # via normalize_value(), silently hiding overflows.
+                    resources = self.knob_space.worker_resources
+                    raw_abs = None
+                    if resources is not None:
+                        if knob.resource_type == "ram":
+                            bytes_per_unit = self.knob_space._get_bytes_per_unit(knob)
+                            raw_abs = (knob_val * resources.ram_bytes) / bytes_per_unit
+                        elif knob.resource_type == "cpu":
+                            raw_abs = knob_val * resources.cpu_cores
+
+                    if raw_abs is not None and knob.max_value is not None:
+                        if raw_abs > knob.max_value * 1.05:  # 5% tolerance for rounding
+                            raise ValueError(
+                                f"Warm-start config contains absolute value for "
+                                f"hardware-relative knob {knob_name}. "
+                                f"Fraction {knob_val} resolves to {raw_abs:.0f}, "
+                                f"which exceeds max {knob.max_value}."
+                            )
 
         base_config = self.knob_space.fractions_to_config(best_config_frac)
 

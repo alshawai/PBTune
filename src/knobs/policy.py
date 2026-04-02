@@ -301,6 +301,11 @@ AUTOTUNING_SOURCE_EXCLUSIONS: Dict[str, tuple[str, str]] = {
         "benchmark_validity",
         "Recovery decode buffer; benchmarks measure normal execution, not crash recovery.",
     ),
+    "io_method": (
+        "stability",
+        "OS I/O subsystem selector (io_uring/posix/worker); infrastructure knob, not "
+        "performance tuning. io_uring can exhaust kernel memory under multi-instance load.",
+    ),
 }
 
 SOURCE_POLICY_COLUMNS = (
