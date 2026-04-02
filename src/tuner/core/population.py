@@ -968,17 +968,20 @@ class Population:
         evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]]
     ) -> None:
         """
-        Check if any workers' scores are saturated and expand ranges if needed.
-        
-        When saturation is detected:
-        1. Identify which worker(s) are saturated (hitting normalized ceiling)
-        2. Record their PRE-saturation scores
-        3. Expand ranges to accommodate better performance
+        Check if any workers' raw metrics exceed normalization bounds and expand if needed.
+
+        Clamping (np.clip) in compute_score() destroys rank ordering between workers
+        whose raw metrics fall outside [min, max]. This method detects when ANY worker's
+        raw latency or throughput exceeds the current bounds, then expands the ranges
+        and rescores all workers to restore correct relative ordering.
+
+        When bounds exceedance is detected:
+        1. Identify which worker(s) have raw metrics outside current bounds
+        2. Record their PRE-expansion scores
+        3. Expand ranges to accommodate the exceeded values (with headroom)
         4. Rescore all workers with new ranges
-        5. Update best score: use the saturated worker with highest PRE-saturation
-           score (they're the true improver), but report their POST-saturation
-           score (fair comparison with new ranges)
-        
+        5. Update historical best score on new ranges
+
         Parameters
         ----------
         evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
@@ -987,39 +990,61 @@ class Population:
         # Only check after ranges are initialized
         if not self._ranges_updated or self.evaluator is None:
             return
-        
+
         metric_config = self.evaluator.config.metric_config
-        
-        # Check each worker for saturation and record PRE-saturation scores
-        saturated_workers = []
-        pre_saturation_scores = {}
-        
+
+        # Check each worker for out-of-bounds metrics (would be clamped by np.clip)
+        # Trigger on raw metric bound exceedance, not normalized score threshold,
+        # because clamping destroys rank ordering between workers long before
+        # the normalized component hits the saturation ceiling.
+        clamped_workers = []
+        pre_clamp_scores = {}
+
         for worker in self.workers:
             if worker.metrics is not None:
-                pre_saturation_scores[worker.worker_id] = worker.performance_score
-                saturation = metric_config.detect_saturation(worker.metrics)
-                if saturation['any']:
-                    saturated_workers.append(worker)
+                pre_clamp_scores[worker.worker_id] = worker.performance_score
+                latency = getattr(
+                    worker.metrics,
+                    f"latency_{metric_config.latency_metric}"
+                )
+                throughput = worker.metrics.throughput
 
-        # If no saturation, nothing to do
-        if not saturated_workers:
+                exceeds_bounds = (
+                    (latency > 0 and latency < metric_config.latency_min)
+                    or (throughput > 0 and throughput > metric_config.throughput_max)
+                )
+                if exceeds_bounds:
+                    clamped_workers.append(worker)
+
+        # If no workers exceed bounds, nothing to do
+        if not clamped_workers:
             return
 
-        # Find the best saturated worker (highest PRE-saturation score)
-        best_saturated_worker = max(saturated_workers, key=lambda w: w.performance_score)
-        best_saturated_pre_score = best_saturated_worker.performance_score
+        # Find the best clamped worker (highest PRE-expansion score)
+        best_clamped_worker = max(clamped_workers, key=lambda w: w.performance_score)
+        best_clamped_pre_score = best_clamped_worker.performance_score
 
         logger.info(
-            "⚠️  Score saturation detected in %d/%d workers (generation %d)",
-            len(saturated_workers), len(self.workers), self.current_generation
+            "⚠️  Metric bounds exceeded in %d/%d workers (generation %d)",
+            len(clamped_workers), len(self.workers), self.current_generation
         )
         logger.info(
-            "    Best saturated: Worker-%d with PRE-saturation score %.4f",
-            best_saturated_worker.worker_id, best_saturated_pre_score
+            "    Best clamped: Worker-%d with PRE-expansion score %.4f",
+            best_clamped_worker.worker_id, best_clamped_pre_score
         )
-        
+
         # Expand ranges based on current generation's metrics
-        current_metrics = [w.metrics for w in self.workers if w.metrics is not None]
+        dead_threshold = (
+            self.config.dead_config_threshold
+            if self.config else 6.0
+        )
+        current_metrics = [
+            w.metrics for w in self.workers
+            if w.metrics is not None and w.performance_score > dead_threshold
+        ]
+        if not current_metrics:
+            return
+
         ranges_expanded = metric_config.expand_ranges_for_metrics(
             current_metrics,
             expansion_factor=0.25  # 25% headroom for continued improvement
