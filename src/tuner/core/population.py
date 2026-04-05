@@ -301,8 +301,8 @@ class Population:
             worker.port = instance.port
 
             worker.db_config = DatabaseConfig(
-                host='localhost',
-                port=instance.port,
+                host=f'pbt-worker-{worker.worker_id}',
+                port=5432,
                 dbname=dbname,
                 user=user,
                 password=password

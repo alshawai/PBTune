@@ -23,6 +23,8 @@ from glob import glob
 from typing import Optional
 from dataclasses import dataclass
 import psycopg2
+import docker
+import os
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
@@ -36,13 +38,14 @@ base_logger = logging.getLogger(__name__)
 class RestartConfig:
     """Configuration for PostgreSQL restart behavior"""
 
-    method: str = 'auto' # 'pg_ctl', 'systemctl', 'auto' (detect)
+    method: str = 'auto' # 'pg_ctl', 'systemctl', 'docker', 'auto' (detect)
     timeout: int = 5
     max_retries: int = 10
     retry_delay: float = 3.0
     pg_ctl_path: Optional[str] = None # Path to pg_ctl binary (auto-detect if None)
     data_dir: Optional[str] = None # PostgreSQL data directory (needed for pg_ctl)
     service_name: str = 'postgresql'  # Service name for systemctl (Linux)
+    container_name: Optional[str] = None # Container name for docker restart
     backup_enabled: bool = True
     rollback_on_failure: bool = True
 
@@ -242,6 +245,15 @@ class PostgresRestartManager:
             self.config.data_dir = self._detect_data_dir()
         
         self.data_dir = self.config.data_dir
+        
+        # Connect to docker client if needed
+        self.docker_client: Optional[docker.DockerClient] = None
+        if self.config.method in ['docker', 'auto']:
+            try:
+                self.docker_client = docker.from_env()
+            except Exception as e:
+                if self.config.method == 'docker':
+                    self.logger.error("Failed to connect to Docker daemon: %s", e)
 
         if self.config.method == 'auto':
             self.config.method = self._detect_restart_method()
@@ -256,6 +268,10 @@ class PostgresRestartManager:
 
     def _detect_restart_method(self) -> str:
         """Auto-detect best restart method for platform"""
+        # If PBT_IN_DOCKER is set, we prefer docker method
+        if os.environ.get('PBT_IN_DOCKER') == '1' or os.path.exists('/.dockerenv'):
+            return 'docker'
+
         if self.data_dir:
             try:
                 pg_ctl = self._find_pg_ctl()
@@ -468,6 +484,8 @@ class PostgresRestartManager:
                 success = self._restart_pg_ctl()
             elif self.config.method == 'windows_service':
                 success = self._restart_windows_service()
+            elif self.config.method == 'docker':
+                success = self._restart_docker()
             else:
                 self.logger.error("Unknown restart method: %s", self.config.method)
                 return False
@@ -590,6 +608,26 @@ class PostgresRestartManager:
             return False
         except Exception as e:
             self.logger.error("pg_ctl restart error: %s", e)
+            return False
+
+    def _restart_docker(self) -> bool:
+        """Restart PostgreSQL using Docker API"""
+        if not self.docker_client:
+            self.logger.error("Docker client not initialized")
+            return False
+
+        container_name = self.config.container_name
+        if not container_name:
+            self.logger.error("container_name required for docker restart")
+            return False
+
+        try:
+            self.logger.info("Restarting Docker container: %s", container_name)
+            container = self.docker_client.containers.get(container_name)
+            container.restart(timeout=self.config.timeout)
+            return True
+        except Exception as e:
+            self.logger.error("Docker restart error: %s", e)
             return False
 
     def _restart_windows_service(self) -> bool:
