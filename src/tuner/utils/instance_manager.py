@@ -103,29 +103,35 @@ class PostgresInstanceManager:
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
             container_name = f"pbt-worker-{worker_id}"
-            
-            # Use host directory as bind mount to preserve data and allow host-level recovery/resets
-            data_dir = self.base_dir / f"worker_{worker_id}"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            
+
+            # In Docker mode, use named Docker volumes (no host paths needed).
+            # In Mac mode, use a host bind-mount directory.
+            if self.in_docker:
+                data_dir = Path(f"/pbt-worker-{worker_id}-data")  # Placeholder, not a real path
+                volume_name = f"pbt-worker-{worker_id}-data"
+            else:
+                data_dir = self.base_dir / f"worker_{worker_id}"
+                data_dir.mkdir(parents=True, exist_ok=True)
+                volume_name = None
+
             exists, running = self._get_container_status(container_name)
 
             if exists and not force_recreate:
-                logger.info("Reusing existing container %s at %s (port %d)", container_name, data_dir, port)
-                
+                logger.info("Reusing existing container %s (port %d)", container_name, port)
+
                 if running:
                     logger.debug("Stopping reused container before startup to clear persisted overrides")
                     self.stop_instance(worker_id)
                     time.sleep(1)
 
-                self._reset_persisted_overrides(data_dir)
+                # Reset persisted overrides only applies to host bind mounts
+                if not self.in_docker:
+                    self._reset_persisted_overrides(data_dir)
+
                 self._kill_stale_port_holder(port)
                 self._start_instance_internal(container_name)
 
-                # Wait for database connecting
                 self._wait_for_instance_ready(port, container_name)
-
-                # Ensure schema is initialized
                 self._initialize_schema(port, container_name)
 
                 instance = InstanceConfig(
@@ -145,7 +151,7 @@ class PostgresInstanceManager:
                     port
                 )
                 self._kill_stale_port_holder(port)
-                instance = self._create_instance(worker_id, port, data_dir, container_name)
+                instance = self._create_instance(worker_id, port, data_dir, container_name, volume_name=volume_name)
 
             self.instances[worker_id] = instance
 
@@ -181,22 +187,34 @@ class PostgresInstanceManager:
         """Kill any host process listening on the target mapping port.
         Required because Docker sometimes gets port collision errors if a host
         process is already bound to the same port.
+        
+        In Docker mode this is skipped entirely — the ports belong to the
+        worker containers, not the tuner container.
         """
+        if self.in_docker:
+            # Inside the tuner container the mapped ports 5440-5443 are Docker
+            # port-forwarding rules, not host processes.  Nothing to kill here.
+            return
+
         try:
             lsof_output = subprocess.check_output(
                 ["lsof", "-t", f"-i:{port}"],
                 text=True,
                 stderr=subprocess.DEVNULL
             ).strip()
-            
+
             pids = lsof_output.split('\n')
             for pid in pids:
                 if pid:
                     logger.warning("Killing rogue process %s holding port %d", pid, port)
                     subprocess.run(["kill", "-9", pid], check=False)
+        except FileNotFoundError:
+            # lsof is not installed on this system — skip gracefully
+            logger.debug("lsof not available, skipping stale port check for port %d", port)
         except subprocess.CalledProcessError:
-            # lsof returns 1 if no process found, which is exactly what we want
+            # lsof returns exit code 1 when no process is found — that's fine
             pass
+
 
     def _wait_for_instance_ready(
         self,
@@ -273,29 +291,37 @@ class PostgresInstanceManager:
         except docker.errors.NotFound:
             pass
 
-    def _create_instance(self, worker_id: int, port: int, data_dir: Path, container_name: str) -> InstanceConfig:
-        """Create and start a new PostgreSQL container via Docker API."""
+    def _create_instance(self, worker_id: int, port: int, data_dir: Path, container_name: str, volume_name: Optional[str] = None) -> InstanceConfig:
+        """Create and start a new PostgreSQL container via Docker API.
         
+        In Docker mode uses named volumes; in Mac mode uses host bind mounts.
+        """
         db_user = "postgres"
         db_password = ""
         db_name = "postgres"
-        
+
         if self.template_db_config:
             db_user = self.template_db_config.user
             db_password = self.template_db_config.password or ""
             db_name = self.template_db_config.dbname
-            
+
         environment = {
             "POSTGRES_USER": db_user,
             "POSTGRES_PASSWORD": db_password,
             "POSTGRES_DB": db_name,
         }
-        
-        # Enforce limits like max 1.5 CPUs and 1GB RAM per worker
-        logger.debug("Running docker container %s with bind-mount %s ...", container_name, data_dir)
-        
+
+        # Choose volume strategy based on execution environment
+        if self.in_docker and volume_name:
+            # Docker mode: use a named volume — no host paths involved
+            volumes = {volume_name: {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}}
+            logger.debug("Running docker container %s with named volume %s", container_name, volume_name)
+        else:
+            # Mac mode: use a host bind mount
+            volumes = {str(data_dir.absolute()): {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}}
+            logger.debug("Running docker container %s with bind-mount %s", container_name, data_dir)
+
         try:
-            # We map the port to the host and bind-mount the data_dir
             container = self.docker_client.containers.run(
                 "postgres:17",
                 name=container_name,
@@ -303,8 +329,8 @@ class PostgresInstanceManager:
                 detach=True,
                 environment=environment,
                 ports={'5432/tcp': port},
-                volumes={str(data_dir.absolute()): {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}},
-                mem_limit="1g",
+                volumes=volumes,
+                mem_limit="512m",
                 nano_cpus=1500000000,  # 1.5 CPUs
                 command="postgres -c logging_collector=off -c log_destination=stderr"
             )
@@ -327,9 +353,21 @@ class PostgresInstanceManager:
         )
 
     def _start_instance_internal(self, container_name: str) -> None:
-        """Start a stopped Docker container."""
+        """Start a stopped Docker container and ensure it's on the correct network."""
         try:
             container = self.docker_client.containers.get(container_name)
+            
+            # Ensure the container is attached to our common network
+            # (Critical for DNS resolution between tuner and workers in Docker)
+            try:
+                network = self.docker_client.networks.get(self.network_name)
+                container.reload()  # Refresh attributes to get latest network settings
+                if self.network_name not in container.attrs.get('NetworkSettings', {}).get('Networks', {}):
+                    logger.info("Attaching %s to network %s", container_name, self.network_name)
+                    network.connect(container)
+            except Exception as net_err:
+                logger.debug("Network attachment check for %s: %s", self.network_name, net_err)
+
             container.start()
         except Exception as e:
             logger.warning("Error starting container %s: %s", container_name, e)
