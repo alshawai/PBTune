@@ -1,0 +1,31 @@
+FROM python:3.13-slim
+
+# Install system dependencies
+# - sysbench: for OLTP workload
+# - postgresql-client: for pg_isready, psql, pg_basebackup
+# - build-essential: to compile TPC-H dbgen
+# - rsync: for snapshot restorations
+RUN apt-get update && apt-get install -y \
+    sysbench \
+    postgresql-client \
+    build-essential \
+    rsync \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Entrypoint to ensure environment is ready before running the tuner
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# Default command (can be overridden)
+CMD ["python", "-m", "src.tuner.main", "--tier", "minimal", "--config", "rapid"]

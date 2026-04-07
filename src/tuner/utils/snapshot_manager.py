@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from enum import Enum
+from pathlib import Path
 import logging
 import docker
 import time
@@ -41,15 +42,24 @@ def detect_best_snapshot_method() -> SnapshotMethod:
 class SnapshotConfig:
     """
     Configuration for SnapshotManager.
-    
+
+    Supports two modes:
+    - **Mac/host mode**: set ``baseline_path`` to a local directory path.
+    - **Docker mode**:   leave ``baseline_path`` as None and set ``baseline_volume``.
+
     Attributes
     ----------
     baseline_volume : str
-        Name of the docker volume used to store the baseline snapshot data.
+        Name of the Docker volume used to store the baseline snapshot data.
+        Used when baseline_path is None.
+    baseline_path : Optional[Path]
+        Local directory path for storing snapshot data on the host.
+        When set, the snapshot manager operates on the host file system (Mac mode).
     """
     baseline_volume: str = "pbt-snapshots-volume"
+    baseline_path: Optional[Path] = None
     restore_interval: int = 1
-    
+
     # Files to exclude from volume rsyncs
     excluded_files: List[str] = field(default_factory=lambda: [
         'postgresql.conf',
@@ -61,37 +71,63 @@ class SnapshotConfig:
     ])
 
 
+
 class SnapshotManager:
     """
-    Docker volume manager for PostgreSQL data snapshots.
+    Hybrid snapshot manager for PostgreSQL data.
+
+    Operates in two modes determined by SnapshotConfig:
+    - **Mac/host mode** (baseline_path set): uses host directory snapshots via rsync.
+    - **Docker mode** (baseline_path is None): uses Docker volumes via pg_basebackup.
     """
 
     def __init__(self, config: SnapshotConfig, instance_manager=None):
         self.config = config
         self.instance_manager = instance_manager
-        
+
+        # Determine which mode to use
+        self.use_host_path = config.baseline_path is not None
+
         try:
             self.docker_client = docker.from_env()
         except docker.errors.DockerException as e:
             raise RuntimeError(f"Could not connect to Docker daemon: {e}")
 
-        # Ensure snapshot volume exists
-        try:
-            self.docker_client.volumes.get(self.config.baseline_volume)
-        except docker.errors.NotFound:
-            logger.info("Creating Docker volume '%s'", self.config.baseline_volume)
-            self.docker_client.volumes.create(self.config.baseline_volume)
+        if self.use_host_path:
+            # Mac/host mode — ensure directory exists
+            config.baseline_path.mkdir(parents=True, exist_ok=True)
+            self.baseline_created = self._is_host_baseline_valid()
+            logger.info(
+                "Initialized SnapshotManager (host-path mode): path=%s, exists=%s",
+                config.baseline_path,
+                self.baseline_created
+            )
+        else:
+            # Docker volume mode — ensure volume exists
+            try:
+                self.docker_client.volumes.get(self.config.baseline_volume)
+            except docker.errors.NotFound:
+                logger.info("Creating Docker volume '%s'", self.config.baseline_volume)
+                self.docker_client.volumes.create(self.config.baseline_volume)
 
-        self.baseline_created = self._is_baseline_valid()
-        
-        logger.info(
-            "Initialized Docker SnapshotManager: baseline_volume=%s, exists=%s",
-            self.config.baseline_volume,
-            self.baseline_created
-        )
+            self.baseline_created = self._is_baseline_valid()
+            logger.info(
+                "Initialized SnapshotManager (Docker volume mode): volume=%s, exists=%s",
+                self.config.baseline_volume,
+                self.baseline_created
+            )
+
+    def _is_host_baseline_valid(self) -> bool:
+        """Check if the host-path baseline directory has data inside it."""
+        try:
+            path = self.config.baseline_path
+            return path.exists() and any(path.iterdir())
+        except Exception as e:
+            logger.debug("Failed to validate host-path baseline: %s", e)
+            return False
 
     def _is_baseline_valid(self) -> bool:
-        """Check if the baseline volume has data inside it."""
+        """Check if the Docker volume baseline has data inside it."""
         try:
             # We spin up a tiny container to ls the volume
             container = self.docker_client.containers.run(

@@ -663,15 +663,20 @@ class PBTTuner:
                 instances[worker_id].data_dir
                 for worker_id in range(self.pbt_config.population_size)
             ]
+            in_docker = getattr(self.instance_manager, 'in_docker', False)
+            baseline_volume = f'pbt-snapshots-{self.snapshot_identifier}'
+            baseline_path = None if in_docker else Path(
+                f'./pg_snapshots/baseline_{self.snapshot_identifier}'
+            )
             self.population.setup_snapshots(
                 worker_data_dirs=worker_data_dirs,
                 instance_manager=self.instance_manager,
                 pbt_config=self.pbt_config,
-                baseline_path=Path(
-                    f'./pg_snapshots/baseline_{self.snapshot_identifier}'
-                )
+                baseline_volume=baseline_volume,
+                baseline_path=baseline_path,
             )
             self.logger.info("✓ Snapshot restoration configured\n")
+
 
         try:
             for generation in range(self.pbt_config.num_generations):
@@ -711,46 +716,37 @@ class PBTTuner:
     def _create_baseline_snapshot(self, instances: List) -> None:
         """
         Create baseline snapshot from worker_0 before verification.
-        
-        This is called early in the setup process, right after instances
-        are created but before verification and worker assignment. This
-        allows us to cleanly stop worker_0 without affecting other workers'
-        connections.
-        
-        Parameters
-        ----------
-        instances : List[InstanceConfig]
-            List of instance configurations from instance_manager
         """
-        baseline_path = Path(
+        baseline_volume = f'pbt-snapshots-{self.snapshot_identifier}'
+
+        # Mac mode: use a host file path; Docker mode: use a Docker volume
+        in_docker = getattr(self.instance_manager, 'in_docker', False)
+        baseline_path = None if in_docker else Path(
             f'./pg_snapshots/baseline_{self.snapshot_identifier}'
         )
+
         snapshot_config = SnapshotConfig(
+            baseline_volume=baseline_volume,
             baseline_path=baseline_path,
             restore_interval=getattr(self.pbt_config, 'snapshot_restore_interval', 5)
         )
 
-        snapshot_manager = SnapshotManager(snapshot_config)
+        snapshot_manager = SnapshotManager(snapshot_config, instance_manager=self.instance_manager)
 
         if snapshot_manager.baseline_created and not self.force_recreate_baseline:
-            self.logger.info("✓ Using existing baseline snapshot at %s", baseline_path)
+            location = str(baseline_path) if baseline_path else baseline_volume
+            self.logger.info("✓ Using existing baseline snapshot at %s", location)
             return
 
-        worker_0_data_dir = instances[0].data_dir
+        success = snapshot_manager.create_baseline(worker_id=0)
 
-        success = snapshot_manager.create_baseline(
-            source_path=worker_0_data_dir,
-            instance_manager=self.instance_manager,
-            worker_id=0,
-            force=self.force_recreate_baseline,
-            wait_timeout=15.0
-        )
-
+        location = str(baseline_path) if baseline_path else baseline_volume
         if success:
-            self.logger.info("✔️ Baseline snapshot created at %s", baseline_path)
+            self.logger.info("✔️ Baseline snapshot created at %s", location)
         else:
             self.logger.error("❌ Failed to create baseline snapshot")
 
+            
     def _get_stop_reason(self) -> str:
         """Get the reason for early stopping"""
         if self.population.current_generation >= self.pbt_config.num_generations:
