@@ -1,0 +1,41 @@
+services:
+  tuner:
+    build:
+      context: .
+      dockerfile: Dockerfile.tuner
+    image: pbt-tuner:latest
+    container_name: pbt-tuner
+    volumes:
+      # Mount the Docker socket so the tuner can spawn worker containers
+      # On macOS/Docker Desktop, this usually maps seamlessly if you use /var/run/docker.sock
+      # but depending on the user environment, ${DOCKER_HOST:-/var/run/docker.sock} might be needed.
+      # For now, we'll map the standard macOS socket path as a fallback:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount the results directory so output is saved to the host OS
+      - ./results:/app/results
+      # Mount the snapshots directory so baselines persist across runs
+      - pbt-snapshots-volume:/app/pg_snapshots
+      # Mount the source code so changes on host are instantly reflected in the container
+      - ./src:/app/src
+    networks:
+      - pbt-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    # Keep the container running or override with a specific command
+    command: [ "python", "-m", "src.tuner.main", "--tier", "minimal", "--config", "rapid" ]
+
+# We purposefully do NOT define worker services here.
+# The `pbt-tuner` container will dynamically spawn `worker-0`, `worker-1`, etc.
+# using the Docker SDK, attaching them to the `pbt-network`.
+
+networks:
+  pbt-network:
+    name: pbt-network
+    driver: bridge
+
+volumes:
+  pbt-snapshots-volume:
+    name: pbt-snapshots-volume

@@ -300,9 +300,10 @@ class Population:
             instance = instances[worker.worker_id]
             worker.port = instance.port
 
+            in_docker = getattr(self.instance_manager, 'in_docker', False)
             worker.db_config = DatabaseConfig(
-                host='localhost',
-                port=instance.port,
+                host=f'pbt-worker-{worker.worker_id}' if in_docker else 'localhost',
+                port=5432 if in_docker else instance.port,
                 dbname=dbname,
                 user=user,
                 password=password
@@ -319,56 +320,57 @@ class Population:
         worker_data_dirs: List[Path],
         instance_manager: Any,
         pbt_config: Any,
+        baseline_volume: Optional[str] = None,
         baseline_path: Optional[Path] = None,
     ) -> None:
         """
         Register snapshot manager for database restoration during training.
-        
-        **Prerequisites**: 
-        Baseline snapshot must already exist (created by PBTTuner._create_baseline_snapshot()).
-        
-        **Snapshot Architecture**:
-        - Uses ONE baseline snapshot created from a clean database state
-        - ALL workers restore from this SAME baseline at configured intervals
-        - Each worker then applies their unique knob configuration on top
-        
+
+        Supports two modes:
+        - **Mac mode**: pass ``baseline_path`` → host filesystem snapshots.
+        - **Docker mode**: pass ``baseline_volume`` → Docker volume snapshots.
+
         Parameters
         ----------
         worker_data_dirs : List[Path]
-            PostgreSQL data directories for each worker, ordered by worker ID
+            PostgreSQL data directories for each worker.
         instance_manager : PostgresInstanceManager
-            Instance manager for stopping/starting instances during restoration
+            Instance manager for stopping/starting instances.
         pbt_config : PBTConfig
-            PBT configuration containing enable_snapshots and snapshot_restore_interval
+            PBT configuration.
+        baseline_volume : str, optional
+            Name of the Docker volume for the baseline snapshot.
+        baseline_path : Path, optional
+            Host directory for the baseline snapshot (Mac mode).
         """
         if not getattr(pbt_config, 'enable_snapshots', False):
             logger.debug("Snapshots disabled in config")
             return
 
-        baseline_path = baseline_path or Path('./pg_snapshots/baseline')
-
         snapshot_config = SnapshotConfig(
+            baseline_volume=baseline_volume or "pbt-snapshots-volume",
             baseline_path=baseline_path,
             restore_interval=getattr(pbt_config, 'snapshot_restore_interval', 5)
         )
 
-        self.snapshot_manager = SnapshotManager(snapshot_config)
+        self.snapshot_manager = SnapshotManager(snapshot_config, instance_manager=instance_manager)
         self.worker_data_dirs = worker_data_dirs
         self.instance_manager = instance_manager
 
-        # Baseline must already exist
         if not self.snapshot_manager.baseline_created:
+            location = str(baseline_path) if baseline_path else (baseline_volume or "pbt-snapshots-volume")
             logger.error(
                 "Baseline snapshot not found at %s. "
                 "This should have been created during instance setup.",
-                baseline_path
+                location
             )
             self.snapshot_manager = None
             return
 
+        location = str(baseline_path) if baseline_path else (baseline_volume or "pbt-snapshots-volume")
         logger.info(
             "Snapshot restoration enabled: baseline=%s, interval=%d",
-            baseline_path,
+            location,
             snapshot_config.restore_interval
         )
 

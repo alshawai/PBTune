@@ -1499,9 +1499,20 @@ class Evaluator:
 
                 restart_manager = None
                 if self.config.enable_restart:
+                    import copy
+                    # Create a specific config for this worker
+                    worker_restart_config = copy.deepcopy(self.config.restart_config or RestartConfig())
+                    
+                    # If in docker or auto-detect, ensure we use docker method with correct name
+                    if worker_restart_config.method in ['docker', 'auto']:
+                        worker_restart_config.container_name = f"pbt-worker-{worker.worker_id}"
+                        # Disable local backup as worker files aren't mounted in tuner
+                        worker_restart_config.backup_enabled = False
+                        worker_restart_config.method = 'docker'
+
                     restart_manager = PostgresRestartManager(
                         db_config=worker.db_config,
-                        restart_config=self.config.restart_config,
+                        restart_config=worker_restart_config,
                         worker_id=worker.worker_id
                     )
 

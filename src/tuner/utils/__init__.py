@@ -30,6 +30,15 @@ from src.tuner.utils.hardware_info import (
     get_system_info,
     log_system_info,
 )
+from src.tuner.utils.logger_config import (
+    setup_logging,
+    get_logger,
+    log_section_header,
+    log_generation_summary,
+    print_startup_banner,
+    ColorCode,
+    ColorPalette
+)
 
 __all__ = [
     'KnobApplicator',
@@ -47,4 +56,11 @@ __all__ = [
     'get_system_info',
     'log_system_info',
     'WorkerResources',
+    'setup_logging',
+    'get_logger',
+    'log_section_header',
+    'log_generation_summary',
+    'print_startup_banner',
+    'ColorCode',
+    'ColorPalette',
 ]

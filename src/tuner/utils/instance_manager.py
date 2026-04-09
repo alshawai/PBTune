@@ -1,28 +1,29 @@
 """
-PostgreSQL Instance Manager for Parallel PBT
+PostgreSQL Instance Manager for Parallel PBT (Docker Version)
 
-Manages multiple PostgreSQL instances for true parallel worker execution.
-Each worker gets its own isolated PostgreSQL instance with unique port and data directory.
+Manages multiple PostgreSQL instances for true parallel worker execution using Docker.
+Each worker gets its own isolated PostgreSQL container and attached volume.
 
 Architecture:
 - Base port: 5432 (configurable)
-- Worker N uses port: base_port + N
-- Data directory: {base_dir}/worker_{N}
-- Reuses existing instances when possible
+- Worker N uses mapped port: base_port + N
+- Container names: pbt-worker-N
+- Network: pbt-network
+- Data volume: bind-mounted to host's base_dir / worker_N
 """
 
 from __future__ import annotations
 import time
 import logging
-from glob import glob
+import os
+import shutil
+import getpass
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Dict
-import subprocess
-import getpass
-import shutil
-import psutil
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import docker
+
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 
@@ -36,19 +37,11 @@ class InstanceConfig:
     port: int
     data_dir: Path
     running: bool = False
-    pid: Optional[int] = None
 
 
 class PostgresInstanceManager:
     """
-    Manages multiple PostgreSQL instances for parallel worker execution.
-    
-    Responsibilities:
-    - Create/initialize new PostgreSQL instances
-    - Start/stop instances
-    - Monitor instance health
-    - Reuse existing instances from previous runs
-    - Clean up resources
+    Manages multiple PostgreSQL containers for parallel worker execution.
     """
 
     def __init__(
@@ -57,147 +50,89 @@ class PostgresInstanceManager:
         base_port: int = 5432,
         template_db_config: Optional[DatabaseConfig] = None,
         schema_provider: Optional[object] = None,
-        pg_ctl_path: Optional[str] = None,
-        initdb_path: Optional[str] = None
+        **kwargs
     ):
         """
-        Initialize the instance manager.
-        
-        Parameters
-        ----------
-        base_dir : Path
-            Base directory for all worker instances
-        base_port : int
-            Base port number (worker N uses base_port + N)
-        template_db_config : Optional[DatabaseConfig]
-            Template database config (for schema/data)
-        schema_provider : Optional[object]
-            Object implementing prepare(db_config) and validate(db_config)
-            for schema initialization. Typically the workload executor.
-        pg_ctl_path : Optional[str]
-            Path to pg_ctl executable (auto-detected if None)
-        initdb_path : Optional[str]
-            Path to initdb executable (auto-detected if None)
+        Initialize the Docker instance manager.
         """
-        self.base_dir = Path(base_dir)
+        self.base_dir = Path(base_dir) # Kept for backward compatibility
         self.base_port = base_port
         self.template_db_config = template_db_config
         self.schema_provider = schema_provider
         self.instances: Dict[int, InstanceConfig] = {}
-        self.baseline_snapshot_path: Optional[Path] = None
+        
+        # Detect if we are running inside a container (our tuner container)
+        # to decide how to connect to workers for health checks.
+        self.in_docker = os.path.exists('/.dockerenv') or os.environ.get('PBT_IN_DOCKER') == '1'
+        
+        # Connect to Docker Daemon
+        try:
+            self.docker_client = docker.from_env()
+            self.docker_client.ping()
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Could not connect to Docker daemon: {e}. Is Docker running?")
 
-        # Auto-detect PostgreSQL binaries
-        self.pg_ctl = pg_ctl_path or self._find_executable('pg_ctl')
-        self.initdb = initdb_path or self._find_executable('initdb')
-        self.pg_dump = self._find_executable('pg_dump')
-        self.psql = self._find_executable('psql')
-
-        if not self.pg_ctl:
-            raise RuntimeError("pg_ctl not found. Please install PostgreSQL or specify path.")
-        if not self.initdb:
-            raise RuntimeError("initdb not found. Please install PostgreSQL or specify path.")
+        # Ensure the pbt-network exists
+        self.network_name = "pbt-network"
+        try:
+            self.docker_client.networks.get(self.network_name)
+        except docker.errors.NotFound:
+            logger.info("Creating Docker network '%s'", self.network_name)
+            self.docker_client.networks.create(self.network_name, driver="bridge")
 
         logger.debug(
-            "✓ Initialized InstanceManager: base_dir=%s, base_port=%d\n",
-            base_dir,
+            "✓ Initialized Docker InstanceManager: base_port=%d\n",
             base_port
         )
-
-    def _find_executable(self, name: str) -> Optional[str]:
-        """Find PostgreSQL executable in PATH or common locations."""
-        path = shutil.which(name)  # Trying PATH first
-        if path:
-            return path
-
-        # Try common PostgreSQL installation paths
-        common_paths = [
-            f"C:/Program Files/PostgreSQL/18/bin/{name}.exe",
-            f"C:/Program Files/PostgreSQL/17/bin/{name}.exe",
-            f"C:/Program Files/PostgreSQL/16/bin/{name}.exe",
-            f"/usr/local/pgsql/bin/{name}",
-            f"/usr/lib/postgresql/*/bin/{name}",
-        ]
-
-        for path_pattern in common_paths:
-            if '*' in path_pattern:
-                # Handle wildcard paths
-                matches = glob(path_pattern)
-                if matches:
-                    return matches[0]
-            elif Path(path_pattern).exists():
-                return path_pattern
-
-        logger.warning("Could not find %s in PATH or common locations", name)
-        return None
 
     def setup_instances(
         self,
         num_workers: int,
         force_recreate: bool = False
     ) -> List[InstanceConfig]:
-        """
-        Set up PostgreSQL instances for all workers.
-        Reuses existing instances when possible unless force_recreate=True.
-        
-        Parameters
-        ----------
-        num_workers : int
-            Number of worker instances needed
-        force_recreate : bool
-            If True, recreate all instances from scratch
-        
-        Returns
-        -------
-        List[InstanceConfig]
-            List of configured instances
-        """
+        """Set up PostgreSQL container instances for all workers."""
+        if num_workers <= 0:
+            raise ValueError("Must specify at least 1 worker")
+
         logger.info(
-            "Setting up %d PostgreSQL instances (force_recreate=%s)",
+            "Setting up %d PostgreSQL containers (force_recreate=%s)",
             num_workers,
             force_recreate
         )
 
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
-            data_dir = self.base_dir / f"worker_{worker_id}"
+            container_name = f"pbt-worker-{worker_id}"
 
-            if not force_recreate and self._is_valid_instance(data_dir, port):
-                logger.info(
-                    "Reusing existing instance for worker-%d at %s (port %d)",
-                    worker_id,
-                    data_dir,
-                    port
-                )
+            # In Docker mode, use named Docker volumes (no host paths needed).
+            # In Mac mode, use a host bind-mount directory.
+            if self.in_docker:
+                data_dir = Path(f"/pbt-worker-{worker_id}-data")  # Placeholder, not a real path
+                volume_name = f"pbt-worker-{worker_id}-data"
+            else:
+                data_dir = self.base_dir / f"worker_{worker_id}"
+                data_dir.mkdir(parents=True, exist_ok=True)
+                volume_name = None
 
-                if self._is_instance_running(data_dir):
-                    logger.debug(
-                        "Stopping reused instance before startup to clear persisted overrides"
-                    )
-                    subprocess.run(
-                        [self.pg_ctl, '-D', str(data_dir), 'stop', '-m', 'fast'],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        check=False,
-                    )
+            exists, running = self._get_container_status(container_name)
+
+            if exists and not force_recreate:
+                logger.info("Reusing existing container %s (port %d)", container_name, port)
+
+                if running:
+                    logger.debug("Stopping reused container before startup to clear persisted overrides")
+                    self.stop_instance(worker_id)
                     time.sleep(1)
 
-                self._reset_persisted_overrides(data_dir)
+                # Reset persisted overrides only applies to host bind mounts
+                if not self.in_docker:
+                    self._reset_persisted_overrides(data_dir)
+
                 self._kill_stale_port_holder(port)
-                self._start_instance_internal(data_dir)
+                self._start_instance_internal(container_name)
 
-                self._wait_for_instance_ready(port)
-
-                if self.template_db_config:
-                    self._ensure_postgres_user_exists(port)
-
-                # Ensure schema is valid even for reused instances.
-                # When switching benchmarks (e.g. sysbench → tpch),
-                # validate() will detect missing tables and prepare()
-                # will create the new schema.
-                self._initialize_schema(port, data_dir)
+                self._wait_for_instance_ready(port, container_name)
+                self._initialize_schema(port, container_name)
 
                 instance = InstanceConfig(
                     worker_id=worker_id,
@@ -206,29 +141,17 @@ class PostgresInstanceManager:
                     running=True
                 )
             else:
-                if data_dir.exists():
-                    logger.info("Removing old instance at %s", data_dir)
-                    # Try graceful pg_ctl stop before removing data dir
-                    try:
-                        subprocess.run(
-                            [self.pg_ctl, '-D', str(data_dir), 'stop', '-m', 'immediate'],
-                            capture_output=True, text=True, timeout=10, check=False
-                        )
-                        time.sleep(1)
-                    except (subprocess.TimeoutExpired, Exception):
-                        pass
-
-                    shutil.rmtree(data_dir)
-
-                self._kill_stale_port_holder(port)
+                if exists:
+                    logger.info("Removing old container %s", container_name)
+                    self._remove_container(container_name)
 
                 logger.info(
-                    "Creating new instance for worker-%d at %s (port %d)",
-                    worker_id,
-                    data_dir,
+                    "Creating new container %s on mapped port %d",
+                    container_name,
                     port
                 )
-                instance = self._create_instance(worker_id, port, data_dir)
+                self._kill_stale_port_holder(port)
+                instance = self._create_instance(worker_id, port, data_dir, container_name, volume_name=volume_name)
 
             self.instances[worker_id] = instance
 
@@ -246,47 +169,83 @@ class PostgresInstanceManager:
             return
 
         backup_path = data_dir / 'postgresql.auto.conf.pre_reuse_backup'
-        shutil.copy2(auto_conf, backup_path)
+        try:
+            shutil.copy2(auto_conf, backup_path)
 
-        with open(auto_conf, 'w', encoding='utf-8') as handle:
-            handle.write("# Cleared before instance reuse to remove stale ALTER SYSTEM overrides.\n")
+            with open(auto_conf, 'w', encoding='utf-8') as handle:
+                handle.write("# Cleared before instance reuse to remove stale ALTER SYSTEM overrides.\n")
 
-        logger.debug(
-            "Cleared persisted overrides in %s (backup at %s)",
-            auto_conf,
-            backup_path,
-        )
+            logger.debug(
+                "Cleared persisted overrides in %s (backup at %s)",
+                auto_conf,
+                backup_path,
+            )
+        except Exception as e:
+            logger.warning("Could not clear pg auto config %s: %s", auto_conf, e)
+
+    def _kill_stale_port_holder(self, port: int) -> None:
+        """Kill any host process listening on the target mapping port.
+        Required because Docker sometimes gets port collision errors if a host
+        process is already bound to the same port.
+        
+        In Docker mode this is skipped entirely — the ports belong to the
+        worker containers, not the tuner container.
+        """
+        if self.in_docker:
+            # Inside the tuner container the mapped ports 5440-5443 are Docker
+            # port-forwarding rules, not host processes.  Nothing to kill here.
+            return
+
+        try:
+            lsof_output = subprocess.check_output(
+                ["lsof", "-t", f"-i:{port}"],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip()
+
+            pids = lsof_output.split('\n')
+            for pid in pids:
+                if pid:
+                    logger.warning("Killing rogue process %s holding port %d", pid, port)
+                    subprocess.run(["kill", "-9", pid], check=False)
+        except FileNotFoundError:
+            # lsof is not installed on this system — skip gracefully
+            logger.debug("lsof not available, skipping stale port check for port %d", port)
+        except subprocess.CalledProcessError:
+            # lsof returns exit code 1 when no process is found — that's fine
+            pass
+
 
     def _wait_for_instance_ready(
         self,
         port: int,
-        max_attempts: int = 15,
+        container_name: Optional[str] = None,
+        max_attempts: int = 20,
         delay_seconds: float = 2.0,
     ) -> None:
-        """Wait until a PostgreSQL instance accepts local connections.
-
-        This is primarily used in the reused-instance path where start is async
-        and fixed sleeps are not reliable under load.
-        """
+        """Wait until a PostgreSQL instance accepts local connections."""
         current_user = getpass.getuser()
+
+        host = container_name if (self.in_docker and container_name) else 'localhost'
+        actual_port = 5432 if self.in_docker else port
 
         last_error: Optional[Exception] = None
         for attempt in range(1, max_attempts + 1):
             test_configs = [
                 DatabaseConfig(
-                    host='localhost',
-                    port=str(port),
+                    host=host,
+                    port=str(actual_port),
                     dbname='postgres',
                     user=current_user,
                     password=''
                 )
             ]
 
-            if self.template_db_config and self.template_db_config.user != current_user:
+            if self.template_db_config:
                 test_configs.append(
                     DatabaseConfig(
-                        host='localhost',
-                        port=str(port),
+                        host=host,
+                        port=str(actual_port),
                         dbname=self.template_db_config.dbname,
                         user=self.template_db_config.user,
                         password=self.template_db_config.password or ''
@@ -299,8 +258,9 @@ class PostgresInstanceManager:
                     conn.close()
                     if attempt > 1:
                         logger.debug(
-                            "Instance on port %d became ready after %d attempts",
-                            port,
+                            "Instance on %s:%d became ready after %d attempts",
+                            host,
+                            actual_port,
                             attempt,
                         )
                     return
@@ -310,205 +270,78 @@ class PostgresInstanceManager:
             time.sleep(delay_seconds)
 
         raise RuntimeError(
-            f"Instance on port {port} did not become ready after "
+            f"Instance on {host}:{actual_port} did not become ready after "
             f"{max_attempts} attempts: {last_error}"
         )
-    
-    def _is_valid_instance(self, data_dir: Path, expected_port: int) -> bool:
-        """
-        Check if a data directory contains a valid PostgreSQL instance with correct port.
+
+    def _get_container_status(self, container_name: str) -> tuple[bool, bool]:
+        """Returns (exists, is_running)."""
+        try:
+            container = self.docker_client.containers.get(container_name)
+            return True, container.status == "running"
+        except docker.errors.NotFound:
+            return False, False
+
+    def _remove_container(self, container_name: str) -> None:
+        """Force remove a container and its volumes."""
+        try:
+            container = self.docker_client.containers.get(container_name)
+            container.remove(force=True, v=True)
+            logger.debug("Removed container %s", container_name)
+        except docker.errors.NotFound:
+            pass
+
+    def _create_instance(self, worker_id: int, port: int, data_dir: Path, container_name: str, volume_name: Optional[str] = None) -> InstanceConfig:
+        """Create and start a new PostgreSQL container via Docker API.
         
-        Parameters
-        ----------
-        data_dir : Path
-            Instance data directory
-        expected_port : int
-            Port the instance should be configured for
-            
-        Returns
-        -------
-        bool
-            True if valid and has correct port configuration
+        In Docker mode uses named volumes; in Mac mode uses host bind mounts.
         """
-        if not data_dir.exists():
-            return False
+        db_user = "postgres"
+        db_password = ""
+        db_name = "postgres"
 
-        required_files = [
-            'PG_VERSION',
-            'postgresql.conf',
-            'pg_hba.conf',
-            'base',  # Database directory
-        ]
+        if self.template_db_config:
+            db_user = self.template_db_config.user
+            db_password = self.template_db_config.password or ""
+            db_name = self.template_db_config.dbname
 
-        for file_name in required_files:
-            if not (data_dir / file_name).exists():
-                logger.debug("Missing required file: %s", file_name)
-                return False
+        environment = {
+            "POSTGRES_USER": db_user,
+            "POSTGRES_PASSWORD": db_password,
+            "POSTGRES_DB": db_name,
+        }
 
-        conf_file = data_dir / 'postgresql.conf'
-        try:
-            with open(conf_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip().startswith('port'):
-                        parts = line.split('=')
-                        if len(parts) == 2:
-                            configured_port = int(parts[1].strip().split('#')[0])
-                            if configured_port != expected_port:
-                                logger.info(
-                                    "Instance at %s configured for port %d, "
-                                    "expected %d - needs recreation",
-                                    data_dir, configured_port, expected_port
-                                )
-                                return False
-                            break
-        except (IOError, ValueError) as e:
-            logger.warning("Could not verify port configuration in %s: %s", conf_file, e)
-            return False
-
-        return True
-
-    def _is_instance_running(self, data_dir: Path) -> bool:
-        """
-        Check if a PostgreSQL instance is already running.
-        
-        Parameters
-        ----------
-        data_dir : Path
-            Instance data directory
-            
-        Returns
-        -------
-        bool
-            True if instance is running
-        """
-        pid_file = data_dir / 'postmaster.pid'
-        if not pid_file.exists():
-            return False
+        # Choose volume strategy based on execution environment
+        if self.in_docker and volume_name:
+            # Docker mode: use a named volume — no host paths involved
+            volumes = {volume_name: {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}}
+            logger.debug("Running docker container %s with named volume %s", container_name, volume_name)
+        else:
+            # Mac mode: use a host bind mount
+            volumes = {str(data_dir.absolute()): {'bind': '/var/lib/postgresql/data', 'mode': 'rw'}}
+            logger.debug("Running docker container %s with bind-mount %s", container_name, data_dir)
 
         try:
-            with open(pid_file, 'r', encoding='utf-8') as f:
-                pid = int(f.readline().strip())
-
-            if psutil.pid_exists(pid):
-                try:
-                    proc = psutil.Process(pid)
-                    if 'postgres' in proc.name().lower():
-                        return True
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-
-            return False
-
-        except (IOError, ValueError, ImportError) as e:
-            logger.debug("Could not verify if instance is running: %s", e)
-            # If psutil not available, assume not running and try to start
-            return False
-
-    def _kill_stale_port_holder(self, port: int) -> None:
-        """
-        Kill any process still holding a worker port from a previous crashed run.
-        
-        Parameters
-        ----------
-        port : int
-            TCP port to check for stale listeners
-        """
-        try:
-            for conn in psutil.net_connections(kind='tcp'):
-                if conn.laddr.port == port and conn.status == 'LISTEN':
-                    try:
-                        proc = psutil.Process(conn.pid)
-                        proc_name = proc.name().lower()
-                        if 'postgres' in proc_name or 'postmaster' in proc_name:
-                            logger.warning(
-                                "Killing stale PostgreSQL process (PID %d) holding port %d",
-                                conn.pid, port
-                            )
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=5)
-                            except psutil.TimeoutExpired:
-                                proc.kill()
-                                proc.wait(timeout=3)
-                            time.sleep(1)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass
-        except (psutil.AccessDenied, OSError) as e:
-            logger.debug("Could not check for stale port holders: %s", e)
-
-    def _create_instance(self, worker_id: int, port: int, data_dir: Path) -> InstanceConfig:
-        """Create and initialize a new PostgreSQL instance."""
-        data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Step 1: Initialize data directory with initdb
-        logger.debug("Running initdb for worker-%d...", worker_id)
-        try:
-            result = subprocess.run(
-                [self.initdb, '-D', str(data_dir), '--encoding=UTF8', '--locale=C'],
-                capture_output=True,
-                text=True,
-                timeout=60
+            container = self.docker_client.containers.run(
+                "postgres:17",
+                name=container_name,
+                network=self.network_name,
+                detach=True,
+                environment=environment,
+                ports={'5432/tcp': port},
+                volumes=volumes,
+                mem_limit="512m",
+                nano_cpus=1500000000,  # 1.5 CPUs
+                command="postgres -c logging_collector=off -c log_destination=stderr"
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"initdb failed: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("initdb timed out after 60 seconds")
-        
-        # Step 2: Configure postgresql.conf
-        self._configure_instance(data_dir, port)
-        
-        # Step 3: Start the instance
-        self._start_instance_internal(data_dir)
-        
-        # Step 4: Verify instance is running and create postgres user
-        logger.debug("Verifying instance startup on port %d...", port)
-        
-        # initdb creates a user with current Windows username, not 'postgres'
-        # We need to connect with that user first, then create 'postgres' user
-        current_user = getpass.getuser()
-        
-        max_attempts = 15  # 15 attempts = 30 seconds max wait
-        instance_conn = None
-        for attempt in range(max_attempts):
-            try:
-                # Try to connect with Windows username (what initdb creates)
-                test_config = DatabaseConfig(
-                    host='localhost',
-                    port=str(port),
-                    dbname='postgres',
-                    user=current_user,
-                    password=''  # No password for local initdb user
-                )
-                instance_conn = get_connection(config=test_config)
-                logger.debug("Instance verified running on port %d (attempt %d)", port, attempt + 1)
-                break
-            except Exception as e:
-                if attempt == max_attempts - 1:
-                    # Last attempt failed
-                    logger.error("Instance failed to start on port %d after %d attempts", port, max_attempts)
-                    logfile = data_dir / 'logfile'
-                    if logfile.exists():
-                        try:
-                            with open(logfile, 'r', encoding='utf-8') as f:
-                                logger.error("PostgreSQL log:\n%s", f.read())
-                        except Exception:
-                            pass
-                    raise RuntimeError(f"Instance failed to start: {e}")
-                time.sleep(2)  # Wait before retry
-        
-        # Step 4b: Create postgres superuser if template db config requires it
-        if instance_conn and self.template_db_config and self.template_db_config.user != current_user:
-            self._create_user_if_not_exists(instance_conn, self.template_db_config.user, self.template_db_config.password)
+        except docker.errors.APIError as e:
+            raise RuntimeError(f"Failed to create docker container {container_name}: {e}")
             
-            # Step 4c: Create the application database (test_dataset)
-            self._create_application_database(instance_conn, self.template_db_config.dbname)
-            
-            instance_conn.close()
-            
-            # Step 5: Initialize schema/data (create sbtest1 table)
-            self._initialize_schema(port, data_dir)
-        elif instance_conn:
-            instance_conn.close()
+        # Wait for the container to become ready
+        self._wait_for_instance_ready(port, container_name)
+        
+        # Initialize the schema/dbgen data
+        self._initialize_schema(port, container_name)
         
         logger.info("Successfully created instance for worker-%d on port %d", worker_id, port)
         
@@ -519,202 +352,34 @@ class PostgresInstanceManager:
             running=True
         )
 
-    def _ensure_postgres_user_exists(self, port: int) -> None:
-        """
-        Ensure postgres user and application database exist on a 
-        running instance (for reused instances).
-        
-        Parameters
-        ----------
-        port : int
-            Port of the running instance
-        """
-        if not self.template_db_config:
-            return
-
-        current_user = getpass.getuser()
-
-        # If template requires same user as Windows user, no need to create
-        if self.template_db_config.user == current_user:
-            return
-
+    def _start_instance_internal(self, container_name: str) -> None:
+        """Start a stopped Docker container and ensure it's on the correct network."""
         try:
-            # Connect with Windows username
-            test_config = DatabaseConfig(
-                host='localhost',
-                port=str(port),
-                dbname='postgres',
-                user=current_user,
-                password=''
-            )
-            conn = get_connection(config=test_config)
-
-            self._create_user_if_not_exists(
-                conn,
-                self.template_db_config.user,
-                self.template_db_config.password
-            )
-
-            self._create_application_database(conn, self.template_db_config.dbname)
-
-            conn.close()
-            logger.debug("Ensured user '%s' exists on port %d", self.template_db_config.user, port)
-
-        except Exception as e:
-            logger.warning("Could not ensure user exists on port %d: %s", port, e)
-
-    def _create_application_database(self, conn, dbname: str) -> None:
-        """
-        Create the application database if it doesn't exist.
-        
-        Parameters
-        ----------
-        conn : psycopg2.connection
-            Active database connection (connected to postgres database)
-        dbname : str
-            Name of the database to create
-        """
-        try:
-
-            old_isolation = conn.isolation_level
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s",
-                (dbname,)
-            )
-            exists = cursor.fetchone() is not None
-
-            if not exists:
-                logger.debug("Creating database '%s'...", dbname)
-                cursor.execute(f'CREATE DATABASE "{dbname}"')
-                logger.debug("Created database '%s'", dbname)
-            else:
-                logger.debug("Database '%s' already exists", dbname)
-
-            cursor.close()
-
-            conn.set_isolation_level(old_isolation)
-
-        except Exception as e:
-            logger.warning("Could not create database '%s': %s", dbname, e)
+            container = self.docker_client.containers.get(container_name)
+            
+            # Ensure the container is attached to our common network
+            # (Critical for DNS resolution between tuner and workers in Docker)
             try:
-                conn.set_isolation_level(old_isolation)
-            except:
-                pass
+                network = self.docker_client.networks.get(self.network_name)
+                container.reload()  # Refresh attributes to get latest network settings
+                if self.network_name not in container.attrs.get('NetworkSettings', {}).get('Networks', {}):
+                    logger.info("Attaching %s to network %s", container_name, self.network_name)
+                    network.connect(container)
+            except Exception as net_err:
+                logger.debug("Network attachment check for %s: %s", self.network_name, net_err)
 
-    def _create_user_if_not_exists(self, conn, username: str, password: str) -> None:
-        """
-        Create a PostgreSQL user if it doesn't already exist.
-        
-        Parameters
-        ----------
-        conn : psycopg2.connection
-            Active database connection
-        username : str
-            Username to create
-        password : str
-            Password for the user
-        """
-        try:
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT 1 FROM pg_roles WHERE rolname = %s",
-                (username,)
-            )
-            exists = cursor.fetchone() is not None
-
-            if not exists:
-                logger.debug("Creating user '%s'...", username)
-                cursor.execute(
-                    f"CREATE USER {username} WITH SUPERUSER PASSWORD %s",
-                    (password,)
-                )
-                conn.commit()
-                logger.debug("Created user '%s'", username)
-            else:
-                logger.debug("User '%s' already exists", username)
-
-            cursor.close()
-
+            container.start()
         except Exception as e:
-            logger.warning("Could not create user '%s': %s", username, e)
-            conn.rollback()
+            logger.warning("Error starting container %s: %s", container_name, e)
 
-    def _configure_instance(self, data_dir: Path, port: int) -> None:
-        """Configure PostgreSQL instance with appropriate settings."""
-        conf_path = data_dir / 'postgresql.conf'
-
-        # Read existing config
-        with open(conf_path, 'r') as f:
-            config_lines = f.readlines()
-
-        custom_config = f"""
-# Custom configuration for worker instance
-port = {port}
-logging_collector = off
-log_destination = 'stderr'
-# Use /tmp for Unix domain sockets to avoid path length issues
-unix_socket_directories = '/tmp'
-"""
-        
-        with open(conf_path, 'a') as f:
-            f.write(custom_config)
-        
-        logger.debug("Configured instance at %s with port %d", data_dir, port)
-    
-    def _start_instance_internal(self, data_dir: Path) -> None:
-        """Start a PostgreSQL instance."""
-        logger.debug("Starting PostgreSQL instance at %s", data_dir)
-
-        logfile = data_dir / 'logfile'
-
-        try:
-            startupinfo = None
-            if hasattr(subprocess, 'STARTUPINFO'):
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
-            subprocess.Popen(
-                [self.pg_ctl, '-D', str(data_dir), '-l', str(logfile), '-W', 'start'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                startupinfo=startupinfo,
-                creationflags=(
-                    subprocess.CREATE_NEW_PROCESS_GROUP 
-                    if hasattr(subprocess, 'CREATE_NEW_PROCESS_GROUP') else 0
-                )
-            )
-
-            logger.debug("Issued start command for instance at %s", data_dir)
-
-        except Exception as e:
-            logger.warning("Error issuing pg_ctl start command: %s", e)
-            # Continue anyway - connection test will tell us if it worked
-
-    def _initialize_schema(self, port: int, data_dir: Path) -> None:
-        """
-        Initialize schema by delegating to the schema_provider.
-
-        The provider's validate() checks if the schema already exists;
-        if not, prepare() creates it. This keeps all benchmark-specific
-        logic (sysbench prepare, TPC-H dbgen, etc.) out of the instance
-        manager.
-
-        Fast path: if a baseline snapshot exists for the current scale
-        factor, restores from snapshot instead of running the full
-        prepare() pipeline (stop → rsync → start → validate).
-        """
+    def _initialize_schema(self, port: int, container_name: str) -> None:
+        """Initialize schema by delegating to the schema_provider."""
         if not self.schema_provider or not self.template_db_config:
-            logger.debug("No schema provider configured, skipping schema init")
             return
 
         instance_config = DatabaseConfig(
-            host='localhost',
-            port=str(port),
+            host=container_name if self.in_docker else 'localhost',
+            port=5432 if self.in_docker else port,
             dbname=self.template_db_config.dbname,
             user=self.template_db_config.user,
             password=self.template_db_config.password or ''
@@ -725,59 +390,6 @@ unix_socket_directories = '/tmp'
                 logger.debug("Schema already valid on port %d", port)
                 return
 
-            # Fast path: restore from existing baseline snapshot
-            if self.baseline_snapshot_path and self.baseline_snapshot_path.exists():
-                logger.info(
-                    "Restoring schema from baseline snapshot on port %d", port
-                )
-                try:
-                    subprocess.run(
-                        [self.pg_ctl, '-D', str(data_dir), 'stop', '-m', 'fast'],
-                        capture_output=True, text=True, timeout=30, check=False
-                    )
-                    time.sleep(1)
-
-                    subprocess.run(
-                        ['rsync', '-a', '--delete',
-                         '--exclude', 'postmaster.pid',
-                         '--exclude', 'postmaster.opts',
-                         '--exclude', 'postgresql.conf',
-                         '--exclude', 'pg_hba.conf',
-                         '--exclude', 'pg_ident.conf',
-                         str(self.baseline_snapshot_path) + '/',
-                         str(data_dir) + '/'],
-                        capture_output=True, text=True, timeout=120, check=True
-                    )
-
-                    self._start_instance_internal(data_dir)
-
-                    # Wait for instance to become ready after restore
-                    for attempt in range(10):
-                        time.sleep(2)
-                        try:
-                            if self.schema_provider.validate(instance_config):
-                                logger.info(
-                                    "Schema restored from snapshot on port %d",
-                                    port
-                                )
-                                return
-                        except Exception:
-                            pass
-
-                    logger.warning(
-                        "Snapshot restore validation failed on port %d, "
-                        "falling back to prepare()", port
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Snapshot restore failed on port %d: %s, "
-                        "falling back to prepare()", port, e
-                    )
-                    # Ensure instance is running for prepare() fallback
-                    if not self._is_instance_running(data_dir):
-                        self._start_instance_internal(data_dir)
-                        time.sleep(2)
-
             logger.info("Preparing schema on port %d...", port)
             self.schema_provider.prepare(instance_config)
             logger.debug("Schema preparation complete on port %d", port)
@@ -787,118 +399,76 @@ unix_socket_directories = '/tmp'
             raise
 
     def start_instance(self, worker_id: int) -> bool:
-        """
-        Start a specific worker's PostgreSQL instance.
-        
-        Parameters
-        ----------
-        worker_id : int
-            Worker ID
-        
-        Returns
-        -------
-        bool
-            True if started successfully
-        """
         if worker_id not in self.instances:
-            logger.error("No instance configured for worker-%d", worker_id)
             return False
         
         instance = self.instances[worker_id]
-        
         if instance.running:
-            logger.debug("Instance for worker-%d already running", worker_id)
             return True
-        
-        try:
-            self._start_instance_internal(instance.data_dir)
-            instance.running = True
-            logger.info("Started instance for worker-%d on port %d", worker_id, instance.port)
-            return True
-        except Exception as e:
-            logger.error("Failed to start instance for worker-%d: %s", worker_id, e)
-            return False
-    
-    def stop_instance(self, worker_id: int, mode: str = 'fast') -> bool:
-        """
-        Stop a specific worker's PostgreSQL instance.
-        
-        Parameters
-        ----------
-        worker_id : int
-            Worker ID
-        mode : str
-            Shutdown mode: 'smart', 'fast', or 'immediate'
-        
-        Returns
-        -------
-        bool
-            True if stopped successfully
-        """
-        if worker_id not in self.instances:
-            logger.error("No instance configured for worker-%d", worker_id)
-            return False
-        
-        instance = self.instances[worker_id]
-        
-        if not instance.running:
-            logger.debug("Instance for worker-%d already stopped", worker_id)
-            return True
-        
-        logger.info("Stopping instance for worker-%d (mode=%s)", worker_id, mode)
-        
-        try:
-            result = subprocess.run(
-                [self.pg_ctl, '-D', str(instance.data_dir), 'stop', '-m', mode],  # type: ignore
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode not in [0, 1]:  # 1 = not running
-                logger.warning("pg_ctl stop returned %d: %s", result.returncode, result.stderr)
             
-            instance.running = False
-            logger.info("Stopped instance for worker-%d", worker_id)
+        container_name = f"pbt-worker-{worker_id}"
+        self._kill_stale_port_holder(instance.port)
+        
+        try:
+            self._start_instance_internal(container_name)
+            instance.running = True
+            logger.info("Started worker-%d", worker_id)
             return True
-        except subprocess.TimeoutExpired:
-            logger.error("pg_ctl stop timed out for worker-%d", worker_id)
-            return False
         except Exception as e:
-            logger.error("Failed to stop instance for worker-%d: %s", worker_id, e)
+            logger.error("Failed to start worker-%d: %s", worker_id, e)
             return False
-    
+
+    def stop_instance(self, worker_id: int, mode: str = 'fast') -> bool:
+        if worker_id not in self.instances:
+            return False
+            
+        instance = self.instances[worker_id]
+        if not instance.running:
+            return True
+            
+        container_name = f"pbt-worker-{worker_id}"
+        try:
+            container = self.docker_client.containers.get(container_name)
+            # Use immediate timeout since Docker handles stopping postgres
+            container.stop(timeout=10)
+            instance.running = False
+            logger.info("Stopped worker-%d", worker_id)
+            return True
+        except Exception as e:
+            logger.error("Failed to stop worker-%d: %s", worker_id, e)
+            return False
+
     def start_all(self) -> bool:
-        """Start all configured instances."""
         logger.info("Starting all %d instances...", len(self.instances))
-        success = True
-        
-        for worker_id in self.instances:
-            if not self.start_instance(worker_id):
-                success = False
-        
-        return success
+        return all(self.start_instance(w) for w in self.instances)
 
     def recover_instance(self, worker_id: int) -> bool:
-        """Recover a worker instance from potentially bad persisted config.
-
-        This is designed for dead-config rescue workflow where a sampled
-        configuration prevented startup.
-        """
+        """Recover a worker instance from potentially bad persisted config."""
         if worker_id not in self.instances:
             logger.error("No instance configured for worker-%d", worker_id)
             return False
 
         instance = self.instances[worker_id]
+        container_name = f"pbt-worker-{worker_id}"
 
-        self.stop_instance(worker_id, mode='immediate')
+        # 1. Force stop container
+        self.stop_instance(worker_id)
+        
+        # 2. Prevent port mapping collisions
         self._kill_stale_port_holder(instance.port)
+        
+        # 3. Clean up bad configs from bind-mount host directory
         self._reset_persisted_overrides(instance.data_dir)
 
         try:
-            self._start_instance_internal(instance.data_dir)
-            self._wait_for_instance_ready(instance.port)
-            self._initialize_schema(instance.port, instance.data_dir)
+            # 4. Restart the container
+            self._start_instance_internal(container_name)
+            
+            # 5. Wait for it to become ready
+            self._wait_for_instance_ready(instance.port, container_name)
+            
+            # 6. Initialize schema if lost
+            self._initialize_schema(instance.port, container_name)
             instance.running = True
             logger.info(
                 "Recovered instance for worker-%d on port %d",
@@ -912,79 +482,38 @@ unix_socket_directories = '/tmp'
             return False
 
     def stop_all(self, mode: str = 'fast') -> bool:
-        """Stop all running instances."""
         logger.info("Stopping all %d instances...", len(self.instances))
-        success = True
-        
-        for worker_id in self.instances:
-            if not self.stop_instance(worker_id, mode=mode):
-                success = False
-        
-        return success
-    
-    def get_instance_config(self, worker_id: int) -> Optional[InstanceConfig]:
-        """Get configuration for a specific worker instance."""
-        return self.instances.get(worker_id)
-    
+        return all(self.stop_instance(w) for w in self.instances)
+
     def verify_instances(self) -> Dict[int, bool]:
-        """
-        Verify all instances are accessible.
-        
-        Returns
-        -------
-        Dict[int, bool]
-            Map of worker_id -> connection_successful
-        """
         logger.info("Verifying %d instances...", len(self.instances))
         results = {}
-        
         for worker_id, instance in self.instances.items():
+            results[worker_id] = False
             try:
+                container_name = f"pbt-worker-{worker_id}"
                 test_config = DatabaseConfig(
-                    host='localhost',
-                    port=instance.port,
-                    dbname='postgres',
+                    host=container_name if self.in_docker else 'localhost',
+                    port=5432 if self.in_docker else instance.port,
+                    dbname=self.template_db_config.dbname if self.template_db_config else 'postgres',
                     user=self.template_db_config.user if self.template_db_config else 'postgres',
                     password=self.template_db_config.password if self.template_db_config else ''
                 )
-                
                 conn = get_connection(test_config)
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-                cursor.close()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
                 conn.close()
-                
                 results[worker_id] = True
-                logger.debug("✓ Worker-%d instance accessible on port %d", worker_id, instance.port)
             except Exception as e:
-                results[worker_id] = False
-                logger.error("✗ Worker-%d instance NOT accessible: %s", worker_id, e)
-        
-        success_count = sum(results.values())
-        logger.info("Verification complete: %d/%d instances accessible", success_count, len(results))
-        
+                logger.error("Verification failed for worker-%d (%s:%d): %s", worker_id, test_config.host, test_config.port, e)
         return results
-    
+
     def cleanup(self, remove_data: bool = False) -> None:
-        """
-        Clean up resources.
-        
-        Parameters
-        ----------
-        remove_data : bool
-            If True, also remove data directories
-        """
+        """Clean up Docker containers and volumes."""
         logger.info("Cleaning up instance manager (remove_data=%s)", remove_data)
-        
-        # Stop all instances
-        self.stop_all(mode='immediate')
-        
-        # Remove data directories if requested
+        self.stop_all()
         if remove_data:
-            for instance in self.instances.values():
-                if instance.data_dir.exists():
-                    logger.info("Removing data directory: %s", instance.data_dir)
-                    shutil.rmtree(instance.data_dir)
-        
+            for worker_id in list(self.instances.keys()):
+                container_name = f"pbt-worker-{worker_id}"
+                self._remove_container(container_name)
         self.instances.clear()

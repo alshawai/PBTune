@@ -26,3 +26,4 @@ PyYAML==6.0.3
 
 # Workload benchmarking
 # Note: SYSBENCH installed separately via system package manager
+docker>=7.1.0
