@@ -715,7 +715,7 @@ The configuration system has **two distinct validation layers**:
 
 **Purpose**: Validate against **tuning ranges**
 
-**Scope**: Knob definitions from `knob_metadata.py`
+**Scope**: Knob definitions from `data/knob_metadata.json`
 
 **Example**:
 ```python
