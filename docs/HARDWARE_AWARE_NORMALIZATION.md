@@ -8,7 +8,7 @@ Using pre-recorded best configurations (`best_config.json`) evaluated on arbitra
 
 ### The Fractional Transfer System
 
-Rather than persisting raw absolute values, knobs tagged as `hardware_relative=True` in `TuningMetadata` serialize to **fractions of the node's detectable limits**, allowing configs that maximized a 2GB RAM container to effectively warm-start tuning efforts inside an 8GB container without immediate OOM (Out Of Memory) or excessive swapping.
+Rather than persisting raw absolute values, knobs tagged as `hardware_relative=True` in `TuningMetadata` (loaded from [`data/knob_metadata.json`](../data/knob_metadata.json) via `src/knobs/knob_metadata.py`) serialize to **fractions of the node's detectable limits**, allowing configs that maximized a 2GB RAM container to effectively warm-start tuning efforts inside an 8GB container without immediate OOM (Out Of Memory) or excessive swapping.
 
 ---
 
