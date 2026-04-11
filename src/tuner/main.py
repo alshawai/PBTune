@@ -45,8 +45,7 @@ from datetime import datetime
 import numpy as np
 import psycopg2
 
-from src.config.database import DatabaseConfig
-from src.tuner.utils.snapshot_manager import SnapshotManager, SnapshotConfig
+from src.config.database import get_db_config
 
 from src.tuner.config import (
     get_knob_space,
@@ -67,12 +66,13 @@ from src.tuner.evaluator.evaluator import (
 )
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.tuner.evaluator.metrics import (
+from src.utils.environments import EnvironmentFactory
+from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
     create_metric_config,
 )
-from src.tuner.utils.logger_config import (
+from src.utils.logger import (
     setup_logging,
     get_logger,
     log_section_header,
@@ -81,9 +81,8 @@ from src.tuner.utils.logger_config import (
     ColorCode,
     ColorPalette
 )
-from src.tuner.utils.instance_manager import PostgresInstanceManager
-from src.tuner.utils.hardware_info import get_system_info, log_system_info, detect_worker_resources
-
+from src.utils.hardware_info import get_system_info, log_system_info, detect_worker_resources
+from src.utils.restart_manager import RestartConfig
 
 def convert_numpy_types(obj: Any) -> Any:
     """
@@ -181,6 +180,7 @@ class PBTTuner:
         self.force_recreate_baseline = kwargs.get('force_recreate_baseline', False)
 
         self.cleanup_instances = kwargs.get('cleanup_instances', False)
+        self.no_docker = kwargs.get('no_docker', False)
 
         self.warm_start_path = kwargs.get('warm_start_path', None)
         self.warm_start_provenance = {"enabled": False}
@@ -197,7 +197,7 @@ class PBTTuner:
 
         self.logger.debug("✓ Loaded %d knobs\n", len(self.knob_space))
 
-        self.db_config = DatabaseConfig.from_env()
+        self.db_config = get_db_config()
 
         self.metric_config = create_metric_config(workload_type.value)
 
@@ -212,6 +212,9 @@ class PBTTuner:
             restart_interval=10,
             random_seed=random_seed,
             warmup_passes=self.pbt_config.warmup_passes,
+            restart_config=RestartConfig(
+                method='pg_ctl' if self.no_docker else 'docker'
+            )
         )
 
         info_color = ColorPalette.get_level_color('INFO', 'ansi')
@@ -287,15 +290,22 @@ class PBTTuner:
             evaluator=self.evaluator
         )
 
-        self.instance_manager = PostgresInstanceManager(
-            base_dir=Path(f'./pg_instances/{self.benchmark_name}'),
-            base_port=5440,
-            template_db_config=None if kwargs.get('skip_schema_init') else self.db_config,
-            schema_provider=workload_executor,
-        )
 
         self.system_info = get_system_info()
+        self.worker_resources = detect_worker_resources(
+            max_parallel_workers=self.pbt_config.num_parallel_workers
+        )
 
+        no_docker = kwargs.get('no_docker', False)
+        self.env = EnvironmentFactory.create(
+            schema_provider=workload_executor,
+            use_docker=not no_docker,
+            base_dir=Path(f'./pg_instances/{self.benchmark_name}'),
+            base_port=5440,
+            db_config=self.db_config,
+            worker_resources=self.worker_resources,
+            run_id="tuner_run"
+        )
         self.start_time: Optional[float] = None
         self.generation_history = []
 
@@ -416,16 +426,15 @@ class PBTTuner:
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as e:
-            if self.instance_manager is not None:
-                recovered = self.instance_manager.recover_instance(worker.worker_id)
-                if recovered:
-                    worker_logger.info(
-                        "[DEAD_CONFIG] Immediate instance recovery succeeded after connection failure"
-                    )
-                else:
-                    worker_logger.error(
-                        "[DEAD_CONFIG] Immediate instance recovery failed after connection failure"
-                    )
+            recovered = self.env.recover_instance(worker.worker_id)
+            if recovered:
+                worker_logger.info(
+                    "[DEAD_CONFIG] Immediate instance recovery succeeded after connection failure"
+                )
+            else:
+                worker_logger.error(
+                    "[DEAD_CONFIG] Immediate instance recovery failed after connection failure"
+                )
 
             return self._build_failure_result(
                 worker_logger=worker_logger,
@@ -602,23 +611,13 @@ class PBTTuner:
         )
 
         try:
-            baseline_path = Path(
-                f'./pg_snapshots/baseline_{self.snapshot_identifier}'
-            )
-            # Skip snapshot-based init if we're about to recreate the baseline
-            if not self.force_recreate_baseline:
-                self.instance_manager.baseline_snapshot_path = baseline_path
-
-            instances = self.instance_manager.setup_instances(
+            instances = self.env.setup_instances(
                 num_workers=self.pbt_config.population_size,
                 force_recreate=self.force_recreate_instances
             )
             self.logger.info("✓ Created %d instances", len(instances))
 
-            if self.pbt_config.enable_snapshots:
-                self._create_baseline_snapshot(instances)
-
-            verification = self.instance_manager.verify_instances()
+            verification = self.env.verify_instances()
             failed = [wid for wid, status in verification.items() if not status]
             if failed:
                 self.logger.error("❌ Failed to verify instances: %s", failed)
@@ -651,7 +650,7 @@ class PBTTuner:
             user=self.db_config.user,
             password=self.db_config.password
         )
-        self.population.instance_manager = self.instance_manager
+        self.population.env = self.env
         self.logger.info(
             "✓ Initialized %d workers with dedicated instances\n",
             len(self.population.workers)
@@ -659,21 +658,9 @@ class PBTTuner:
 
         # Register snapshot manager with population
         if self.pbt_config.enable_snapshots:
-            worker_data_dirs = [
-                instances[worker_id].data_dir
-                for worker_id in range(self.pbt_config.population_size)
-            ]
-            in_docker = getattr(self.instance_manager, 'in_docker', False)
-            baseline_volume = f'pbt-snapshots-{self.snapshot_identifier}'
-            baseline_path = None if in_docker else Path(
-                f'./pg_snapshots/baseline_{self.snapshot_identifier}'
-            )
             self.population.setup_snapshots(
-                worker_data_dirs=worker_data_dirs,
-                instance_manager=self.instance_manager,
+                env=self.env,
                 pbt_config=self.pbt_config,
-                baseline_volume=baseline_volume,
-                baseline_path=baseline_path,
             )
             self.logger.info("✓ Snapshot restoration configured\n")
 
@@ -699,12 +686,11 @@ class PBTTuner:
 
         finally:
             self.logger.info("Stopping PostgreSQL instances...")
-            self.instance_manager.stop_all()
-            self.logger.info("✓ All instances stopped")
+            self.env.stop_all()
 
             if self.cleanup_instances:
-                self.logger.info("Cleaning up instance data...")
-                self.instance_manager.cleanup(remove_data=True)
+                self.logger.info("Cleaning up environment...")
+                self.env.cleanup(remove_data=True)
                 self.logger.info("✓ Instance data removed")
 
         total_time = time.time() - self.start_time
@@ -713,40 +699,6 @@ class PBTTuner:
 
         return results
 
-    def _create_baseline_snapshot(self, instances: List) -> None:
-        """
-        Create baseline snapshot from worker_0 before verification.
-        """
-        baseline_volume = f'pbt-snapshots-{self.snapshot_identifier}'
-
-        # Mac mode: use a host file path; Docker mode: use a Docker volume
-        in_docker = getattr(self.instance_manager, 'in_docker', False)
-        baseline_path = None if in_docker else Path(
-            f'./pg_snapshots/baseline_{self.snapshot_identifier}'
-        )
-
-        snapshot_config = SnapshotConfig(
-            baseline_volume=baseline_volume,
-            baseline_path=baseline_path,
-            restore_interval=getattr(self.pbt_config, 'snapshot_restore_interval', 5)
-        )
-
-        snapshot_manager = SnapshotManager(snapshot_config, instance_manager=self.instance_manager)
-
-        if snapshot_manager.baseline_created and not self.force_recreate_baseline:
-            location = str(baseline_path) if baseline_path else baseline_volume
-            self.logger.info("✓ Using existing baseline snapshot at %s", location)
-            return
-
-        success = snapshot_manager.create_baseline(worker_id=0)
-
-        location = str(baseline_path) if baseline_path else baseline_volume
-        if success:
-            self.logger.info("✔️ Baseline snapshot created at %s", location)
-        else:
-            self.logger.error("❌ Failed to create baseline snapshot")
-
-            
     def _get_stop_reason(self) -> str:
         """Get the reason for early stopping"""
         if self.population.current_generation >= self.pbt_config.num_generations:
@@ -1074,6 +1026,7 @@ on your hardware, configuration, and workload/benchmark.
     workload_exclusive.add_argument(
         '--benchmark',
         type=str,
+        default='sysbench',
         choices=['sysbench', 'tpch'],
         help='Run standard external benchmark (sysbench=OLTP, tpch=OLAP)'
     )
@@ -1115,6 +1068,12 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     instance_group = parser.add_argument_group('Instance Management')
+    instance_group.add_argument(
+        '--no-docker',
+        action='store_true',
+        help='Run natively on bare-metal PostgreSQL instead of using Docker'
+    )
+
     instance_group.add_argument(
         '--force-recreate-instances',
         action='store_true',
@@ -1268,7 +1227,8 @@ def main():
             skip_schema_init=args.skip_schema_init,
             output_dir=args.output_dir,
             logger=logger,
-            timestamp=timestamp
+            timestamp=timestamp,
+            no_docker=args.no_docker
         )
 
         tuner.run()
