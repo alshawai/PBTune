@@ -5,6 +5,7 @@ SQLAlchemy==2.0.46
 # Data processing
 pandas==3.0.1
 numpy==2.4.2
+scipy==1.16.2
 
 # System monitoring
 psutil==7.2.2
@@ -26,4 +27,6 @@ PyYAML==6.0.3
 
 # Workload benchmarking
 # Note: SYSBENCH installed separately via system package manager
-docker>=7.1.0
+
+# Evaluation (evaluate_tuning module)
+docker>=7.0.0          # Docker SDK for Python — container lifecycle management
