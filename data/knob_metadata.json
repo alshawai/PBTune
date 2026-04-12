@@ -1,0 +1,802 @@
+{
+  "shared_buffers": {
+    "tuning_min": 16384,
+    "tuning_max": 131072,
+    "scale": "log",
+    "impact_tier": "minimal",
+    "tuning_priority": 1,
+    "notes": "Most impactful knob. Log scale because doubling matters more than addition.",
+    "hardware_relative": true,
+    "resource_type": "ram"
+  },
+  "effective_cache_size": {
+    "tuning_min": 65536,
+    "tuning_max": 1048576,
+    "scale": "log",
+    "impact_tier": "minimal",
+    "tuning_priority": 1,
+    "notes": "Planner's OS cache estimate. Doesn't allocate memory, only affects plans.",
+    "hardware_relative": true,
+    "resource_type": "ram"
+  },
+  "work_mem": {
+    "tuning_min": 4096,
+    "tuning_max": 65536,
+    "scale": "log",
+    "impact_tier": "minimal",
+    "tuning_priority": 1,
+    "notes": "Per-operation memory. Total can be work_mem * connections * operations_per_query",
+    "hardware_relative": true,
+    "resource_type": "ram"
+  },
+  "random_page_cost": {
+    "tuning_min": 0.1,
+    "tuning_max": 4.0,
+    "scale": "linear",
+    "impact_tier": "minimal",
+    "tuning_priority": 1,
+    "notes": "Critical for index vs seqscan decisions. SSD: 1.0-1.5, HDD: 3.0-4.0",
+    "hardware_relative": true,
+    "resource_type": "disk_type"
+  },
+  "max_parallel_workers_per_gather": {
+    "tuning_min": 0,
+    "tuning_max": 4,
+    "scale": "linear",
+    "impact_tier": "minimal",
+    "tuning_priority": 1,
+    "notes": "Parallelism for analytical queries. Limited by CPU cores.",
+    "hardware_relative": true,
+    "resource_type": "cpu"
+  },
+  "maintenance_work_mem": {
+    "tuning_min": 65536,
+    "tuning_max": 262144,
+    "scale": "log",
+    "impact_tier": "core",
+    "tuning_priority": 2,
+    "notes": "For VACUUM, CREATE INDEX. Can be larger than work_mem.",
+    "hardware_relative": true,
+    "resource_type": "ram"
+  },
+  "wal_buffers": {
+    "tuning_min": 64,
+    "tuning_max": 2048,
+    "scale": "log",
+    "impact_tier": "core",
+    "tuning_priority": 2,
+    "notes": "WAL buffer size. Default -1 means auto (1/32 of shared_buffers).",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "effective_io_concurrency": {
+    "tuning_min": 0,
+    "tuning_max": 200,
+    "scale": "linear",
+    "impact_tier": "core",
+    "tuning_priority": 2,
+    "notes": "Expected concurrent I/O. SSD: 100-200, HDD: 1-2",
+    "hardware_relative": true,
+    "resource_type": "disk_type"
+  },
+  "default_statistics_target": {
+    "tuning_min": 10,
+    "tuning_max": 10000,
+    "scale": "log",
+    "impact_tier": "core",
+    "tuning_priority": 2,
+    "notes": "Statistics sample size for ANALYZE. Higher = better plans, slower ANALYZE.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "checkpoint_timeout": {
+    "tuning_min": 30,
+    "tuning_max": 3600,
+    "scale": "log",
+    "impact_tier": "core",
+    "tuning_priority": 2,
+    "notes": "Max time between automatic checkpoints. Affects recovery time.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "checkpoint_completion_target": {
+    "tuning_min": 0.1,
+    "tuning_max": 0.9,
+    "scale": "linear",
+    "impact_tier": "core",
+    "tuning_priority": 2,
+    "notes": "Spread checkpoint I/O over this fraction of checkpoint_timeout.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "max_connections": {
+    "tuning_min": 50,
+    "tuning_max": 200,
+    "scale": "linear",
+    "impact_tier": "core",
+    "tuning_priority": 3,
+    "notes": "Max concurrent connections. Requires restart. High values increase memory.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "max_worker_processes": {
+    "tuning_min": 4,
+    "tuning_max": 16,
+    "scale": "linear",
+    "impact_tier": "core",
+    "tuning_priority": 3,
+    "notes": "Max background workers. Requires restart. Must be >= max_parallel_workers.",
+    "hardware_relative": true,
+    "resource_type": "cpu"
+  },
+  "maintenance_io_concurrency": {
+    "tuning_min": 0,
+    "tuning_max": 200,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Maintenance I/O concurrency for VACUUM/CREATE INDEX, similar semantics to effective_io_concurrency.",
+    "hardware_relative": true,
+    "resource_type": "disk_type"
+  },
+  "io_workers": {
+    "tuning_min": 1,
+    "tuning_max": 16,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "I/O worker count (PG17+); bounded to practical CPU-core-aligned range.",
+    "hardware_relative": true,
+    "resource_type": "cpu"
+  },
+  "max_parallel_apply_workers_per_subscription": {
+    "tuning_min": 0,
+    "tuning_max": 8,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "Logical replication apply parallelism; low-impact for non-replication benchmarks but safely tunable.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "hash_mem_multiplier": {
+    "tuning_min": 1.0,
+    "tuning_max": 8.0,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Hash operation memory multiplier; bounded to avoid aggressive memory oversubscription.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_worker_slots": {
+    "tuning_min": 1,
+    "tuning_max": 16,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Autovacuum worker slot capacity; aligned with practical worker process limits.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "max_wal_senders": {
+    "tuning_min": 0,
+    "tuning_max": 10,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "WAL sender process cap; safely bounded for environments without heavy replication fanout.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "max_logical_replication_workers": {
+    "tuning_min": 0,
+    "tuning_max": 10,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "Logical replication worker cap; bounded for stability in non-replication-centric tuning runs.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "superuser_reserved_connections": {
+    "tuning_min": 0,
+    "tuning_max": 5,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "Reserved connection slots for superusers; tuned conservatively to prevent starvation.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "reserved_connections": {
+    "tuning_min": 0,
+    "tuning_max": 5,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "Reserved connection slots; conservative bounds preserve user connection capacity.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "notify_buffers": {
+    "tuning_min": 4,
+    "tuning_max": 64,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "LISTEN/NOTIFY buffers (pages); bounded for safe memory footprint.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "multixact_member_buffers": {
+    "tuning_min": 4,
+    "tuning_max": 64,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "MultiXact member SLRU buffers (pages); bounded for stable memory usage.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "multixact_offset_buffers": {
+    "tuning_min": 4,
+    "tuning_max": 64,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "MultiXact offset SLRU buffers (pages); bounded for stable memory usage.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "seq_page_cost": {
+    "tuning_min": 0.1,
+    "tuning_max": 2.0,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Cost of sequential page fetch. Usually kept at 1.0 as baseline.",
+    "hardware_relative": true,
+    "resource_type": "disk_type"
+  },
+  "cpu_tuple_cost": {
+    "tuning_min": 0.001,
+    "tuning_max": 0.1,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Cost of processing each row.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "cpu_index_tuple_cost": {
+    "tuning_min": 0.0001,
+    "tuning_max": 0.01,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Cost of processing each index entry.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "cpu_operator_cost": {
+    "tuning_min": 0.0001,
+    "tuning_max": 0.01,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Cost of executing operators/functions.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "max_wal_size": {
+    "tuning_min": 80,
+    "tuning_max": 10240,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Max WAL size before forced checkpoint.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "min_wal_size": {
+    "tuning_min": 80,
+    "tuning_max": 2048,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Minimum WAL size to keep.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "max_parallel_workers": {
+    "tuning_min": 0,
+    "tuning_max": 16,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Max parallel workers system-wide. Must be <= max_worker_processes.",
+    "hardware_relative": true,
+    "resource_type": "cpu"
+  },
+  "max_parallel_maintenance_workers": {
+    "tuning_min": 0,
+    "tuning_max": 4,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Max parallel workers for maintenance (CREATE INDEX, VACUUM).",
+    "hardware_relative": true,
+    "resource_type": "cpu"
+  },
+  "parallel_setup_cost": {
+    "tuning_min": 1.0,
+    "tuning_max": 10000.0,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Cost of starting parallel workers.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "parallel_tuple_cost": {
+    "tuning_min": 0.0001,
+    "tuning_max": 10.0,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Cost of transferring tuples between workers.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "bgwriter_delay": {
+    "tuning_min": 10,
+    "tuning_max": 2000,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "ms between bgwriter rounds.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "bgwriter_lru_maxpages": {
+    "tuning_min": 0,
+    "tuning_max": 1000,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "pages per bgwriter round.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "bgwriter_flush_after": {
+    "tuning_min": 0,
+    "tuning_max": 256,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "pages written by bgwriter before OS flush.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "bgwriter_lru_multiplier": {
+    "tuning_min": 0.0,
+    "tuning_max": 10.0,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "multiplier for pages to write based on recent usage.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "wal_writer_delay": {
+    "tuning_min": 1,
+    "tuning_max": 5000,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "ms between WAL flushes.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "commit_delay": {
+    "tuning_min": 0,
+    "tuning_max": 10000,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "microseconds to wait for group commit.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "commit_siblings": {
+    "tuning_min": 0,
+    "tuning_max": 20,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "concurrent active transactions to trigger commit_delay.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "checkpoint_flush_after": {
+    "tuning_min": 0,
+    "tuning_max": 256,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "pages written by checkpointer before OS flush.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_cost_limit": {
+    "tuning_min": 1,
+    "tuning_max": 2000,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "aggregate cost cap for vacuum.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_cost_page_dirty": {
+    "tuning_min": 0,
+    "tuning_max": 1000,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "cost of dirtying a page.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_cost_page_hit": {
+    "tuning_min": 0,
+    "tuning_max": 100,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "cost of vacuuming a buffer-hit page.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_cost_page_miss": {
+    "tuning_min": 0,
+    "tuning_max": 1000,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "cost of vacuuming a disk-read page.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_vacuum_cost_limit": {
+    "tuning_min": -1,
+    "tuning_max": 2000,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "per-worker autovacuum cost limit.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_vacuum_cost_delay": {
+    "tuning_min": -1.0,
+    "tuning_max": 50.0,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "ms delay after cost limit is hit.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_vacuum_scale_factor": {
+    "tuning_min": 0.01,
+    "tuning_max": 0.5,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "fraction of table modified for vacuum.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_analyze_scale_factor": {
+    "tuning_min": 0.01,
+    "tuning_max": 0.5,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "fraction of table modified for analyze.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_vacuum_insert_scale_factor": {
+    "tuning_min": 0.01,
+    "tuning_max": 0.5,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "fraction of table inserted for vacuum.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_buffer_usage_limit": {
+    "tuning_min": 128,
+    "tuning_max": 2048,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "buffer usage limit for vacuum (pages).",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "commit_timestamp_buffers": {
+    "tuning_min": 0,
+    "tuning_max": 1024,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "SLRU buffers for commit timestamps (must be multiple of 16).",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "serializable_buffers": {
+    "tuning_min": 16,
+    "tuning_max": 1024,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "SLRU buffers for serializable transactions (must be multiple of 16).",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "subtransaction_buffers": {
+    "tuning_min": 0,
+    "tuning_max": 1024,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "SLRU buffers for subtransactions (must be multiple of 16).",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "transaction_buffers": {
+    "tuning_min": 0,
+    "tuning_max": 1024,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "SLRU buffers for transactions (must be multiple of 16).",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "io_combine_limit": {
+    "tuning_min": 1,
+    "tuning_max": 128,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "I/O combine limit.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "io_max_combine_limit": {
+    "tuning_min": 1,
+    "tuning_max": 128,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "Max I/O combine limit.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "io_max_concurrency": {
+    "tuning_min": -1,
+    "tuning_max": 256,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "Max I/O concurrency.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "backend_flush_after": {
+    "tuning_min": 0,
+    "tuning_max": 256,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "pages written by backend before OS flush.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "min_parallel_table_scan_size": {
+    "tuning_min": 0,
+    "tuning_max": 65536,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "pages required to trigger parallel table scan.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "min_parallel_index_scan_size": {
+    "tuning_min": 0,
+    "tuning_max": 16384,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "pages required to trigger parallel index scan.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "geqo_effort": {
+    "tuning_min": 1,
+    "tuning_max": 10,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "GEQO effort level.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "geqo_seed": {
+    "tuning_min": 0.0,
+    "tuning_max": 1.0,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "GEQO random seed.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "geqo_selection_bias": {
+    "tuning_min": 1.5,
+    "tuning_max": 2.0,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "GEQO selection bias.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "cursor_tuple_fraction": {
+    "tuning_min": 0.0,
+    "tuning_max": 1.0,
+    "scale": "linear",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "planner estimator for cursor retrieval fraction.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "recursive_worktable_factor": {
+    "tuning_min": 0.1,
+    "tuning_max": 100.0,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 5,
+    "notes": "planner multiplier for recursive queries.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_freeze_min_age": {
+    "tuning_min": 0,
+    "tuning_max": 100000000,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "minimum age before freezing tuples.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "vacuum_multixact_freeze_min_age": {
+    "tuning_min": 0,
+    "tuning_max": 100000000,
+    "scale": "log",
+    "impact_tier": "extensive",
+    "tuning_priority": 4,
+    "notes": "minimum age before freezing multixacts.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 3,
+    "notes": "Enable autovacuum. Usually keep on.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_max_workers": {
+    "tuning_min": 1,
+    "tuning_max": 8,
+    "scale": "linear",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Max autovacuum worker processes.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "autovacuum_naptime": {
+    "tuning_min": 1,
+    "tuning_max": 600,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Time between autovacuum runs.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "temp_buffers": {
+    "tuning_min": 1024,
+    "tuning_max": 4096,
+    "scale": "log",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Temp buffer size per session.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "enable_seqscan": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Enable sequential scans. Usually leave on.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "enable_indexscan": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Enable index scans. Usually leave on.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "enable_bitmapscan": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Enable bitmap scans.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "enable_hashjoin": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Enable hash joins.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "enable_mergejoin": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Enable merge joins.",
+    "hardware_relative": false,
+    "resource_type": ""
+  },
+  "enable_nestloop": {
+    "tuning_min": null,
+    "tuning_max": null,
+    "scale": "categorical",
+    "impact_tier": "standard",
+    "tuning_priority": 4,
+    "notes": "Enable nested loop joins.",
+    "hardware_relative": false,
+    "resource_type": ""
+  }
+}
