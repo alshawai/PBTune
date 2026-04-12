@@ -14,8 +14,8 @@ This metadata is overlaid onto knobs retrieved from pg_settings to create
 a complete tuning specification.
 """
 
+from pathlib import Path
 import json
-import os
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -66,19 +66,23 @@ class TuningMetadata:
 
 def _load_metadata(path: str = "data/knob_metadata.json") -> Dict[str, TuningMetadata]:
     """Load knob tuning metadata from JSON and coerce values to TuningMetadata."""
-    if not os.path.isabs(path):
-        # Resolve relative paths against the repository root, not the caller cwd.
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-        path = os.path.join(project_root, path)
+    path = Path(path)
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+
+        return {k: TuningMetadata(**v) for k, v in data.items()}
+
     except FileNotFoundError as exc:
         raise FileNotFoundError(
             f"Knob metadata file not found at '{path}'. "
             "Generate it with the metadata export step or place knob metadata JSON at this path."
         ) from exc
-    return {k: TuningMetadata(**v) for k, v in data.items()}
+    except TypeError as exc:
+        # This handles cases where the JSON has missing or incorrect data for a specific Knob.
+        raise TypeError(
+            f"Malformed metadata in '{path}'. Check if all fields match TuningMetadata dataclass."
+        ) from exc
 
 
 KNOB_TUNING_METADATA: Dict[str, TuningMetadata] = _load_metadata()
@@ -108,4 +112,7 @@ def get_knobs_by_tier(tier: str) -> list:
     tier_lower = tier.lower()
     if tier_lower not in IMPACT_TIERS:
         raise ValueError(f"Unknown tier: {tier}. Must be one of {list(IMPACT_TIERS.keys())}")
-    return IMPACT_TIERS[tier_lower]  # type: ignore
+
+    # Ensure a list is returned even if the tier value is None (e.g., 'extensive')
+    result = IMPACT_TIERS[tier_lower]
+    return result if result is not None else []

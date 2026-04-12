@@ -1,7 +1,7 @@
 """Shared policy engine for PostgreSQL autotuning knob admission and exclusion."""
 
 import json
-import os
+from pathlib import Path
 from typing import Dict
 
 import pandas as pd
@@ -11,10 +11,7 @@ from src.knobs.knob_metadata import KNOB_TUNING_METADATA
 
 def _load_policy(path: str = "data/knob_policy.json") -> Dict[str, tuple[str, str]]:
     """Load source exclusion policy from JSON while preserving tuple-based API."""
-    if not os.path.isabs(path):
-        # Resolve relative paths against repository root for deterministic imports/tests.
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-        path = os.path.join(project_root, path)
+    path = Path(path)
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

@@ -10,9 +10,8 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MODULE_PATH = REPO_ROOT / "src" / "knobs" / "policy.py"
-POLICY_JSON_PATH = REPO_ROOT / "data" / "knob_policy.json"
+MODULE_PATH = Path("src/knobs/policy.py")
+POLICY_JSON_PATH = Path("data/knob_policy.json")
 
 
 @contextmanager
