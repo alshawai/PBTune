@@ -26,7 +26,6 @@ from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class LoadedData:
     """
@@ -80,15 +79,17 @@ def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.reindex(sorted(df.columns), axis=1)
 
     for col in df.columns:
-        # Map explicit python booleans directly to 0/1
-        if df[col].dtype == bool:
-            df[col] = df[col].astype(int)
+        # Map explicit python booleans directly to 0/1.
+        # json.load() produces Python bool objects, but pandas infers columns
+        # of bools as object dtype, so we must also check infer_dtype.
+        if df[col].dtype == bool or pd.api.types.infer_dtype(df[col].dropna(), skipna=True) == 'boolean':
+            df[col] = df[col].astype(bool).astype(int)
             continue
-            
+
         # Analyze string/object columns to differentiate Bools vs Enums
-        if df[col].dtype == object or pd.core.dtypes.common.is_string_dtype(df[col]):
+        if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
             unique_vals = set(df[col].dropna().astype(str).str.lower())
-            
+
             # PostgreSQL represents booleans as "on" or "off" primarily
             if unique_vals.issubset({'on', 'off', 'true', 'false', '1', '0'}):
                 df[col] = df[col].astype(str).str.lower().map({
@@ -182,11 +183,9 @@ def load_pbt_results(
     logger.info(f"Loading {len(json_files)} PBT result records from {directory_path}")
 
     raw_configs = []
-    historical_metrics: List[PerformanceMetrics] = []
+    valid_metrics: List[PerformanceMetrics] = []
     metadata_list = []
     target_knob_set = None
-    
-    valid_metrics_to_score = []
 
     # 1. Parsing and Extraction
     for file_path in json_files:
@@ -207,13 +206,21 @@ def load_pbt_results(
         })
 
         for gen in data.get('generation_history', []):
-            configs = gen.get('worker_configs', [])
-            scores = gen.get('worker_scores', [])
-            metrics_list = gen.get('worker_metrics', [])
-            
-            # Use zip to safely iterate them concurrently
-            for config_obj, old_score, metrics_dict in zip(configs, scores, metrics_list):
+            worker_configs = gen.get('worker_configs', [])
+            worker_scores = gen.get('worker_scores', [])
+
+            # Actual JSON format (written by main.py):
+            #   worker_configs: [{worker_id, config}]
+            #   worker_scores:  [{worker_id, score, metrics}]   ← metrics nested here
+            # Join by worker_id so ordering differences don't corrupt alignment.
+            score_by_id = {ws['worker_id']: ws for ws in worker_scores}
+
+            for config_obj in worker_configs:
+                worker_id = config_obj.get('worker_id')
                 config = config_obj.get('config', {})
+                score_obj = score_by_id.get(worker_id, {})
+                old_score = score_obj.get('score')
+                metrics_dict = score_obj.get('metrics') or {}
                 
                 # Validation: Mismatched dimensions crashes clustering models
                 current_knobs = frozenset(config.keys())
@@ -240,8 +247,7 @@ def load_pbt_results(
                     continue
 
                 raw_configs.append(config)
-                valid_metrics_to_score.append(pm)
-                historical_metrics.append(pm)
+                valid_metrics.append(pm)
 
     n_valid = len(raw_configs)
     if n_valid == 0:
@@ -261,9 +267,9 @@ def load_pbt_results(
     
     # Scale ranges across ALL sessions (0 padding tightly bounds the range)
     logger.info("Computing global bounds across all tuning sessions...")
-    global_metric_config.update_ranges(historical_metrics, padding_factor=0.0)
-    
-    global_scores = [global_metric_config.compute_score(m) for m in valid_metrics_to_score]
+    global_metric_config.update_ranges(valid_metrics, padding_factor=0.0)
+
+    global_scores = [global_metric_config.compute_score(m) for m in valid_metrics]
 
     # 3. DataFrame Post-Processing
     df = pd.DataFrame(raw_configs)
