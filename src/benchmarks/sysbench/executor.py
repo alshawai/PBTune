@@ -187,8 +187,8 @@ class SysbenchExecutor(BenchmarkExecutor):
             "--report-interval=0",
         ]
 
-        # if warmup > 0:
-        #     cmd.append(f"--warmup-time={warmup}")
+        if warmup > 0:
+            cmd.append(f"--warmup-time={warmup}")
 
         if seed is not None:
             cmd.append(f"--rand-seed={seed}")
