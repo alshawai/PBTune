@@ -16,7 +16,7 @@ def mock_pbt_directory(tmp_path):
     data_dir = tmp_path / "pbt_results"
     data_dir.mkdir()
     
-    # File 1: Session A
+    # File 1: Session A — two valid workers
     file1_data = {
         "tuning_session": {
             "workload_type": "oltp",
@@ -26,19 +26,18 @@ def mock_pbt_directory(tmp_path):
         "generation_history": [
             {
                 "worker_configs": [
-                    {"config": {"shared_buffers": 1024, "enable_indexscan": "on", "wal_sync_method": "fdatasync"}},
-                    {"config": {"shared_buffers": 2048, "enable_indexscan": "off", "wal_sync_method": "open_datasync"}}
+                    {"worker_id": 0, "config": {"shared_buffers": 1024, "enable_indexscan": "on",  "wal_sync_method": "fdatasync"}},
+                    {"worker_id": 1, "config": {"shared_buffers": 2048, "enable_indexscan": "off", "wal_sync_method": "open_datasync"}}
                 ],
-                "worker_scores": [150.0, 200.0],
-                "worker_metrics": [
-                    {"latency_p95": 15.0, "throughput": 1000.0, "failure_type": None},
-                    {"latency_p95": 10.0, "throughput": 1500.0, "failure_type": None}
+                "worker_scores": [
+                    {"worker_id": 0, "score": 150.0, "metrics": {"latency_p95": 15.0, "throughput": 1000.0, "failure_type": None}},
+                    {"worker_id": 1, "score": 200.0, "metrics": {"latency_p95": 10.0, "throughput": 1500.0, "failure_type": None}}
                 ]
             }
         ]
     }
     
-    # File 2: Session B (worse latency, better throughput to test global boundaries)
+    # File 2: Session B — one valid worker, one crashed (failure_type set)
     file2_data = {
         "tuning_session": {
             "workload_type": "oltp",
@@ -47,13 +46,12 @@ def mock_pbt_directory(tmp_path):
         "generation_history": [
             {
                 "worker_configs": [
-                    {"config": {"shared_buffers": 4096, "enable_indexscan": "true", "wal_sync_method": "fsync"}},
-                    {"config": {"shared_buffers": 8192, "enable_indexscan": "false", "wal_sync_method": "fdatasync"}}
+                    {"worker_id": 0, "config": {"shared_buffers": 4096, "enable_indexscan": "true",  "wal_sync_method": "fsync"}},
+                    {"worker_id": 1, "config": {"shared_buffers": 8192, "enable_indexscan": "false", "wal_sync_method": "fdatasync"}}
                 ],
-                "worker_scores": [120.0, None], # One score is None (failed run or rejected)
-                "worker_metrics": [
-                    {"latency_p95": 25.0, "throughput": 800.0, "failure_type": None},
-                    {"latency_p95": 0.0, "throughput": 0.0, "failure_type": "crashed"} # Skipped
+                "worker_scores": [
+                    {"worker_id": 0, "score": 120.0, "metrics": {"latency_p95": 25.0, "throughput": 800.0, "failure_type": None}},
+                    {"worker_id": 1, "score": None,  "metrics": {"latency_p95": 0.0,  "throughput": 0.0,   "failure_type": "crashed"}}
                 ]
             }
         ]
@@ -70,8 +68,8 @@ def mock_mismatched_pbt_directory(tmp_path):
     data_dir = tmp_path / "mismatched_pbt"
     data_dir.mkdir()
     
-    file1 = {"generation_history": [{"worker_configs": [{"config": {"a": 1}}], "worker_scores": [1], "worker_metrics": [{"throughput": 1}]}]}
-    file2 = {"generation_history": [{"worker_configs": [{"config": {"a": 1, "b": 2}}], "worker_scores": [1], "worker_metrics": [{"throughput": 1}]}]}
+    file1 = {"generation_history": [{"worker_configs": [{"worker_id": 0, "config": {"a": 1}}],         "worker_scores": [{"worker_id": 0, "score": 1, "metrics": {"throughput": 1, "failure_type": None}}]}]}
+    file2 = {"generation_history": [{"worker_configs": [{"worker_id": 0, "config": {"a": 1, "b": 2}}], "worker_scores": [{"worker_id": 0, "score": 1, "metrics": {"throughput": 1, "failure_type": None}}]}]}
     
     (data_dir / "pbt_results_1.json").write_text(json.dumps(file1))
     (data_dir / "pbt_results_2.json").write_text(json.dumps(file2))
