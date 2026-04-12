@@ -250,7 +250,7 @@ def load_knob_space_for_tier(
         raise FileNotFoundError(
             f"Preprocessed knobs not found: {csv_path}\n"
             f"Run preprocessing first:\n"
-            f"  python -m src.knobs (includes preprocessing)\n"
+            f"  python -m src.knobs.preprocess_knobs\n"
             f"Current working directory: {Path.cwd()}"
         )
 
