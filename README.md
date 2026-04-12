@@ -164,7 +164,7 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component
 │   ├── ENVIRONMENT_SETUP.md      # Installation and configuration guide
 │   ├── POSTGRESQL_CONNECTION_AND_KNOBS.md  # Database connection, knob retrieval
 │   └── CONFIGURATION_MANAGEMENT.md         # KnobSpace, KnobApplicator
-├── data/                         # Knob metadata (large CSV samples gitignored)
+├── data/                         # JSON Knob metadata/policy files (and gitignored CSV exports)
 │   ├── postgresql_knobs.csv      # PostgreSQL knob definitions
 │   └── tuner_knobs/              # Tiered knob selections (minimal, core, standard)
 ├── results/                      # Optimization results (JSON + HTML logs)
