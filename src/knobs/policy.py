@@ -15,8 +15,15 @@ def _load_policy(path: str = "data/knob_policy.json") -> Dict[str, tuple[str, st
         # Resolve relative paths against repository root for deterministic imports/tests.
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
         path = os.path.join(project_root, path)
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            "Knob policy file not found at resolved path "
+            f"'{path}'. Ensure data/knob_policy.json exists relative to the "
+            "repository root or pass the correct policy path to _load_policy()."
+        ) from exc
     # Accept either raw dict shape or wrapped export shape for backward compatibility.
     raw_policy = data.get("AUTOTUNING_SOURCE_EXCLUSIONS", data)
     return {k: tuple(v) for k, v in raw_policy.items()}
