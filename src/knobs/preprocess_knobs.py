@@ -369,7 +369,7 @@ def load_knobs_for_tier(tier: str, data_dir: str = "data/tuner_knobs") -> pd.Dat
         raise FileNotFoundError(
             f"Preprocessed knobs not found: {csv_path}\n"
             f"Run preprocessing first:\n"
-            f"  python -m src.knobs.preprocess_knobs"
+            f"  python -m src.tuner.config.preprocess_knobs"
         )
 
     return pd.read_csv(csv_path)

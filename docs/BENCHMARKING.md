@@ -144,61 +144,6 @@ The PBT tuner uses standard PostgreSQL tools (`pg_basebackup`) to clone whicheve
 **What happens under the hood:**
 The tuner connects to your `DB_HOST`, uses `pg_basebackup` to pull a binary snapshot of your entire database locally, spins up 4 isolated parallel worker instances from that exact snapshot, and executes your raw queries against them, scoring the performance of different knob configurations.
 
-## 3. Bayesian Optimization Baseline for PBT Comparison
-
-For direct comparisons against Population-Based Training, the repository also
-includes a sequential Bayesian Optimization runner backed by SMAC3 and
-ConfigSpace. It uses the same evaluator, workload selection, and scoring logic
-as the PBT path, but evaluates configurations one at a time.
-
-### Recommended Usage
-
-Run the BO baseline with the same tier and workload settings you use for PBT:
-
-```bash
-python -m src.scripts.run_bo_comparison \
-  --tier minimal \
-  --config rapid \
-  --benchmark sysbench \
-  --max-evals 20 \
-  --seed 42 \
-  --initial-design-size 6
-```
-
-BO result artifacts are written under:
-
-```text
-results/<workload>/bo_runs/<tier>/bo_results_<timestamp>.json
-```
-
-### Comparison Workflow
-
-After running both PBT and BO, generate a direct comparison report:
-
-```bash
-python -m src.scripts.plot_bo_vs_pbt \
-  --bo-result results/oltp/bo_runs/minimal/bo_results_<timestamp>.json \
-  --pbt-result results/oltp/pbt_runs/minimal/tuning_sessions/pbt_results_<timestamp>.json
-```
-
-The generated HTML report plots both methods in two views:
-
-1. Best score vs evaluation index, which highlights sample efficiency.
-2. Best score vs elapsed time, which highlights wall-clock efficiency.
-
-### Fairness Notes
-
-The BO runner intentionally mirrors the PBT runtime controls where practical:
-
-- Same knob tier and same search-space metadata.
-- Same workload selection, benchmark choice, and metric scoring.
-- Same seed when reproducible comparisons are desired.
-- Same output schema style so the results can be plotted side by side.
-
-Because SMAC minimizes by default, the BO objective returns the negative of the
-evaluator score so that the optimizer and PBT are aligned on the same notion of
-"better" configurations.
-
 ## Note on PBT Relative Scoring
 
 When configuring the population-based training, the internal PBT algorithm does not cross-compare raw numbers across these two methods. It simply records the relative percentage improvement (e.g., "Configuration X improved throughput by 43% against configuration Y"). Thus, both approaches are completely valid and scientifically sound so long as the developer does not switch from internal tests to external tests mid-run.

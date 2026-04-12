@@ -241,14 +241,6 @@ This creates:
 
 ## Quick Start
 
-Before running the tuner for the first time, generate tiered knob CSV files:
-
-```bash
-python -m src.knobs
-```
-
-This writes preprocessed files under `data/tuner_knobs/` used by the tuner.
-
 ### Example 1: Rapid Tuning (2-3 minutes)
 
 > **Note**: Actual runtime depends on your hardware (CPU cores, RAM, storage speed). Times shown are estimates for modern multi-core systems with SSD storage.
@@ -357,39 +349,6 @@ This framework intentionally supports a two-pronged benchmarking methodology:
 - **Custom Prototyping**: For tuning proprietary application databases, use the internal JSON-based query templates.
 
 For full architectural details on this design, please read the [Benchmarking Documentation](./docs/BENCHMARKING.md).
-
-### Bayesian Optimization Baseline
-
-The repository also includes a sequential SMAC3-based Bayesian Optimization
-baseline for direct comparison with PBT. It uses the same workload pipeline,
-same evaluator, and the same scoring rules, but evaluates configurations one at
-a time.
-
-Run it with the same tier and workload settings you use for PBT:
-
-```bash
-python -m src.scripts.run_bo_comparison \
-  --tier minimal \
-  --config rapid \
-  --benchmark sysbench \
-  --max-evals 20 \
-  --seed 42 \
-  --initial-design-size 6
-```
-
-BO results are written to:
-
-```text
-results/<workload>/bo_runs/<tier>/bo_results_<timestamp>.json
-```
-
-After a BO run and a matching PBT run, create the side-by-side comparison HTML:
-
-```bash
-python -m src.scripts.plot_bo_vs_pbt \
-  --bo-result results/oltp/bo_runs/minimal/bo_results_<timestamp>.json \
-  --pbt-result results/oltp/pbt_runs/minimal/tuning_sessions/pbt_results_<timestamp>.json
-```
 
 ### Custom Workloads
 
