@@ -9,9 +9,8 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MODULE_PATH = REPO_ROOT / "src" / "knobs" / "knob_metadata.py"
-DATA_PATH = REPO_ROOT / "data" / "knob_metadata.json"
+MODULE_PATH = Path("src/knobs/knob_metadata.py")
+DATA_PATH = Path("data/knob_metadata.json")
 EXPECTED_METADATA_COUNT = 80
 
 
