@@ -15,6 +15,10 @@ python-dotenv==1.2.1
 # Machine Learning (if needed)
 scikit-learn==1.8.0
 
+# Bayesian Optimization / SMBO baselines
+smac>=2.0.0
+ConfigSpace>=0.6.1
+
 # Configuration
 PyYAML==6.0.3
 
