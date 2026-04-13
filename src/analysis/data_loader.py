@@ -23,8 +23,9 @@ from src.tuner.evaluator.metrics import (
 from src.tuner.config.knob_loader import get_knob_space
 from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
 from typing import Dict, List, Any, Optional, Tuple
+from src.tuner.utils.logger_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class LoadedData:
