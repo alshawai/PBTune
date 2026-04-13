@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 from enum import Enum
 import numpy as np
 from src.tuner.utils import WorkerResources
-from src.tuner.utils import get_logger
+from src.tuner.utils.logger_config import get_logger
 
 logger = get_logger(__name__)
 
