@@ -136,7 +136,7 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed 
 | **Worker**           | Individual configuration + performance state         | [`src/tuner/core/worker.py`](src/tuner/core/worker.py)                       |
 | **Evolution**        | Exploit-explore algorithms (selection, perturbation) | [`src/tuner/core/evolution.py`](src/tuner/core/evolution.py)                 |
 | **Evaluator**        | Workload execution, metric collection                | [`src/tuner/evaluator/evaluator.py`](src/tuner/evaluator/evaluator.py)       |
-| **Instance Manager** | Multi-instance PostgreSQL orchestration              | [`src/tuner/utils/instance_manager.py`](src/tuner/utils/instance_manager.py) |
+| **Environment Layer** | Multi-instance PostgreSQL orchestration              | [`src/utils/environments/`](src/utils/environments/) |
 | **Knob Space**       | Search space definition, sampling, perturbation      | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py)           |
 
 See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component interaction details.
@@ -152,8 +152,8 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component
 │   │   ├── core/                 # PBT algorithm (population, worker, evolution)
 │   │   ├── config/               # Configuration management (knob space, sampling)
 │   │   ├── evaluator/            # Performance evaluation (metrics, workloads)
-│   │   ├── utils/                # Utilities (logging, instance mgmt, restart mgr)
 │   │   └── main.py               # Entry point
+│   ├── utils/                    # Shared utilities (environments, logging, metrics, restart)
 │   ├── database/                 # Database connection & management
 │   ├── config/                   # Global configuration (database settings)
 │   ├── knobs/                    # Knob metadata retrieval from PostgreSQL
@@ -170,8 +170,11 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component
 ├── results/                      # Optimization results (JSON + HTML logs)
 ├── workloads/                    # Workload definitions (OLTP, OLAP, custom)
 ├── notebooks/                    # Jupyter notebooks for analysis
-├── tests/                        # Test suite (planned - see Future Work)
-└── requirements.txt              # Python dependencies
+├── tests/                        # Unit test suite
+├── requirements.txt              # Runtime Python dependencies
+├── requirements-dev.txt          # Dev/test/lint/typecheck dependencies
+├── pyproject.toml                # Ruff + mypy configuration
+└── Makefile                      # Deterministic local validation targets
 ```
 
 ---
@@ -198,6 +201,13 @@ cd ai-database-optimization
 pip install -r requirements.txt
 ```
 
+For contributor workflows (tests, lint, type checks), install development
+dependencies as well:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 **Key Dependencies:**
 
 - `psycopg2-binary` - PostgreSQL adapter
@@ -205,6 +215,9 @@ pip install -r requirements.txt
 - `numpy` - Numerical operations for PBT
 - `pandas` - Knob metadata processing
 - `python-dotenv` - Environment variable management
+- `pytest` - Unit test runner
+- `ruff` - Linting baseline (high-signal correctness checks)
+- `mypy` - Type-check baseline for evaluation module
 
 ### Step 3: Configure Database
 
@@ -236,6 +249,18 @@ This creates:
 
 - `sbtest1` table with 10,000 rows (OLTP workload testing)
 - Indexes and constraints
+
+### Step 5: Validate Your Development Environment
+
+Run the deterministic command matrix used by CI:
+
+```bash
+make lint
+make typecheck
+make test
+# or run all gates
+make check-all
+```
 
 ---
 

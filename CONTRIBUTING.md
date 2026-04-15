@@ -129,19 +129,49 @@ Branch naming conventions:
 ### Step 4: Test Your Changes
 
 ```bash
-# Ensure imports work
-python -m src.tuner.main --help
+# Install dev dependencies (if not already installed)
+pip install -r requirements-dev.txt
 
-# Run a quick test
-python -m src.tuner.main --tier minimal --config rapid --generations 5
+# Deterministic local validation (same gates as CI)
+make lint
+make typecheck
+make test
 
-# Verify no errors in logs
+# One-command full gate
+make check-all
 ```
 
-**Note**: Automated test coverage is currently limited. Please run available checks plus manual validation.
+**Recommended**: Use project-local Python from `.venv` for all commands.
 
 ```bash
-pytest -q
+.venv/bin/python -m src.tuner.main --help
+```
+
+### Local Validation Command Matrix
+
+```bash
+# Install all runtime + dev tools
+make install-dev
+
+# Lint (strict gate)
+make lint
+
+# Type checks (evaluation + utils + scripts)
+make typecheck
+
+# Unit tests
+make test
+
+# All gates
+make check-all
+```
+
+If `make` is unavailable on your platform, run the equivalent commands directly:
+
+```bash
+.venv/bin/python -m ruff check src tests
+.venv/bin/python -m mypy src/evaluation src/utils src/scripts
+.venv/bin/python -m pytest -q tests/unit
 ```
 
 ### Step 5: Commit
@@ -228,16 +258,23 @@ def compute_score(
 
 ## 🧪 Testing Status
 
-Current testing infrastructure is intentionally lightweight:
+Current baseline quality gates:
 
-- **Shared fixtures**: `tests/conftest.py`
-- **Manual validation**: CLI smoke runs on local PostgreSQL instances
+- **Unit tests**: `tests/unit` (run with `make test`)
+- **Linting**: `ruff` strict checks (run with `make lint`)
+- **Type checks**: `mypy` on `src/evaluation`, `src/utils`, and `src/scripts` (run with `make typecheck`)
+- **CI**: Pull-request workflow at `.github/workflows/ci.yml` runs all gates
 
-Future expansions may include:
+### Common Failure Triage
 
-- **Unit tests**: `pytest` for individual components
-- **Integration tests**: End-to-end PBT workflow validation
-- **Performance tests**: Regression testing for optimization quality
+- **Docker daemon not running**:
+    Start Docker before running workflows that require containerized evaluation. If you are only validating unit tests and static checks, run `make check-all`.
+- **Missing PostgreSQL binaries (`pg_ctl`, `initdb`)**:
+    Install PostgreSQL server tools and ensure binaries are available in `PATH`.
+- **Missing Python dev tools (`pytest`, `ruff`, `mypy`)**:
+    Reinstall with `make install-dev` or `pip install -r requirements-dev.txt`.
+- **Fixture/data path issues**:
+    Confirm expected repository paths exist (`workloads/`, `data/tuner_knobs/`) and run commands from the repository root.
 
 ## 📚 Documentation Standards
 
