@@ -1,0 +1,31 @@
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = [
+  "src/benchmarks/tpch/tpch-dbgen",
+]
+
+[tool.ruff.lint]
+# Start with high-signal correctness checks only.
+select = ["E9", "F63", "F7", "F82"]
+extend-select = ["F401", "F841", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Legacy modules are onboarded incrementally for import ordering and pyupgrade rules.
+"src/**/*.py" = ["I001", "UP"]
+"tests/**/*.py" = ["I001", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+pretty = true
+show_error_codes = true
+ignore_missing_imports = true
+follow_imports = "skip"
+warn_unused_ignores = false
+warn_redundant_casts = false
+exclude = ["src/benchmarks/tpch/tpch-dbgen"]
+files = ["src/evaluation", "src/utils/logger", "src/utils", "src/scripts"]
+
+[[tool.mypy.overrides]]
+module = ["docker", "docker.*", "psycopg2", "psycopg2.*", "psutil"]
+ignore_missing_imports = true
