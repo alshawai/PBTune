@@ -40,9 +40,9 @@ from src.tuner.core.evolution import (
     check_convergence,
 )
 from src.tuner.config.knob_space import KnobSpace
-from src.tuner.evaluator.metrics import PerformanceMetrics
-from src.tuner.utils.logger_config import get_logger
-from src.tuner.utils.snapshot_manager import SnapshotManager, SnapshotConfig
+from src.utils.environments import DatabaseEnvironment
+from src.utils.metrics import PerformanceMetrics
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -186,9 +186,9 @@ class Population:
         self.generations_without_improvement: int = 0
 
         # Snapshot support (configured via setup_snapshots() method)
-        self.snapshot_manager: Optional[SnapshotManager] = None
-        self.worker_data_dirs: Optional[List[Path]] = None
-        self.instance_manager: Optional[Any] = None
+        self.enable_snapshots: bool = False
+        self.restore_interval: int = 5
+        self.env: Optional[DatabaseEnvironment] = None
 
         self._ranges_updated: bool = False
 
@@ -280,7 +280,8 @@ class Population:
         user : str
             PostgreSQL username
         password : str
-            PostgreSQL password
+            PostgreSQL password# Snapshot manager deleted
+
         
         Example
         -------
@@ -300,10 +301,9 @@ class Population:
             instance = instances[worker.worker_id]
             worker.port = instance.port
 
-            in_docker = getattr(self.instance_manager, 'in_docker', False)
             worker.db_config = DatabaseConfig(
-                host=f'pbt-worker-{worker.worker_id}' if in_docker else 'localhost',
-                port=5432 if in_docker else instance.port,
+                host='127.0.0.1',
+                port=instance.port,
                 dbname=dbname,
                 user=user,
                 password=password
@@ -317,61 +317,23 @@ class Population:
 
     def setup_snapshots(
         self,
-        worker_data_dirs: List[Path],
-        instance_manager: Any,
+        env: DatabaseEnvironment,
         pbt_config: Any,
-        baseline_volume: Optional[str] = None,
-        baseline_path: Optional[Path] = None,
     ) -> None:
         """
-        Register snapshot manager for database restoration during training.
-
-        Supports two modes:
-        - **Mac mode**: pass ``baseline_path`` → host filesystem snapshots.
-        - **Docker mode**: pass ``baseline_volume`` → Docker volume snapshots.
-
-        Parameters
-        ----------
-        worker_data_dirs : List[Path]
-            PostgreSQL data directories for each worker.
-        instance_manager : PostgresInstanceManager
-            Instance manager for stopping/starting instances.
-        pbt_config : PBTConfig
-            PBT configuration.
-        baseline_volume : str, optional
-            Name of the Docker volume for the baseline snapshot.
-        baseline_path : Path, optional
-            Host directory for the baseline snapshot (Mac mode).
+        Register snapshot configuration for database restoration during training.
         """
-        if not getattr(pbt_config, 'enable_snapshots', False):
+        self.env = env
+        self.enable_snapshots = getattr(pbt_config, 'enable_snapshots', False)
+        self.restore_interval = getattr(pbt_config, 'snapshot_restore_interval', 5)
+
+        if not self.enable_snapshots:
             logger.debug("Snapshots disabled in config")
             return
 
-        snapshot_config = SnapshotConfig(
-            baseline_volume=baseline_volume or "pbt-snapshots-volume",
-            baseline_path=baseline_path,
-            restore_interval=getattr(pbt_config, 'snapshot_restore_interval', 5)
-        )
-
-        self.snapshot_manager = SnapshotManager(snapshot_config, instance_manager=instance_manager)
-        self.worker_data_dirs = worker_data_dirs
-        self.instance_manager = instance_manager
-
-        if not self.snapshot_manager.baseline_created:
-            location = str(baseline_path) if baseline_path else (baseline_volume or "pbt-snapshots-volume")
-            logger.error(
-                "Baseline snapshot not found at %s. "
-                "This should have been created during instance setup.",
-                location
-            )
-            self.snapshot_manager = None
-            return
-
-        location = str(baseline_path) if baseline_path else (baseline_volume or "pbt-snapshots-volume")
         logger.info(
-            "Snapshot restoration enabled: baseline=%s, interval=%d",
-            location,
-            snapshot_config.restore_interval
+            "Snapshot restoration enabled: interval=%d",
+            self.restore_interval
         )
 
     def evaluate_generation(
@@ -564,8 +526,8 @@ class Population:
                 dead_worker.generation_created = self.current_generation + 1
                 config_changed = dead_worker.knob_config != previous_config
 
-                if self.instance_manager is not None:
-                    if not self.instance_manager.recover_instance(dead_worker.worker_id):
+                if self.env is not None:
+                    if not self.env.recover_instance(dead_worker.worker_id):
                         dead_logger.error(
                             "[DEAD_CONFIG] Fallback resample could not recover worker instance"
                         )
@@ -602,8 +564,8 @@ class Population:
 
             dead_worker.clone_from(donor, self.current_generation)
 
-            if self.instance_manager is not None:
-                if not self.instance_manager.recover_instance(dead_worker.worker_id):
+            if self.env is not None:
+                if not self.env.recover_instance(dead_worker.worker_id):
                     dead_logger.error(
                         "[DEAD_CONFIG] Instance recovery failed during immediate rescue"
                     )
@@ -614,7 +576,7 @@ class Population:
                     "[DEAD_CONFIG] Instance recovered. Will be re-evaluated in next generation."
                 )
             else:
-                rescued += 1  # If no instance manager, just count as rescued
+                rescued += 1  # If no env, just count as rescued
 
         return rescued
 
@@ -842,68 +804,28 @@ class Population:
         ...         break
         """
         # Restore database snapshots if enabled and it's time to restore
-        if self.snapshot_manager and self.snapshot_manager.should_restore(self.current_generation):
+        if (
+            self.enable_snapshots and
+            self.current_generation > 0 and
+            self.current_generation % self.restore_interval == 0
+        ):
             logger.info(
                 "Restoring database snapshots for generation %d (interval: %d)",
                 self.current_generation,
-                self.snapshot_manager.config.restore_interval
+                self.restore_interval
             )
 
-            if self.instance_manager:
-                try:
-                    # Stop all PostgreSQL instances
-                    logger.debug("Stopping PostgreSQL instances for snapshot restoration")
-                    for worker_id in range(len(self.workers)):
-                        self.instance_manager.stop_instance(worker_id)
-
-                    # Restore all worker databases from baseline snapshot
-                    logger.debug(
-                        "Restoring %d worker databases from baseline",
-                        len(self.worker_data_dirs)  # type: ignore
-                    )
-                    self.snapshot_manager.restore_all_workers(self.worker_data_dirs)  # type: ignore
-
-                    # Restart all PostgreSQL instances
-                    logger.debug("Restarting PostgreSQL instances")
-                    for worker_id in range(len(self.workers)):
-                        self.instance_manager.start_instance(worker_id)
-
-                    # Wait for instances to be fully ready after restoration
-                    logger.debug("Waiting for instances to accept connections...")
-                    max_wait = 10.0
-                    check_interval = 0.5
-                    start_wait = time.time()
-
-                    all_ready = False
-                    while (time.time() - start_wait) < max_wait:
-                        # Try to verify at least one instance is accepting connections
-                        try:
-                            # Quick connection test using worker 0's config
-                            test_conn = get_connection(
-                                config=self.workers[0].db_config,
-                                connect_timeout=1
-                            )
-                            test_conn.close()
-                            all_ready = True
-                            elapsed = time.time() - start_wait
-                            logger.debug("Instances ready after %.1fs", elapsed)
-                            break
-                        except Exception:
-                            time.sleep(check_interval)
-
-                    if not all_ready:
-                        logger.warning(
-                            "Instances may not be fully ready after %.1fs wait",
-                            max_wait
-                        )
-
+            try:
+                if self.env:
+                    for worker in self.workers:
+                        self.env.restore_snapshot(worker.worker_id)
                     logger.info("✓ Database snapshots restored successfully")
-
-                except Exception as e:
-                    logger.error("Snapshot restoration failed: %s", e)
-                    raise
-            else:
-                logger.warning("Snapshot restoration requested but instance_manager not available")
+                else:
+                    logger.warning("Snapshot restoration requested but env not available")
+            except Exception as e:
+                logger.error("Failed to restore databases from snapshots: %s", e)
+                logger.debug("Exception details:", exc_info=True)
+                raise
 
         self.evaluate_generation(evaluate_fn, parallel=parallel, max_workers=max_workers)
 
