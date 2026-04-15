@@ -10,7 +10,7 @@ variables directly to ensure consistency and security.
 """
 
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -33,7 +33,7 @@ class DatabaseConfig:
         Database password
     host : str
         Database host address
-    port : str
+    port : int
         Database port
     dbname : str
         Database name
@@ -42,7 +42,7 @@ class DatabaseConfig:
     user: str
     password: str
     host: str
-    port: str
+    port: int
     dbname: str
 
     @classmethod
@@ -71,17 +71,17 @@ class DatabaseConfig:
             user=os.getenv("DB_USER", "postgres"),
             password=password,
             host=os.getenv("DB_HOST", "localhost"),
-            port=os.getenv("DB_PORT", "5432"),
+            port=int(os.getenv("DB_PORT", "5432")),
             dbname=os.getenv("DB_NAME", "test_dataset"),
         )
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> Dict[str, Union[str, int]]:
         """
         Get configuration as a dictionary (useful for psycopg2).
         
         Returns
         -------
-        Dict[str, str]
+        Dict[str, Union[str, int]]
             Dictionary with keys: user, password, host, port, dbname
         """
         return {

@@ -43,7 +43,7 @@ from typing import Dict, Any, Optional, Tuple, List
 import copy
 
 from src.tuner.config.knob_space import KnobSpace
-from src.tuner.evaluator.metrics import PerformanceMetrics
+from src.utils.metrics import PerformanceMetrics
 from src.config.database import DatabaseConfig
 
 

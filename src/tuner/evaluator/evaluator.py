@@ -46,20 +46,20 @@ import psutil
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
 from src.tuner.config import get_knob_space
-from src.tuner.evaluator.metrics import (
+from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
     MetricConfig,
 )
 from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.tuner.core.worker import Worker
-from src.tuner.utils.restart_manager import (
+from src.utils.restart_manager import (
     RestartCostModel,
     PostgresRestartManager,
     RestartConfig,
 )
-from src.tuner.utils.applicator import KnobApplicator, ApplicatorConfig
-from src.tuner.utils.logger_config import get_logger
+from src.utils.applicator import KnobApplicator, ApplicatorConfig
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -624,7 +624,7 @@ class Evaluator:
     
     Example
     -------
-    >>> from src.tuner.evaluator.metrics import WorkloadType, MetricConfig
+    >>> from src.utils.metrics import WorkloadType, MetricConfig
     >>> from src.config.database import DatabaseConfig
     >>> 
     >>> config = EvaluatorConfig(
@@ -1159,9 +1159,36 @@ class Evaluator:
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
 
-            logger.warning("Could not find PostgreSQL postmaster for port %d", port)
         except Exception as e:
-            logger.warning("Error finding postmaster PID: %s", e)
+            logger.debug("Error finding postmaster PID via psutil: %s", e)
+
+        # Fallback for Docker instances: find container mapping this port and get its State.Pid
+        try:
+            import docker
+            client = docker.from_env()
+            for container in client.containers.list():
+                ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+                for container_port, host_bindings in ports.items():
+                    if host_bindings:
+                        for binding in host_bindings:
+                            if str(binding.get('HostPort')) == str(port):
+                                pid = container.attrs['State']['Pid']
+                                if worker_id is not None:
+                                    worker_logger = get_logger(__name__, worker_id=worker_id)
+                                    worker_logger.debug(
+                                        "Found docker container postmaster PID %d for port %d", 
+                                        pid, port
+                                    )
+                                else:
+                                    logger.debug(
+                                        "Found docker container postmaster PID %d for port %d", 
+                                        pid, port
+                                    )
+                                return pid
+        except Exception as docker_exc:
+            logger.debug("Error finding postmaster PID via Docker: %s", docker_exc)
+
+        logger.warning("Could not find PostgreSQL postmaster for port %d", port)
 
         return None
 
@@ -1492,7 +1519,7 @@ class Evaluator:
 
             if apply_config and worker.knob_config:
                 knob_applicator = KnobApplicator(
-                    connection_params=worker.db_config.to_dict(),
+                    db_config=worker.db_config,
                     config=self.applicator_config,
                     worker_id=worker.worker_id
                 )
