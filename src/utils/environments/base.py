@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from pathlib import Path
 from dataclasses import dataclass
 
+import psycopg2
 from psycopg2 import sql
 
 from src.config.database import DatabaseConfig

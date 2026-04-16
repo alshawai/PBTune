@@ -34,7 +34,8 @@ class EnvironmentFactory:
         base_port: int = 5440,
         db_config: Optional[DatabaseConfig] = None,
         worker_resources: Optional[Any] = None,
-        run_id: str = "tuner-run"
+        run_id: str = "tuner-run",
+        container_prefix: str = "pbt-worker",
     ) -> DatabaseEnvironment:
         """Create the appropriate environment backend."""
         cpu_cores = worker_resources.cpu_cores if worker_resources else 0.0
@@ -53,6 +54,7 @@ class EnvironmentFactory:
                     ram_bytes=ram_bytes,
                     base_port=base_port,
                     base_dir=base_dir,
+                    container_prefix=container_prefix,
                 )
             except (ImportError, Exception) as e:
                 logger.warning(get_isolation_warning_banner())

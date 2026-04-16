@@ -1,8 +1,6 @@
 import json
 import pytest
 import pandas as pd
-from pathlib import Path
-import numpy as np
 
 from src.analysis.data_loader import load_pbt_results, _encode_dataframe_features
 

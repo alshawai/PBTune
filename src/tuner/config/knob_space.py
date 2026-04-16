@@ -27,8 +27,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union, Tuple
 from enum import Enum
 import numpy as np
-from src.tuner.utils import WorkerResources
-from src.tuner.utils.logger_config import get_logger
+
+from src.utils.hardware_info import WorkerResources
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

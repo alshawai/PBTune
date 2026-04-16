@@ -27,7 +27,7 @@ Application Strategies:
 
 Example Usage:
 -------------
->>> from src.tuner.utils.applicator import KnobApplicator, ApplicatorConfig
+>>> from src.utils.applicator import KnobApplicator, ApplicatorConfig
 >>> 
 >>> config = ApplicatorConfig(
 ...     persist=True,
@@ -37,7 +37,7 @@ Example Usage:
 ...     allow_restart_params=True  # Include high-impact parameters
 ... )
 >>> 
->>> applicator = KnobApplicator(connection_params, config)
+>>> applicator = KnobApplicator(db_config, config)
 >>> 
 >>> knob_config = {
 ...     'shared_buffers': 131072,  # Requires restart
@@ -61,7 +61,7 @@ from psycopg2.extensions import connection as PostgresConnection
 
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
-from src.tuner.utils.logger_config import get_logger
+from src.utils.logger import get_logger
 
 
 class KnobContext(Enum):
@@ -177,7 +177,7 @@ class KnobApplicator:
     Example
     -------
     >>> applicator = KnobApplicator(
-    ...     connection_params={'host': 'localhost', 'dbname': 'postgres'},
+    ...     db_config=DatabaseConfig(host='localhost', dbname='postgres'),
     ...     config=ApplicatorConfig(persist=True, validate=True)
     ... )
     >>> 
@@ -194,7 +194,7 @@ class KnobApplicator:
 
     def __init__(
         self,
-        connection_params: Dict[str, Any],
+        db_config: DatabaseConfig,
         config: Optional[ApplicatorConfig] = None,
         worker_id: Optional[int] = None
     ):
@@ -203,14 +203,14 @@ class KnobApplicator:
         
         Parameters
         ----------
-        connection_params : Dict[str, Any]
-            PostgreSQL connection parameters
+        db_config : DatabaseConfig
+            PostgreSQL database configuration
         config : Optional[ApplicatorConfig]
             Application configuration (uses defaults if None)
         worker_id : Optional[int]
             Worker ID for logging
         """
-        self.connection_params = connection_params
+        self.db_config = db_config
         self.config = config or ApplicatorConfig()
         self.worker_id = worker_id
         self.connection: Optional[PostgresConnection] = None
@@ -233,8 +233,7 @@ class KnobApplicator:
     def _connect_internal(self) -> None:
         """Internal connect (assumes lock is held)."""
         try:
-            db_config = DatabaseConfig(**self.connection_params)
-            self.connection = get_connection(config=db_config)
+            self.connection = get_connection(config=self.db_config)
 
             self.connection.autocommit = True
             self.logger.debug("Connected to PostgreSQL")

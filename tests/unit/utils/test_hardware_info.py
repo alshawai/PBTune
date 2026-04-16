@@ -8,7 +8,7 @@ states, ensuring that the resource detection logic behaves as expected in
 various scenarios.
 """
 from unittest.mock import patch
-from src.tuner.utils.hardware_info import (
+from src.utils.hardware_info import (
     _is_containerized,
     detect_worker_resources,
     detect_cpu_model,
@@ -34,11 +34,11 @@ def test_is_containerized_false(mock_exists):
         assert not _is_containerized()
 
 
-@patch("src.tuner.utils.hardware_info._is_containerized", return_value=False)
-@patch("src.tuner.utils.hardware_info.detect_disk_type", return_value="SSD")
-@patch("src.tuner.utils.hardware_info.psutil.virtual_memory")
-@patch("src.tuner.utils.hardware_info.psutil.cpu_count")
-@patch("src.tuner.utils.hardware_info.psutil.Process")
+@patch("src.utils.hardware_info._is_containerized", return_value=False)
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
 def test_detect_worker_resources_bare_metal(
     mock_process,
     mock_cpu_count,
@@ -72,11 +72,11 @@ def test_detect_worker_resources_bare_metal(
     assert wr.disk_type == "SSD"
 
 
-@patch("src.tuner.utils.hardware_info._is_containerized", return_value=True)
-@patch("src.tuner.utils.hardware_info.detect_disk_type", return_value="HDD")
-@patch("src.tuner.utils.hardware_info.psutil.virtual_memory")
-@patch("src.tuner.utils.hardware_info.psutil.cpu_count")
-@patch("src.tuner.utils.hardware_info.psutil.Process")
+@patch("src.utils.hardware_info._is_containerized", return_value=True)
+@patch("src.utils.hardware_info.detect_disk_type", return_value="HDD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
 def test_detect_worker_resources_container(
     mock_process,
     _mock_cpu_count,
@@ -110,9 +110,9 @@ def test_detect_worker_resources_container(
     assert wr.disk_type == "HDD"
 
 
-@patch("src.tuner.utils.hardware_info.platform.system", return_value="Windows")
-@patch("src.tuner.utils.hardware_info.platform.processor", return_value="Mocked Intel(R) Core(TM) i9")
-def test_detect_cpu_model(mock_processor, mock_system):
+@patch("src.utils.hardware_info.platform.system", return_value="Windows")
+@patch("src.utils.hardware_info.platform.processor", return_value="Mocked Intel(R) Core(TM) i9")
+def test_detect_cpu_model(_mock_processor, _mock_system):
     """Test CPU model detection returns a valid non-empty string."""
     cpu = detect_cpu_model()
     assert isinstance(cpu, str)
@@ -143,8 +143,8 @@ def test_detect_ram_total():
     assert ram["total_gb"] > 0.0
 
 
-@patch("src.tuner.utils.hardware_info.detect_pg_version", return_value="PostgreSQL 14.2")
-def test_system_info_dict_keys(mock_pg_version):
+@patch("src.utils.hardware_info.detect_pg_version", return_value="PostgreSQL 14.2")
+def test_system_info_dict_keys(_mock_pg_version):
     """Test get_system_info returns dict with all expected keys."""
     sys_info = get_system_info()
     expected_keys = {
