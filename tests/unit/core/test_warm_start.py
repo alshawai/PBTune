@@ -9,7 +9,6 @@ cloning. Tests include:
 """
 import pytest
 import json
-from src.tuner.core.worker import Worker
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.main import PBTTuner
 from src.tuner.config import PBTConfig

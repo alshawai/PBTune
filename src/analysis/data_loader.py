@@ -7,23 +7,21 @@ Based Training (PBT). It handles global metric re-scoring and dataframe encoding
 data for downstream Machine Learning models and visualization.
 """
 
-from dataclasses import dataclass
-import pandas as pd
-from typing import Dict, List, Any, Optional
-import os
 import json
-import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
-from src.tuner.evaluator.metrics import (
+import pandas as pd
+
+from src.utils.metrics import (
     MetricConfig, 
     PerformanceMetrics, 
     create_metric_config
 )
 from src.tuner.config.knob_loader import get_knob_space
 from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
-from typing import Dict, List, Any, Optional, Tuple
-from src.tuner.utils.logger_config import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -177,7 +175,7 @@ def load_pbt_results(
     if not dir_path.exists() or not dir_path.is_dir():
         raise FileNotFoundError(f"Directory not found: {directory_path}")
 
-    json_files = list(dir_path.glob("pbt_results_*.json"))
+    json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
     if not json_files:
         raise FileNotFoundError(f"No PBT result files found in {directory_path}")
 

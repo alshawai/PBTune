@@ -6,15 +6,38 @@ Stops all running instances and optionally removes data directories.
 
 import argparse
 import logging
+import shutil
 import sys
 from pathlib import Path
 
-from src.tuner.utils import PostgresInstanceManager
+from src.config.database import DatabaseConfig
+from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.utils.environments import EnvironmentFactory, InstanceConfig
+from src.utils.metrics import PerformanceMetrics
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+
+class _NoopBenchmarkExecutor(BenchmarkExecutor):
+    """Minimal schema provider used for environment lifecycle-only cleanup."""
+
+    def prepare(self, db_config: DatabaseConfig) -> None:
+        return
+
+    def validate(self, db_config: DatabaseConfig) -> bool:
+        return True
+
+    def execute(
+        self,
+        db_config: DatabaseConfig,
+        worker_id: int | None = None,
+        **kwargs: object,
+    ) -> PerformanceMetrics:
+        del db_config, worker_id, kwargs
+        return PerformanceMetrics()
 
 def main():
     parser = argparse.ArgumentParser(description='Cleanup PostgreSQL instances')
@@ -53,10 +76,26 @@ def main():
 
     print(f"\nCleaning up instances in {base_dir}...")
 
-    # Create manager (will find existing instances)
-    manager = PostgresInstanceManager(
+    # Use environment factory so cleanup remains compatible with both backends.
+    try:
+        db_config = DatabaseConfig.from_env()
+    except ValueError:
+        db_config = DatabaseConfig(
+            user="postgres",
+            password="",
+            host="127.0.0.1",
+            port=5432,
+            dbname="postgres",
+        )
+
+    manager = EnvironmentFactory.create(
+        schema_provider=_NoopBenchmarkExecutor(),
+        use_docker=False,
+        db_config=db_config,
         base_dir=base_dir,
-        base_port=5432
+        base_port=5432,
+        run_id="cleanup",
+        container_prefix="cleanup-worker",
     )
 
     # Detect running instances by checking data directories
@@ -65,13 +104,17 @@ def main():
 
     # Attempt to stop each one
     for worker_dir in worker_dirs:
-        worker_id = int(worker_dir.name.split('_')[1])
-        instance_config = type('Config', (), {
-            'worker_id': worker_id,
-            'port': 5432 + worker_id,
-            'data_dir': worker_dir,
-            'running': True
-        })()
+        suffix = worker_dir.name.split('_', 1)[1]
+        if not suffix.isdigit():
+            logging.warning("Skipping unrecognized worker directory: %s", worker_dir.name)
+            continue
+        worker_id = int(suffix)
+        instance_config = InstanceConfig(
+            worker_id=worker_id,
+            port=5432 + worker_id,
+            data_dir=worker_dir,
+            running=True,
+        )
         manager.instances[worker_id] = instance_config
 
     # Stop all
@@ -82,7 +125,9 @@ def main():
     # Remove data if requested
     if args.remove_data:
         print("\nRemoving data directories...")
-        manager.cleanup(remove_data=True)
+        for worker_dir in worker_dirs:
+            if worker_dir.is_dir():
+                shutil.rmtree(worker_dir, ignore_errors=True)
         print("✓ Data directories removed")
     else:
         print("\nData directories preserved (use --remove-data to delete)")
