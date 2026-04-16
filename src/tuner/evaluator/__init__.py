@@ -8,7 +8,7 @@ This package handles:
 - Composite score computation (workload-dependent)
 """
 
-from src.tuner.evaluator.metrics import (
+from src.utils.metrics import (
     PerformanceMetrics,
     MetricConfig,
     WorkloadType,

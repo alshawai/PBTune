@@ -1,4 +1,5 @@
-PYTHON ?= .venv/bin/python
+VENV_PYTHON := .venv/bin/python
+PYTHON ?= $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),python3)
 
 .PHONY: install-dev test lint lint-strict typecheck check-all
 

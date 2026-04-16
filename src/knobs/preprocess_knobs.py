@@ -33,7 +33,7 @@ from src.knobs.policy import (
 )
 from src.knobs.retrieval import PostgreSQLKnobRetriever
 from src.knobs.knob_metadata import KNOB_TUNING_METADATA, IMPACT_TIERS
-from src.tuner.utils.logger_config import setup_logging, get_logger
+from src.utils.logger import setup_logging, get_logger
 
 setup_logging()
 

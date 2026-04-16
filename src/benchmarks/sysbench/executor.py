@@ -4,8 +4,8 @@ from typing import Optional
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
-from src.tuner.evaluator.metrics import PerformanceMetrics
-from src.tuner.utils.logger_config import get_logger
+from src.utils.logger import get_logger
+from src.utils.metrics import PerformanceMetrics
 from src.tuner.evaluator.executor import BenchmarkExecutor
 
 class SysbenchExecutor(BenchmarkExecutor):

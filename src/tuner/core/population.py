@@ -25,13 +25,10 @@ Design:
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Callable, Tuple
-import time
-from pathlib import Path
 from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
 
 from src.config.database import DatabaseConfig
-from src.database.connection import get_connection
 from src.tuner.core.worker import Worker
 from src.tuner.core.evolution import (
     execute_exploit_explore,

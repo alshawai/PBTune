@@ -25,7 +25,7 @@ from src.tuner.config.knob_space import (
     KnobType,
     KnobScale,
 )
-from src.tuner.utils.hardware_info import WorkerResources
+from src.utils.hardware_info import WorkerResources
 
 
 @pytest.fixture
@@ -286,13 +286,13 @@ def test_fractions_to_config_units(mock_knob_space):
 
 def test_detect_worker_resources_bare_metal(mock_knob_space):
     """Integration test: resolve ranges with realistically detected bare-metal resources."""
-    from src.tuner.utils.hardware_info import detect_worker_resources
+    from src.utils.hardware_info import detect_worker_resources
     from unittest.mock import patch
-    with patch("src.tuner.utils.hardware_info._is_containerized", return_value=False), \
-         patch("src.tuner.utils.hardware_info.detect_disk_type", return_value="SSD"), \
-         patch("src.tuner.utils.hardware_info.psutil.virtual_memory") as mock_vm, \
-         patch("src.tuner.utils.hardware_info.psutil.Process") as mock_process, \
-         patch("src.tuner.utils.hardware_info.psutil.cpu_count") as mock_cpu_count:
+    with patch("src.utils.hardware_info._is_containerized", return_value=False), \
+         patch("src.utils.hardware_info.detect_disk_type", return_value="SSD"), \
+         patch("src.utils.hardware_info.psutil.virtual_memory") as mock_vm, \
+         patch("src.utils.hardware_info.psutil.Process") as mock_process, \
+         patch("src.utils.hardware_info.psutil.cpu_count") as mock_cpu_count:
 
         class MockMem:
             total = 32 * 1024**3
@@ -316,12 +316,12 @@ def test_detect_worker_resources_bare_metal(mock_knob_space):
 
 def test_detect_worker_resources_container(mock_knob_space):
     """Integration test: resolve ranges with container limits."""
-    from src.tuner.utils.hardware_info import detect_worker_resources
+    from src.utils.hardware_info import detect_worker_resources
     from unittest.mock import patch
-    with patch("src.tuner.utils.hardware_info._is_containerized", return_value=True), \
-         patch("src.tuner.utils.hardware_info.detect_disk_type", return_value="SSD"), \
-         patch("src.tuner.utils.hardware_info.psutil.virtual_memory") as mock_vm, \
-         patch("src.tuner.utils.hardware_info.psutil.Process") as mock_process:
+    with patch("src.utils.hardware_info._is_containerized", return_value=True), \
+         patch("src.utils.hardware_info.detect_disk_type", return_value="SSD"), \
+         patch("src.utils.hardware_info.psutil.virtual_memory") as mock_vm, \
+         patch("src.utils.hardware_info.psutil.Process") as mock_process:
 
         class MockMem:
             total = 8 * 1024**3

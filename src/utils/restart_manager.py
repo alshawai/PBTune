@@ -14,6 +14,7 @@ Research basis:
 """
 
 import logging
+import json
 import subprocess
 import time
 import shutil
@@ -22,13 +23,13 @@ from pathlib import Path
 from glob import glob
 from typing import Optional
 from dataclasses import dataclass
+import os
 import psycopg2
 import docker
-import os
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
-from src.tuner.utils.logger_config import WorkerLoggerAdapter
+from src.utils.logger import WorkerLoggerAdapter
 
 # Base logger - will be wrapped with WorkerLoggerAdapter in __init__
 base_logger = logging.getLogger(__name__)
@@ -48,6 +49,8 @@ class RestartConfig:
     container_name: Optional[str] = None # Container name for docker restart
     backup_enabled: bool = True
     rollback_on_failure: bool = True
+    run_id: Optional[str] = None
+    benchmark_type: Optional[str] = None
 
 
 class RestartCostModel:
@@ -233,6 +236,7 @@ class PostgresRestartManager:
         self.db_config = db_config
         self.config = restart_config or RestartConfig()
         self.worker_id = worker_id
+        self.logger: logging.Logger | logging.LoggerAdapter[logging.Logger]
         
         # Create worker-aware logger with proper coloring
         if worker_id is not None:
@@ -251,9 +255,13 @@ class PostgresRestartManager:
         if self.config.method in ['docker', 'auto']:
             try:
                 self.docker_client = docker.from_env()
-            except Exception as e:
+            except (docker.errors.DockerException, OSError) as e:
                 if self.config.method == 'docker':
-                    self.logger.error("Failed to connect to Docker daemon: %s", e)
+                    self.logger.error(
+                        "Failed to connect to Docker daemon: %s | context=%s",
+                        e,
+                        self._context_payload("docker-init"),
+                    )
 
         if self.config.method == 'auto':
             self.config.method = self._detect_restart_method()
@@ -266,6 +274,19 @@ class PostgresRestartManager:
             self.config.data_dir
         )
 
+    def _context_payload(self, phase: str, **extra: object) -> str:
+        """Build structured context for restart lifecycle diagnostics."""
+        payload: dict[str, object | None] = {
+            "worker_id": self.worker_id,
+            "benchmark": self.config.benchmark_type,
+            "run_id": self.config.run_id,
+            "phase": phase,
+            "method": self.config.method,
+            "container_name": self.config.container_name,
+        }
+        payload.update({k: v for k, v in extra.items() if v is not None})
+        return json.dumps(payload, sort_keys=True)
+
     def _detect_restart_method(self) -> str:
         """Auto-detect best restart method for platform"""
         # If PBT_IN_DOCKER is set, we prefer docker method
@@ -277,8 +298,8 @@ class PostgresRestartManager:
                 pg_ctl = self._find_pg_ctl()
                 if pg_ctl:
                     return 'pg_ctl'
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as e:
+                self.logger.debug("Failed detecting pg_ctl from data_dir context: %s", e)
         
         system = platform.system()
 
@@ -298,8 +319,8 @@ class PostgresRestartManager:
             pg_ctl = self._find_pg_ctl()
             if pg_ctl:
                 return 'pg_ctl'
-        except Exception:
-            pass
+        except (OSError, subprocess.SubprocessError) as e:
+            self.logger.debug("Failed fallback pg_ctl detection: %s", e)
 
         self.logger.warning("Could not auto-detect restart method, defaulting to pg_ctl")
         return 'pg_ctl'
@@ -316,8 +337,12 @@ class PostgresRestartManager:
                     return data_dir
             finally:
                 conn.close()
-        except Exception as e:
-            self.logger.warning("Could not auto-detect data_directory: %s", e)
+        except (psycopg2.Error, OSError) as e:
+            self.logger.warning(
+                "Could not auto-detect data_directory: %s | context=%s",
+                e,
+                self._context_payload("detect-data-dir"),
+            )
             return None
 
     def _find_pg_ctl(self) -> Optional[str]:
@@ -381,8 +406,12 @@ class PostgresRestartManager:
                 self.logger.warning("postgresql.auto.conf not found at %s", auto_conf)
                 return None
 
-        except Exception as e:
-            self.logger.error("Failed to backup config: %s", e)
+        except (psycopg2.Error, OSError) as e:
+            self.logger.error(
+                "Failed to backup config: %s | context=%s",
+                e,
+                self._context_payload("backup-config"),
+            )
             return None
 
     def restore_config(self, backup_path: Path) -> bool:
@@ -452,8 +481,12 @@ class PostgresRestartManager:
                         )
                         return False
 
-                except Exception as e:
-                    self.logger.error("Exception starting PostgreSQL with restored config: %s", e)
+                except (OSError, subprocess.SubprocessError) as e:
+                    self.logger.error(
+                        "Exception starting PostgreSQL with restored config: %s | context=%s",
+                        e,
+                        self._context_payload("restore-config-start"),
+                    )
                     return False
             else:
                 self.logger.warning(
@@ -463,8 +496,12 @@ class PostgresRestartManager:
                 )
                 return True  # Return True for config restoration even if can't restart
 
-        except Exception as e:
-            self.logger.error("Failed to restore config: %s", e)
+        except (psycopg2.Error, OSError, subprocess.SubprocessError) as e:
+            self.logger.error(
+                "Failed to restore config: %s | context=%s",
+                e,
+                self._context_payload("restore-config"),
+            )
             return False
 
     def restart(self) -> bool:
@@ -491,19 +528,28 @@ class PostgresRestartManager:
                 return False
 
             if not success:
-                self.logger.error("Restart command failed")
+                self.logger.error(
+                    "Restart command failed | context=%s",
+                    self._context_payload("restart-command"),
+                )
                 if self.config.rollback_on_failure and backup_path:
                     self.restore_config(backup_path)
                 return False
 
             if not self._wait_for_connection():
-                self.logger.error("Database did not come back up after restart")
+                self.logger.error(
+                    "Database did not come back up after restart | context=%s",
+                    self._context_payload("wait-for-connection"),
+                )
                 if self.config.rollback_on_failure and backup_path:
                     self.restore_config(backup_path)
                 return False
 
             if not self._validate_restart():
-                self.logger.error("Restart validation failed")
+                self.logger.error(
+                    "Restart validation failed | context=%s",
+                    self._context_payload("validate-restart"),
+                )
                 if self.config.rollback_on_failure and backup_path:
                     self.restore_config(backup_path)
                 return False
@@ -511,8 +557,12 @@ class PostgresRestartManager:
             self.logger.info("PostgreSQL restart completed successfully")
             return True
 
-        except Exception as e:
-            self.logger.error("Restart failed with exception: %s", e)
+        except (psycopg2.Error, OSError, subprocess.SubprocessError, docker.errors.DockerException) as e:
+            self.logger.error(
+                "Restart failed with exception: %s | context=%s",
+                e,
+                self._context_payload("restart"),
+            )
             if self.config.rollback_on_failure and backup_path:
                 self.restore_config(backup_path)
             return False
@@ -536,8 +586,12 @@ class PostgresRestartManager:
         except subprocess.TimeoutExpired:
             self.logger.error("systemctl restart timed out")
             return False
-        except Exception as e:
-            self.logger.error("systemctl restart error: %s", e)
+        except (OSError, subprocess.SubprocessError) as e:
+            self.logger.error(
+                "systemctl restart error: %s | context=%s",
+                e,
+                self._context_payload("restart-systemctl"),
+            )
             return False
 
     def _restart_pg_ctl(self) -> bool:
@@ -589,15 +643,23 @@ class PostgresRestartManager:
                     [pg_ctl, 'start', '-D', self.config.data_dir, '-l', str(Path(self.config.data_dir) / 'logfile')],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == 'Windows' else 0
+                    creationflags=(
+                        getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+                        if platform.system() == 'Windows'
+                        else 0
+                    )
                 )
                 self.logger.debug("Issued pg_ctl start command")
                 
                 # Give PostgreSQL a moment to begin startup
                 time.sleep(2)
                 
-            except Exception as e:
-                self.logger.warning("Error issuing pg_ctl start command: %s", e)
+            except (OSError, subprocess.SubprocessError) as e:
+                self.logger.warning(
+                    "Error issuing pg_ctl start command: %s | context=%s",
+                    e,
+                    self._context_payload("restart-pgctl-start"),
+                )
             
             # Proceed directly to connection validation
             # This is the reliable way to verify PostgreSQL is actually running
@@ -606,8 +668,12 @@ class PostgresRestartManager:
         except subprocess.TimeoutExpired:
             self.logger.error("pg_ctl restart timed out")
             return False
-        except Exception as e:
-            self.logger.error("pg_ctl restart error: %s", e)
+        except (OSError, subprocess.SubprocessError) as e:
+            self.logger.error(
+                "pg_ctl restart error: %s | context=%s",
+                e,
+                self._context_payload("restart-pgctl"),
+            )
             return False
 
     def _restart_docker(self) -> bool:
@@ -626,14 +692,18 @@ class PostgresRestartManager:
             container = self.docker_client.containers.get(container_name)
             container.restart(timeout=self.config.timeout)
             return True
-        except Exception as e:
-            self.logger.error("Docker restart error: %s", e)
+        except docker.errors.DockerException as e:
+            self.logger.error(
+                "Docker restart error: %s | context=%s",
+                e,
+                self._context_payload("restart-docker"),
+            )
             return False
 
     def _restart_windows_service(self) -> bool:
         """Restart PostgreSQL using Windows Service Control"""
         try:
-            stop_result = subprocess.run(
+            subprocess.run(
                 ['sc', 'stop', self.config.service_name],
                 capture_output=True,
                 timeout=15,
@@ -656,8 +726,12 @@ class PostgresRestartManager:
         except subprocess.TimeoutExpired:
             self.logger.error("Windows service restart timed out")
             return False
-        except Exception as e:
-            self.logger.error("Windows service restart error: %s", e)
+        except (OSError, subprocess.SubprocessError) as e:
+            self.logger.error(
+                "Windows service restart error: %s | context=%s",
+                e,
+                self._context_payload("restart-windows-service"),
+            )
             return False
 
     def _wait_for_connection(self) -> bool:
@@ -690,11 +764,16 @@ class PostgresRestartManager:
                 if attempt < self.config.max_retries - 1:
                     time.sleep(self.config.retry_delay)
                 continue
-            except Exception as e:
+            except (psycopg2.Error, OSError) as e:
                 self.logger.error(
-                    "Unexpected error during connection attempt %d: %s",
+                    "Unexpected error during connection attempt %d: %s | context=%s",
                     attempt + 1,
-                    str(e)
+                    str(e),
+                    self._context_payload(
+                        "wait-for-connection",
+                        attempt=attempt + 1,
+                        max_retries=self.config.max_retries,
+                    ),
                 )
                 return False
 
@@ -736,7 +815,7 @@ class PostgresRestartManager:
                     continue
 
                 return text
-        except Exception as e:
+        except (OSError, ValueError) as e:
             self.logger.debug("Could not inspect startup logfile for fatal errors: %s", e)
 
         return None
@@ -770,6 +849,10 @@ class PostgresRestartManager:
             finally:
                 conn.close()
 
-        except Exception as e:
-            self.logger.error("Restart validation failed: %s", e)
+        except (psycopg2.Error, OSError) as e:
+            self.logger.error(
+                "Restart validation failed: %s | context=%s",
+                e,
+                self._context_payload("validate-restart"),
+            )
             return False

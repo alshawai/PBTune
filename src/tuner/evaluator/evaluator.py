@@ -1168,7 +1168,7 @@ class Evaluator:
             client = docker.from_env()
             for container in client.containers.list():
                 ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
-                for container_port, host_bindings in ports.items():
+                for _container_port, host_bindings in ports.items():
                     if host_bindings:
                         for binding in host_bindings:
                             if str(binding.get('HostPort')) == str(port):
@@ -1639,11 +1639,9 @@ class Evaluator:
                         # Calculate I/O from database statistics (8KB blocks)
                         if stats_after:
                             blocks_read_delta = stats_after[0] - stats_before[0]
-                            blocks_hit_delta = stats_after[1] - stats_before[1]
 
                             # Convert to MB (8KB blocks)
                             io_read_mb = (blocks_read_delta * 8) / 1024.0
-                            total_io_mb = ((blocks_read_delta + blocks_hit_delta) * 8) / 1024.0
 
                             # Store in metrics
                             metrics.io_read_mb = max(0, io_read_mb)

@@ -282,7 +282,7 @@ class PostgreSQLKnobRetriever:
             all_params = self.get_all_parameters()
             df = all_params[all_params["name"].isin(knob_names)]
 
-        return dict(zip(df["name"], df["value"]))
+        return dict(zip(df["name"], df["value"], strict=True))
 
     def get_knob_details(self, knob_name: str) -> Optional[ConfigParameter]:
         """
@@ -327,7 +327,7 @@ class PostgreSQLKnobRetriever:
                 return None
 
             col_names = [desc[0] for desc in cursor.description]  # type: ignore
-            param_dict = dict(zip(col_names, row))
+            param_dict = dict(zip(col_names, row, strict=True))
 
             return ConfigParameter(**param_dict)
         finally:

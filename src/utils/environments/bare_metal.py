@@ -20,7 +20,6 @@ import psycopg2
 from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
 from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
-from src.database.connection import get_connection
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -301,7 +300,6 @@ class BareMetalEnvironment(DatabaseEnvironment):
         """
         port = self.base_port + worker_id
 
-        active_config = self.get_db_config(worker_id)
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
