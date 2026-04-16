@@ -14,6 +14,26 @@ from src.tuner.main import PBTTuner
 from src.tuner.config import PBTConfig
 from src.tuner.config.knob_space import KnobSpace, WorkerResources, KnobDefinition, KnobType
 
+
+@pytest.fixture(autouse=True)
+def patch_pbttuner_knob_loader(monkeypatch, request):
+    """Patch PBTTuner init-time dependencies to avoid filesystem coupling in CI."""
+    mock_knob_space = request.getfixturevalue("mock_knob_space")
+    fixed_resources = WorkerResources(
+        ram_bytes=4 * 1024 * 1024 * 1024,
+        cpu_cores=4,
+        disk_type='ssd',
+    )
+
+    monkeypatch.setattr(
+        "src.tuner.main.get_knob_space",
+        lambda _tier: mock_knob_space,
+    )
+    monkeypatch.setattr(
+        "src.tuner.main.detect_worker_resources",
+        lambda *args, **kwargs: fixed_resources,
+    )
+
 @pytest.fixture
 def mock_knob_space():
     """Provides a mocked KnobSpace for testing warm starts with RAM relative specs."""
