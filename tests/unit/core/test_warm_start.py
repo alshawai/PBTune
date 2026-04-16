@@ -9,6 +9,7 @@ cloning. Tests include:
 """
 import pytest
 import json
+from src.config.database import DatabaseConfig
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.main import PBTTuner
 from src.tuner.config import PBTConfig
@@ -19,6 +20,13 @@ from src.tuner.config.knob_space import KnobSpace, WorkerResources, KnobDefiniti
 def patch_pbttuner_knob_loader(monkeypatch, request):
     """Patch PBTTuner init-time dependencies to avoid filesystem coupling in CI."""
     mock_knob_space = request.getfixturevalue("mock_knob_space")
+    fake_db_config = DatabaseConfig(
+        user="postgres",
+        password="test-password",
+        host="127.0.0.1",
+        port=5432,
+        dbname="test_dataset",
+    )
     fixed_resources = WorkerResources(
         ram_bytes=4 * 1024 * 1024 * 1024,
         cpu_cores=4,
@@ -32,6 +40,10 @@ def patch_pbttuner_knob_loader(monkeypatch, request):
     monkeypatch.setattr(
         "src.tuner.main.detect_worker_resources",
         lambda *args, **kwargs: fixed_resources,
+    )
+    monkeypatch.setattr(
+        "src.tuner.main.get_db_config",
+        lambda: fake_db_config,
     )
 
 @pytest.fixture
