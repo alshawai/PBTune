@@ -8,8 +8,8 @@ import numpy as np
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
-from src.tuner.evaluator.metrics import PerformanceMetrics
-from src.tuner.utils.logger_config import get_logger
+from src.utils.logger import get_logger
+from src.utils.metrics import PerformanceMetrics
 from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.benchmarks.tpch import QUERIES_DIR, SCHEMA_SQL, INDEXES_SQL
 from src.benchmarks.tpch.setup_dbgen import find_or_build_dbgen, generate_data

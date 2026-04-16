@@ -56,6 +56,7 @@ class DockerEnvironment(DatabaseEnvironment):
         image_name: str = "postgres:17",
         base_port: int = 5440,
         base_dir: Path = Path("./pg_instances"),
+        container_prefix: str = "pbt-worker",
     ):
         super().__init__(run_id, db_config, schema_provider)
         self.cpu_cores = cpu_cores
@@ -63,6 +64,7 @@ class DockerEnvironment(DatabaseEnvironment):
         self.image_name = image_name
         self.base_port = base_port
         self.base_dir = base_dir
+        self.container_prefix = container_prefix
 
         self.client = docker.from_env(timeout=30)
         self.instances: Dict[int, InstanceConfig] = {}
@@ -76,6 +78,10 @@ class DockerEnvironment(DatabaseEnvironment):
             LOGGER.info("Creating Docker network '%s'", self.network_name)
             self.client.networks.create(self.network_name, driver="bridge")
             LOGGER.debug("➤ Network '%s' created successfully", self.network_name)
+
+    def _container_name(self, worker_id: int) -> str:
+        """Build the Docker container name for a worker."""
+        return f"{self.container_prefix}-{worker_id}"
 
     def setup_instances(
             self,
@@ -96,7 +102,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
-            container_name = f"pbt-worker-{worker_id}"
+            container_name = self._container_name(worker_id)
             LOGGER.info("  Setting up container '%s' on port %d:", container_name, port)
 
             if force_recreate:
@@ -128,7 +134,7 @@ class DockerEnvironment(DatabaseEnvironment):
                     ColorCode.RESET
                 )
             except docker.errors.NotFound:  # Create it
-                volumes = {}
+                volumes: Dict[str, Dict[str, str]] = {}
                 environment = {
                     'POSTGRES_USER': self.base_config.user,
                     'POSTGRES_PASSWORD': self.base_config.password,
@@ -177,10 +183,13 @@ class DockerEnvironment(DatabaseEnvironment):
                 self.initialize_schema(worker_id)
 
                 if worker_id == 0:
-                    LOGGER.debug(
-                        "    Caching worker 0 baseline snapshot for fast-path initialization...",
-                    )
-                    self.create_snapshot(worker_id=0)
+                    if self.snapshot_exists(worker_id=0):
+                        LOGGER.debug("    Baseline snapshot already exists; skipping snapshot creation")
+                    else:
+                        LOGGER.debug(
+                            "    Caching worker 0 baseline snapshot for fast-path initialization...",
+                        )
+                        self.create_snapshot(worker_id=0)
 
             LOGGER.debug(
                 "%s  ➤ Container '%s' set up successfully.%s",
@@ -201,7 +210,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
     def start_instance(self, worker_id: int) -> bool:
         """Start a stopped container."""
-        container_name = f"pbt-worker-{worker_id}"
+        container_name = self._container_name(worker_id)
         try:
             container = self.client.containers.get(container_name)
             container.start()
@@ -212,7 +221,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
     def stop_instance(self, worker_id: int, mode: str = 'fast') -> bool:
         """Stop a running container."""
-        container_name = f"pbt-worker-{worker_id}"
+        container_name = self._container_name(worker_id)
         try:
             container = self.client.containers.get(container_name)
             container.stop(timeout=5)
@@ -235,7 +244,7 @@ class DockerEnvironment(DatabaseEnvironment):
         """Check status of containers."""
         res = {}
         for worker_id, instance_config in self.instances.items():
-            container_name = f"pbt-worker-{worker_id}"
+            container_name = self._container_name(worker_id)
             try:
                 container = self.client.containers.get(container_name)
                 res[worker_id] = container.status == 'running'
@@ -247,7 +256,7 @@ class DockerEnvironment(DatabaseEnvironment):
     def cleanup(self, remove_data: bool = False) -> None:
         """Remove containers."""
         for worker_id in self.instances:
-            container_name = f"pbt-worker-{worker_id}"
+            container_name = self._container_name(worker_id)
             try:
                 container = self.client.containers.get(container_name)
                 container.remove(force=True)
@@ -273,7 +282,7 @@ class DockerEnvironment(DatabaseEnvironment):
         if result.restart_required:
             self.stop_instance(worker_id)
             self.start_instance(worker_id)
-            self._wait_for_ready(f"pbt-worker-{worker_id}", db_config.port)
+            self._wait_for_ready(self._container_name(worker_id), db_config.port)
 
     @contextmanager
     def _with_timeout(self, seconds: Optional[int]):
@@ -312,7 +321,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
     def create_snapshot(self, worker_id: int = 0) -> str:
         """Create a baseline snapshot from the specified worker instance using Docker Commit."""
-        container_name = f"pbt-worker-{worker_id}"
+        container_name = self._container_name(worker_id)
         snapshot_id = f"pbt-snapshot-{self.run_id}"
         try:
             container = self.client.containers.get(container_name)
@@ -322,6 +331,18 @@ class DockerEnvironment(DatabaseEnvironment):
         except docker.errors.APIError as e:
             LOGGER.error("Failed to create snapshot from %s: %s", container_name, e)
             return ""
+
+    def snapshot_exists(self, worker_id: int = 0) -> bool:
+        """Check whether the baseline snapshot image already exists."""
+        del worker_id  # Snapshot identity is run-scoped, not worker-scoped.
+        snapshot_id = f"pbt-snapshot-{self.run_id}"
+        try:
+            self.client.images.get(snapshot_id)
+            return True
+        except docker.errors.ImageNotFound:
+            return False
+        except docker.errors.APIError:
+            return False
 
     def restore_snapshot(self, worker_id: int, snapshot_id: str = "") -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
@@ -334,7 +355,7 @@ class DockerEnvironment(DatabaseEnvironment):
             LOGGER.debug("  No snapshot image '%s' found, skipping restore", snapshot_id)
             return False
 
-        container_name = f"pbt-worker-{worker_id}"
+        container_name = self._container_name(worker_id)
         port = self.base_port + worker_id
 
         # Stop and remove current container

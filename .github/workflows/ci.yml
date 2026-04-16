@@ -26,10 +26,10 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Lint (strict)
-        run: make lint
+        run: make lint PYTHON=python
 
       - name: Type check (evaluation + utils + scripts)
-        run: make typecheck
+        run: make typecheck PYTHON=python
 
       - name: Unit tests
-        run: make test
+        run: make test PYTHON=python

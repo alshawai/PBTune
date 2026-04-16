@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 from src.config.database import DatabaseConfig
-from src.tuner.evaluator.metrics import PerformanceMetrics
+from src.utils.metrics import PerformanceMetrics
 
 
 class BenchmarkExecutor(ABC):

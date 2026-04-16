@@ -217,17 +217,56 @@ class MetricConfig:
     @staticmethod
     def for_oltp() -> 'MetricConfig':
         """Create OLTP-optimized metric configuration."""
-        return OLTP_METRIC_CONFIG
+        return MetricConfig(
+            workload_type=OLTP_METRIC_CONFIG.workload_type,
+            weight_latency=OLTP_METRIC_CONFIG.weight_latency,
+            weight_throughput=OLTP_METRIC_CONFIG.weight_throughput,
+            weight_memory=OLTP_METRIC_CONFIG.weight_memory,
+            weight_error=OLTP_METRIC_CONFIG.weight_error,
+            latency_metric=OLTP_METRIC_CONFIG.latency_metric,
+            normalize_by_baseline=OLTP_METRIC_CONFIG.normalize_by_baseline,
+            baseline_metrics=OLTP_METRIC_CONFIG.baseline_metrics,
+            latency_min=OLTP_METRIC_CONFIG.latency_min,
+            latency_max=OLTP_METRIC_CONFIG.latency_max,
+            throughput_min=OLTP_METRIC_CONFIG.throughput_min,
+            throughput_max=OLTP_METRIC_CONFIG.throughput_max,
+        )
 
     @staticmethod
     def for_olap() -> 'MetricConfig':
         """Create OLAP-optimized metric configuration."""
-        return OLAP_METRIC_CONFIG
+        return MetricConfig(
+            workload_type=OLAP_METRIC_CONFIG.workload_type,
+            weight_latency=OLAP_METRIC_CONFIG.weight_latency,
+            weight_throughput=OLAP_METRIC_CONFIG.weight_throughput,
+            weight_memory=OLAP_METRIC_CONFIG.weight_memory,
+            weight_error=OLAP_METRIC_CONFIG.weight_error,
+            latency_metric=OLAP_METRIC_CONFIG.latency_metric,
+            normalize_by_baseline=OLAP_METRIC_CONFIG.normalize_by_baseline,
+            baseline_metrics=OLAP_METRIC_CONFIG.baseline_metrics,
+            latency_min=OLAP_METRIC_CONFIG.latency_min,
+            latency_max=OLAP_METRIC_CONFIG.latency_max,
+            throughput_min=OLAP_METRIC_CONFIG.throughput_min,
+            throughput_max=OLAP_METRIC_CONFIG.throughput_max,
+        )
 
     @staticmethod
     def for_mixed() -> 'MetricConfig':
         """Create mixed workload metric configuration."""
-        return MIXED_METRIC_CONFIG
+        return MetricConfig(
+            workload_type=MIXED_METRIC_CONFIG.workload_type,
+            weight_latency=MIXED_METRIC_CONFIG.weight_latency,
+            weight_throughput=MIXED_METRIC_CONFIG.weight_throughput,
+            weight_memory=MIXED_METRIC_CONFIG.weight_memory,
+            weight_error=MIXED_METRIC_CONFIG.weight_error,
+            latency_metric=MIXED_METRIC_CONFIG.latency_metric,
+            normalize_by_baseline=MIXED_METRIC_CONFIG.normalize_by_baseline,
+            baseline_metrics=MIXED_METRIC_CONFIG.baseline_metrics,
+            latency_min=MIXED_METRIC_CONFIG.latency_min,
+            latency_max=MIXED_METRIC_CONFIG.latency_max,
+            throughput_min=MIXED_METRIC_CONFIG.throughput_min,
+            throughput_max=MIXED_METRIC_CONFIG.throughput_max,
+        )
 
     def update_ranges(
         self,
@@ -694,29 +733,32 @@ def create_metric_config(
     workload_type_lower = workload_type.lower()
 
     if workload_type_lower == "oltp":
-        base_config = OLTP_METRIC_CONFIG
+        base_config = MetricConfig.for_oltp()
     elif workload_type_lower == "olap":
-        base_config = OLAP_METRIC_CONFIG
+        base_config = MetricConfig.for_olap()
     elif workload_type_lower == "mixed":
-        base_config = MIXED_METRIC_CONFIG
+        base_config = MetricConfig.for_mixed()
     else:
         raise ValueError(
             f"Unknown workload_type: {workload_type}. "
             f"Must be 'oltp', 'olap', or 'mixed'"
         )
 
-    if custom_weights:
-        config_dict = {
-            "workload_type": base_config.workload_type,
-            "weight_latency": custom_weights.get("weight_latency", base_config.weight_latency),
-            "weight_throughput": custom_weights.get(
-                "weight_throughput",
-                base_config.weight_throughput
-                ),
-            "weight_memory": custom_weights.get("weight_memory", base_config.weight_memory),
-            "weight_error": custom_weights.get("weight_error", base_config.weight_error),
-            "latency_metric": custom_weights.get("latency_metric", base_config.latency_metric),
-        }
-        return MetricConfig(**config_dict)
-
-    return base_config
+    config_dict = {
+        "workload_type": base_config.workload_type,
+        "weight_latency": custom_weights.get("weight_latency", base_config.weight_latency),
+        "weight_throughput": custom_weights.get(
+            "weight_throughput",
+            base_config.weight_throughput,
+        ),
+        "weight_memory": custom_weights.get("weight_memory", base_config.weight_memory),
+        "weight_error": custom_weights.get("weight_error", base_config.weight_error),
+        "latency_metric": custom_weights.get("latency_metric", base_config.latency_metric),
+        "normalize_by_baseline": base_config.normalize_by_baseline,
+        "baseline_metrics": base_config.baseline_metrics,
+        "latency_min": base_config.latency_min,
+        "latency_max": base_config.latency_max,
+        "throughput_min": base_config.throughput_min,
+        "throughput_max": base_config.throughput_max,
+    }
+    return MetricConfig(**config_dict)
