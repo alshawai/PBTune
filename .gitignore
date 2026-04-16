@@ -1,8 +1,6 @@
 # AI related files
 .prompts/
 .chats/
-.claude/
-CLAUDE.md
 
 # Drafts and documentation
 Draft*.md
