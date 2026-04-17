@@ -2,7 +2,7 @@
 
 ## Core Computation (`MetricConfig.compute_score()`)
 
-Located in `src/tuner/evaluator/metrics.py`.
+Located in `src/utils/metrics.py`.
 
 ### Step-by-Step
 
