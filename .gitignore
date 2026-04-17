@@ -48,7 +48,7 @@ venv/
 env/
 ENV/
 .env
-.venv
+.venv*
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -112,6 +112,7 @@ results/**/pbt_results_*.json
 results/**/best_config*.json
 results/**/intermediate_*.json
 results/**/*.html
+results/**/fanova_importance.json
 
 # Postgres Snapshots generated during execution
 pg_snapshots/
