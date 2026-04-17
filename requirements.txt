@@ -30,3 +30,7 @@ PyYAML==6.0.3
 
 # Evaluation (evaluate_tuning module)
 docker>=7.0.0          # Docker SDK for Python — container lifecycle management
+
+# Importance Analysis
+fanova>=2.0.18
+ConfigSpace>=0.6.1
