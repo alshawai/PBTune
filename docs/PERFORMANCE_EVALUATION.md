@@ -1,6 +1,6 @@
 # Performance Evaluation System
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-04-17
 
 See also: [Documentation Index](./README.md)
 
@@ -91,7 +91,7 @@ This system serves as the **fitness function** for Population Based Training—i
 
 ## Component 1: PerformanceMetrics
 
-**Location**: [src/tuner/evaluator/metrics.py](../src/tuner/evaluator/metrics.py)
+**Location**: [src/utils/metrics.py](../src/utils/metrics.py)
 
 ### Purpose
 
@@ -109,7 +109,7 @@ The `PerformanceMetrics` dataclass is a **structured container** for all perform
 metrics = {
     "latency": 45.3,  # p50? p95? p99? Units?
     "throughput": 1234,  # TPS or QPS?
-    "cpu": 0.67  # Percentage or fraction?
+    "memory_utilization": 0.67  # Percentage or fraction?
 }
 ```
 
@@ -121,7 +121,6 @@ metrics = PerformanceMetrics(
     latency_p95=45.3,      # Milliseconds, 95th percentile
     latency_p99=52.1,      # Milliseconds, 99th percentile
     throughput=1234.5,     # Queries per second
-    cpu_utilization=0.67,  # Fraction (0.0 to 1.0)
     memory_utilization=0.82,
     io_read_mb=125.4,
     io_write_mb=43.2,
@@ -175,11 +174,10 @@ throughput = total_queries / total_time
 #### Resource Utilization Metrics
 
 ```python
-cpu_utilization: float      # CPU usage (0.0 to 1.0)
 memory_utilization: float   # Memory usage (0.0 to 1.0)
-io_read_mb: float          # MB read from disk
-io_write_mb: float         # MB written to disk
-cache_hit_ratio: float     # Buffer cache hits (0.0 to 1.0)
+io_read_mb: float           # MB read from disk
+io_write_mb: float          # MB written to disk
+cache_hit_ratio: float      # Buffer cache hits (0.0 to 1.0)
 ```
 
 **Why track resources?**
@@ -216,7 +214,7 @@ Useful for loading metrics from checkpoints or logs.
 
 ## Component 2: Metric Scoring
 
-**Location**: [src/tuner/evaluator/metrics.py](../src/tuner/evaluator/metrics.py)
+**Location**: [src/utils/metrics.py](../src/utils/metrics.py)
 
 ### Purpose
 
@@ -233,9 +231,10 @@ The scoring system converts **multiple raw metrics** into a **single composite s
 - Increase `work_mem` → better query performance, but higher memory usage
 - Increase `shared_buffers` → better cache hits, but less memory for other processes
 
-**Solution**: Weighted composite score captures trade-offs:
+**Solution**: Weighted composite score captures trade-offs using normalized components:
 ```
-score = w1·throughput + w2·(1/latency) + w3·(1 - cpu_util) + w4·cache_hit_ratio
+score = w_latency·latency_norm + w_throughput·throughput_norm
+    + w_memory·(1 - memory_utilization) + w_error·(1 - error_rate)
 ```
 
 ### MetricConfig: Workload-Specific Weights
@@ -249,168 +248,70 @@ class MetricConfig:
     """
     workload_type: WorkloadType
     
-    # Primary metrics
-    latency_weight: float = 0.4        # Lower latency = better
-    throughput_weight: float = 0.3     # Higher TPS = better
-    
-    # Resource efficiency
-    cpu_weight: float = 0.1            # Lower CPU = better
-    memory_weight: float = 0.1         # Lower memory = better
-    io_weight: float = 0.05            # Lower I/O = better
-    
-    # Quality metrics
-    cache_weight: float = 0.04         # Higher cache hits = better
-    error_penalty: float = 10.0        # Error rate penalty multiplier
+    # Scoring weights (must sum to 1.0)
+    weight_latency: float = 0.5
+    weight_throughput: float = 0.3
+    weight_memory: float = 0.05
+    weight_error: float = 0.05
+
+    # Latency percentile by workload objective
+    latency_metric: str = "p95"  # or "p99" for OLAP
+
+    # Adaptive normalization ranges
+    latency_min: float = 1.0
+    latency_max: float = 1000.0
+    throughput_min: float = 1.0
+    throughput_max: float = 10000.0
 ```
 
-**Default weights** (OLTP-focused):
-- Latency: 40% (most important for OLTP)
-- Throughput: 30% (high transaction rate critical)
-- CPU: 10% (efficiency matters)
-- Memory: 10% (memory efficiency)
-- I/O: 5% (less critical with good caching)
-- Cache: 4% (indirectly captured by latency)
-- Error penalty: 10× (heavily penalize errors)
+**Default workload profiles**:
+- OLTP: `weight_latency=0.50`, `weight_throughput=0.40`, `weight_memory=0.05`, `weight_error=0.05`, `latency_metric=p95`
+- OLAP: `weight_latency=0.55`, `weight_throughput=0.30`, `weight_memory=0.10`, `weight_error=0.05`, `latency_metric=p99`
+- MIXED: `weight_latency=0.40`, `weight_throughput=0.35`, `weight_memory=0.15`, `weight_error=0.10`, `latency_metric=p95`
 
-### Scoring Functions
+### Composite Scoring Function
 
-#### OLTP Scoring (Transaction Processing)
+The implementation uses a single `compute_score()` path with workload-specific
+`MetricConfig`, not separate `compute_oltp_score()`/`compute_olap_score()`
+functions.
 
 ```python
-def compute_oltp_score(metrics: PerformanceMetrics, config: MetricConfig) -> float:
-    """
-    OLTP optimization goal: High throughput + Low latency
-    
-    Priorities:
-    1. Low latency (fast transaction response)
-    2. High throughput (many transactions/second)
-    3. Resource efficiency (low CPU/memory)
-    """
-    
-    # lower is better
-    latency_score = config.latency_weight / (metrics.latency_p95 + 1.0)
-    
-    # higher is better
-    throughput_score = config.throughput_weight * metrics.throughput / 1000.0
-    
-    # lower usage is better
-    cpu_score = config.cpu_weight * (1.0 - metrics.cpu_utilization)
-    memory_score = config.memory_weight * (1.0 - metrics.memory_utilization)
-    
-    cache_score = config.cache_weight * metrics.cache_hit_ratio
-    score = latency_score + throughput_score + cpu_score + memory_score + cache_score
-    
-    if metrics.error_rate > 0:
-        score *= (1.0 - metrics.error_rate * config.error_penalty)
-    
-    return max(0.0, score)  # Ensure non-negative
+def compute_score(metrics: PerformanceMetrics) -> float:
+    latency = getattr(metrics, f"latency_{self.latency_metric}")
+
+    latency_norm = normalize_low_is_better(latency, latency_min, latency_max)
+    throughput_norm = normalize_high_is_better(
+        metrics.throughput,
+        throughput_min,
+        throughput_max,
+    )
+    memory_norm = 1.0 - clamp(metrics.memory_utilization, 0.0, 1.0)
+    error_norm = 1.0 - clamp(metrics.error_rate, 0.0, 1.0)
+
+    score_01 = (
+        weight_latency * latency_norm
+        + weight_throughput * throughput_norm
+        + weight_memory * memory_norm
+        + weight_error * error_norm
+    )
+    return max(0.0, score_01) * 100.0
 ```
 
-**Example**:
-```
-Metrics: latency_p95=45ms, throughput=1200 TPS, cpu=0.65, memory=0.72, 
-         cache_hit=0.95, errors=0.001
+### Adaptive Range Calibration
 
-Score calculation:
-  latency_score  = 0.4 / (45 + 1)    = 0.00870
-  throughput_score = 0.3 * 1200/1000  = 0.36000
-  cpu_score      = 0.1 * (1 - 0.65)  = 0.03500
-  memory_score   = 0.1 * (1 - 0.72)  = 0.02800
-  cache_score    = 0.04 * 0.95       = 0.03800
-                                       ────────
-  Subtotal                           = 0.48970
-  Error penalty  = 1 - (0.001 * 10)  = 0.99000
-                                       ────────
-  Final score    = 0.48970 * 0.99    = 0.48480
-```
+For post-hoc rescoring and mid-run adaptation, normalization ranges are
+calibrated from observed data via `MetricConfig.update_ranges()`:
 
-#### OLAP Scoring (Analytics Queries)
+- Uses robust 5th/95th percentiles (not fragile raw min/max)
+- Adds optional headroom padding
+- Enables fair score comparability across hardware/workload regimes
+
+### Usage in Evaluation/PBT
 
 ```python
-def compute_olap_score(metrics: PerformanceMetrics, config: MetricConfig) -> float:
-    """
-    OLAP optimization goal: Fast query execution + Resource efficiency
-    
-    Priorities:
-    1. Low query execution time
-    2. Efficient memory usage (large sorts/joins)
-    3. Good cache utilization
-    """
-    
-    query_time_score = config.latency_weight / (metrics.latency_p95 + 1.0)
-    
-    # OLAP often memory-constrained
-    memory_score = config.memory_weight * (1.0 - metrics.memory_utilization)
-    
-    # Cache efficiency (critical for OLAP)
-    cache_score = config.cache_weight * metrics.cache_hit_ratio
-    
-    # I/O efficiency (OLAP can be I/O-bound)
-    io_score = config.io_weight / (metrics.io_read_mb + 1.0)
-    
-    score = query_time_score + memory_score + cache_score + io_score
-    
-    if metrics.error_rate > 0:
-        score *= (1.0 - metrics.error_rate * config.error_penalty)
-    
-    return max(0.0, score)
-```
-
-**Key differences from OLTP**:
-- Throughput less important (queries are longer, fewer per second)
-- Memory efficiency more critical (large sorts/joins)
-- I/O efficiency matters (scanning large datasets)
-
-#### Mixed Workload Scoring
-
-```python
-def compute_mixed_score(metrics: PerformanceMetrics, config: MetricConfig) -> float:
-    """
-    Mixed workload: Balance between OLTP and OLAP
-    
-    Computes weighted average of OLTP and OLAP scores.
-    """
-    oltp_score = compute_oltp_score(metrics, config)
-    olap_score = compute_olap_score(metrics, config)
-    
-    # 60% OLTP, 40% OLAP (adjustable)
-    return 0.6 * oltp_score + 0.4 * olap_score
-```
-
-### Main Scoring Function
-
-```python
-def compute_score(
-    metrics: PerformanceMetrics,
-    config: MetricConfig
-) -> float:
-    """
-    Compute composite performance score.
-    
-    Dispatches to workload-specific scoring function.
-    Higher score = better performance.
-    """
-    if config.workload_type == WorkloadType.OLTP:
-        return compute_oltp_score(metrics, config)
-    elif config.workload_type == WorkloadType.OLAP:
-        return compute_olap_score(metrics, config)
-    else:  # MIXED
-        return compute_mixed_score(metrics, config)
-```
-
-**Usage in PBT**:
-```python
-def evaluate_worker(worker: Worker) -> tuple[PerformanceMetrics, float]:
-    # Apply configuration
-    applicator.apply(worker.knob_config)
-    
-    # Run workload and collect metrics
-    metrics = evaluator.run_workload()
-    
-    # Compute score for PBT optimization
-    score = compute_score(metrics, metric_config)
-    
-    return metrics, score
+metric_config = create_metric_config(workload)
+metric_config.update_ranges(observations, padding_factor=0.0)
+score = metric_config.compute_score(metrics)
 ```
 
 ---
@@ -891,6 +792,6 @@ The Performance Evaluation System provides the **fitness function** for PBT opti
 **Key Insight**: The scoring function is **workload-dependent**—OLTP prioritizes low latency and high throughput, OLAP prioritizes query execution time and resource efficiency. PBT uses these scores to evolve configurations toward better performance.
 
 **File Locations**:
-- Metrics: [src/tuner/evaluator/metrics.py](../src/tuner/evaluator/metrics.py)
+- Metrics and scoring: [src/utils/metrics.py](../src/utils/metrics.py)
 - Evaluator: [src/tuner/evaluator/evaluator.py](../src/tuner/evaluator/evaluator.py)
-- Tests: [src/tuner/evaluator/\_\_main\_\_.py](../src/tuner/evaluator/__main__.py)
+- Evaluation tests: [tests/unit/evaluation/test_evaluate_tuning.py](../tests/unit/evaluation/test_evaluate_tuning.py)
