@@ -518,13 +518,24 @@ class Population:
                 dead_worker.knob_config = selected_config
                 dead_worker.performance_score = 0.0
                 dead_worker.metrics = None
+                dead_worker.force_restart_next_eval = True
 
                 dead_worker.parent_id = None
                 dead_worker.generation_created = self.current_generation + 1
                 config_changed = dead_worker.knob_config != previous_config
 
                 if self.env is not None:
-                    if not self.env.recover_instance(dead_worker.worker_id):
+                    recovered = False
+                    try:
+                        recovered = self.env.recover_instance(dead_worker.worker_id)
+                    except (ConnectionError, RuntimeError, OSError) as exc:
+                        dead_logger.error(
+                            "[DEAD_CONFIG] Fallback resample recovery raised an unexpected error: %s",
+                            exc,
+                            exc_info=True,
+                        )
+
+                    if not recovered:
                         dead_logger.error(
                             "[DEAD_CONFIG] Fallback resample could not recover worker instance"
                         )
@@ -560,9 +571,20 @@ class Population:
             )
 
             dead_worker.clone_from(donor, self.current_generation)
+            dead_worker.force_restart_next_eval = True
 
             if self.env is not None:
-                if not self.env.recover_instance(dead_worker.worker_id):
+                recovered = False
+                try:
+                    recovered = self.env.recover_instance(dead_worker.worker_id)
+                except (ConnectionError, RuntimeError, OSError) as exc:
+                    dead_logger.error(
+                        "[DEAD_CONFIG] Instance recovery raised an unexpected error during immediate rescue: %s",
+                        exc,
+                        exc_info=True,
+                    )
+
+                if not recovered:
                     dead_logger.error(
                         "[DEAD_CONFIG] Instance recovery failed during immediate rescue"
                     )
@@ -724,7 +746,9 @@ class Population:
         if self._ranges_updated:
             converged = check_convergence(
                 self.workers,
-                self.config.convergence_threshold
+                self.config.convergence_threshold,
+                dead_config_threshold=self.config.dead_config_threshold,
+                min_valid_workers=2,
             )
         else:
             logger.debug(
@@ -753,6 +777,13 @@ class Population:
             self.generations_without_improvement += 1
 
         return result
+
+    @staticmethod
+    def _invoke_optional_worker_callback(callback: Any, worker_id: int) -> bool:
+        """Invoke a worker callback only when present and callable."""
+        if not callable(callback):
+            return False
+        return bool(callback(worker_id))
 
     def train_generation(
         self,
@@ -814,8 +845,36 @@ class Population:
 
             try:
                 if self.env:
+                    failed_workers = []
                     for worker in self.workers:
-                        self.env.restore_snapshot(worker.worker_id)
+                        restored = self.env.restore_snapshot(worker.worker_id)
+                        if not restored:
+                            logger.error(
+                                "Snapshot restore failed for worker %d; attempting clean-slate rebuild",
+                                worker.worker_id,
+                            )
+
+                            rebuilt = False
+                            rebuild_fn = getattr(self.env, "rebuild_worker_instance", None)
+                            rebuilt = self._invoke_optional_worker_callback(
+                                rebuild_fn,
+                                worker.worker_id,
+                            )
+                            if not callable(rebuild_fn):
+                                logger.error(
+                                    "Environment does not implement clean-slate rebuild for worker %d",
+                                    worker.worker_id,
+                                )
+
+                            if not rebuilt:
+                                failed_workers.append(worker.worker_id)
+
+                    if failed_workers:
+                        raise RuntimeError(
+                            "Snapshot restore recovery failed for workers: "
+                            f"{failed_workers}"
+                        )
+
                     logger.info("✓ Database snapshots restored successfully")
                 else:
                     logger.warning("Snapshot restoration requested but env not available")
@@ -930,9 +989,19 @@ class Population:
                 )
                 throughput = worker.metrics.throughput
 
+                latency_below_min = latency > 0 and latency < metric_config.latency_min
+                latency_above_max = latency > 0 and latency > metric_config.latency_max
+                throughput_below_min = (
+                    throughput > 0 and throughput < metric_config.throughput_min
+                )
+                throughput_above_max = (
+                    throughput > 0 and throughput > metric_config.throughput_max
+                )
                 exceeds_bounds = (
-                    (latency > 0 and latency < metric_config.latency_min)
-                    or (throughput > 0 and throughput > metric_config.throughput_max)
+                    latency_below_min
+                    or latency_above_max
+                    or throughput_below_min
+                    or throughput_above_max
                 )
                 if exceeds_bounds:
                     clamped_workers.append(worker)
@@ -1037,7 +1106,12 @@ class Population:
             'min_score': stats['min'],
             'best_worker_id': best_worker.worker_id,
             'best_config': best_worker.knob_config.copy(),  # type: ignore
-            'converged': check_convergence(self.workers, self.config.convergence_threshold),
+            'converged': check_convergence(
+                self.workers,
+                self.config.convergence_threshold,
+                dead_config_threshold=self.config.dead_config_threshold,
+                min_valid_workers=2,
+            ),
             'best_overall_score': self.best_overall_score,
             'generations_without_improvement': self.generations_without_improvement,
         }
