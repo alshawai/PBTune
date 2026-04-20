@@ -1,6 +1,0 @@
-services:
-  test:
-    image: docker:latest
-    command: docker info
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock

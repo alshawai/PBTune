@@ -405,7 +405,9 @@ def get_population_statistics(workers: List[Worker]) -> dict:
 
 def check_convergence(
     workers: List[Worker],
-    convergence_threshold: float = 0.01
+    convergence_threshold: float = 0.01,
+    dead_config_threshold: float = 0.0,
+    min_valid_workers: int = 2,
 ) -> bool:
     """
     Check if population has converged (all workers similar performance).
@@ -423,11 +425,35 @@ def check_convergence(
     convergence_threshold : float
         Maximum allowed standard deviation for convergence
         Default: 0.01 (very tight convergence)
+
+    dead_config_threshold : float
+        Minimum score considered a healthy, non-dead worker.
+        Workers below this threshold are excluded from convergence checks.
+
+    min_valid_workers : int
+        Minimum number of healthy workers required to evaluate convergence.
+        Convergence is not meaningful with fewer than this count.
         
     Returns
     -------
     bool
         True if converged, False otherwise
     """
-    stats = get_population_statistics(workers)
+    valid_workers = [
+        worker
+        for worker in workers
+        if worker.metrics is not None
+        and worker.metrics.failure_type is None
+        and worker.performance_score >= dead_config_threshold
+    ]
+
+    if len(valid_workers) < min_valid_workers:
+        logger.debug(
+            "Skipping convergence check: %d valid workers (minimum=%d)",
+            len(valid_workers),
+            min_valid_workers,
+        )
+        return False
+
+    stats = get_population_statistics(valid_workers)
     return stats['std'] < convergence_threshold
