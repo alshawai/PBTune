@@ -99,6 +99,9 @@ class EvaluatorConfig:
     vacuum_analyze_timeout_seconds : float
         Per-worker timeout for post-workload VACUUM ANALYZE safety maintenance.
         Prevents generation stalls when maintenance blocks or runs too long.
+    worker_memory_budget_bytes : Optional[int]
+        Per-worker RAM budget used to normalize PostgreSQL RSS into
+        memory_utilization [0, 1]. If None/invalid, falls back to host RAM.
     """
     workload_type: WorkloadType
     metric_config: MetricConfig
@@ -112,6 +115,7 @@ class EvaluatorConfig:
     random_seed: Optional[int] = None
     warmup_passes: int = 0
     vacuum_analyze_timeout_seconds: float = 45.0
+    worker_memory_budget_bytes: Optional[int] = None
 
 
 class WorkloadExecutor:
@@ -846,14 +850,22 @@ class Evaluator:
                 )
 
                 # Only restart every restart_interval generations (batching strategy)
-                should_restart = generation is not None and (generation % restart_interval == 0)
+                should_interval_restart = (
+                    generation is not None and (generation % restart_interval == 0)
+                )
+                should_restart = force_restart or should_interval_restart
 
                 if should_restart:
                     if restart_manager:
-                        worker_logger.info(
-                            "Restarting (generation %d is restart interval)",
-                            generation
-                        )
+                        if force_restart and not should_interval_restart:
+                            worker_logger.info(
+                                "Restarting (forced for config consistency after recovery)"
+                            )
+                        else:
+                            worker_logger.info(
+                                "Restarting (generation %d is restart interval)",
+                                generation
+                            )
                         restart_occurred = self._perform_restart(
                             connection, restart_manager, worker_log_id, worker_id=worker_id
                         )
@@ -1295,24 +1307,47 @@ class Evaluator:
                         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                             continue
 
-                    # Memory percentage
+                    # Normalize worker RSS against worker RAM budget when available.
+                    # This avoids dilution from dividing by full host RAM.
                     try:
-                        system_memory = psutil.virtual_memory().total
-                        metrics['memory_utilization'] = total_memory_rss / system_memory
+                        worker_budget = self.config.worker_memory_budget_bytes
+                        denominator = (
+                            float(worker_budget)
+                            if worker_budget is not None and worker_budget > 0
+                            else float(psutil.virtual_memory().total)
+                        )
+                        if denominator <= 0.0:
+                            metrics['memory_utilization'] = 0.0
+                        else:
+                            ratio = total_memory_rss / denominator
+                            metrics['memory_utilization'] = max(0.0, min(1.0, ratio))
+
                         memory_mb = total_memory_rss / (1024 * 1024)
+                        denominator_mb = denominator / (1024 * 1024) if denominator > 0 else 0.0
                         memory_pct = metrics['memory_utilization'] * 100
+                        denominator_label = "worker-budget" if worker_budget and worker_budget > 0 else "host-total"
+
                         if worker_id is not None:
                             worker_logger = get_logger(__name__, worker_id=worker_id)
                             worker_logger.debug(
-                                "Memory: %.1fMB (%.1f%%) across %d processes",
-                                memory_mb, memory_pct, len(postgres_processes)
+                                "Memory: %.1fMB / %.1fMB (%s) => %.1f%% across %d processes",
+                                memory_mb,
+                                denominator_mb,
+                                denominator_label,
+                                memory_pct,
+                                len(postgres_processes),
                             )
                         else:
                             logger.debug(
-                                "Memory: %.1fMB (%.1f%%) across %d processes",
-                                memory_mb, memory_pct, len(postgres_processes)
+                                "Memory: %.1fMB / %.1fMB (%s) => %.1f%% across %d processes",
+                                memory_mb,
+                                denominator_mb,
+                                denominator_label,
+                                memory_pct,
+                                len(postgres_processes),
                             )
-                    except:
+                    except (OSError, ValueError, TypeError) as exc:
+                        logger.debug("Memory denominator resolution failed: %s", exc)
                         metrics['memory_utilization'] = 0.0
 
                 except Exception as e:
@@ -1524,6 +1559,8 @@ class Evaluator:
                     worker_id=worker.worker_id
                 )
 
+                force_restart = worker.force_restart_next_eval
+
                 restart_manager = None
                 if self.config.enable_restart:
                     import copy
@@ -1549,11 +1586,17 @@ class Evaluator:
                     knob_applicator=knob_applicator,
                     restart_manager=restart_manager,
                     worker_log_id=worker_log_id,
-                    force_restart=False,
+                    force_restart=force_restart,
                     generation=generation,
                     restart_interval=self.config.restart_interval,
                     worker_id=worker.worker_id
                 )
+
+                if force_restart and restart_occurred:
+                    worker.force_restart_next_eval = False
+                    worker_logger.debug(
+                        "Cleared forced-restart marker after successful restart"
+                    )
 
                 if restart_occurred:
                     self.disconnect(connection, worker_id=worker.worker_id)
