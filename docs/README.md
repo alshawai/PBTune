@@ -1,6 +1,6 @@
 # Documentation Index
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-04-17
 
 This index provides a quick navigation map for the project documentation set.
 
@@ -14,6 +14,7 @@ This index provides a quick navigation map for the project documentation set.
 ## Evaluation and Benchmarking
 
 - [Performance Evaluation](./PERFORMANCE_EVALUATION.md)
+- [Evaluation Reproducibility Runbook](./EVALUATION_RUNBOOK.md)
 - [Metrics Validation](./METRICS_VALIDATION.md)
 - [Benchmarking Strategy](./BENCHMARKING.md)
 
