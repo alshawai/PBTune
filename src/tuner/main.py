@@ -39,6 +39,7 @@ import sys
 import math
 import time
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
@@ -46,6 +47,7 @@ import numpy as np
 import psycopg2
 
 from src.config.database import get_db_config
+from src.database.connection import get_connection
 
 from src.tuner.config import (
     get_knob_space,
@@ -181,6 +183,7 @@ class PBTTuner:
 
         self.cleanup_instances = kwargs.get('cleanup_instances', False)
         self.no_docker = kwargs.get('no_docker', False)
+        self.docker_image = kwargs.get('docker_image', None)
 
         self.warm_start_path = kwargs.get('warm_start_path', None)
         self.warm_start_provenance = {"enabled": False}
@@ -192,8 +195,8 @@ class PBTTuner:
         self.knob_space = get_knob_space(knob_tier)
 
         self.logger.debug("  Detecting hardware resources...")
-        worker_resources = detect_worker_resources(self.pbt_config.num_parallel_workers)
-        self.knob_space.resolve_hardware_ranges(worker_resources)
+        self.worker_resources = detect_worker_resources(self.pbt_config.num_parallel_workers)
+        self.knob_space.resolve_hardware_ranges(self.worker_resources)
 
         self.logger.debug("✓ Loaded %d knobs\n", len(self.knob_space))
 
@@ -212,6 +215,7 @@ class PBTTuner:
             restart_interval=10,
             random_seed=random_seed,
             warmup_passes=self.pbt_config.warmup_passes,
+            worker_memory_budget_bytes=self.worker_resources.ram_bytes,
             restart_config=RestartConfig(
                 method='pg_ctl' if self.no_docker else 'docker'
             )
@@ -263,6 +267,8 @@ class PBTTuner:
             workload_executor = self._create_workload_executor(workload_type, workload_file)
             self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.scale_factor}"
 
+        self.snapshot_identifier = self._normalize_snapshot_identifier(self.snapshot_identifier)
+
         self.output_dir = (
             Path(kwargs.get('output_dir', "results"))
             / self.workload_type.value
@@ -292,9 +298,6 @@ class PBTTuner:
 
 
         self.system_info = get_system_info()
-        self.worker_resources = detect_worker_resources(
-            max_parallel_workers=self.pbt_config.num_parallel_workers
-        )
 
         no_docker = kwargs.get('no_docker', False)
         self.env = EnvironmentFactory.create(
@@ -304,7 +307,9 @@ class PBTTuner:
             base_port=5440,
             db_config=self.db_config,
             worker_resources=self.worker_resources,
-            run_id="tuner_run"
+            run_id=self.snapshot_identifier,
+            image_name=self.docker_image,
+            force_recreate_baseline=self.force_recreate_baseline,
         )
         self.start_time: Optional[float] = None
         self.generation_history = []
@@ -330,6 +335,73 @@ class PBTTuner:
         """Dynamically fetch the all-time mathematically rescored best score from Population"""
         _, score = self.population.get_best_configuration()
         return score
+
+    def _normalize_snapshot_identifier(self, snapshot_identifier: str) -> str:
+        """Normalize snapshot identifiers for filesystem and Docker compatibility."""
+        normalized = re.sub(r"[^a-z0-9_.-]+", "-", snapshot_identifier.lower()).strip("-")
+        return normalized or "default"
+
+    def _get_runtime_supported_knobs(self, worker_id: int = 0) -> Tuple[set[str], str]:
+        """Get runtime pg_settings knob names and server version from a worker instance."""
+        db_config = self.env.get_db_config(worker_id)
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_connection(config=db_config, connect_timeout=5)
+            cursor = conn.cursor()
+            cursor.execute("SELECT current_setting('server_version')")
+            version_row = cursor.fetchone()
+            server_version = str(version_row[0]) if version_row else "unknown"
+
+            cursor.execute("SELECT name FROM pg_settings")
+            supported_knobs = {str(row[0]) for row in cursor.fetchall()}
+            return supported_knobs, server_version
+        except (psycopg2.Error, RuntimeError, OSError, ValueError) as exc:
+            self.logger.warning(
+                "Failed to inspect runtime pg_settings for knob compatibility: %s",
+                exc,
+            )
+            return set(self.knob_space.knobs.keys()), "unknown"
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
+
+    def _prune_unsupported_runtime_knobs(self) -> None:
+        """Prune knobs unavailable on runtime PostgreSQL to avoid apply/verify failures."""
+        supported_knobs, server_version = self._get_runtime_supported_knobs(worker_id=0)
+        configured_knobs = set(self.knob_space.knobs.keys())
+        unsupported_knobs = sorted(configured_knobs - supported_knobs)
+
+        if not unsupported_knobs:
+            self.logger.info(
+                "✓ Runtime knob compatibility check passed against PostgreSQL %s (%d knobs)",
+                server_version,
+                len(configured_knobs),
+            )
+            return
+
+        for knob_name in unsupported_knobs:
+            self.knob_space.knobs.pop(knob_name, None)
+
+        preview = unsupported_knobs[:20]
+        suffix = " ..." if len(unsupported_knobs) > len(preview) else ""
+        self.logger.warning(
+            "Pruned %d unsupported knobs for PostgreSQL %s: %s%s",
+            len(unsupported_knobs),
+            server_version,
+            ", ".join(preview),
+            suffix,
+        )
+
+        if len(self.knob_space) == 0:
+            raise RuntimeError(
+                "No runtime-compatible knobs remain after pg_settings compatibility pruning."
+            )
+
+        self.logger.info("✓ Continuing with %d runtime-compatible knobs", len(self.knob_space))
 
     def _create_workload_executor(
         self,
@@ -426,7 +498,21 @@ class PBTTuner:
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as e:
-            recovered = self.env.recover_instance(worker.worker_id)
+            recovered = False
+            if self.env is None:
+                worker_logger.error(
+                    "[DEAD_CONFIG] No environment available for immediate recovery"
+                )
+            else:
+                try:
+                    recovered = self.env.recover_instance(worker.worker_id)
+                except (ConnectionError, RuntimeError, OSError) as recovery_error:
+                    worker_logger.error(
+                        "[DEAD_CONFIG] Immediate recovery raised an unexpected error: %s",
+                        recovery_error,
+                        exc_info=True,
+                    )
+
             if recovered:
                 worker_logger.info(
                     "[DEAD_CONFIG] Immediate instance recovery succeeded after connection failure"
@@ -604,94 +690,102 @@ class PBTTuner:
         self.logger.info("Output Dir:      %s", self.output_dir)
         self.start_time = time.time()
 
-        log_section_header(self.logger, "Setting Up PostgreSQL Instances")
-        self.logger.info(
-            "Creating %d PostgreSQL instances for parallel execution...",
-            self.pbt_config.population_size
-        )
-
         try:
-            instances = self.env.setup_instances(
-                num_workers=self.pbt_config.population_size,
-                force_recreate=self.force_recreate_instances
+            log_section_header(self.logger, "Setting Up PostgreSQL Instances")
+            self.logger.info(
+                "Creating %d PostgreSQL instances for parallel execution...",
+                self.pbt_config.population_size
             )
-            self.logger.info("✓ Created %d instances", len(instances))
 
-            verification = self.env.verify_instances()
-            failed = [wid for wid, status in verification.items() if not status]
-            if failed:
-                self.logger.error("❌ Failed to verify instances: %s", failed)
-                raise RuntimeError(f"Instance verification failed for workers: {failed}")
+            try:
+                instances = self.env.setup_instances(
+                    num_workers=self.pbt_config.population_size,
+                    force_recreate=self.force_recreate_instances
+                )
+                self.logger.info("✓ Created %d instances", len(instances))
 
-            self.logger.info("✓ All instances verified and accessible\n")
-        except Exception as e:
-            self.logger.error("❌ Failed to setup instances: %s", e)
-            raise
+                verification = self.env.verify_instances()
+                failed = [wid for wid, status in verification.items() if not status]
+                if failed:
+                    self.logger.error("❌ Failed to verify instances: %s", failed)
+                    raise RuntimeError(f"Instance verification failed for workers: {failed}")
 
-        self.logger.info("Initializing population...")
-        if self.warm_start_path:
-            self.logger.debug("Warm-starting from %s", self.warm_start_path)
-            warm_configs = self._build_warm_start_configs(
-                warm_start_path=Path(self.warm_start_path),
-                population_size=self.pbt_config.population_size,
-                seed=42,
+                self.logger.info("✓ All instances verified and accessible\n")
+                self._prune_unsupported_runtime_knobs()
+            except Exception as e:
+                self.logger.error("❌ Failed to setup instances: %s", e)
+                raise
+
+            self.logger.info("Initializing population...")
+            if self.warm_start_path:
+                self.logger.debug("Warm-starting from %s", self.warm_start_path)
+                warm_configs = self._build_warm_start_configs(
+                    warm_start_path=Path(self.warm_start_path),
+                    population_size=self.pbt_config.population_size,
+                    seed=42,
+                )
+                self.population.initialize(
+                    initial_configs=warm_configs,
+                    random_seed=self.random_seed
+                )
+            else:
+                self.population.initialize(random_seed=self.random_seed)
+
+            self.logger.debug("Assigning instance configurations to workers...")
+            self.population.setup_worker_instances(
+                instances=instances,
+                dbname=self.db_config.dbname,
+                user=self.db_config.user,
+                password=self.db_config.password
             )
-            self.population.initialize(
-                initial_configs=warm_configs,
-                random_seed=self.random_seed
+            self.population.env = self.env
+            self.logger.info(
+                "✓ Initialized %d workers with dedicated instances\n",
+                len(self.population.workers)
             )
-        else:
-            self.population.initialize(random_seed=self.random_seed)
 
-        self.logger.debug("Assigning instance configurations to workers...")
-        self.population.setup_worker_instances(
-            instances=instances,
-            dbname=self.db_config.dbname,
-            user=self.db_config.user,
-            password=self.db_config.password
-        )
-        self.population.env = self.env
-        self.logger.info(
-            "✓ Initialized %d workers with dedicated instances\n",
-            len(self.population.workers)
-        )
-
-        # Register snapshot manager with population
-        if self.pbt_config.enable_snapshots:
-            self.population.setup_snapshots(
-                env=self.env,
-                pbt_config=self.pbt_config,
-            )
-            self.logger.info("✓ Snapshot restoration configured\n")
+            # Register snapshot manager with population
+            if self.pbt_config.enable_snapshots:
+                self.population.setup_snapshots(
+                    env=self.env,
+                    pbt_config=self.pbt_config,
+                )
+                self.logger.info("✓ Snapshot restoration configured\n")
 
 
-        try:
-            for generation in range(self.pbt_config.num_generations):
-                self.run_generation(generation)
+            try:
+                for generation in range(self.pbt_config.num_generations):
+                    self.run_generation(generation)
 
-                if self.population.should_stop():
-                    reason = self._get_stop_reason()
-                    self.logger.info("⚠ Early stopping triggered: %s", reason)
-                    break
+                    if self.population.should_stop():
+                        reason = self._get_stop_reason()
+                        self.logger.info("⚠ Early stopping triggered: %s", reason)
+                        break
 
-                if (generation + 1) % 5 == 0:
-                    self.save_intermediate_results(generation)
+                    if (generation + 1) % 5 == 0:
+                        self.save_intermediate_results(generation)
 
-        except KeyboardInterrupt:
-            self.logger.info("⚠ Interrupted by user. Saving results...")
+            except KeyboardInterrupt:
+                self.logger.info("⚠ Interrupted by user. Saving results...")
 
-        except (RuntimeError, ValueError) as e:
-            self.logger.error("\n❌ Error during training: %s", e)
-            self.logger.debug("Exception details:", exc_info=True)
+            except (RuntimeError, ValueError) as e:
+                self.logger.error("\n❌ Error during training: %s", e)
+                self.logger.debug("Exception details:", exc_info=True)
 
         finally:
             self.logger.info("Stopping PostgreSQL instances...")
-            self.env.stop_all()
+            try:
+                self.env.stop_all()
+            except (RuntimeError, ValueError, ConnectionError, OSError) as e:
+                self.logger.warning("⚠ Failed to stop PostgreSQL instances cleanly: %s", e)
 
             if self.cleanup_instances:
                 self.logger.info("Cleaning up environment...")
-                self.env.cleanup(remove_data=True)
-                self.logger.info("✓ Instance data removed")
+                try:
+                    self.env.cleanup(remove_data=True)
+                    self.logger.info("✓ Instance data removed")
+                except (RuntimeError, ValueError, ConnectionError, OSError) as e:
+                    self.logger.warning("⚠ Failed to clean up instance data: %s", e)
 
         total_time = time.time() - self.start_time
         results = self.save_final_results(total_time)
@@ -748,9 +842,12 @@ class PBTTuner:
                 'num_knobs': len(self.knob_space),
                 'workload_type': self.workload_type.value,
                 'benchmark_name': self.benchmark_name,
-                'scale_factor': self.pbt_config.scale_factor,
+                'tpch_scale_factor': self.pbt_config.scale_factor,
+                'tpch_warmup_passes': self.pbt_config.warmup_passes,
                 'sysbench_tables': self.pbt_config.sysbench_tables,
                 'sysbench_table_size': self.pbt_config.sysbench_table_size,
+                'sysbench_duration_seconds': self.pbt_config.evaluation_duration,
+                'sysbench_warmup_seconds': self.pbt_config.warmup_duration,
                 'population_size': self.pbt_config.population_size,
                 'total_generations': self.population.current_generation,
                 'total_time_seconds': total_time,
@@ -828,9 +925,40 @@ class PBTTuner:
         population_size: int,
         seed: int,
     ) -> List[Dict[str, Any]]:
-        """Build initial configs from a previous best_config.json."""
-        with open(Path(self.warm_start_path), 'r', encoding='utf-8') as f:  # type: ignore
-            best_config_frac = json.load(f)
+        """Build initial configs from a previous warm-start artifact.
+
+        Accepts either:
+        - ``best_config_*.json`` (flat mapping: knob -> fraction)
+        - ``pbt_results_*.json`` (nested at ``best_configuration.knobs``)
+        """
+        with open(warm_start_path, 'r', encoding='utf-8') as f:
+            warm_start_data = json.load(f)
+
+        if not isinstance(warm_start_data, dict):
+            raise ValueError(
+                "Warm-start file must be a JSON object containing knob fractions"
+            )
+
+        best_config_frac: Dict[str, Any]
+        if "best_configuration" in warm_start_data:
+            best_configuration = warm_start_data.get("best_configuration")
+            if not isinstance(best_configuration, dict):
+                raise ValueError(
+                    "Warm-start tuning session file has invalid best_configuration block"
+                )
+
+            knobs = best_configuration.get("knobs")
+            if not isinstance(knobs, dict):
+                raise ValueError(
+                    "Warm-start tuning session file is missing best_configuration.knobs"
+                )
+
+            self.logger.debug(
+                "Warm-start source detected as tuning session output; using best_configuration.knobs"
+            )
+            best_config_frac = knobs
+        else:
+            best_config_frac = warm_start_data
 
         for knob_name, knob_val in best_config_frac.items():
             if knob_name in self.knob_space.knobs:
@@ -1075,6 +1203,16 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     instance_group.add_argument(
+        '--docker-image',
+        type=str,
+        default=None,
+        help=(
+            'Docker image override for PostgreSQL workers '
+            '(e.g., postgres:18). If omitted, auto-resolved from host version.'
+        )
+    )
+
+    instance_group.add_argument(
         '--force-recreate-instances',
         action='store_true',
         help='Force recreation of PostgreSQL instances (default: reuse existing)'
@@ -1124,6 +1262,12 @@ on your hardware, configuration, and workload/benchmark.
         )
     )
 
+    output_group.add_argument(
+        '--no-color',
+        action='store_true',
+        help='Disable ANSI colors in terminal logger output'
+    )
+
     return parser.parse_args()
 
 
@@ -1145,7 +1289,6 @@ def main():
 
     setup_logging(
         verbosity=args.verbose,
-        enable_colors=True,
         show_module=True,
         output_file=output_file
     )
@@ -1228,7 +1371,8 @@ def main():
             output_dir=args.output_dir,
             logger=logger,
             timestamp=timestamp,
-            no_docker=args.no_docker
+            no_docker=args.no_docker,
+            docker_image=args.docker_image,
         )
 
         tuner.run()
