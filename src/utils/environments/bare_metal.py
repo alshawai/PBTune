@@ -16,10 +16,12 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any
 import psycopg2
+import psutil
 
 from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
 from src.tuner.evaluator.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
+from src.database.connection import get_connection
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,11 +42,30 @@ class BareMetalEnvironment(DatabaseEnvironment):
         schema_provider: BenchmarkExecutor,
         base_port: int = 5440,
         base_dir: Path = Path("./pg_instances"),
+        ram_bytes: int = 0,
+        force_recreate_baseline: bool = False,
     ):
-        super().__init__(run_id, db_config, schema_provider)
+        logger.info(
+            "Initializing BareMetalEnvironment with base_port=%d, base_dir=%s...",
+            base_port,
+            base_dir
+        )
+        super().__init__(
+            run_id,
+            db_config,
+            schema_provider,
+            force_recreate_baseline=force_recreate_baseline,
+        )
         self.base_port = base_port
         self.base_dir = base_dir
+        self.ram_bytes = ram_bytes
         self.instances: Dict[int, InstanceConfig] = {}
+
+        logger.debug(
+            "➤ Initialized BareMetalEnvironment with base_port=%d, base_dir=%s",
+            self.base_port,
+            self.base_dir
+        )
 
     def setup_instances(
             self,
@@ -60,6 +81,9 @@ class BareMetalEnvironment(DatabaseEnvironment):
             num_workers,
             force_recreate
         )
+
+        if self.force_recreate_baseline:
+            self._remove_baseline_snapshot()
 
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
@@ -115,7 +139,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
                 
                 # Overwrite postgresql.conf to ensure the correct port is bound natively
                 conf_path = data_dir / "postgresql.conf"
-                with open(conf_path, "a") as f:
+                with open(conf_path, "a", encoding="utf-8") as f:
                     f.write(f"\nport = {port}\n")
                     f.write("unix_socket_directories = '/tmp'\n")
                     f.write("listen_addresses = '*'\n")
@@ -128,7 +152,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
                 running=False
             )
             self.instances[worker_id] = instance
-            
+
             self.start_instance(worker_id)
             self._wait_for_ready(worker_id)
 
@@ -137,9 +161,18 @@ class BareMetalEnvironment(DatabaseEnvironment):
                 logger.info("  Initializing schema for worker %d...", worker_id)
                 self.initialize_schema(worker_id)
                 if worker_id == 0:
-                    logger.debug("  Caching worker 0 baseline snapshot for fast-path initialization...")
-                    self.create_snapshot(worker_id=0)
-            
+                    baseline_snapshot = self._resolve_snapshot_path()
+                    if baseline_snapshot.exists():
+                        logger.debug(
+                            "  Baseline snapshot already exists at %s; skipping recreation",
+                            baseline_snapshot,
+                        )
+                    else:
+                        logger.debug(
+                            "  Caching worker 0 baseline snapshot for fast-path initialization..."
+                        )
+                        self.create_snapshot(worker_id=0)
+
         return list(self.instances.values())
 
     def start_instance(self, worker_id: int) -> bool:
@@ -228,13 +261,30 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self.start_instance(worker_id)
             self._wait_for_ready(worker_id)
 
+    def _resolve_snapshot_path(self, snapshot_id: str = "") -> Path:
+        """Resolve a snapshot identifier to an absolute snapshot directory path."""
+        if snapshot_id:
+            return Path(snapshot_id)
+        return self.base_dir / "pg_snapshots" / self.run_id
+
+    def _remove_baseline_snapshot(self) -> None:
+        """Remove the baseline snapshot directory if it exists."""
+        baseline_snapshot = self._resolve_snapshot_path()
+        if baseline_snapshot.exists():
+            logger.info(
+                "Removing baseline snapshot at %s (force_recreate_baseline=True)",
+                baseline_snapshot,
+            )
+            shutil.rmtree(baseline_snapshot, ignore_errors=True)
+
     def create_snapshot(self, worker_id: int = 0) -> str:
         """Create a baseline snapshot from the specified worker instance using Rsync."""
-        baseline_path = self.base_dir / "pbt-snapshot-baseline"
+        baseline_path = self._resolve_snapshot_path()
 
         self.stop_instance(worker_id)
 
         # Rsync the data
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(baseline_path, ignore_errors=True)
         subprocess.run([
             "rsync", "-a", "--delete",
@@ -249,22 +299,19 @@ class BareMetalEnvironment(DatabaseEnvironment):
 
     def restore_snapshot(self, worker_id: int, snapshot_id: str = "") -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
-        if not snapshot_id:
-            snapshot_id = str(self.base_dir / "pbt-snapshot-baseline")
-
-        snapshot_path = Path(snapshot_id)
+        snapshot_path = self._resolve_snapshot_path(snapshot_id)
         if not snapshot_path.exists():
-            logger.debug("  No snapshot found at %s, skipping restore", snapshot_id)
+            logger.debug("  No snapshot found at %s, skipping restore", snapshot_path)
             return False
 
         data_dir = self.instances[worker_id].data_dir
         self.stop_instance(worker_id, mode='immediate')
-        
+
         try:
             subprocess.run([
                 "rsync", "-a", "--delete",
                 "--exclude", "postgresql.conf",
-                snapshot_id + "/",
+                str(snapshot_path) + "/",
                 str(data_dir) + "/"
             ], check=True)
         except subprocess.CalledProcessError as e:
@@ -291,6 +338,47 @@ class BareMetalEnvironment(DatabaseEnvironment):
             user=self.base_config.user,
             password=self.base_config.password
         )
+
+    def collect_memory_utilization(self, worker_id: int) -> float:
+        """Collect PostgreSQL RSS utilization ratio against worker memory budget."""
+        db_config = self.get_db_config(worker_id)
+
+        try:
+            conn = get_connection(db_config, connect_timeout=5)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT pg_backend_pid()")
+                row = cur.fetchone()
+                if row is None or row[0] is None:
+                    return 0.0
+                backend_pid = int(row[0])
+                cur.close()
+            finally:
+                conn.close()
+        except psycopg2.Error as exc:
+            logger.debug("Memory collection connect/query failed for worker %d: %s", worker_id, exc)
+            return 0.0
+
+        try:
+            backend_process = psutil.Process(backend_pid)
+            postmaster_process = backend_process.parent()
+            if postmaster_process is None:
+                return 0.0
+
+            total_rss = float(postmaster_process.memory_info().rss)
+            for proc in postmaster_process.children(recursive=True):
+                try:
+                    total_rss += float(proc.memory_info().rss)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+
+            denominator = float(self.ram_bytes) if self.ram_bytes > 0 else float(psutil.virtual_memory().total)
+            if denominator <= 0.0:
+                return 0.0
+            return max(0.0, min(1.0, total_rss / denominator))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError) as exc:
+            logger.debug("Memory RSS aggregation failed for worker %d: %s", worker_id, exc)
+            return 0.0
 
     def _wait_for_ready(self, worker_id: int, timeout=30) -> None:
         """Wait until PostgreSQL is accepting connections.
