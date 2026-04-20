@@ -255,6 +255,79 @@ def test_warm_start_invalid_absolute_values(mock_knob_space, tmp_path):
             seed=42
         )
 
+
+def test_warm_start_accepts_tuning_session_results_json(mock_knob_space, tmp_path, caplog):
+    """Warm-start should extract fractions from pbt_results best_configuration.knobs."""
+    warm_start_path = tmp_path / "pbt_results_20260418_0257.json"
+    warm_start_data = {
+        "tuning_session": {
+            "knob_tier": "minimal",
+            "num_knobs": 3,
+        },
+        "best_configuration": {
+            "score": 98.2,
+            "knobs": {
+                "shared_buffers": 0.15,
+                "work_mem": 0.001,
+                "maintenance_work_mem": 0.01,
+            },
+            "metrics": {},
+        },
+        "generation_history": [],
+    }
+    with open(warm_start_path, 'w', encoding='utf-8') as f:
+        json.dump(warm_start_data, f)
+
+    tuner = PBTTuner(
+        knob_tier="minimal",
+        pbt_config=PBTConfig(population_size=4, num_generations=1, num_parallel_workers=4),
+        warm_start_path=str(warm_start_path),
+        skip_schema_init=True,
+    )
+    tuner.knob_space = mock_knob_space
+
+    configs = tuner._build_warm_start_configs(
+        warm_start_path=warm_start_path,
+        population_size=4,
+        seed=42,
+    )
+
+    assert len(configs) == 2
+    base = configs[0]
+    assert base["shared_buffers"] == 78643
+    assert base["work_mem"] == 4194
+    assert base["maintenance_work_mem"] == 41943
+    assert "Warm-start config missing knobs" not in caplog.text
+    assert "Warm-start config dropping extra knobs" not in caplog.text
+
+
+def test_warm_start_rejects_malformed_tuning_session_json(mock_knob_space, tmp_path):
+    """Malformed pbt_results payloads should fail fast with clear errors."""
+    warm_start_path = tmp_path / "pbt_results_invalid.json"
+    warm_start_data = {
+        "best_configuration": {
+            "score": 88.0,
+            # knobs intentionally missing
+        }
+    }
+    with open(warm_start_path, 'w', encoding='utf-8') as f:
+        json.dump(warm_start_data, f)
+
+    tuner = PBTTuner(
+        knob_tier="minimal",
+        pbt_config=PBTConfig(population_size=2, num_generations=1, num_parallel_workers=2),
+        warm_start_path=str(warm_start_path),
+        skip_schema_init=True,
+    )
+    tuner.knob_space = mock_knob_space
+
+    with pytest.raises(ValueError, match="best_configuration.knobs"):
+        tuner._build_warm_start_configs(
+            warm_start_path=warm_start_path,
+            population_size=2,
+            seed=42,
+        )
+
 def test_warm_start_graduated_perturbation():
     """Graduated perturbation scale correctly across variant span."""
     tuner = PBTTuner(

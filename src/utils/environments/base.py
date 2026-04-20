@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 from pathlib import Path
 from dataclasses import dataclass
+import time
 
 import psycopg2
 from psycopg2 import sql
@@ -44,7 +45,8 @@ class DatabaseEnvironment(ABC):
     def __init__(
         self, run_id: str,
         db_config: DatabaseConfig,
-        schema_provider: BenchmarkExecutor
+        schema_provider: BenchmarkExecutor,
+        force_recreate_baseline: bool = False,
     ):
         """
         Initialize the environment manager.
@@ -57,10 +59,13 @@ class DatabaseEnvironment(ABC):
             Base configuration describing the database to manage.
         schema_provider : BenchmarkExecutor
             Provider to handle database schema initialization (e.g. SysbenchExecutor).
+        force_recreate_baseline : bool
+            If True, removes and recreates the baseline snapshot before setup.
         """
         self.run_id = run_id
         self.base_config = db_config
         self.schema_provider = schema_provider
+        self.force_recreate_baseline = force_recreate_baseline
 
     def initialize_schema(self, worker_id: int) -> None:
         """
@@ -75,6 +80,7 @@ class DatabaseEnvironment(ABC):
         """
         config = self.get_db_config(worker_id)
         self._ensure_database_exists(config)
+        self._reset_persisted_configuration(worker_id, config)
 
         LOGGER.debug("    Validating schema for worker %d...", worker_id)
         if self.schema_provider.validate(config):
@@ -94,6 +100,7 @@ class DatabaseEnvironment(ABC):
         )
         if self.restore_snapshot(worker_id):
             if self.schema_provider.validate(config):
+                self._reset_persisted_configuration(worker_id, config)
                 LOGGER.debug(
                     "%s    ➤ Schema restored from snapshot for worker %d%s",
                     ColorCode.OKGREEN,
@@ -150,6 +157,68 @@ class DatabaseEnvironment(ABC):
         except psycopg2.Error as e:
             LOGGER.error("Failed to ensure database '%s' exists: %s", config.dbname, e)
 
+    def _wait_until_connectable(self, config: DatabaseConfig, timeout_seconds: int = 30) -> bool:
+        """Wait for PostgreSQL to accept connections after restart operations."""
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                conn = get_connection(config=config, connect_timeout=2)
+                conn.close()
+                return True
+            except (RuntimeError, psycopg2.Error):
+                time.sleep(0.5)
+        return False
+
+    def _reset_persisted_configuration(self, worker_id: int, config: DatabaseConfig) -> None:
+        """Clear persisted ALTER SYSTEM settings and restart if pending_restart remains."""
+        conn = None
+        cursor = None
+        pending_restart_count = 0
+        try:
+            conn = get_connection(config=config, connect_timeout=5)
+            conn.autocommit = True
+            cursor = conn.cursor()
+            cursor.execute("ALTER SYSTEM RESET ALL")
+            cursor.execute("SELECT pg_reload_conf()")
+            cursor.execute("SELECT count(*) FROM pg_settings WHERE pending_restart")
+            row = cursor.fetchone()
+            pending_restart_count = int(row[0]) if row and row[0] is not None else 0
+        except (RuntimeError, psycopg2.Error, ValueError) as exc:
+            LOGGER.warning(
+                "Failed to reset persisted configuration for worker %d: %s",
+                worker_id,
+                exc,
+            )
+            return
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
+
+        if pending_restart_count <= 0:
+            return
+
+        if not self.stop_instance(worker_id):
+            LOGGER.warning(
+                "Failed to stop worker %d during persisted configuration reset",
+                worker_id,
+            )
+            return
+
+        if not self.start_instance(worker_id):
+            LOGGER.warning(
+                "Failed to restart worker %d during persisted configuration reset",
+                worker_id,
+            )
+            return
+
+        if not self._wait_until_connectable(config):
+            LOGGER.warning(
+                "Worker %d did not become connectable after persisted configuration reset",
+                worker_id,
+            )
+
     @abstractmethod
     def setup_instances(
         self,
@@ -198,3 +267,7 @@ class DatabaseEnvironment(ABC):
     @abstractmethod
     def get_db_config(self, worker_id: int) -> DatabaseConfig:
         """Get the runtime connection configuration for a defined worker."""
+
+    @abstractmethod
+    def collect_memory_utilization(self, worker_id: int) -> float:
+        """Collect per-worker PostgreSQL memory utilization as a [0, 1] ratio."""
