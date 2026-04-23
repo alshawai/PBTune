@@ -569,6 +569,7 @@ class ComparisonRunner:
                     worker_id=0,
                 )
                 apply_result = knob_applicator.apply(knobs)
+
                 if apply_result.restart_required:
                     LOGGER.info(
                         "Restart-required knobs applied (%s); restarting instance",
@@ -579,7 +580,8 @@ class ComparisonRunner:
                             "Failed to restart instance after applying "
                             f"restart-required knobs: {list(apply_result.restart_required)}"
                         )
-                    # Refresh db_config after restart (port may have changed)
+
+                    # Refresh config after restart and rebind applicator.
                     active_config = env.get_db_config(worker_id=0)
                     knob_applicator = KnobApplicator(
                         db_config=active_config,
@@ -588,7 +590,7 @@ class ComparisonRunner:
                     )
 
                 verification = knob_applicator.verify(knobs)
-                failed_params = [k for k, v in verification.items() if not v]
+                failed_params = [k for k, ok in verification.items() if not ok]
                 if failed_params:
                     LOGGER.warning(
                         "Configuration verification failed for %d parameters: %s",

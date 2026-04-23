@@ -178,6 +178,8 @@ class PBTTuner:
                     Timestamp for result files (format: YYYYMMDD_HHMM)
                 - logger: Optional[logging.Logger] (default: None)
                     Custom logger instance. If None, a default logger is created.
+                - enable_colors: bool (default: True)
+                    Enable ANSI colors in manually colorized startup log messages.
         """
         self.knob_tier = knob_tier
         self.pbt_config = pbt_config or STANDARD_CONFIG
@@ -189,6 +191,7 @@ class PBTTuner:
         self.cleanup_instances = kwargs.get("cleanup_instances", False)
         self.no_docker = kwargs.get("no_docker", False)
         self.docker_image = kwargs.get("docker_image", None)
+        self.enable_colors = kwargs.get("enable_colors", True)
 
         self.warm_start_path = kwargs.get("warm_start_path", None)
         self.warm_start_provenance = {"enabled": False}
@@ -199,7 +202,13 @@ class PBTTuner:
         self.logger.debug("Loading knob space: %s", knob_tier.upper())
         self.knob_space = get_knob_space(knob_tier)
         if self.pbt_config.tuning_mode == TuningMode.ONLINE:
-            self.knob_space = self.knob_space.create_online_view()
+            create_online_view = getattr(self.knob_space, "create_online_view", None)
+            if callable(create_online_view):
+                self.knob_space = create_online_view()
+            else:
+                self.logger.debug(
+                    "KnobSpace.create_online_view() not available; using full knob tier"
+                )
 
         self.logger.debug("  Detecting hardware resources...")
         self.worker_resources = detect_worker_resources(
@@ -227,7 +236,11 @@ class PBTTuner:
             worker_memory_budget_bytes=self.worker_resources.ram_bytes,
         )
 
-        info_color = ColorPalette.get_level_color('INFO', 'ansi')
+        info_color = (
+            ColorPalette.get_level_color("INFO", "ansi") if self.enable_colors else ""
+        )
+        bold = ColorCode.BOLD if self.enable_colors else ""
+        reset = ColorCode.RESET if self.enable_colors else ""
 
         if benchmark == "sysbench":
             self.benchmark_name = "sysbench"
@@ -235,9 +248,9 @@ class PBTTuner:
 
             self.logger.info(
                 "%s%sUsing external Sysbench C-binary for rigorous benchmarking.%s",
-                ColorCode.BOLD,
+                bold,
                 info_color,
-                ColorCode.RESET,
+                reset,
             )
             workload_executor = SysbenchExecutor(
                 tables=self.pbt_config.sysbench_tables,
@@ -254,9 +267,9 @@ class PBTTuner:
 
             self.logger.info(
                 "%s%sUsing TPC-H benchmark for analytical workload evaluation.%s",
-                ColorCode.BOLD,
+                bold,
                 info_color,
-                ColorCode.RESET,
+                reset,
             )
             workload_executor = TPCHExecutor(scale_factor=self.pbt_config.scale_factor)
             self.snapshot_identifier = f"tpch_sf{self.pbt_config.scale_factor}"
@@ -272,10 +285,10 @@ class PBTTuner:
 
             self.logger.info(
                 "%s%sUsing custom workload executor defined in %s.%s",
-                ColorCode.BOLD,
+                bold,
                 info_color,
                 workload_file,
-                ColorCode.RESET,
+                reset,
             )
             workload_executor = self._create_workload_executor(
                 workload_type, workload_file
@@ -336,8 +349,7 @@ class PBTTuner:
         self._last_logged_best_score: float = -1.0
 
         self.logger.info(
-            "%s%sPBT Database Tuner Initialization Complete!%s",
-            ColorCode.BOLD, info_color, ColorCode.RESET
+            "%s%sPBT Database Tuner Initialization Complete!%s", bold, info_color, reset
         )
 
     @property
@@ -1309,6 +1321,12 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    output_group.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI colors in terminal logger output",
+    )
+
     return parser.parse_args()
 
 
@@ -1316,6 +1334,7 @@ def main():
     """Main entry point"""
     args = parse_args()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    enable_colors = not args.no_color
 
     # Compute structured log directory: {base}/{workload}/pbt_runs/{tier}/
     workload_for_dir = "olap" if args.benchmark == "tpch" else args.workload
@@ -1324,10 +1343,11 @@ def main():
 
     output_file = log_output_dir / f"pbt_tuning_{timestamp}.html"
 
-    print_startup_banner()
+    print_startup_banner(enable_colors=enable_colors)
 
     setup_logging(
         verbosity=args.verbose,
+        enable_colors=enable_colors,
         show_module=True,
         output_file=output_file,
     )
@@ -1335,10 +1355,11 @@ def main():
         __name__
     )  # inherits from the root logger (defined in setup_logging)
 
-    info_color = ColorPalette.get_level_color("INFO", "ansi")
+    info_color = ColorPalette.get_level_color("INFO", "ansi") if enable_colors else ""
+    bold = ColorCode.BOLD if enable_colors else ""
+    reset = ColorCode.RESET if enable_colors else ""
     logger.info(
-        "%s%sStarting PBT Database Tuner Initialization...%s",
-        ColorCode.BOLD, info_color, ColorCode.RESET
+        "%s%sStarting PBT Database Tuner Initialization...%s", bold, info_color, reset
     )
 
     logger.debug("📝 Logging to HTML file: %s", output_file)
@@ -1405,6 +1426,7 @@ def main():
             timestamp=timestamp,
             no_docker=args.no_docker,
             docker_image=args.docker_image,
+            enable_colors=enable_colors,
         )
 
         tuner.run()

@@ -4,6 +4,7 @@ Cleanup script for PostgreSQL instances
 Stops all running instances and optionally removes data directories.
 """
 
+from __future__ import annotations
 import argparse
 import logging
 import shutil

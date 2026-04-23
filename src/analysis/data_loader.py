@@ -7,10 +7,11 @@ Based Training (PBT). It handles global metric re-scoring and dataframe encoding
 data for downstream Machine Learning models and visualization.
 """
 
+from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import pandas as pd
 
@@ -107,13 +108,15 @@ def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _extract_knob_bounds(df: pd.DataFrame) -> Dict[str, Tuple[float, float]]:
+def _extract_knob_bounds(df: pd.DataFrame, worker_resources: Optional[Dict] = None, tier: str = "extensive") -> Dict[str, Tuple[float, float]]:
     """Determine continuous/discrete bounds for fANOVA ConfigSpace using KnobSpecs."""
     bounds = {}
     try:
-        space = get_knob_space("extensive")
+        space = get_knob_space(tier)
+        if worker_resources:
+            space.resolve_hardware_ranges(worker_resources)
     except Exception as e:
-        logger.warning(f"Extensive knob space unavailable, using empirical fallback bounds: {e}")
+        logger.warning(f"Knob space unavailable, using empirical fallback bounds: {e}")
         space = None
 
     for col in df.columns:
@@ -202,7 +205,8 @@ def load_pbt_results(
             'workload_type': session_meta.get('workload_type', default_workload_type),
             'benchmark_name': session_meta.get('benchmark_name', 'unknown'),
             'system_info': data.get('system_info', {}),
-            'worker_resources': data.get('worker_resources', {})
+            'worker_resources': data.get('worker_resources', {}),
+            'knob_tier': session_meta.get('knob_tier', 'extensive')
         })
 
         for gen in data.get('generation_history', []):
@@ -278,7 +282,11 @@ def load_pbt_results(
     df = pd.DataFrame(raw_configs)
     df_encoded = _encode_dataframe_features(df)
     scores_series = pd.Series(global_scores, name="score")
-    knob_bounds = _extract_knob_bounds(df_encoded)
+    
+    worker_resources = metadata_list[0].get("worker_resources", {}) if metadata_list else {}
+    knob_tier = metadata_list[0].get("knob_tier", "extensive") if metadata_list else "extensive"
+    
+    knob_bounds = _extract_knob_bounds(df_encoded, worker_resources, knob_tier)
 
     logger.info(f"Loaded {n_valid} valid configurations with {len(df_encoded.columns)} variables.")
 

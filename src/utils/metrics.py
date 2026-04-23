@@ -29,6 +29,7 @@ OLAP Score:
 Higher score = better performance (we maximize this in PBT)
 """
 
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List
 import logging
