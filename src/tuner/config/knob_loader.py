@@ -16,6 +16,7 @@ This approach provides:
 - Separation of data retrieval from optimization logic
 """
 
+from __future__ import annotations
 import ast
 from pathlib import Path
 from typing import Dict, Any, List, Optional
