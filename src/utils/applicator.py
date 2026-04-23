@@ -28,7 +28,7 @@ Application Strategies:
 Example Usage:
 -------------
 >>> from src.utils.applicator import KnobApplicator, ApplicatorConfig
->>> 
+>>>
 >>> config = ApplicatorConfig(
 ...     persist=True,
 ...     auto_reload=True,
@@ -36,15 +36,15 @@ Example Usage:
 ...     rollback_on_error=False,  # Allow partial success
 ...     allow_restart_params=True  # Include high-impact parameters
 ... )
->>> 
+>>>
 >>> applicator = KnobApplicator(db_config, config)
->>> 
+>>>
 >>> knob_config = {
 ...     'shared_buffers': 131072,  # Requires restart
 ...     'work_mem': 8192,          # Runtime modifiable
 ...     'random_page_cost': 1.1    # Runtime modifiable
 ... }
->>> 
+>>>
 >>> result = applicator.apply(knob_config)
 >>> print(f"Applied: {result.applied_count}/{len(knob_config)}")
 >>> print(f"Restart required for: {result.restart_required}")
@@ -66,6 +66,7 @@ from src.utils.logger import get_logger
 
 class KnobContext(Enum):
     """PostgreSQL parameter context types."""
+
     INTERNAL = "internal"
     POSTMASTER = "postmaster"
     SIGHUP = "sighup"
@@ -79,7 +80,7 @@ class KnobContext(Enum):
 class ApplicatorConfig:
     """
     Configuration for KnobApplicator behavior.
-    
+
     Attributes
     ----------
     persist : bool
@@ -96,22 +97,20 @@ class ApplicatorConfig:
         they apply as many parameters as possible and continue with failures.
     allow_restart_params : bool
         Allow parameters that require restart (default: True)
-    auto_restart : bool
-        Automatically restart PostgreSQL when needed (default: False)
-        WARNING: Requires appropriate permissions and can cause downtime.
     """
+
     persist: bool = True
     auto_reload: bool = True
     validate: bool = True
     dry_run: bool = False
     rollback_on_error: bool = False
     allow_restart_params: bool = True
-    auto_restart: bool = False
 
 
 @dataclass
 class ParameterInfo:
     """Information about a PostgreSQL parameter from pg_settings."""
+
     name: str
     vartype: str
     context: str  # internal, postmaster, sighup, etc.
@@ -127,7 +126,7 @@ class ParameterInfo:
 class ApplicationResult:
     """
     Result of applying configuration changes.
-    
+
     Attributes
     ----------
     success : bool
@@ -145,6 +144,7 @@ class ApplicationResult:
     message : str
         Overall result message
     """
+
     success: bool
     applied: Dict[str, Any] = field(default_factory=dict)
     failed: Dict[str, str] = field(default_factory=dict)
@@ -157,12 +157,12 @@ class ApplicationResult:
 class KnobApplicator:
     """
     Applies PostgreSQL configuration changes safely with validation.
-    
+
     The applicator handles context-aware parameter application:
     - Runtime modifiable: Applied immediately with SET or ALTER SYSTEM
     - Restart required: Marked for manual restart
     - Validation: Checks against min/max/enum constraints
-    
+
     Attributes
     ----------
     config : ApplicatorConfig
@@ -173,19 +173,19 @@ class KnobApplicator:
         Active database connection
     param_cache : Dict[str, ParameterInfo]
         Cached parameter information from pg_settings
-    
+
     Example
     -------
     >>> applicator = KnobApplicator(
     ...     db_config=DatabaseConfig(host='localhost', dbname='postgres'),
     ...     config=ApplicatorConfig(persist=True, validate=True)
     ... )
-    >>> 
+    >>>
     >>> result = applicator.apply({
     ...     'work_mem': 8192,
     ...     'random_page_cost': 1.1
     ... })
-    >>> 
+    >>>
     >>> if result.success:
     ...     print(f"Applied {result.applied_count} parameters")
     ...     if result.restart_required:
@@ -196,11 +196,11 @@ class KnobApplicator:
         self,
         db_config: DatabaseConfig,
         config: Optional[ApplicatorConfig] = None,
-        worker_id: Optional[int] = None
+        worker_id: Optional[int] = None,
     ):
         """
         Initialize KnobApplicator.
-        
+
         Parameters
         ----------
         db_config : DatabaseConfig
@@ -222,7 +222,7 @@ class KnobApplicator:
             "Initialized KnobApplicator: persist=%s, validate=%s, dry_run=%s",
             self.config.persist,
             self.config.validate,
-            self.config.dry_run
+            self.config.dry_run,
         )
 
     def connect(self) -> None:
@@ -256,7 +256,7 @@ class KnobApplicator:
     def _load_parameter_info(self, param_names: List[str]) -> None:
         """
         Load parameter information from pg_settings.
-        
+
         Parameters
         ----------
         param_names : List[str]
@@ -265,7 +265,7 @@ class KnobApplicator:
         if not self.connection:
             raise RuntimeError("Not connected to PostgreSQL")
 
-        placeholders = ','.join(['%s'] * len(param_names))
+        placeholders = ",".join(["%s"] * len(param_names))
         query = f"""
             SELECT 
                 name,
@@ -294,9 +294,11 @@ class KnobApplicator:
                     unit=row[3],
                     min_val=row[4],
                     max_val=row[5],
-                    enumvals=row[6] if isinstance(row[6], list) else (row[6].split(',') if isinstance(row[6], str) else None),
+                    enumvals=row[6]
+                    if isinstance(row[6], list)
+                    else (row[6].split(",") if isinstance(row[6], str) else None),
                     boot_val=row[7],
-                    reset_val=row[8]
+                    reset_val=row[8],
                 )
                 self.param_cache[param_info.name] = param_info
 
@@ -309,14 +311,11 @@ class KnobApplicator:
             cursor.close()
 
     def _validate_parameter(
-        self,
-        name: str,
-        value: Any,
-        param_info: ParameterInfo
+        self, name: str, value: Any, param_info: ParameterInfo
     ) -> tuple[bool, Optional[str]]:
         """
         Validate parameter value against constraints.
-        
+
         Parameters
         ----------
         name : str
@@ -325,7 +324,7 @@ class KnobApplicator:
             Parameter value
         param_info : ParameterInfo
             Parameter metadata from pg_settings
-        
+
         Returns
         -------
         tuple[bool, Optional[str]]
@@ -342,7 +341,16 @@ class KnobApplicator:
                 return False, f"{name} must be boolean"
             if isinstance(value, str):
                 value_str = value.lower()
-                if value_str not in ('on', 'off', 'true', 'false', '1', '0', 'yes', 'no'):
+                if value_str not in (
+                    "on",
+                    "off",
+                    "true",
+                    "false",
+                    "1",
+                    "0",
+                    "yes",
+                    "no",
+                ):
                     return False, f"{name} invalid boolean value: {value}"
 
         elif param_info.vartype == "integer":
@@ -380,14 +388,11 @@ class KnobApplicator:
         return True, None
 
     def _apply_parameter(
-        self,
-        name: str,
-        value: Any,
-        param_info: ParameterInfo
+        self, name: str, value: Any, param_info: ParameterInfo
     ) -> tuple[bool, Optional[str]]:
         """
         Apply a single parameter.
-        
+
         Parameters
         ----------
         name : str
@@ -396,7 +401,7 @@ class KnobApplicator:
             Parameter value
         param_info : ParameterInfo
             Parameter metadata
-        
+
         Returns
         -------
         tuple[bool, Optional[str]]
@@ -416,7 +421,9 @@ class KnobApplicator:
                     cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
                     self.logger.info("(restart required) Applied %s = %s", name, value)
                 else:
-                    self.logger.warning("%s requires restart, skipping (persist=False)", name)
+                    self.logger.warning(
+                        "%s requires restart, skipping (persist=False)", name
+                    )
                     return False, f"{name} requires restart but persist=False"
 
             elif param_info.context in ["sighup", "backend", "superuser-backend"]:
@@ -426,10 +433,15 @@ class KnobApplicator:
                     cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
                     self.logger.info("(ALTER SYSTEM) Applied %s = %s", name, value)
                 else:
-                    self.logger.debug("%s requires pg_reload_conf(), skipping in session-only mode", name)
+                    self.logger.debug(
+                        "%s requires pg_reload_conf(), skipping in session-only mode",
+                        name,
+                    )
                     return False, f"{name} requires pg_reload_conf() but persist=False"
 
-            elif self.config.persist:  # runtime modifiable with persistence (USER/SUPERUSER)
+            elif (
+                self.config.persist
+            ):  # runtime modifiable with persistence (USER/SUPERUSER)
                 cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
                 self.logger.info("(ALTER SYSTEM) Applied %s = %s", name, value)
 
@@ -449,7 +461,7 @@ class KnobApplicator:
     def _reload_configuration(self) -> bool:
         """
         Reload PostgreSQL configuration (pg_reload_conf()).
-        
+
         Returns
         -------
         bool
@@ -475,26 +487,23 @@ class KnobApplicator:
         finally:
             cursor.close()
 
-    def apply(
-        self,
-        knob_config: Dict[str, Any]
-    ) -> ApplicationResult:
+    def apply(self, knob_config: Dict[str, Any]) -> ApplicationResult:
         """
         Apply knob configuration to PostgreSQL.
-        
+
         This is the main entry point for applying configurations.
         Handles validation, application, and rollback if needed.
-        
+
         Parameters
         ----------
         knob_config : Dict[str, Any]
             Dictionary of parameter_name -> value
-        
+
         Returns
         -------
         ApplicationResult
             Result with applied/failed parameters and restart requirements
-        
+
         Example
         -------
         >>> result = applicator.apply({
@@ -502,7 +511,7 @@ class KnobApplicator:
         ...     'work_mem': 8192,
         ...     'random_page_cost': 1.1
         ... })
-        >>> 
+        >>>
         >>> if result.success:
         ...     print(f"Applied {result.applied_count} parameters")
         >>> else:
@@ -511,10 +520,7 @@ class KnobApplicator:
         with self._lock:  # Use lock to ensure thread-safe application
             return self._apply_locked(knob_config)
 
-    def _apply_locked(
-        self,
-        knob_config: Dict[str, Any]
-    ) -> ApplicationResult:
+    def _apply_locked(self, knob_config: Dict[str, Any]) -> ApplicationResult:
         """Internal apply method (called while holding lock)."""
         result = ApplicationResult(success=False)
 
@@ -546,7 +552,9 @@ class KnobApplicator:
                 for name, value in knob_config.items():
                     if name in self.param_cache:
                         param_info = self.param_cache[name]
-                        is_valid, error_msg = self._validate_parameter(name, value, param_info)
+                        is_valid, error_msg = self._validate_parameter(
+                            name, value, param_info
+                        )
                         if not is_valid:
                             result.failed[name] = error_msg  # type: ignore
                             result.failed_count += 1
@@ -573,11 +581,17 @@ class KnobApplicator:
                     result.failed_count += 1
 
             if result.failed_count > 0 and self.config.rollback_on_error:
-                self.logger.warning("Failed to apply %d parameters", result.failed_count)
+                self.logger.warning(
+                    "Failed to apply %d parameters", result.failed_count
+                )
                 result.success = False
                 result.message = f"{result.failed_count} failures"
             else:
-                if self.config.persist and self.config.auto_reload and result.applied_count > 0:
+                if (
+                    self.config.persist
+                    and self.config.auto_reload
+                    and result.applied_count > 0
+                ):
                     if not self._reload_configuration():
                         self.logger.warning("Configuration applied but reload failed")
 
@@ -593,16 +607,13 @@ class KnobApplicator:
                     self.logger.info(
                         "Partial success: %d applied, %d failed",
                         result.applied_count,
-                        result.failed_count
+                        result.failed_count,
                     )
 
                 if result.restart_required:
-                    result.message += f", {len(result.restart_required)} require restart"
-                    if self.config.auto_restart:
-                        self.logger.warning(
-                            "Restart required for: %s (auto_restart delegated to RestartManager)", 
-                            result.restart_required
-                        )
+                    result.message += (
+                        f", {len(result.restart_required)} require restart"
+                    )
 
         except psycopg2.Error as e:
             result.success = False
@@ -615,18 +626,15 @@ class KnobApplicator:
 
         return result
 
-    def get_current_values(
-        self,
-        param_names: List[str]
-    ) -> Dict[str, Any]:
+    def get_current_values(self, param_names: List[str]) -> Dict[str, Any]:
         """
         Get current values of specified parameters.
-        
+
         Parameters
         ----------
         param_names : List[str]
             List of parameter names
-        
+
         Returns
         -------
         Dict[str, Any]
@@ -637,7 +645,7 @@ class KnobApplicator:
 
         cursor = self.connection.cursor()  # type: ignore
         try:
-            placeholders = ','.join(['%s'] * len(param_names))
+            placeholders = ",".join(["%s"] * len(param_names))
             query = f"""
                 SELECT name, setting, unit
                 FROM pg_settings
@@ -657,12 +665,12 @@ class KnobApplicator:
     def reset_parameter(self, name: str) -> bool:
         """
         Reset parameter to default value.
-        
+
         Parameters
         ----------
         name : str
             Parameter name
-        
+
         Returns
         -------
         bool
@@ -704,22 +712,26 @@ class KnobApplicator:
         expected_config: Dict[str, Any],
     ) -> Dict[str, bool]:
         """
-        Verify that PostgreSQL settings match expected values.
+        Verify that configuration parameters match expected values.
+
+        Queries `pg_settings` and compares actual values against the supplied
+        expected configuration.  Returns a mapping from parameter name to
+        a boolean indicating whether the value matched.
 
         Parameters
         ----------
         expected_config : Dict[str, Any]
-            Parameter name -> expected value mapping.
+            Mapping of parameter names to their expected values.
 
         Returns
         -------
         Dict[str, bool]
-            Parameter name -> match status.
+            Per-parameter verification results (True = match).
         """
         verification: Dict[str, bool] = {}
+        mismatches: list[str] = []
 
         conn = None
-        cursor = None
         try:
             conn = get_connection(self.db_config, connect_timeout=5)
             cursor = conn.cursor()
@@ -727,65 +739,101 @@ class KnobApplicator:
             for param_name, expected_value in expected_config.items():
                 try:
                     cursor.execute(
-                        "SELECT setting, vartype FROM pg_settings WHERE name = %s",
+                        "SELECT setting, unit, vartype FROM pg_settings WHERE name = %s",
                         (param_name,),
                     )
-                    row = cursor.fetchone()
+                    result = cursor.fetchone()
 
-                    if row is None:
+                    if not result:
+                        self.logger.warning(
+                            "Parameter '%s' not found in pg_settings", param_name
+                        )
                         verification[param_name] = False
                         continue
 
-                    current_value_str, vartype = row
+                    current_value_str, unit, vartype = result
+                    current_value_repr: str
 
                     if isinstance(expected_value, bool):
-                        current_value = str(current_value_str).lower() in (
-                            "on",
-                            "true",
-                            "1",
-                        )
-                        verification[param_name] = current_value == expected_value
+                        current_value = current_value_str.lower() in ("on", "true", "1")
+                        match = current_value == expected_value
+                        current_value_repr = str(current_value)
                     elif isinstance(expected_value, (int, float)):
                         current_value_num = float(current_value_str)
-                        expected_num = float(expected_value)
+                        expected_float = float(expected_value)
+
                         if vartype == "integer":
-                            verification[param_name] = int(round(current_value_num)) == int(
-                                round(expected_num)
+                            match = int(round(current_value_num)) == int(
+                                round(expected_float)
                             )
+                            current_value_repr = str(int(round(current_value_num)))
                         else:
-                            tolerance = max(0.01, abs(expected_num) * 1e-6)
-                            verification[param_name] = abs(current_value_num - expected_num) <= tolerance
+                            import math
+
+                            abs_tolerance = max(0.01, abs(expected_float) * 1e-6)
+                            match = math.isclose(
+                                current_value_num,
+                                expected_float,
+                                rel_tol=1e-6,
+                                abs_tol=abs_tolerance,
+                            )
+                            current_value_repr = str(current_value_num)
                     else:
-                        current_value_text = str(current_value_str)
+                        current_value_text = current_value_str
+                        # wal_compression enum migration: on -> pglz
                         if (
                             param_name == "wal_compression"
                             and str(expected_value).lower() in ("on", "true")
-                            and current_value_text.lower() in ("on", "pglz")
+                            and str(current_value_text).lower() in ("on", "pglz")
                         ):
-                            verification[param_name] = True
+                            match = True
                         else:
-                            verification[param_name] = (
-                                current_value_text == str(expected_value)
-                            )
+                            match = str(current_value_text) == str(expected_value)
+                        current_value_repr = str(current_value_text)
 
-                except (psycopg2.Error, ValueError, TypeError) as exc:
+                    verification[param_name] = match
+
+                    if not match:
+                        mismatches.append(
+                            f"{param_name}: expected={expected_value}, actual={current_value_repr}"
+                        )
+
+                except Exception as e:
                     self.logger.warning(
-                        "Failed to verify parameter '%s': %s", param_name, exc
+                        "Failed to verify parameter '%s': %s", param_name, e
                     )
                     verification[param_name] = False
 
-            return verification
+            cursor.close()
 
-        except (psycopg2.Error, OSError, RuntimeError) as exc:
-            self.logger.error("Configuration verification failed: %s", exc)
-            return {
-                name: False for name in expected_config
-            }
+            verified_count = sum(verification.values())
+            total_count = len(verification)
+
+            if verified_count == total_count:
+                self.logger.debug(
+                    "Configuration verified: %d/%d parameters correct",
+                    verified_count,
+                    total_count,
+                )
+            else:
+                self.logger.warning(
+                    "Configuration mismatch: %d/%d parameters verified",
+                    verified_count,
+                    total_count,
+                )
+                for mismatch in mismatches:
+                    self.logger.warning("  %s", mismatch)
+
+        except Exception as e:
+            self.logger.error("Configuration verification failed: %s", e)
         finally:
-            if cursor is not None:
-                cursor.close()
-            if conn is not None:
-                conn.close()
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        return verification
 
     def __repr__(self) -> str:
         """String representation."""

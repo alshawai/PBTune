@@ -64,7 +64,9 @@ def test_policy_loads_from_wrapped_json_with_expected_count_and_tuple_values():
     # Verify a known key round-trips to the tuple-based runtime contract.
     sample_key = "vacuum_cost_delay"
     assert sample_key in module.AUTOTUNING_SOURCE_EXCLUSIONS
-    assert module.AUTOTUNING_SOURCE_EXCLUSIONS[sample_key] == tuple(expected[sample_key])
+    assert module.AUTOTUNING_SOURCE_EXCLUSIONS[sample_key] == tuple(
+        expected[sample_key]
+    )
 
     assert all(
         isinstance(value, tuple) and len(value) == 2

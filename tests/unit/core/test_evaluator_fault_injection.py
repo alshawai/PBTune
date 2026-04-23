@@ -62,6 +62,8 @@ class _InvalidBenchmarkExecutor(BenchmarkExecutor):
 
 
 def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
+    mock_env = MagicMock()
+
     db_config = DatabaseConfig(
         user="postgres",
         password="postgres",
@@ -74,7 +76,7 @@ def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
         metric_config=MetricConfig.for_oltp(),
         db_config=db_config,
     )
-    return Evaluator(config=config, workload_executor=executor, env=MagicMock())
+    return Evaluator(config=config, workload_executor=executor, env=mock_env)
 
 
 def _make_worker() -> Worker:

@@ -27,12 +27,12 @@ class WorkerLoggerAdapter(logging.LoggerAdapter):
 
     def process(self, msg, kwargs):
         """Add worker_id to log record."""
-        worker_id = self.extra.get('worker_id')  # type: ignore
+        worker_id = self.extra.get("worker_id")  # type: ignore
         if worker_id is not None:
             msg = f"[Worker-{worker_id}] {msg}"
 
-        if 'extra' not in kwargs:
-            kwargs['extra'] = {}
-        kwargs['extra'].update(self.extra)  # type: ignore
+        if "extra" not in kwargs:
+            kwargs["extra"] = {}
+        kwargs["extra"].update(self.extra)  # type: ignore
 
         return msg, kwargs

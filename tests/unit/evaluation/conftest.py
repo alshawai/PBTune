@@ -95,6 +95,7 @@ def make_run_result():
     Usage::
         default_run = make_run_result("default", 1, score=42.0, tps=800.0)
     """
+
     def _factory(
         config_type: str,
         run_number: int,
@@ -122,6 +123,7 @@ def make_run_result():
             score=score,
             duration_seconds=90.0,
         )
+
     return _factory
 
 
