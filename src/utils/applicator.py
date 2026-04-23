@@ -699,6 +699,94 @@ class KnobApplicator:
         """Context manager exit - close connection."""
         self.disconnect()
 
+    def verify(
+        self,
+        expected_config: Dict[str, Any],
+    ) -> Dict[str, bool]:
+        """
+        Verify that PostgreSQL settings match expected values.
+
+        Parameters
+        ----------
+        expected_config : Dict[str, Any]
+            Parameter name -> expected value mapping.
+
+        Returns
+        -------
+        Dict[str, bool]
+            Parameter name -> match status.
+        """
+        verification: Dict[str, bool] = {}
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_connection(self.db_config, connect_timeout=5)
+            cursor = conn.cursor()
+
+            for param_name, expected_value in expected_config.items():
+                try:
+                    cursor.execute(
+                        "SELECT setting, vartype FROM pg_settings WHERE name = %s",
+                        (param_name,),
+                    )
+                    row = cursor.fetchone()
+
+                    if row is None:
+                        verification[param_name] = False
+                        continue
+
+                    current_value_str, vartype = row
+
+                    if isinstance(expected_value, bool):
+                        current_value = str(current_value_str).lower() in (
+                            "on",
+                            "true",
+                            "1",
+                        )
+                        verification[param_name] = current_value == expected_value
+                    elif isinstance(expected_value, (int, float)):
+                        current_value_num = float(current_value_str)
+                        expected_num = float(expected_value)
+                        if vartype == "integer":
+                            verification[param_name] = int(round(current_value_num)) == int(
+                                round(expected_num)
+                            )
+                        else:
+                            tolerance = max(0.01, abs(expected_num) * 1e-6)
+                            verification[param_name] = abs(current_value_num - expected_num) <= tolerance
+                    else:
+                        current_value_text = str(current_value_str)
+                        if (
+                            param_name == "wal_compression"
+                            and str(expected_value).lower() in ("on", "true")
+                            and current_value_text.lower() in ("on", "pglz")
+                        ):
+                            verification[param_name] = True
+                        else:
+                            verification[param_name] = (
+                                current_value_text == str(expected_value)
+                            )
+
+                except (psycopg2.Error, ValueError, TypeError) as exc:
+                    self.logger.warning(
+                        "Failed to verify parameter '%s': %s", param_name, exc
+                    )
+                    verification[param_name] = False
+
+            return verification
+
+        except (psycopg2.Error, OSError, RuntimeError) as exc:
+            self.logger.error("Configuration verification failed: %s", exc)
+            return {
+                name: False for name in expected_config
+            }
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
+
     def __repr__(self) -> str:
         """String representation."""
         return (
