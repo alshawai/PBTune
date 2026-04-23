@@ -11,7 +11,9 @@ from src.config.database import DatabaseConfig
 class _FakeCursor:
     """Cursor stub for deterministic validate() query responses."""
 
-    def __init__(self, table_names: list[str], max_id: int | None, row_count: int | None):
+    def __init__(
+        self, table_names: list[str], max_id: int | None, row_count: int | None
+    ):
         self._table_names = table_names
         self._max_id = max_id
         self._row_count = row_count
@@ -101,7 +103,9 @@ def _make_db_config() -> DatabaseConfig:
 
 def test_validate_accepts_exact_table_set_and_row_count() -> None:
     """Validation should pass only when schema matches configured profile shape."""
-    cursor = _FakeCursor(table_names=["sbtest1", "sbtest2"], max_id=25000, row_count=10200)
+    cursor = _FakeCursor(
+        table_names=["sbtest1", "sbtest2"], max_id=25000, row_count=10200
+    )
     conn = _FakeConnection(cursor)
     executor = SysbenchExecutor(tables=2, table_size=10_000)
 
@@ -131,7 +135,9 @@ def test_validate_rejects_extra_tables_from_previous_profile() -> None:
 
 def test_validate_rejects_row_cardinality_mismatch() -> None:
     """Validation should fail when row cardinality does not match table_size contract."""
-    cursor = _FakeCursor(table_names=["sbtest1", "sbtest2"], max_id=250000, row_count=100000)
+    cursor = _FakeCursor(
+        table_names=["sbtest1", "sbtest2"], max_id=250000, row_count=100000
+    )
     conn = _FakeConnection(cursor)
     executor = SysbenchExecutor(tables=2, table_size=10_000)
 
@@ -147,7 +153,9 @@ def test_prepare_drops_tpch_leftovers_before_sysbench_prepare() -> None:
     executor = SysbenchExecutor(tables=2, table_size=10_000)
     logger = MagicMock()
 
-    cleanup_cursor = _PrepareCursorStub(table_names=["lineitem", "orders", "_tpch_metadata"])
+    cleanup_cursor = _PrepareCursorStub(
+        table_names=["lineitem", "orders", "_tpch_metadata"]
+    )
     cleanup_conn = _PrepareConnectionStub(cleanup_cursor)
     vacuum_cursor = _PrepareCursorStub()
     vacuum_conn = _PrepareConnectionStub(vacuum_cursor)
