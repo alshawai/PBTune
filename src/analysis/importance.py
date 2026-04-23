@@ -5,7 +5,6 @@ Knob Importance Analysis
 Computes marginal and pairwise importance of database knobs using fANOVA variance decomposition.
 """
 
-import logging
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
 
@@ -13,6 +12,13 @@ import pandas as pd
 from ConfigSpace import ConfigurationSpace
 from ConfigSpace.hyperparameters import UniformFloatHyperparameter, UniformIntegerHyperparameter
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from fanova import fANOVA
+
+from src.analysis.data_loader import LoadedData
+from src.utils.logger import get_logger
+
+
 # Monkey-patch np.float for fanova backwards compatibility
 if not hasattr(np, 'float'):
     np.float = float
@@ -21,12 +27,7 @@ if not hasattr(np, 'int'):
 if not hasattr(np, 'bool'):
     np.bool = bool
 
-from sklearn.ensemble import RandomForestRegressor
-from fanova import fANOVA
-
-from src.analysis.data_loader import LoadedData
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class InsufficientDataError(Exception):
     """Raised when there are fewer than 30 samples available for importance analysis."""
