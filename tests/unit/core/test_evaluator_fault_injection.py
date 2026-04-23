@@ -9,7 +9,7 @@ import pytest
 from src.config.database import DatabaseConfig
 from src.tuner.core.worker import Worker
 from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.metrics import MetricConfig, PerformanceMetrics, WorkloadType
 
 
@@ -74,7 +74,7 @@ def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
         metric_config=MetricConfig.for_oltp(),
         db_config=db_config,
     )
-    return Evaluator(config=config, workload_executor=executor)
+    return Evaluator(config=config, workload_executor=executor, env=MagicMock())
 
 
 def _make_worker() -> Worker:

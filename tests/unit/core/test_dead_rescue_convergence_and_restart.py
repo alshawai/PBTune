@@ -10,7 +10,7 @@ from src.config.database import DatabaseConfig
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
 from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.applicator import ApplicationResult
 from src.utils.metrics import MetricConfig, PerformanceMetrics, WorkloadType
 
@@ -48,6 +48,8 @@ class _HealthyBenchmarkExecutor(BenchmarkExecutor):
 
 
 def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
+    mock_env = MagicMock()
+
     db_config = DatabaseConfig(
         user="postgres",
         password="postgres",
@@ -60,11 +62,13 @@ def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
         metric_config=MetricConfig.for_oltp(),
         db_config=db_config,
     )
-    return Evaluator(config=config, workload_executor=executor)
+    return Evaluator(config=config, workload_executor=executor, env=mock_env)
 
 
 def _make_worker() -> Worker:
-    worker = Worker(worker_id=0, knob_space=MagicMock(), knob_config={"shared_buffers": "256MB"})
+    worker = Worker(
+        worker_id=0, knob_space=MagicMock(), knob_config={"shared_buffers": "256MB"}
+    )
     worker.db_config = DatabaseConfig(
         user="postgres",
         password="postgres",
@@ -95,7 +99,11 @@ def test_record_generation_not_converged_after_all_dead_resample() -> None:
     )
 
     population.workers = [
-        Worker(worker_id=idx, knob_space=MagicMock(), knob_config={"shared_buffers": "32MB"})
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "32MB"},
+        )
         for idx in range(3)
     ]
 
@@ -112,7 +120,7 @@ def test_record_generation_not_converged_after_all_dead_resample() -> None:
     assert all(worker.force_restart_next_eval for worker in population.workers)
     assert all(worker.metrics is None for worker in population.workers)
 
-    setattr(population, "_ranges_updated", True)
+    population._ranges_updated = True
     result = population.record_generation()
 
     assert result.converged is False
@@ -129,18 +137,14 @@ def test_apply_configuration_force_restart_overrides_interval_deferral() -> None
         applied_count=1,
         restart_required={"shared_buffers"},
     )
-    restart_manager = MagicMock()
 
     with patch.object(evaluator, "_perform_restart", return_value=True) as restart_mock:
         restart_occurred = evaluator.apply_configuration(
             connection=connection,
             knob_config={"shared_buffers": "256MB"},
             knob_applicator=knob_applicator,
-            restart_manager=restart_manager,
-            worker_log_id="Worker-0",
             force_restart=True,
             generation=3,
-            restart_interval=10,
             worker_id=0,
         )
 
@@ -261,7 +265,7 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
 
     population.evaluator = MagicMock()
     population.evaluator.config.metric_config = metric_config
-    setattr(population, "_ranges_updated", True)
+    population._ranges_updated = True
     population.current_generation = 5
 
     workers = []
@@ -284,7 +288,7 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     old_latency_max = metric_config.latency_max
     old_throughput_min = metric_config.throughput_min
 
-    saturation_check = getattr(population, "_check_and_handle_saturation")
+    saturation_check = population._check_and_handle_saturation
     saturation_check(lambda _w: (PerformanceMetrics(), 0.0))
 
     assert metric_config.latency_max > old_latency_max

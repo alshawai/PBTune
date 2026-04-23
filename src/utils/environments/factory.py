@@ -19,7 +19,7 @@ from src.utils.logger import get_logger, get_isolation_warning_banner
 from src.utils.environments.base import DatabaseEnvironment
 from src.utils.environments.docker import DockerEnvironment
 from src.utils.environments.bare_metal import BareMetalEnvironment
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
 from src.utils.hardware_info import detect_pg_version
 
@@ -88,7 +88,9 @@ class EnvironmentFactory:
             try:
                 # Test connectivity
                 docker.from_env().ping()
-                resolved_image_name = EnvironmentFactory._resolve_docker_image(image_name)
+                resolved_image_name = EnvironmentFactory._resolve_docker_image(
+                    image_name
+                )
                 return DockerEnvironment(
                     run_id=run_id,
                     db_config=db_config,

@@ -20,7 +20,6 @@ class _DummySchemaProvider:
     """Minimal schema provider stand-in used for context payload generation."""
 
 
-
 class _SysbenchLikeSchemaProvider:
     """Schema provider stand-in with profile-defining Sysbench attributes."""
 
@@ -50,7 +49,9 @@ def _make_environment() -> DockerEnvironment:
     env.container_prefix = "pbt-worker"
     env.force_recreate_baseline = False
     env.instances = {
-        0: InstanceConfig(worker_id=0, port=5440, data_dir=Path("/tmp/worker_0"), running=True)
+        0: InstanceConfig(
+            worker_id=0, port=5440, data_dir=Path("/tmp/worker_0"), running=True
+        )
     }
     env._snapshot_timeout = 120
     env._ready_timeout = 60
@@ -203,7 +204,9 @@ def test_default_snapshot_id_is_profile_scoped() -> None:
 def test_default_snapshot_id_changes_when_schema_profile_changes() -> None:
     """Different benchmark schema profiles must not share snapshot identities."""
     standard_env = _make_environment()
-    standard_env.schema_provider = _SysbenchLikeSchemaProvider(tables=10, table_size=100000)
+    standard_env.schema_provider = _SysbenchLikeSchemaProvider(
+        tables=10, table_size=100000
+    )
 
     rapid_env = _make_environment()
     rapid_env.schema_provider = _SysbenchLikeSchemaProvider(tables=2, table_size=10000)
@@ -234,7 +237,9 @@ def test_snapshot_exists_requires_matching_manifest_signature(tmp_path: Path) ->
     assert env.snapshot_exists(worker_id=0) is False
 
 
-def test_snapshot_exists_returns_true_with_matching_manifest_signature(tmp_path: Path) -> None:
+def test_snapshot_exists_returns_true_with_matching_manifest_signature(
+    tmp_path: Path,
+) -> None:
     """Existing images are reusable only when manifest profile metadata matches."""
     env = _make_environment()
     env.base_dir = tmp_path

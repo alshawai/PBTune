@@ -30,13 +30,13 @@ class _DummyEnvironment(DatabaseEnvironment):
     def recover_instance(self, worker_id: int) -> bool:
         return True
 
+    def restart_instance(self, worker_id: int) -> bool:
+        return True
+
     def verify_instances(self) -> dict[int, bool]:
         return {}
 
     def cleanup(self, remove_data: bool = False) -> None:
-        return None
-
-    def apply_knobs(self, worker_id: int, knobs):
         return None
 
     def create_snapshot(self, worker_id: int = 0) -> str:
@@ -77,7 +77,6 @@ def _make_env() -> _DummyEnvironment:
     )
 
 
-
 def test_ensure_database_exists_handles_connection_failure_without_name_error() -> None:
     """Operational errors should be logged and swallowed without secondary NameError."""
     db_config = DatabaseConfig(
@@ -105,6 +104,22 @@ def test_ensure_database_exists_handles_connection_failure_without_name_error() 
 
     logger_error.assert_called_once()
     assert "Failed to ensure database" in logger_error.call_args[0][0]
+
+
+def test_reset_statistics_uses_pg_stat_reset() -> None:
+    """reset_statistics should call pg_stat_reset() on the worker database."""
+    env = _make_env()
+    cursor = MagicMock()
+    cursor.fetchone.return_value = (None,)
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("src.utils.environments.base.get_connection", return_value=conn):
+        assert env.reset_statistics(worker_id=0) is True
+
+    cursor.execute.assert_called_once_with("SELECT pg_stat_reset()")
+    conn.commit.assert_called_once()
+    conn.close.assert_called_once()
 
 
 def test_reset_persisted_configuration_restarts_when_pending_restart() -> None:
