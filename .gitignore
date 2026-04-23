@@ -11,7 +11,7 @@ notes/
 code-snippets/
 
 # Research papers and PDFs
-Papers/
+papers/
 *.pdf
 research/
 
@@ -112,6 +112,7 @@ results/**/pbt_results_*.json
 results/**/best_config*.json
 results/**/intermediate_*.json
 results/**/*.html
+results/oltp/comparisons/
 results/**/fanova_importance.json
 
 # Postgres Snapshots generated during execution

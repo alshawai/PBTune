@@ -11,6 +11,8 @@ results directly comparable to published academic baselines.
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from psycopg2 import sql
+
 from src.config.database import DatabaseConfig
 from src.utils.metrics import PerformanceMetrics
 
@@ -71,3 +73,39 @@ class BenchmarkExecutor(ABC):
         hand, typically runs for a fixed duration and can benefit from a
         random seed for reproducibility.
         """
+
+    def _drop_existing_public_tables(
+        self,
+        cursor,
+        logger,
+        log_prefix: str = "",
+    ) -> None:
+        """Drop all existing tables in PostgreSQL public schema.
+
+        Args:
+            cursor: Active psycopg2 cursor bound to target database.
+            logger: Logger used for debug diagnostics.
+            log_prefix: Optional benchmark-specific prefix for log messages.
+        """
+        cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        existing_tables = [str(row[0]) for row in cursor.fetchall()]
+        if not existing_tables:
+            return
+
+        if log_prefix:
+            logger.debug(
+                f"{log_prefix} Dropping existing public tables (%d)...",
+                len(existing_tables),
+            )
+        else:
+            logger.debug(
+                "Dropping existing public tables (%d)...",
+                len(existing_tables),
+            )
+
+        for table_name in sorted(existing_tables):
+            cursor.execute(
+                sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
+                    sql.Identifier(table_name)
+                )
+            )

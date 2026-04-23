@@ -1,6 +1,6 @@
 # Population-Based Training for PostgreSQL Configuration Tuning
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-04-17
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-316192.svg)](https://www.postgresql.org/) [![License: Academic Research](https://img.shields.io/badge/License-Academic%20Research-red.svg)](#license)
 
@@ -425,6 +425,7 @@ Comprehensive documentation available in [`docs/`](./docs/):
 - **[PostgreSQL Connection and Knobs](./docs/POSTGRESQL_CONNECTION_AND_KNOBS.md)** - Database connection, knob retrieval, metadata management
 - **[Population Implementation](./docs/POPULATION_IMPLEMENTATION.md)** - Population initialization, parallel evaluation, evolution cycle
 - **[Environment Setup](./docs/ENVIRONMENT_SETUP.md)** - Installation, configuration, troubleshooting
+- **[Evaluation Reproducibility Runbook](./docs/EVALUATION_RUNBOOK.md)** - Canonical comparative-evaluation commands, outputs, and reproducibility checks
 
 ---
 

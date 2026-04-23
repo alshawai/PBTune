@@ -109,6 +109,11 @@ class Worker:
         Instance-specific database configuration
         Set by instance manager during initialization
         Contains host, port, dbname, user, password for worker's instance
+
+    force_restart_next_eval : bool
+        Whether evaluator should force a PostgreSQL restart on the next
+        configuration application. Used after dead-worker rescue to ensure
+        restart-required knobs are actually activated before benchmarking.
         
     Notes
     -----
@@ -138,6 +143,7 @@ class Worker:
 
     port: Optional[int] = None
     db_config: Optional[DatabaseConfig] = None
+    force_restart_next_eval: bool = False
 
     def __post_init__(self):
         """Initialize worker with random configuration if none provided."""
@@ -325,6 +331,7 @@ class Worker:
         self.performance_score = 0.0
         self.metrics = None
         self.parent_id = None
+        self.force_restart_next_eval = False
 
     def __repr__(self) -> str:
         """Human-readable representation."""
@@ -367,4 +374,5 @@ class Worker:
             'parent_id': self.parent_id,
             'generation_created': self.generation_created,
             'port': self.port,
+            'force_restart_next_eval': self.force_restart_next_eval,
         }
