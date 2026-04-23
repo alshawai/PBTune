@@ -26,38 +26,28 @@ Design Patterns:
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List, Union
-from pathlib import Path
-import json
+from typing import Dict, Any, Optional, Union
 import logging
-import math
 import time
-import subprocess
-import threading
-from queue import Queue
-import yaml
 import numpy as np
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import connection as PostgresConnection, register_adapter, AsIs
-import psutil
 
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
-from src.tuner.config import get_knob_space
+from src.utils.environments.base import DatabaseEnvironment
 from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
     MetricConfig,
 )
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
+from src.tuner.evaluator.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
-from src.utils.restart_manager import (
-    RestartCostModel,
-    PostgresRestartManager,
-    RestartConfig,
-)
+from src.tuner.evaluator.restart_policy import TuningMode, should_restart
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger
 
@@ -89,16 +79,8 @@ class EvaluatorConfig:
         Duration of measurement phase in seconds (default: 60.0)
     cooldown_duration : float
         Duration to wait after config change before evaluation (default: 5.0)
-    enable_restart : bool
-        Enable automatic database restart for restart-required params (default: False)
-    restart_interval : int
-        Batch restarts every N generations (default: 10)
-    restart_config : Optional[RestartConfig]
-        Configuration for restart manager (default: None = auto-detect)
     random_seed : Optional[int]
         Optional random seed for reproducibility (default: None)
-    worker_memory_budget_bytes : Optional[int]
-        Per-worker RAM budget used by memory normalization logic when available.
     vacuum_analyze_timeout_seconds : float
         Per-worker timeout for post-workload VACUUM ANALYZE safety maintenance.
         Prevents generation stalls when maintenance blocks or runs too long.
@@ -113,513 +95,12 @@ class EvaluatorConfig:
     warmup_duration: float = 30.0
     measurement_duration: float = 60.0
     cooldown_duration: float = 5.0
-    enable_restart: bool = False
-    restart_interval: int = 10
-    restart_config: Optional[RestartConfig] = None
+    tuning_mode: TuningMode = TuningMode.ONLINE
+    adaptive_restart_interval: int = 10
     random_seed: Optional[int] = None
     warmup_passes: int = 0
-    worker_memory_budget_bytes: Optional[int] = None
     vacuum_analyze_timeout_seconds: float = 45.0
     worker_memory_budget_bytes: Optional[int] = None
-
-
-class WorkloadExecutor:
-    """
-    Template-based SQL query executor.
-
-    Executes user-provided SQL queries for workload testing with optional
-    parameterization and concurrent execution.
-    Standard OLTP, OLAP, and MIXED workloads also use this executor via internal templates.
-    """
-
-    def __init__(
-        self,
-        queries: list[str],
-        weights: Optional[list[float]] = None,
-        table_size: int = 100000,
-        num_tables: int = 10,
-        num_threads: int = 8,
-    ):
-        """
-        Initialize template workload executor.
-
-        Parameters
-        ----------
-        queries : list[str]
-            List of SQL queries to execute (can contain placeholders like {id}, {table}, etc.)
-        weights : Optional[list[float]]
-            Execution frequency weights (default: uniform)
-        table_size : int
-            Rows per table for parameter instantiation (default: 100K, academic standard)
-        num_tables : int
-            Number of sbtest tables to use (default: 10, academic standard)
-        num_threads : int
-            Number of concurrent threads (default: 8)
-        """
-        self.queries = queries
-        self.weights = weights or [1.0] * len(queries)
-        total = sum(self.weights)  # Normalize weights
-        self.weights = [w / total for w in self.weights]
-        self.table_size = table_size
-        self.num_tables = num_tables
-        self.num_threads = num_threads
-        # Placeholder, will be seeded in execute() if random_seed is provided
-        self.rng = np.random.default_rng()
-
-    def _instantiate_query(self, template: str) -> str:
-        """Instantiate query template with random parameters."""
-        table_idx = self.rng.integers(1, self.num_tables)
-        table2_idx = self.rng.integers(1, self.num_tables)
-        params = {
-            "table": f"sbtest{table_idx}",
-            "table2": f"sbtest{table2_idx}",
-            "id": self.rng.integers(1, self.table_size + 1),
-            "k_val": self.rng.integers(1, self.table_size + 1),
-            "threshold": self.rng.integers(
-                self.table_size // 4, 3 * self.table_size // 4
-            ),
-            "low": self.rng.integers(1, self.table_size // 2),
-            "high": self.rng.integers(self.table_size // 2, self.table_size),
-            "low_k": self.rng.integers(1, self.table_size // 2),
-            "high_k": self.rng.integers(self.table_size // 2, self.table_size),
-            "offset": self.rng.integers(0, self.table_size),
-        }
-        try:
-            return template.format(**params)
-        except KeyError:
-            return template  # A template that doesn't need parameters
-
-    def prepare(self, db_config: DatabaseConfig) -> None:
-        """Create required sbtest tables using native sysbench C-binary."""
-        logger.info(
-            "Preparing %d sbtest tables (%d rows each) on %s:%s...",
-            self.num_tables,
-            self.table_size,
-            db_config.host,
-            db_config.port,
-        )
-        cmd = [
-            "sysbench",
-            "oltp_read_write",
-            "--db-driver=pgsql",
-            f"--pgsql-host={db_config.host}",
-            f"--pgsql-port={db_config.port}",
-            f"--pgsql-user={db_config.user}",
-            f"--pgsql-password={db_config.password}",
-            f"--pgsql-db={db_config.dbname}",
-            f"--tables={self.num_tables}",
-            f"--table-size={self.table_size}",
-        ]
-        subprocess.run(
-            cmd + ["cleanup"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        subprocess.run(cmd + ["prepare"], check=True, stdout=subprocess.DEVNULL)
-
-        # Run VACUUM ANALYZE to stabilize statistics and prevent 'autoanalyze'
-        # from randomly triggering during benchmark
-        try:
-            conn = get_connection(config=db_config)
-            conn.autocommit = True
-            cursor = conn.cursor()
-            for i in range(1, self.num_tables + 1):
-                cursor.execute(f"VACUUM ANALYZE sbtest{i}")
-            cursor.close()
-            conn.close()
-            logger.debug(
-                "Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables."
-            )
-        except Exception as e:
-            logger.warning("Failed to post-vacuum workload tables: %s", e)
-
-        logger.info("Schema preparation complete.")
-
-    def validate(self, db_config: DatabaseConfig) -> bool:
-        """Check if all required sbtest tables exist."""
-        conn = get_connection(config=db_config)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT count(*) FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
-        )
-        count = cursor.fetchone()[0]  # type: ignore
-        cursor.close()
-        conn.close()
-        return count >= self.num_tables
-
-    def execute(
-        self,
-        connection: PostgresConnection,
-        duration: float,
-        warmup: float = 30.0,
-        worker_id: Optional[int] = None,
-        random_seed: Optional[int] = None,
-    ) -> PerformanceMetrics:
-        """
-        Execute template queries with optional concurrent execution.
-
-        Parameters
-        ----------
-        connection : PostgresConnection
-            Active database connection to execute queries on
-        duration : float
-            Duration of the measurement period
-        warmup : float
-            Warmup period duration
-        worker_id : Optional[int]
-            Worker ID for logging differentiation
-        random_seed : Optional[int]
-            Optional random seed for reproducibility
-
-        Returns
-        -------
-            PerformanceMetrics
-                Collected metrics from the execution
-        """
-        work_logger = (
-            get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None
-            else logger
-        )
-
-        # Use a dedicated random instance for reproducibility without affecting global RNG
-        self.rng = (
-            np.random.default_rng(random_seed) if random_seed is not None else np.random
-        )
-
-        if random_seed is not None:
-            work_logger.debug(
-                "Seeded random with %d for reproducible workload", random_seed
-            )
-
-        cursor = connection.cursor()
-
-        if warmup > 0:
-            work_logger.debug("Template query warmup: %.1fs", warmup)
-            warmup_end = time.time() + warmup
-            while time.time() < warmup_end:
-                template = self.rng.choice(self.queries, p=self.weights)
-                query = self._instantiate_query(template)
-                try:
-                    cursor.execute(query)
-                    if cursor.description is not None:
-                        cursor.fetchall()
-                    connection.commit()
-                except Exception as e:
-                    work_logger.warning("Warmup query failed: %s", e)
-                    connection.rollback()
-        cursor.close()
-
-        if self.num_threads > 1:
-            work_logger.debug(
-                "Template query measurement: %ss with %d threads",
-                duration,
-                self.num_threads,
-            )
-            return self._execute_concurrent(connection, duration, work_logger)
-
-        work_logger.debug("Template query measurement: %ss (sequential)", duration)
-        return self._execute_sequential(connection, duration, work_logger)
-
-    def _execute_concurrent(
-        self, connection: PostgresConnection, duration: float, work_logger
-    ) -> PerformanceMetrics:
-        """Execute queries with multiple concurrent threads."""
-        db_params = {
-            "host": connection.info.host,
-            "port": connection.info.port,
-            "dbname": connection.info.dbname,
-            "user": connection.info.user,
-            "password": connection.info.password
-            if hasattr(connection.info, "password")
-            else None,
-        }
-
-        results_queue = Queue()
-        start_time = time.time()
-        stop_event = threading.Event()
-
-        def worker_thread():
-            """Worker thread for concurrent query execution."""
-            thread_latencies = []
-            thread_errors = 0
-            thread_queries = 0
-
-            try:
-                thread_conn = psycopg2.connect(
-                    **{k: v for k, v in db_params.items() if v is not None}
-                )
-                thread_cursor = thread_conn.cursor()
-
-                while not stop_event.is_set():
-                    template = self.rng.choice(self.queries, p=self.weights)  # type: ignore
-                    query = self._instantiate_query(template)
-                    query_start = time.time()
-
-                    try:
-                        thread_cursor.execute(query)
-                        if thread_cursor.description is not None:
-                            thread_cursor.fetchall()
-                        thread_conn.commit()
-
-                        query_end = time.time()
-                        thread_latencies.append((query_end - query_start) * 1000)
-                        thread_queries += 1
-                    except Exception:
-                        thread_conn.rollback()
-                        thread_errors += 1
-                        thread_queries += 1
-
-                thread_cursor.close()
-                thread_conn.close()
-            except Exception as e:
-                work_logger.warning("Worker thread failed: %s", e)
-
-            results_queue.put((thread_latencies, thread_queries, thread_errors))
-
-        # Start concurrent threads
-        threads = []
-        for _ in range(self.num_threads):
-            t = threading.Thread(target=worker_thread, daemon=True)
-            t.start()
-            threads.append(t)
-
-        # Run for specified duration
-        time.sleep(duration)
-        stop_event.set()
-
-        # Wait for threads
-        for t in threads:
-            t.join(timeout=5.0)
-
-        total_time = time.time() - start_time
-
-        # Aggregate results
-        all_latencies = []
-        total_queries = 0
-        total_errors = 0
-
-        while not results_queue.empty():
-            thread_latencies, thread_queries, thread_errors = results_queue.get()
-            all_latencies.extend(thread_latencies)
-            total_queries += thread_queries
-            total_errors += thread_errors
-
-        if all_latencies:
-            latencies_sorted = sorted(all_latencies)
-            p50 = latencies_sorted[len(latencies_sorted) // 2]
-            p95 = latencies_sorted[int(len(latencies_sorted) * 0.95)]
-            p99 = latencies_sorted[int(len(latencies_sorted) * 0.99)]
-        else:
-            p50 = p95 = p99 = 0.0
-
-        throughput = total_queries / total_time if total_time > 0 else 0.0
-        error_rate = total_errors / total_queries if total_queries > 0 else 0.0
-
-        return PerformanceMetrics(
-            latency_p50=p50,
-            latency_p95=p95,
-            latency_p99=p99,
-            throughput=throughput,
-            total_queries=total_queries,
-            total_time=total_time,
-            error_rate=error_rate,
-        )
-
-    def _execute_sequential(
-        self, connection: PostgresConnection, duration: float, work_logger
-    ) -> PerformanceMetrics:
-        """Execute queries sequentially."""
-        cursor = connection.cursor()
-        start_time = time.time()
-        latencies = []
-        query_count = 0
-        error_count = 0
-
-        while (time.time() - start_time) < duration:
-            template = self.rng.choice(self.queries, p=self.weights)  # type: ignore
-            query = self._instantiate_query(template)
-            query_start = time.time()
-
-            try:
-                cursor.execute(query)
-                if cursor.description is not None:
-                    cursor.fetchall()
-                connection.commit()
-
-                query_end = time.time()
-                latencies.append((query_end - query_start) * 1000)
-                query_count += 1
-
-            except Exception as e:
-                work_logger.warning("Query failed: %s", e)
-                connection.rollback()
-                error_count += 1
-                query_count += 1
-
-        total_time = time.time() - start_time
-        cursor.close()
-
-        if latencies:
-            latencies_sorted = sorted(latencies)
-            p50 = latencies_sorted[len(latencies_sorted) // 2]
-            p95 = latencies_sorted[int(len(latencies_sorted) * 0.95)]
-            p99 = latencies_sorted[int(len(latencies_sorted) * 0.99)]
-        else:
-            p50 = p95 = p99 = 0.0
-
-        throughput = query_count / total_time if total_time > 0 else 0.0
-        error_rate = error_count / query_count if query_count > 0 else 0.0
-
-        return PerformanceMetrics(
-            latency_p50=p50,
-            latency_p95=p95,
-            latency_p99=p99,
-            throughput=throughput,
-            total_queries=query_count,
-            total_time=total_time,
-            error_rate=error_rate,
-        )
-
-
-class WorkloadFileLoader:
-    """
-    Utility to load workload definitions from files.
-
-    Supports JSON and YAML formats for defining custom workloads.
-    Validates queries and provides helpful error messages.
-
-    File Format (JSON):
-    ------------------
-    {
-        "name": "My Custom Workload",
-        "description": "Application-specific queries",
-        "queries": [
-            {
-                "sql": "SELECT * FROM users WHERE id = {id}",
-                "weight": 0.5,
-                "description": "Point select"
-            },
-            {
-                "sql": "SELECT COUNT(*) FROM orders WHERE status = 'pending'",
-                "weight": 0.3
-            }
-        ]
-    }
-
-    File Format (YAML):
-    ------------------
-    name: My Custom Workload
-    description: Application-specific queries
-    queries:
-      - sql: "SELECT * FROM users WHERE id = {id}"
-        weight: 0.5
-        description: "Point select"
-      - sql: "SELECT COUNT(*) FROM orders WHERE status = 'pending'"
-        weight: 0.3
-    """
-
-    @staticmethod
-    def load_from_file(filepath: str) -> WorkloadExecutor:
-        """
-        Load workload from JSON or YAML file.
-
-        Parameters
-        ----------
-        filepath : str
-            Path to workload definition file (.json or .yaml/.yml)
-
-        Returns
-        -------
-        WorkloadExecutor
-            Configured executor with loaded queries
-
-        Raises
-        ------
-        FileNotFoundError
-            If file doesn't exist
-        ValueError
-            If file format is invalid or queries are malformed
-        """
-        filepath = Path(filepath)
-
-        if not filepath.exists():
-            raise FileNotFoundError(f"Workload file not found: {filepath}")
-
-        if filepath.suffix == ".json":
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        elif filepath.suffix in [".yaml", ".yml"]:
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-            except ImportError as exc:
-                raise ImportError(
-                    "PyYAML is required for YAML workload files. "
-                    "Install with: pip install pyyaml"
-                ) from exc
-        else:
-            raise ValueError(
-                f"Unsupported file format: {filepath.suffix}. Use .json, .yaml, or .yml"
-            )
-
-        if not isinstance(data, dict):
-            raise ValueError("Workload file must contain a JSON object/YAML dict")
-
-        if "queries" not in data:
-            raise ValueError("Workload file must contain 'queries' field")
-
-        queries = data["queries"]
-        if not isinstance(queries, list) or len(queries) == 0:
-            raise ValueError("'queries' must be a non-empty list")
-
-        query_list = []
-        weight_list = []
-
-        for i, query_def in enumerate(queries):
-            if isinstance(query_def, str):
-                query_list.append(query_def)
-                weight_list.append(1.0)
-            elif isinstance(query_def, dict):
-                if "sql" not in query_def:
-                    raise ValueError(f"Query {i} missing 'sql' field")
-
-                query_list.append(query_def["sql"])
-                weight_list.append(query_def.get("weight", 1.0))
-            else:
-                raise ValueError(f"Query {i} must be a string or dict with 'sql' field")
-
-        name = data.get("name", filepath.stem)
-        description = data.get("description", "Custom workload")
-
-        schema = data.get("schema", {})
-        num_tables = schema.get("tables", 1)
-        table_size = schema.get("table_size", 100000)
-
-        if not schema:
-            logger.warning(
-                "Workload '%s' has no 'schema' section — defaulting to 1 table "
-                "with 100K rows. Add a 'schema' section for multi-table support.",
-                name,
-            )
-
-        logger.debug(
-            "-> Loaded workload '%s': %s (%d queries, %d tables × %d rows)\n",
-            name,
-            description,
-            len(query_list),
-            num_tables,
-            table_size,
-        )
-
-        return WorkloadExecutor(
-            queries=query_list,
-            weights=weight_list,
-            num_tables=num_tables,
-            table_size=table_size,
-        )
 
 
 class Evaluator:
@@ -671,7 +152,7 @@ class Evaluator:
         self,
         config: EvaluatorConfig,
         workload_executor: Union[WorkloadExecutor, BenchmarkExecutor],
-        worker_id: Optional[str] = None,
+        env: DatabaseEnvironment,
     ):
         """
         Initialize Evaluator.
@@ -687,22 +168,12 @@ class Evaluator:
         """
         self.config = config
         self.workload_executor = workload_executor
-        self.worker_id = worker_id or "Evaluator"
-
-        self.restart_cost_model = RestartCostModel(
-            base_restart_time=7.0,
-            cache_warmup_ratio=0.1,
-            restart_interval=config.restart_interval,
-        )
-
-        self.applicator_config = ApplicatorConfig(
-            auto_restart=False,  # We handle restart manually per instance
-            rollback_on_error=False,
-        )
+        self.env = env
 
         logger.debug(
-            "✓ Created Evaluator: workload=%s, duration=%ss",
+            "✓ Created Evaluator: workload=%s, mode=%s, duration=%ss",
             config.workload_type.value.upper(),
+            config.tuning_mode.value,
             config.measurement_duration,
         )
 
@@ -807,19 +278,15 @@ class Evaluator:
         connection: PostgresConnection,
         knob_config: Dict[str, Any],
         knob_applicator: KnobApplicator,
-        restart_manager: Optional[PostgresRestartManager],
-        worker_log_id: str,
         force_restart: bool = False,
         generation: Optional[int] = None,
-        restart_interval: int = 10,
         worker_id: Optional[int] = None,
     ) -> bool:
-        """
-        Apply knob configuration to worker's PostgreSQL instance.
+        """Apply knob configuration and optionally restart via policy.
 
-        This method separates parameters into:
-        1. Runtime params: Applied immediately via SET/ALTER SYSTEM
-        2. Restart params: Batched and applied only on restart intervals
+        This method applies knobs directly through KnobApplicator,
+        then uses RestartPolicy (should_restart) for restart decisions,
+        with env.restart_instance() for the actual restart mechanism.
 
         Parameters
         ----------
@@ -828,26 +295,19 @@ class Evaluator:
         knob_config : Dict[str, Any]
             Configuration parameters to apply
         knob_applicator : KnobApplicator
-            Applicator for this worker's instance
-        restart_manager : Optional[PostgresRestartManager]
-            Restart manager for this worker's instance
-        worker_log_id : str
-            Worker identifier for logging
+            Applicator for this worker's instance (legacy compat)
         force_restart : bool
-            Force immediate restart regardless of params
+            Force immediate restart regardless of mode/interval
         generation : Optional[int]
-            Current generation number (for restart interval checking)
-        restart_interval : int, default=10
-            Only restart every N generations (to batch restart cost)
+            Current generation number
+        worker_id : Optional[int]
+            Numeric worker ID
 
         Returns
         -------
         bool
             True if restart occurred during this application
         """
-        restart_occurred = False
-
-        # Create worker logger for consistent [Worker-X] formatting and colors
         worker_logger = (
             get_logger(__name__, worker_id=worker_id)
             if worker_id is not None
@@ -857,96 +317,77 @@ class Evaluator:
         try:
             result = knob_applicator.apply(knob_config)
 
-            # Don't log here - we'll log after verification instead
+            restart_required = bool(
+                result.restart_required and len(result.restart_required) > 0
+            )
 
-            # If restart-required params changed, check if we should restart this generation
-            if result.restart_required and len(result.restart_required) > 0:
+            if restart_required:
+                restart_required_params = list(result.restart_required)
+                first_three = (
+                    restart_required_params[:3] + ["..."]
+                    if len(restart_required_params) > 3
+                    else restart_required_params
+                )
+
                 worker_logger.info(
                     "Restart required for %d parameters: %s",
-                    len(result.restart_required),
-                    list(result.restart_required),
+                    len(restart_required_params),
+                    first_three,
                 )
 
-                # Only restart every restart_interval generations (batching strategy)
-                should_interval_restart = (
-                    generation is not None and (generation % restart_interval == 0)
-                )
-                should_restart = force_restart or should_interval_restart
+            do_restart = should_restart(
+                mode=self.config.tuning_mode,
+                restart_required=restart_required,
+                generation=generation,
+                adaptive_restart_interval=self.config.adaptive_restart_interval,
+                force=force_restart,
+            )
 
-                if should_restart:
-                    if restart_manager:
-                        if force_restart and not should_interval_restart:
-                            worker_logger.info(
-                                "Restarting (forced for config consistency after recovery)"
-                            )
-                        else:
-                            worker_logger.info(
-                                "Restarting (generation %d is restart interval)",
-                                generation
-                            )
-                        restart_occurred = self._perform_restart(
-                            connection,
-                            restart_manager,
-                            worker_log_id,
-                            worker_id=worker_id,
-                        )
-                        if not restart_occurred:
-                            raise ConnectionError(
-                                "PostgreSQL restart failed; worker marked as dead-config candidate"
-                            )
-                    else:
-                        worker_logger.warning(
-                            "Restart needed but restart_manager not configured"
-                        )
-                else:
+            if do_restart:
+                return self._perform_restart(connection, worker_id=worker_id)
+
+            if restart_required and not do_restart:
+                if self.config.tuning_mode == TuningMode.ADAPTIVE:
+                    interval = self.config.adaptive_restart_interval
+                    next_restart = (
+                        ((generation // interval) + 1) * interval
+                        if generation is not None
+                        else interval
+                    )
                     worker_logger.info(
                         "Deferring restart (will restart at generation %d)",
-                        ((generation // restart_interval) + 1) * restart_interval
-                        if generation is not None
-                        else restart_interval,
+                        next_restart,
                     )
-            elif force_restart and restart_manager:
-                restart_occurred = self._perform_restart(
-                    connection, restart_manager, worker_log_id, worker_id=worker_id
-                )
-                if not restart_occurred:
-                    raise ConnectionError(
-                        "Forced PostgreSQL restart failed; worker marked as dead-config candidate"
+                elif self.config.tuning_mode == TuningMode.ONLINE:
+                    worker_logger.debug(
+                        "ONLINE mode: restart-required knobs written but restart skipped"
                     )
+
+            return False
 
         except Exception as e:
             worker_logger.error("Failed to apply configuration: %s", e)
             raise
 
-        return restart_occurred
-
     def _perform_restart(
         self,
         connection: PostgresConnection,
-        restart_manager: PostgresRestartManager,
-        worker_log_id: str,
         worker_id: Optional[int] = None,
     ) -> bool:
-        """
-        Restart the PostgreSQL instance for this worker.
+        """Restart PostgreSQL via the injected environment.
 
         Parameters
         ----------
         connection : PostgresConnection
-            Connection to close/reconnect after restart
-        restart_manager : PostgresRestartManager
-            Manager for this instance
-        worker_log_id : str
-            Worker ID for logging
+            Connection to close before restart
         worker_id : Optional[int]
-            Numeric worker ID for logger context
+            Worker ID for environment restart and logging
 
         Returns
         -------
         bool
             True if restart succeeded
         """
-        # Create worker logger for consistent [Worker-X] formatting and colors
         worker_logger = (
             get_logger(__name__, worker_id=worker_id)
             if worker_id is not None
@@ -963,22 +404,9 @@ class Evaluator:
             except (psycopg2.Error, AttributeError):
                 pass
 
-            # Restart the instance
-            if restart_manager.restart():
+            wid = worker_id if worker_id is not None else 0
+            if self.env.restart_instance(wid):
                 worker_logger.info("Restart successful")
-
-                # Reset statistics after restart
-                try:
-                    temp_conn = get_connection(config=restart_manager.db_config)
-                    cursor = temp_conn.cursor()
-                    cursor.execute("SELECT pg_stat_reset()")
-                    cursor.fetchone()
-                    cursor.close()
-                    temp_conn.commit()
-                    temp_conn.close()
-                    worker_logger.debug("Reset PostgreSQL statistics")
-                except Exception as e:
-                    worker_logger.warning("Failed to reset statistics: %s", e)
 
                 return True
             else:
@@ -989,437 +417,35 @@ class Evaluator:
             worker_logger.error("Restart failed with exception: %s", e)
             return False
 
-    def _verify_configuration(
-        self,
-        connection: PostgresConnection,
-        expected_config: Dict[str, Any],
-        worker_log_id: str,
-        worker_id: Optional[int] = None,
-    ) -> Dict[str, bool]:
-        """
-        Verify that configuration parameters were actually applied.
-
-        Parameters
-        ----------
-        connection : PostgresConnection
-            Active connection to query current settings
-        expected_config : Dict[str, Any]
-            Configuration that should be applied
-        worker_log_id : str
-            Worker identifier for logging
-        worker_id : Optional[int]
-            Numeric worker ID for logger context
-
-        Returns
-        -------
-        Dict[str, bool]
-            Parameter name -> verification status
-        """
-        # Create worker logger for consistent [Worker-X] formatting and colors
-        worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None
-            else logger
-        )
-        verification = {}
-        mismatches = []
-
-        try:
-            cursor = connection.cursor()
-
-            for param_name, expected_value in expected_config.items():
-                try:
-                    # Query current value
-                    cursor.execute(
-                        "SELECT setting, unit, vartype FROM pg_settings WHERE name = %s",
-                        (param_name,),
-                    )
-                    result = cursor.fetchone()
-
-                    if not result:
-                        worker_logger.warning(
-                            "[%s] Parameter '%s' not found in pg_settings",
-                            worker_log_id,
-                            param_name,
-                        )
-                        verification[param_name] = False
-                        continue
-
-                    current_value_str, unit, vartype = result
-
-                    # Convert current value to comparable type
-                    if isinstance(expected_value, bool):
-                        current_value = current_value_str.lower() in ("on", "true", "1")
-                        match = current_value == expected_value
-                    elif isinstance(expected_value, (int, float)):
-                        current_value = float(current_value_str)
-                        expected_float = float(expected_value)
-
-                        # pg_settings may coerce or quantize numeric settings on apply.
-                        # Compare by PostgreSQL vartype semantics, not a fixed tiny delta.
-                        if vartype == "integer":
-                            current_int = int(round(current_value))
-                            expected_int = int(round(expected_float))
-                            current_value = current_int
-                            match = current_int == expected_int
-                        else:
-                            abs_tolerance = max(0.01, abs(expected_float) * 1e-6)
-                            match = math.isclose(
-                                current_value,
-                                expected_float,
-                                rel_tol=1e-6,
-                                abs_tol=abs_tolerance,
-                            )
-                    else:
-                        current_value = current_value_str
-                        # `wal_compression` became an enum on new versions of postgres (on -> pglz)
-                        if (
-                            param_name == "wal_compression"
-                            and str(expected_value).lower() in ("on", "true")
-                            and str(current_value).lower() in ("on", "pglz")
-                        ):
-                            match = True
-                        else:
-                            match = str(current_value) == str(expected_value)
-
-                    verification[param_name] = match
-
-                    if not match:
-                        mismatches.append(
-                            f"{param_name}: expected={expected_value}, actual={current_value}"
-                        )
-
-                except Exception as e:
-                    worker_logger.warning(
-                        "Failed to verify parameter '%s': %s", param_name, e
-                    )
-                    verification[param_name] = False
-
-            cursor.close()
-
-            # Log results
-            verified_count = sum(verification.values())
-            total_count = len(verification)
-
-            if verified_count == total_count:
-                worker_logger.debug(
-                    "Configuration verified: %d/%d parameters correct",
-                    verified_count,
-                    total_count,
-                )
-            else:
-                worker_logger.warning(
-                    "Configuration mismatch: %d/%d parameters verified",
-                    verified_count,
-                    total_count,
-                )
-                for mismatch in mismatches:
-                    worker_logger.warning("  %s", mismatch)
-
-        except Exception as e:
-            worker_logger.error("Configuration verification failed: %s", e)
-
-        return verification
-
-    def _get_postgres_pid(self, connection: PostgresConnection) -> Optional[int]:
-        """
-        Get the PostgreSQL backend process ID.
-
-        Parameters
-        ----------
-        connection : PostgresConnection
-            Active connection to query
-
-        Returns
-        -------
-        Optional[int]
-            PostgreSQL backend PID, or None if unavailable
-        """
-        if not connection or connection.closed:
-            return None
-
-        try:
-            cursor = connection.cursor()
-            cursor.execute("SELECT pg_backend_pid()")
-            result = cursor.fetchone()
-            cursor.close()
-            return int(result[0]) if result else None  # type: ignore
-        except psycopg2.Error as e:
-            logger.warning("Failed to get PostgreSQL PID: %s", e)
-            return None
-
-    def _get_postmaster_pid(
-        self, port: int, worker_id: Optional[int] = None
-    ) -> Optional[int]:
-        """
-        Find the PostgreSQL postmaster (main server) PID by port.
-
-        The postmaster is the parent PostgreSQL process that manages all backends.
-        This is the correct process to monitor for CPU/Memory usage.
-
-        Parameters
-        ----------
-        port : int
-            PostgreSQL port number
-
-        Returns
-        -------
-        Optional[int]
-            Postmaster PID, or None if not found
-        """
-        try:
-            # Find all postgres processes
-            for proc in psutil.process_iter(["pid", "name"]):
-                try:
-                    proc_name = proc.info.get("name", "")
-                    if not proc_name or "postgres" not in proc_name.lower():
-                        continue
-
-                    # Check if this process is listening on the target port
-                    connections = proc.connections(kind="inet")
-                    for conn in connections:
-                        if (
-                            conn.status == psutil.CONN_LISTEN
-                            and conn.laddr.port == port
-                        ):
-                            if worker_id is not None:
-                                worker_logger = get_logger(
-                                    __name__, worker_id=worker_id
-                                )
-                                worker_logger.debug(
-                                    "Found postmaster PID %d for port %d",
-                                    proc.info["pid"],
-                                    port,
-                                )
-                            else:
-                                logger.debug(
-                                    "Found postmaster PID %d for port %d",
-                                    proc.info["pid"],
-                                    port,
-                                )
-                            return proc.info["pid"]
-
-                except (
-                    psutil.NoSuchProcess,
-                    psutil.AccessDenied,
-                    psutil.ZombieProcess,
-                ):
-                    continue
-
-        except Exception as e:
-            logger.debug("Error finding postmaster PID via psutil: %s", e)
-
-        # Fallback for Docker instances: find container mapping this port and get its State.Pid
-        try:
-            import docker
-
-            client = docker.from_env()
-            for container in client.containers.list():
-                ports = container.attrs.get("NetworkSettings", {}).get("Ports", {})
-                for _container_port, host_bindings in ports.items():
-                    if host_bindings:
-                        for binding in host_bindings:
-                            if str(binding.get("HostPort")) == str(port):
-                                pid = container.attrs["State"]["Pid"]
-                                if worker_id is not None:
-                                    worker_logger = get_logger(
-                                        __name__, worker_id=worker_id
-                                    )
-                                    worker_logger.debug(
-                                        "Found docker container postmaster PID %d for port %d",
-                                        pid,
-                                        port,
-                                    )
-                                else:
-                                    logger.debug(
-                                        "Found docker container postmaster PID %d for port %d",
-                                        pid,
-                                        port,
-                                    )
-                                return pid
-        except Exception as docker_exc:
-            logger.debug("Error finding postmaster PID via Docker: %s", docker_exc)
-
-        logger.warning("Could not find PostgreSQL postmaster for port %d", port)
-
-        return None
-
-    def _get_all_postgres_processes(
-        self, postmaster_pid: int, worker_id: Optional[int] = None
-    ) -> List[psutil.Process]:
-        """
-        Get all PostgreSQL processes (postmaster + backends) for a specific instance.
-
-        On Windows, PostgreSQL spawns separate processes for each connection.
-        We need to measure CPU across all of them, not just the postmaster.
-
-        Parameters
-        ----------
-        postmaster_pid : int
-            Postmaster (parent) process PID
-
-        Returns
-        -------
-        List[psutil.Process]
-            List of all postgres processes (parent + children)
-        """
-        processes = []
-
-        try:
-            postmaster = psutil.Process(postmaster_pid)
-            processes.append(postmaster)
-
-            # Get all child processes (backend workers)
-            children = postmaster.children(recursive=True)
-            processes.extend(children)
-
-            if worker_id is not None:
-                worker_logger = get_logger(__name__, worker_id=worker_id)
-                worker_logger.debug(
-                    "Found %d PostgreSQL processes (1 postmaster + %d backends) for PID %d",
-                    len(processes),
-                    len(children),
-                    postmaster_pid,
-                )
-            else:
-                logger.debug(
-                    "Found %d PostgreSQL processes (1 postmaster + %d backends) for PID %d",
-                    len(processes),
-                    len(children),
-                    postmaster_pid,
-                )
-
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-            logger.warning("Failed to get PostgreSQL processes: %s", e)
-
-        return processes
-
     def collect_system_metrics(
         self,
-        connection: PostgresConnection,
-        port: Optional[int] = None,
         worker_id: Optional[int] = None,
     ) -> Dict[str, float]:
-        """
-        Collect system-level metrics using PostgreSQL statistics and psutil for memory.
+        """Collect system-level metrics by delegating to the environment.
+
+        Memory utilization and cache hit ratio are collected via the
+        DatabaseEnvironment abstraction, eliminating the need for
+        process-scanning via psutil.
 
         Parameters
         ----------
-        connection : PostgresConnection
-            Active connection to the PostgreSQL instance
-        port : Optional[int]
-            PostgreSQL port number (for finding postmaster PID)
         worker_id : Optional[int]
-            Worker ID for logging context
+            Worker ID for environment delegation
 
         Returns
         -------
         Dict[str, float]
             System metrics including memory and cache hit ratio
-
-        Notes
-        -----
-        CPU and I/O metrics are collected separately during workload execution
-        using PostgreSQL's built-in statistics (more accurate than psutil on Windows).
         """
-        if not connection or connection.closed:
-            logger.warning("Connection not available for system metrics collection")
-            return {"memory_utilization": 0.0, "cache_hit_ratio": 0.0}
+        metrics: Dict[str, float] = {
+            "memory_utilization": 0.0,
+            "cache_hit_ratio": 0.0,
+        }
 
-        metrics = {}
+        wid = worker_id if worker_id is not None else 0
 
-        # Measure memory usage via psutil (only reliable cross-process metric)
-        if port:
-            postgres_pid = self._get_postmaster_pid(port, worker_id=worker_id)
-            if postgres_pid:
-                try:
-                    postgres_processes = self._get_all_postgres_processes(
-                        postgres_pid, worker_id=worker_id
-                    )
-                    total_memory_rss = 0
-
-                    for proc in postgres_processes:
-                        try:
-                            mem_info = proc.memory_info()
-                            total_memory_rss += mem_info.rss
-                        except (
-                            psutil.NoSuchProcess,
-                            psutil.AccessDenied,
-                            psutil.ZombieProcess,
-                        ):
-                            continue
-
-                    # Normalize worker RSS against worker RAM budget when available.
-                    # This avoids dilution from dividing by full host RAM.
-                    try:
-                        worker_budget = self.config.worker_memory_budget_bytes
-                        denominator = (
-                            float(worker_budget)
-                            if worker_budget is not None and worker_budget > 0
-                            else float(psutil.virtual_memory().total)
-                        )
-                        if denominator <= 0.0:
-                            metrics['memory_utilization'] = 0.0
-                        else:
-                            ratio = total_memory_rss / denominator
-                            metrics['memory_utilization'] = max(0.0, min(1.0, ratio))
-
-                        memory_mb = total_memory_rss / (1024 * 1024)
-                        denominator_mb = denominator / (1024 * 1024) if denominator > 0 else 0.0
-                        memory_pct = metrics['memory_utilization'] * 100
-                        denominator_label = "worker-budget" if worker_budget and worker_budget > 0 else "host-total"
-
-                        if worker_id is not None:
-                            worker_logger = get_logger(__name__, worker_id=worker_id)
-                            worker_logger.debug(
-                                "Memory: %.1fMB / %.1fMB (%s) => %.1f%% across %d processes",
-                                memory_mb,
-                                denominator_mb,
-                                denominator_label,
-                                memory_pct,
-                                len(postgres_processes),
-                            )
-                        else:
-                            logger.debug(
-                                "Memory: %.1fMB / %.1fMB (%s) => %.1f%% across %d processes",
-                                memory_mb,
-                                denominator_mb,
-                                denominator_label,
-                                memory_pct,
-                                len(postgres_processes),
-                            )
-                    except (OSError, ValueError, TypeError) as exc:
-                        logger.debug("Memory denominator resolution failed: %s", exc)
-                        metrics['memory_utilization'] = 0.0
-
-                except Exception as e:
-                    logger.warning("Failed to collect memory metrics: %s", e)
-                    metrics["memory_utilization"] = 0.0
-            else:
-                metrics["memory_utilization"] = 0.0
-        else:
-            metrics["memory_utilization"] = 0.0
-
-        # Get cache hit ratio from PostgreSQL statistics
-        if connection and not connection.closed:
-            cursor = connection.cursor()
-            try:
-                cursor.execute("""
-                    SELECT 
-                        sum(blks_hit)::float / nullif(sum(blks_hit + blks_read), 0) as cache_hit_ratio
-                    FROM pg_stat_database
-                    WHERE datname = current_database()
-                """)
-                result = cursor.fetchone()
-                metrics["cache_hit_ratio"] = float(result[0] or 0.0)  # type: ignore
-            except psycopg2.Error as e:
-                logger.warning("Failed to query cache hit ratio: %s", e)
-                metrics["cache_hit_ratio"] = 0.0
-            finally:
-                cursor.close()
-        else:
-            metrics["cache_hit_ratio"] = 0.0
-
+        metrics["memory_utilization"] = self.env.collect_memory_utilization(wid)
+        metrics["cache_hit_ratio"] = self.env.collect_cache_hit_ratio(wid)
         return metrics
 
     def _vacuum_after_dml(
@@ -1594,7 +620,6 @@ class Evaluator:
                 "Initialize workers with PostgresInstanceManager first."
             )
 
-        worker_log_id = f"Worker-{worker.worker_id}"
         worker_logger = get_logger(__name__, worker_id=worker.worker_id)
         worker_logger.info(
             "Evaluating configuration on instance port %d...", worker.port or 0
@@ -1608,47 +633,23 @@ class Evaluator:
             connection = self.connect(worker.db_config, max_retries=5, retry_delay=3.0)
 
             if apply_config and worker.knob_config:
+                applicator_config = ApplicatorConfig(
+                    rollback_on_error=False,
+                )
                 knob_applicator = KnobApplicator(
                     db_config=worker.db_config,
-                    config=self.applicator_config,
+                    config=applicator_config,
                     worker_id=worker.worker_id,
                 )
 
                 force_restart = worker.force_restart_next_eval
 
-                restart_manager = None
-                if self.config.enable_restart:
-                    import copy
-
-                    # Create a specific config for this worker
-                    worker_restart_config = copy.deepcopy(
-                        self.config.restart_config or RestartConfig()
-                    )
-
-                    # If in docker or auto-detect, ensure we use docker method with correct name
-                    if worker_restart_config.method in ["docker", "auto"]:
-                        worker_restart_config.container_name = (
-                            f"pbt-worker-{worker.worker_id}"
-                        )
-                        # Disable local backup as worker files aren't mounted in tuner
-                        worker_restart_config.backup_enabled = False
-                        worker_restart_config.method = "docker"
-
-                    restart_manager = PostgresRestartManager(
-                        db_config=worker.db_config,
-                        restart_config=worker_restart_config,
-                        worker_id=worker.worker_id,
-                    )
-
                 restart_occurred = self.apply_configuration(
                     connection=connection,
                     knob_config=worker.knob_config,
                     knob_applicator=knob_applicator,
-                    restart_manager=restart_manager,
-                    worker_log_id=worker_log_id,
                     force_restart=force_restart,
                     generation=generation,
-                    restart_interval=self.config.restart_interval,
                     worker_id=worker.worker_id,
                 )
 
@@ -1667,12 +668,7 @@ class Evaluator:
                     worker_logger.debug("Reconnected after restart")
 
                     if worker.knob_config:
-                        verification = self._verify_configuration(
-                            connection=connection,
-                            expected_config=worker.knob_config,
-                            worker_log_id=worker_log_id,
-                            worker_id=worker.worker_id,
-                        )
+                        verification = knob_applicator.verify(worker.knob_config)
 
                         failed_params = [k for k, v in verification.items() if not v]
                         if failed_params:
@@ -1761,9 +757,7 @@ class Evaluator:
                 worker_logger.error("Workload execution failed: %s", e)
                 raise RuntimeError(f"Workload execution failed: {e}") from e
 
-            system_metrics = self.collect_system_metrics(
-                connection, port=worker.port, worker_id=worker.worker_id
-            )
+            system_metrics = self.collect_system_metrics(worker_id=worker.worker_id)
 
             if "cache_hit_ratio" in system_metrics:
                 metrics.cache_hit_ratio = system_metrics["cache_hit_ratio"]
@@ -1773,50 +767,15 @@ class Evaluator:
             # Clean up dead tuples from DML operations to prevent bloat between generations
             self._vacuum_after_dml(worker.db_config, worker_id=worker.worker_id)
 
-            base_score = self.config.metric_config.compute_score(metrics)
+            score = self.config.metric_config.compute_score(metrics)
 
-            adjusted_score = self.restart_cost_model.apply_penalty(
-                score=base_score,
-                measurement_duration=self.config.measurement_duration,
-                restart_occurred=restart_occurred,
-                generation=generation,
-                logger=worker_logger,
-            )
-
-            return metrics, adjusted_score, restart_occurred
+            return metrics, score, restart_occurred
 
         finally:
             self.disconnect(
                 connection,
                 worker_id=worker.worker_id if hasattr(worker, "worker_id") else None,
             )
-
-    def evaluate_configuration(
-        self, knob_config: Dict[str, Any]
-    ) -> tuple[PerformanceMetrics, float]:
-        """
-        Evaluate a raw configuration (without Worker instance).
-
-        Useful for one-off configuration testing.
-
-        Parameters
-        ----------
-        knob_config : Dict[str, Any]
-            Configuration to evaluate
-
-        Returns
-        -------
-        tuple[PerformanceMetrics, float]
-            (metrics, score) tuple
-        """
-        knob_space = get_knob_space("minimal")
-
-        temp_worker = Worker(
-            worker_id=-1, knob_space=knob_space, knob_config=knob_config
-        )
-
-        metrics, score, _ = self.evaluate_worker(temp_worker, apply_config=True)
-        return metrics, score
 
     def __repr__(self) -> str:
         """String representation."""

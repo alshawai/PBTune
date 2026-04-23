@@ -8,7 +8,8 @@ from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
+
 
 class SysbenchExecutor(BenchmarkExecutor):
     """
@@ -51,13 +52,15 @@ class SysbenchExecutor(BenchmarkExecutor):
         self.table_size = table_size
         self.script = script
 
-
     def prepare(self, db_config: DatabaseConfig) -> None:
         """Run native `sysbench prepare` to create all sbtest tables."""
         logger = get_logger(__name__)
         logger.info(
             "Preparing %d sysbench tables (%d rows each) on %s:%s...",
-            self.tables, self.table_size, db_config.host, db_config.port,
+            self.tables,
+            self.table_size,
+            db_config.host,
+            db_config.port,
         )
 
         # Cross-benchmark safety: ensure TPC-H leftovers do not survive into
@@ -74,7 +77,9 @@ class SysbenchExecutor(BenchmarkExecutor):
         cmd = self._build_base_cmd(db_config)
         subprocess.run(
             cmd + ["cleanup"],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         subprocess.run(cmd + ["prepare"], check=True, stdout=subprocess.DEVNULL)
 
@@ -88,7 +93,9 @@ class SysbenchExecutor(BenchmarkExecutor):
                 cursor.execute(f"VACUUM ANALYZE sbtest{i}")
             cursor.close()
             conn.close()
-            logger.debug("Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables.")
+            logger.debug(
+                "Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables."
+            )
         except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
             logger.warning("Failed to post-vacuum sysbench tables: %s", e)
 
@@ -159,10 +166,7 @@ class SysbenchExecutor(BenchmarkExecutor):
                 conn.close()
 
     def execute(
-        self,
-        db_config: DatabaseConfig,
-        worker_id: Optional[int] = None,
-        **kwargs
+        self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
     ) -> PerformanceMetrics:
         logger = get_logger(__name__, worker_id=worker_id)
 
@@ -172,7 +176,10 @@ class SysbenchExecutor(BenchmarkExecutor):
 
         logger.debug(
             "Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)",
-            duration, self.threads, warmup, random_seed,
+            duration,
+            self.threads,
+            warmup,
+            random_seed,
         )
         stdout, stderr, returncode = self._run_sysbench(
             db_config,
@@ -182,7 +189,9 @@ class SysbenchExecutor(BenchmarkExecutor):
         )
 
         if returncode != 0:
-            failure_detail = (stderr or stdout or "sysbench exited without output").strip()
+            failure_detail = (
+                stderr or stdout or "sysbench exited without output"
+            ).strip()
             logger.error(
                 "Sysbench failed (exit %d): %s",
                 returncode,
@@ -253,21 +262,19 @@ class SysbenchExecutor(BenchmarkExecutor):
         """Extract TPS, p95 latency, and error rate from sysbench stdout."""
         metrics = PerformanceMetrics()
 
-        tps_match = re.search(
-            r'transactions:\s+\d+\s+\(([\d.]+)\s+per sec\.\)', stdout
-        )
+        tps_match = re.search(r"transactions:\s+\d+\s+\(([\d.]+)\s+per sec\.\)", stdout)
         if tps_match:
             metrics.throughput = float(tps_match.group(1))
 
-        lat_match = re.search(r'95th percentile:\s+([\d.]+)', stdout)
+        lat_match = re.search(r"95th percentile:\s+([\d.]+)", stdout)
         if lat_match:
             metrics.latency_p95 = float(lat_match.group(1))
 
         # Error rate = ignored_errors / total_transactions
-        err_match = re.search(r'ignored errors:\s+(\d+)', stdout)
+        err_match = re.search(r"ignored errors:\s+(\d+)", stdout)
         if err_match:
             error_count = int(err_match.group(1))
-            txn_match = re.search(r'transactions:\s+(\d+)', stdout)
+            txn_match = re.search(r"transactions:\s+(\d+)", stdout)
             total_txns = int(txn_match.group(1)) if txn_match else 0
             if total_txns > 0:
                 metrics.error_rate = error_count / total_txns

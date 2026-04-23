@@ -8,7 +8,7 @@ abstracting away whether it runs in Docker or on Bare-Metal.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import List
 from pathlib import Path
 from dataclasses import dataclass
 import time
@@ -19,14 +19,16 @@ from psycopg2 import sql
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger, ColorCode
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 
 
 LOGGER = get_logger(__name__)
 
+
 @dataclass
 class InstanceConfig:
     """Configuration for a single PostgreSQL instance."""
+
     worker_id: int
     port: int
     data_dir: Path
@@ -36,21 +38,22 @@ class InstanceConfig:
 class DatabaseEnvironment(ABC):
     """
     Abstract Base Class for managing isolated database environments.
-    
+
     Provides a standardized interface for lifecycle (setup/teardown)
-    and configuration management. This abstraction natively manages multiple 
+    and configuration management. This abstraction natively manages multiple
     workers simultaneously, unifying multi-worker tuning with single-worker evaluation.
     """
 
     def __init__(
-        self, run_id: str,
+        self,
+        run_id: str,
         db_config: DatabaseConfig,
         schema_provider: BenchmarkExecutor,
         force_recreate_baseline: bool = False,
     ):
         """
         Initialize the environment manager.
-        
+
         Parameters
         ----------
         run_id : str
@@ -88,7 +91,7 @@ class DatabaseEnvironment(ABC):
                 "%s    ➤ Schema already exists and valid for worker %d%s",
                 ColorCode.OKGREEN,
                 worker_id,
-                ColorCode.RESET
+                ColorCode.RESET,
             )
             return
 
@@ -96,7 +99,7 @@ class DatabaseEnvironment(ABC):
             "%s    Invalid schema detected. Attempting to restore from snapshot for worker %d...%s",
             ColorCode.WARNING,
             worker_id,
-            ColorCode.RESET
+            ColorCode.RESET,
         )
         if self.restore_snapshot(worker_id):
             if self.schema_provider.validate(config):
@@ -105,7 +108,7 @@ class DatabaseEnvironment(ABC):
                     "%s    ➤ Schema restored from snapshot for worker %d%s",
                     ColorCode.OKGREEN,
                     worker_id,
-                    ColorCode.RESET
+                    ColorCode.RESET,
                 )
                 return
 
@@ -114,42 +117,35 @@ class DatabaseEnvironment(ABC):
             " Preparing schema for worker %d...%s",
             ColorCode.WARNING,
             worker_id,
-            ColorCode.RESET
+            ColorCode.RESET,
         )
         self.schema_provider.prepare(config)
         LOGGER.debug(
             "%s    ➤ Schema prepared for worker %d%s",
             ColorCode.OKGREEN,
             worker_id,
-            ColorCode.RESET
+            ColorCode.RESET,
         )
 
     def _ensure_database_exists(self, config: DatabaseConfig) -> None:
         """Create the application database if it doesn't exist.
-        
+
         After initdb, only the 'postgres' database exists. This method
         connects to 'postgres' and creates the application database
         (e.g. 'test_dataset') which a schema provider expects.
         """
         try:
-            conn = get_connection(
-                config=config,
-                dbname="postgres",
-                connect_timeout=5
-            )
+            conn = get_connection(config=config, dbname="postgres", connect_timeout=5)
             conn.autocommit = True
             cursor = conn.cursor()
 
             cursor.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s",
-                (config.dbname,)
+                "SELECT 1 FROM pg_database WHERE datname = %s", (config.dbname,)
             )
             if not cursor.fetchone():
                 LOGGER.debug("    Creating database '%s'...", config.dbname)
                 cursor.execute(
-                    sql.SQL("CREATE DATABASE {}").format(
-                        sql.Identifier(config.dbname)
-                    )
+                    sql.SQL("CREATE DATABASE {}").format(sql.Identifier(config.dbname))
                 )
 
             cursor.close()
@@ -157,7 +153,9 @@ class DatabaseEnvironment(ABC):
         except psycopg2.Error as e:
             LOGGER.error("Failed to ensure database '%s' exists: %s", config.dbname, e)
 
-    def _wait_until_connectable(self, config: DatabaseConfig, timeout_seconds: int = 30) -> bool:
+    def _wait_until_connectable(
+        self, config: DatabaseConfig, timeout_seconds: int = 30
+    ) -> bool:
         """Wait for PostgreSQL to accept connections after restart operations."""
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
@@ -169,7 +167,9 @@ class DatabaseEnvironment(ABC):
                 time.sleep(0.5)
         return False
 
-    def _reset_persisted_configuration(self, worker_id: int, config: DatabaseConfig) -> None:
+    def _reset_persisted_configuration(
+        self, worker_id: int, config: DatabaseConfig
+    ) -> None:
         """Clear persisted ALTER SYSTEM settings and restart if pending_restart remains."""
         conn = None
         cursor = None
@@ -221,11 +221,8 @@ class DatabaseEnvironment(ABC):
 
     @abstractmethod
     def setup_instances(
-        self,
-        num_workers: int,
-        force_recreate: bool = False
+        self, num_workers: int, force_recreate: bool = False
     ) -> List[InstanceConfig]:
-
         """Set up infrastructure for N database instances."""
 
     @abstractmethod
@@ -233,16 +230,29 @@ class DatabaseEnvironment(ABC):
         """Start a specific worker instance."""
 
     @abstractmethod
-    def stop_instance(self, worker_id: int, mode: str = 'fast') -> bool:
+    def stop_instance(self, worker_id: int, mode: str = "fast") -> bool:
         """Stop a specific worker instance."""
 
     @abstractmethod
-    def stop_all(self, mode: str = 'fast') -> bool:
+    def stop_all(self, mode: str = "fast") -> bool:
         """Stop all managed worker instances."""
 
     @abstractmethod
     def recover_instance(self, worker_id: int) -> bool:
         """Attempt to recover/restart a failed worker instance."""
+
+    @abstractmethod
+    def restart_instance(self, worker_id: int) -> bool:
+        """Restart a specific worker's database instance.
+
+        Handles the full stop → start → wait-for-ready cycle.
+        Used by OFFLINE tuning mode and forced restarts after config changes.
+
+        Returns
+        -------
+        bool
+            True if restart succeeded, False otherwise.
+        """
 
     @abstractmethod
     def verify_instances(self) -> dict[int, bool]:
@@ -251,10 +261,6 @@ class DatabaseEnvironment(ABC):
     @abstractmethod
     def cleanup(self, remove_data: bool = False) -> None:
         """Clean up the environment and release any resources."""
-
-    @abstractmethod
-    def apply_knobs(self, worker_id: int, knobs: Dict[str, Any]) -> None:
-        """Apply a knob configuration mapped to the specific worker using KnobApplicator."""
 
     @abstractmethod
     def create_snapshot(self, worker_id: int = 0) -> str:
@@ -271,3 +277,54 @@ class DatabaseEnvironment(ABC):
     @abstractmethod
     def collect_memory_utilization(self, worker_id: int) -> float:
         """Collect per-worker PostgreSQL memory utilization as a [0, 1] ratio."""
+
+    def collect_cache_hit_ratio(self, worker_id: int) -> float:
+        """Query pg_stat_database for buffer cache hit ratio.
+
+        Default implementation using SQL — works for both Docker and
+        BareMetal since it only needs a database connection.
+
+        Returns
+        -------
+        float
+            Cache hit ratio in [0.0, 1.0], or 0.0 on failure.
+        """
+        try:
+            db_config = self.get_db_config(worker_id)
+            conn = get_connection(config=db_config, connect_timeout=5)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT sum(blks_hit)::float / nullif(sum(blks_hit + blks_read), 0) "
+                "FROM pg_stat_database WHERE datname = current_database()"
+            )
+            result = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            return float(result[0]) if result and result[0] is not None else 0.0
+        except (psycopg2.Error, OSError, ValueError, TypeError, AttributeError) as exc:
+            LOGGER.debug(
+                "Failed to collect cache hit ratio for worker %d: %s",
+                worker_id,
+                exc,
+            )
+            return 0.0
+
+    def reset_statistics(self, worker_id: int) -> bool:
+        """Reset PostgreSQL statistics counters for a worker instance."""
+        try:
+            db_config = self.get_db_config(worker_id)
+            conn = get_connection(config=db_config, connect_timeout=5)
+            cursor = conn.cursor()
+            cursor.execute("SELECT pg_stat_reset()")
+            cursor.fetchone()
+            cursor.close()
+            conn.commit()
+            conn.close()
+            return True
+        except (psycopg2.Error, OSError, ValueError, TypeError, AttributeError) as exc:
+            LOGGER.debug(
+                "Failed to reset statistics for worker %d: %s",
+                worker_id,
+                exc,
+            )
+            return False

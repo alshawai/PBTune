@@ -44,8 +44,9 @@ from src.utils.metrics import PerformanceMetrics, create_metric_config
 from src.utils.rescoring import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 from src.tuner.config import get_knob_space
+from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
 from src.evaluation.loader import load_tuning_session
 from src.evaluation.statistics import compute_comparison_statistics
@@ -541,7 +542,41 @@ class ComparisonRunner:
             active_config = env.get_db_config(worker_id=0)
 
             if knobs:
-                env.apply_knobs(worker_id=0, knobs=knobs)
+                applicator_config = ApplicatorConfig(rollback_on_error=False)
+                knob_applicator = KnobApplicator(
+                    db_config=active_config,
+                    config=applicator_config,
+                    worker_id=0,
+                )
+                apply_result = knob_applicator.apply(knobs)
+
+                if apply_result.restart_required:
+                    LOGGER.info(
+                        "Restart-required knobs applied (%s); restarting instance",
+                        list(apply_result.restart_required),
+                    )
+                    if not env.restart_instance(worker_id=0):
+                        raise RuntimeError(
+                            "Failed to restart instance after applying "
+                            f"restart-required knobs: {list(apply_result.restart_required)}"
+                        )
+
+                    # Refresh config after restart and rebind applicator.
+                    active_config = env.get_db_config(worker_id=0)
+                    knob_applicator = KnobApplicator(
+                        db_config=active_config,
+                        config=applicator_config,
+                        worker_id=0,
+                    )
+
+                verification = knob_applicator.verify(knobs)
+                failed_params = [k for k, ok in verification.items() if not ok]
+                if failed_params:
+                    LOGGER.warning(
+                        "Configuration verification failed for %d parameters: %s",
+                        len(failed_params),
+                        failed_params,
+                    )
 
             if benchmark_name == "tpch":
                 metrics = executor.execute(

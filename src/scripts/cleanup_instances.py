@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from src.config.database import DatabaseConfig
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.environments import EnvironmentFactory, InstanceConfig
 from src.utils.metrics import PerformanceMetrics
 
