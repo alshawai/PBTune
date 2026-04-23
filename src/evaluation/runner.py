@@ -36,7 +36,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
-from src.config.database import get_db_config
+from src.config.database import DatabaseConfig, get_db_config
 from src.utils.environments import EnvironmentFactory, DatabaseEnvironment
 from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
 from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
@@ -84,7 +84,7 @@ class ComparisonRunner:
 
     def __init__(self, config: ComparisonConfig) -> None:
         self.config = config
-        self.base_db_config = get_db_config()
+        self.base_db_config: DatabaseConfig | None = None
         self.timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._session_log_path: Path | None = None
 
@@ -395,6 +395,9 @@ class ComparisonRunner:
         Each call creates a fresh environment so every benchmark repetition
         starts from a clean-slate database.
         """
+        if self.base_db_config is None:
+            self.base_db_config = get_db_config()
+
         return EnvironmentFactory.create(
             schema_provider=executor,
             use_docker=self.config.use_docker,
