@@ -191,6 +191,13 @@ class SysbenchExecutor(BenchmarkExecutor):
             raise RuntimeError(f"Sysbench failed (exit {returncode}): {failure_detail}")
 
         metrics = self._parse_output(stdout)
+
+        if metrics.throughput == 0.0:
+            logger.error("Sysbench extracted 0 throughput! Dumping output:")
+            logger.error("STDOUT:\\n%s", stdout)
+            logger.error("STDERR:\\n%s", stderr)
+            raise RuntimeError("Sysbench executed but parsed 0 throughput. Check logs.")
+
         return metrics
 
     def _build_base_cmd(self, db_config: DatabaseConfig) -> list[str]:
@@ -217,13 +224,10 @@ class SysbenchExecutor(BenchmarkExecutor):
     ) -> tuple[str, str, int]:
         """Spawn the sysbench process and wait for completion."""
         cmd = self._build_base_cmd(db_config) + [
-            f"--time={duration}",
+            f"--time={duration + warmup}",
             f"--threads={self.threads}",
             "--report-interval=0",
         ]
-
-        if warmup > 0:
-            cmd.append(f"--warmup-time={warmup}")
 
         if seed is not None:
             cmd.append(f"--rand-seed={seed}")
