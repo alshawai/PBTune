@@ -139,7 +139,9 @@ def compute_comparison_statistics(
         )
         secondary_metrics.append(mc)
 
-    secondary_adjusted = _holm_adjusted_pvalues([mc.p_value for mc in secondary_metrics])
+    secondary_adjusted = _holm_adjusted_pvalues(
+        [mc.p_value for mc in secondary_metrics]
+    )
     _apply_significance(
         metrics=secondary_metrics,
         adjusted_p_values=secondary_adjusted,
@@ -167,7 +169,9 @@ def compute_comparison_statistics(
     power_warning = _build_power_warning(n)
 
     # Overall improvement uses the score metric
-    score_mc = next(mc for mc in metric_comparisons if mc.metric_name == _PRIMARY_ENDPOINT)
+    score_mc = next(
+        mc for mc in metric_comparisons if mc.metric_name == _PRIMARY_ENDPOINT
+    )
 
     return ComparisonStatistics(
         metrics=metric_comparisons,
@@ -198,9 +202,9 @@ def _compare_metric(
     t_arr = np.array(tuned_vals, dtype=float)
 
     if higher_is_better:
-        differences = t_arr - d_arr          # throughput/score: tuned > default = good
+        differences = t_arr - d_arr  # throughput/score: tuned > default = good
     else:
-        differences = d_arr - t_arr          # latency: default > tuned = good
+        differences = d_arr - t_arr  # latency: default > tuned = good
 
     p_value = _wilcoxon_p(differences)
 
@@ -214,8 +218,10 @@ def _compare_metric(
 
     # Convert CI from absolute difference to percentage
     if baseline_median != 0.0:
-        ci_pct = (ci_lower / abs(baseline_median) * 100.0,
-                  ci_upper / abs(baseline_median) * 100.0)
+        ci_pct = (
+            ci_lower / abs(baseline_median) * 100.0,
+            ci_upper / abs(baseline_median) * 100.0,
+        )
     else:
         ci_pct = (0.0, 0.0)
 
@@ -264,7 +270,9 @@ def _wilcoxon_p(differences: np.ndarray) -> float:
         _, p = stats.wilcoxon(nonzero, alternative="two-sided", zero_method="wilcox")
         return float(p)  # type: ignore
     except ValueError:
-        return 1.0  # scipy requires at least 1 nonzero difference; already checked above
+        return (
+            1.0  # scipy requires at least 1 nonzero difference; already checked above
+        )
 
 
 def _bootstrap_ci_median(
@@ -339,8 +347,7 @@ def _build_extractor(metric_name: str) -> Callable[[RunResult], float]:
     }
     if metric_name not in extractors:
         raise ValueError(
-            f"Unknown metric '{metric_name}'. "
-            f"Valid options: {sorted(extractors)}"
+            f"Unknown metric '{metric_name}'. Valid options: {sorted(extractors)}"
         )
     return extractors[metric_name]
 
@@ -382,7 +389,7 @@ def _build_power_warning(n_pairs: int) -> str | None:
             "p-value is 0.0625, so p<0.05 cannot be reached even before correction."
         )
 
-    min_possible_p = min(1.0, 2.0 / (2.0 ** n_pairs))
+    min_possible_p = min(1.0, 2.0 / (2.0**n_pairs))
     return (
         f"Low statistical power at N={n_pairs}: minimum possible two-sided "
         f"Wilcoxon p-value is {min_possible_p:.4f}."

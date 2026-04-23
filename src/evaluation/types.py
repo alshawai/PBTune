@@ -47,6 +47,7 @@ class ComparisonConfig:
             comparison JSON to results/{workload}/comparisons/{tier} and
             HTML logs to results/{workload}/comparisons/{tier}/logs.
     """
+
     tuning_session_path: Path
     benchmark: Optional[str] = None
     repetitions: int = 5
@@ -77,6 +78,7 @@ class TuningSessionData:
         workload_type: Workload type string ("OLTP", "OLAP", or "MIXED").
         session_id: Timestamp-based session identifier.
     """
+
     best_knobs: dict[str, Any]
     best_score: float
     worker_resources: WorkerResources
@@ -85,7 +87,6 @@ class TuningSessionData:
     benchmark: str
     workload_type: str
     session_id: str
-
 
 
 @dataclass
@@ -104,6 +105,7 @@ class RunResult:
             container setup, benchmark, and teardown.
         container_id: Docker container ID (or "bare-metal").
     """
+
     config_type: str
     run_number: int
     pair_seed: int
@@ -127,6 +129,7 @@ class StatSummary:
         iqr_upper: 75th percentile.
         values: Raw values (needed for bootstrap resampling).
     """
+
     mean: float
     std: float
     median: float
@@ -157,6 +160,7 @@ class MetricComparison:
         endpoint_role: "primary" or "secondary".
         correction_method: Name of correction used for this metric (if any).
     """
+
     metric_name: str
     default: StatSummary
     tuned: StatSummary
@@ -190,6 +194,7 @@ class ComparisonStatistics:
         primary_significant: Whether the primary endpoint is significant.
         secondary_correction_method: Secondary family correction method.
     """
+
     metrics: list[MetricComparison]
     significant_metrics: list[str]
     overall_improvement_pct: float
@@ -223,6 +228,7 @@ class ComparisonResult:
         log_path: Path where the HTML session log was saved.
         scoring_metadata: Rescoring provenance and normalization ranges.
     """
+
     default_runs: list[RunResult]
     tuned_runs: list[RunResult]
     tuned_knobs: dict[str, Any]

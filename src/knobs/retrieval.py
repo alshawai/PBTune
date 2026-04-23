@@ -152,7 +152,7 @@ class PostgreSQLKnobRetriever:
         ----------
         config : Optional[DatabaseConfig], default=None
             Database configuration. If None, uses get_db_config()
-            
+
         Examples
         --------
         >>> from knobs import PostgreSQLKnobRetriever
@@ -439,10 +439,10 @@ class PostgreSQLKnobRetriever:
     def get_all_knobs_with_metadata(self) -> pd.DataFrame:
         """
         Retrieve ALL PostgreSQL configuration parameters with full metadata.
-        
+
         This includes both predefined tunable knobs and all other parameters
         that exist in pg_settings, regardless of whether they're commonly tuned.
-        
+
         Returns
         -------
         pd.DataFrame
@@ -454,9 +454,7 @@ class PostgreSQLKnobRetriever:
         for category_knobs in self.TUNABLE_KNOBS.values():
             predefined_knobs.extend(category_knobs)
 
-        all_params["is_predefined_tunable"] = all_params["name"].isin(
-            predefined_knobs
-        )
+        all_params["is_predefined_tunable"] = all_params["name"].isin(predefined_knobs)
 
         def get_custom_category(name):
             for category, knobs in self.TUNABLE_KNOBS.items():
@@ -474,17 +472,17 @@ class PostgreSQLKnobRetriever:
     def save_all_knobs(self, filepath: str, include_metadata: bool = True) -> None:
         """
         Save ALL PostgreSQL knobs to a CSV file.
-        
+
         This saves every single parameter from pg_settings, not just the predefined
         tunable ones. Useful for comprehensive analysis and discovering new tunable
         parameters.
-        
+
         Parameters
         ----------
         filepath : str
             Path to save the CSV file
         include_metadata : bool, default=True
-            If True, includes additional metadata columns (is_predefined_tunable, 
+            If True, includes additional metadata columns (is_predefined_tunable,
             custom_category, is_runtime_modifiable)
         """
         if include_metadata:
@@ -511,13 +509,13 @@ class PostgreSQLKnobRetriever:
     def get_knobs_by_context(self, context: str) -> pd.DataFrame:
         """
         Get all knobs by their context (when they can be changed).
-        
+
         Parameters
         ----------
         context : str
-            Context type: 'internal', 'postmaster', 'sighup', 'superuser', 
+            Context type: 'internal', 'postmaster', 'sighup', 'superuser',
             'superuser-backend', 'backend', 'user'
-            
+
         Returns
         -------
         pd.DataFrame
@@ -529,13 +527,13 @@ class PostgreSQLKnobRetriever:
     def get_knobs_by_category(self, category: str) -> pd.DataFrame:
         """
         Get all knobs by their PostgreSQL category.
-        
+
         Parameters
         ----------
         category : str
-            PostgreSQL category (e.g., 'Resource Usage / Memory', 
+            PostgreSQL category (e.g., 'Resource Usage / Memory',
             'Query Tuning / Planner Cost Constants', etc.)
-            
+
         Returns
         -------
         pd.DataFrame
@@ -547,7 +545,7 @@ class PostgreSQLKnobRetriever:
     def get_all_categories(self) -> List[str]:
         """
         Get list of all PostgreSQL configuration categories.
-        
+
         Returns
         -------
         List[str]
@@ -559,7 +557,7 @@ class PostgreSQLKnobRetriever:
     def get_all_contexts(self) -> List[str]:
         """
         Get list of all PostgreSQL configuration contexts.
-        
+
         Returns
         -------
         List[str]
@@ -571,7 +569,7 @@ class PostgreSQLKnobRetriever:
     def get_knobs_summary(self) -> Dict[str, int]:
         """
         Get a summary of all knobs in the database.
-        
+
         Returns
         -------
         Dict[str, int]

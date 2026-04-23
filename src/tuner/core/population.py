@@ -48,7 +48,7 @@ logger = get_logger(__name__)
 class PopulationConfig:
     """
     Configuration for Population initialization and behavior.
-    
+
     Parameters
     ----------
     population_size : int
@@ -72,6 +72,7 @@ class PopulationConfig:
         Minimum fraction of knobs that should differ between old and fallback
         resampled configs in all-dead rescue.
     """
+
     population_size: int = 8
     ready_interval: int = 3
     exploit_quantile: float = 0.25
@@ -87,9 +88,10 @@ class PopulationConfig:
 class GenerationResult:
     """
     Results from evaluating one generation.
-    
+
     Tracks performance, exploit-explore activity, and population statistics.
     """
+
     generation: int
     best_score: float
     mean_score: float
@@ -103,11 +105,11 @@ class GenerationResult:
 class Population:
     """
     Manages a population of Workers for Population Based Training.
-    
+
     The Population class is the orchestrator of the PBT algorithm. It manages
     a pool of Worker instances, coordinates parallel evaluations, and triggers
     exploit-explore steps according to the PBT paper's algorithm.
-    
+
     Attributes
     ----------
     workers : List[Worker]
@@ -124,28 +126,28 @@ class Population:
         Best score achieved across all generations
     generations_without_improvement : int
         Counter for early stopping
-    
+
     Example
     -------
     >>> from src.tuner.config import get_knob_space
     >>> knob_space = get_knob_space('minimal')
     >>> config = PopulationConfig(population_size=4, max_generations=50)
-    >>> 
+    >>>
     >>> # Define your evaluation function
     >>> def evaluate_fn(worker):
     ...     # Run workload, measure performance
     ...     metrics = PerformanceMetrics(latency_p95=100.0, throughput=500.0)
     ...     score = compute_score(metrics)
     ...     return metrics, score
-    >>> 
+    >>>
     >>> population = Population(knob_space, config)
     >>> population.initialize()
-    >>> 
+    >>>
     >>> # Run PBT training loop
     >>> for generation in range(config.max_generations):
     ...     result = population.train_generation(evaluate_fn)
     ...     print(f"Gen {generation}: best={result.best_score:.4f}")
-    ...     
+    ...
     ...     if result.converged or population.should_stop():
     ...         break
     """
@@ -158,7 +160,7 @@ class Population:
     ):
         """
         Initialize a Population instance.
-        
+
         Parameters
         ----------
         knob_space : KnobSpace
@@ -193,20 +195,20 @@ class Population:
             "-> Created Population: size=%s, ready_interval=%s, exploit_quantile=%s",
             self.config.population_size,
             self.config.ready_interval,
-            self.config.exploit_quantile
+            self.config.exploit_quantile,
         )
 
     def initialize(
         self,
         initial_configs: Optional[List[Dict[str, Any]]] = None,
-        random_seed: Optional[int] = None
+        random_seed: Optional[int] = None,
     ) -> None:
         """
         Initialize the worker population.
-        
+
         Uses Latin Hypercube Sampling (LHS) for diverse initial configurations.
         This ensures better coverage of the search space and reduces early convergence.
-        
+
         Parameters
         ----------
         initial_configs : Optional[List[Dict[str, Any]]]
@@ -214,12 +216,12 @@ class Population:
             (for partial seeding), in which case the rest are filled via LHS.
         seed : Optional[int], default=None
             Random seed for sampling.
-        
+
         Raises
         ------
         ValueError
             If initial_configs is provided but length is greater than population_size
-        
+
         Note
         ----
         After calling this, call setup_worker_instances() to assign instance configs.
@@ -234,17 +236,16 @@ class Population:
             if num_lhs_needed > 0:
                 logger.debug(
                     "Partial seeding: %d configs provided, filling %d configs with LHS",
-                    len(initial_configs), num_lhs_needed
+                    len(initial_configs),
+                    num_lhs_needed,
                 )
                 lhs_configs = self.knob_space.sample_diverse_configs(
-                    num_samples=num_lhs_needed,
-                    seed=random_seed
+                    num_samples=num_lhs_needed, seed=random_seed
                 )
                 initial_configs = initial_configs + lhs_configs
         else:
             initial_configs = self.knob_space.sample_diverse_configs(
-                num_samples=self.config.population_size,
-                seed=random_seed
+                num_samples=self.config.population_size, seed=random_seed
             )
 
         self.workers = []
@@ -261,13 +262,13 @@ class Population:
     def setup_worker_instances(
         self,
         instances: List[Any],
-        dbname: str = 'postgres',
-        user: str = 'postgres',
-        password: str = ''
+        dbname: str = "postgres",
+        user: str = "postgres",
+        password: str = "",
     ) -> None:
         """
         Assign PostgreSQL instance configurations to workers.
-        
+
         Parameters
         ----------
         instances : List[InstanceConfig]
@@ -279,7 +280,7 @@ class Population:
         password : str
             PostgreSQL password# Snapshot manager deleted
 
-        
+
         Example
         -------
         >>> population.initialize()
@@ -299,18 +300,15 @@ class Population:
             worker.port = instance.port
 
             worker.db_config = DatabaseConfig(
-                host='127.0.0.1',
+                host="127.0.0.1",
                 port=instance.port,
                 dbname=dbname,
                 user=user,
-                password=password
+                password=password,
             )
 
             worker_logger = get_logger(__name__, worker_id=worker.worker_id)
-            worker_logger.info(
-                "Assigned to instance port %d",
-                worker.port
-            )
+            worker_logger.info("Assigned to instance port %d", worker.port)
 
     def setup_snapshots(
         self,
@@ -321,17 +319,14 @@ class Population:
         Register snapshot configuration for database restoration during training.
         """
         self.env = env
-        self.enable_snapshots = getattr(pbt_config, 'enable_snapshots', False)
-        self.restore_interval = getattr(pbt_config, 'snapshot_restore_interval', 5)
+        self.enable_snapshots = getattr(pbt_config, "enable_snapshots", False)
+        self.restore_interval = getattr(pbt_config, "snapshot_restore_interval", 5)
 
         if not self.enable_snapshots:
             logger.debug("Snapshots disabled in config")
             return
 
-        logger.info(
-            "Snapshot restoration enabled: interval=%d",
-            self.restore_interval
-        )
+        logger.info("Snapshot restoration enabled: interval=%d", self.restore_interval)
 
     def evaluate_generation(
         self,
@@ -341,11 +336,11 @@ class Population:
     ) -> None:
         """
         Evaluate all workers in the current generation.
-        
+
         Executes the evaluation function for each worker, either in parallel
         (using ThreadPoolExecutor) or sequentially. Updates each worker's
         metrics and performance score.
-        
+
         Parameters
         ----------
         evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
@@ -360,7 +355,7 @@ class Population:
             Whether to evaluate workers in parallel
         max_workers : Optional[int]
             Maximum number of parallel threads. Defaults to population_size.
-        
+
         Example
         -------
         >>> def my_evaluate(worker):
@@ -368,13 +363,13 @@ class Population:
         ...     metrics = run_workload()
         ...     score = compute_score(metrics)
         ...     return metrics, score
-        >>> 
+        >>>
         >>> population.evaluate_generation(my_evaluate, parallel=True)
         """
         logger.info(
             "Evaluating generation %s - %s",
             self.current_generation,
-            'parallel' if parallel else 'sequential'
+            "parallel" if parallel else "sequential",
         )
 
         if not parallel:
@@ -384,8 +379,7 @@ class Population:
                     worker.update_metrics(metrics, score)
                     worker_logger = get_logger(__name__, worker_id=worker.worker_id)
                     worker_logger.debug(
-                        "score=%.4f, step_count=%s",
-                        score, worker.step_count
+                        "score=%.4f, step_count=%s", score, worker.step_count
                     )
                 except Exception as e:
                     worker_logger = get_logger(__name__, worker_id=worker.worker_id)
@@ -408,8 +402,7 @@ class Population:
                         worker.update_metrics(metrics, score)
                         worker_logger = get_logger(__name__, worker_id=worker.worker_id)
                         worker_logger.debug(
-                            "score=%.4f, step_count=%s",
-                            score, worker.step_count
+                            "score=%.4f, step_count=%s", score, worker.step_count
                         )
                     except Exception as e:
                         worker_logger = get_logger(__name__, worker_id=worker.worker_id)
@@ -419,13 +412,17 @@ class Population:
         logger.info("Generation %s evaluation complete", self.current_generation)
 
     @staticmethod
-    def _config_change_ratio(old_config: Dict[str, Any], new_config: Dict[str, Any]) -> float:
+    def _config_change_ratio(
+        old_config: Dict[str, Any], new_config: Dict[str, Any]
+    ) -> float:
         """Return fraction of knob entries whose values changed."""
         all_keys = set(old_config.keys()) | set(new_config.keys())
         if not all_keys:
             return 0.0
 
-        changed = sum(1 for key in all_keys if old_config.get(key) != new_config.get(key))
+        changed = sum(
+            1 for key in all_keys if old_config.get(key) != new_config.get(key)
+        )
         return changed / len(all_keys)
 
     def _choose_diverse_resample_config(
@@ -557,7 +554,9 @@ class Population:
 
             return resampled
 
-        alive_workers = sorted(alive_workers, key=lambda worker: worker.performance_score, reverse=True)
+        alive_workers = sorted(
+            alive_workers, key=lambda worker: worker.performance_score, reverse=True
+        )
 
         rescued = 0
         for index, dead_worker in enumerate(dead_workers):
@@ -602,16 +601,16 @@ class Population:
     def update_metric_ranges_if_needed(self) -> None:
         """
         Update metric normalization ranges after initial exploration phase.
-        
+
         This implements OtterTune's adaptive approach: after collecting enough
         data from initial evaluations, compute realistic min/max ranges based
         on used hardware's actual performance.
-        
+
         Strategy:
         - Collect metrics from multiple generations to capture performance variability
         - Wait for at least 2 full generations (2 * population_size samples)
         - Use percentile-based ranges to be robust to outliers
-        
+
         Called automatically during train_generation() after evaluations.
         """
         if self._ranges_updated:
@@ -634,40 +633,49 @@ class Population:
             logger.debug(
                 "Waiting for sufficient samples for adaptive normalization: "
                 "%d/%d (generation %d)",
-                len(all_metrics), min_samples_needed, self.current_generation
+                len(all_metrics),
+                min_samples_needed,
+                self.current_generation,
             )
             return
 
         if excluded_failure_metrics > 0:
             logger.debug(
                 "Excluded %d failure-tagged metrics from adaptive normalization updates",
-                excluded_failure_metrics
+                excluded_failure_metrics,
             )
 
         logger.info(
             "Updating normalization ranges from %d observations across %d workers",
-            len(all_metrics), len(self.workers)
+            len(all_metrics),
+            len(self.workers),
         )
 
-        if self.evaluator is not None and hasattr(self.evaluator, 'config'):
+        if self.evaluator is not None and hasattr(self.evaluator, "config"):
             metric_config = self.evaluator.config.metric_config
 
             try:
-                already_initialized = getattr(metric_config, '_ranges_initialized', False)
+                already_initialized = getattr(
+                    metric_config, "_ranges_initialized", False
+                )
                 if not already_initialized:
                     metric_config.update_ranges(all_metrics)
                     logger.info(
                         "✓ Adaptive normalization activated for %s "
                         "workload (based on %d observations)",
                         metric_config.workload_type.value,
-                        len(all_metrics)
+                        len(all_metrics),
                     )
 
                     # Rescore current generation and best overall score with new adaptive ranges
-                    logger.info("♻️  Rescoring current generation with adaptive ranges...")
+                    logger.info(
+                        "♻️  Rescoring current generation with adaptive ranges..."
+                    )
                     for worker in self.workers:
                         if worker.metrics is not None:
-                            worker.performance_score = metric_config.compute_score(worker.metrics)
+                            worker.performance_score = metric_config.compute_score(
+                                worker.metrics
+                            )
 
                     logger.info(
                         "♻️  Resetting historical best score to align with new adaptive bounds"
@@ -685,18 +693,16 @@ class Population:
         logger.info("Metric normalization ranges updated successfully")
 
     def exploit_and_explore(
-        self,
-        require_ready: bool = True,
-        exclude_knobs: Optional[List[str]] = None
+        self, require_ready: bool = True, exclude_knobs: Optional[List[str]] = None
     ) -> int:
         """
         Perform exploit-explore step on poor-performing workers.
-        
+
         Delegates to evolution.execute_exploit_explore() to perform:
         1. Identify poor and elite workers (truncation selection)
         2. Clone elite configs to poor workers (exploit)
         3. Perturb poor workers' configs (explore)
-        
+
         Parameters
         ----------
         require_ready : bool, default=True
@@ -705,7 +711,7 @@ class Population:
             Enable verbose logging of exploit-explore details
         exclude_knobs : Optional[List[str]]
             Knobs to exclude from perturbation (keep constant)
-        
+
         Returns
         -------
         int
@@ -718,12 +724,13 @@ class Population:
             current_generation=self.current_generation,
             require_ready=require_ready,
             dead_config_threshold=self.config.dead_config_threshold,
-            exclude_knobs=exclude_knobs
+            exclude_knobs=exclude_knobs,
         )
 
         logger.info(
             "Exploit-explore complete: %s workers modified (generation %s)",
-            num_exploited, self.current_generation
+            num_exploited,
+            self.current_generation,
         )
 
         return num_exploited
@@ -731,10 +738,10 @@ class Population:
     def record_generation(self) -> GenerationResult:
         """
         Record statistics and results for the current generation.
-        
+
         Computes population statistics, identifies best worker, checks
         convergence, and updates history.
-        
+
         Returns
         -------
         GenerationResult
@@ -757,9 +764,9 @@ class Population:
 
         result = GenerationResult(
             generation=self.current_generation,
-            best_score=stats['max'],
-            mean_score=stats['mean'],
-            std_score=stats['std'],
+            best_score=stats["max"],
+            mean_score=stats["mean"],
+            std_score=stats["std"],
             num_exploited=0,  # Will be updated by train_generation
             best_worker_id=best_worker.worker_id,
             best_config=best_worker.knob_config.copy(),  # type: ignore
@@ -794,13 +801,13 @@ class Population:
     ) -> GenerationResult:
         """
         Execute one complete PBT generation.
-        
+
         This is the main training loop method. It:
         1. Evaluates all workers with their current configurations
         2. Performs exploit-explore to evolve poor performers
         3. Records generation statistics
         4. Increments generation counter
-        
+
         Parameters
         ----------
         evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
@@ -813,18 +820,18 @@ class Population:
             Maximum parallel workers for evaluation. When less than
             population_size, workers evaluate in batches. If None,
             defaults to population_size.
-        
+
         Returns
         -------
         GenerationResult
             Summary of this generation's results
-        
+
         Example
         -------
         >>> def evaluate(worker):
         ...     # Your evaluation logic
         ...     return metrics, score
-        >>> 
+        >>>
         >>> for gen in range(max_generations):
         ...     result = population.train_generation(evaluate)
         ...     print(f"Best: {result.best_score:.4f}")
@@ -833,14 +840,14 @@ class Population:
         """
         # Restore database snapshots if enabled and it's time to restore
         if (
-            self.enable_snapshots and
-            self.current_generation > 0 and
-            self.current_generation % self.restore_interval == 0
+            self.enable_snapshots
+            and self.current_generation > 0
+            and self.current_generation % self.restore_interval == 0
         ):
             logger.info(
                 "Restoring database snapshots for generation %d (interval: %d)",
                 self.current_generation,
-                self.restore_interval
+                self.restore_interval,
             )
 
             try:
@@ -855,7 +862,9 @@ class Population:
                             )
 
                             rebuilt = False
-                            rebuild_fn = getattr(self.env, "rebuild_worker_instance", None)
+                            rebuild_fn = getattr(
+                                self.env, "rebuild_worker_instance", None
+                            )
                             rebuilt = self._invoke_optional_worker_callback(
                                 rebuild_fn,
                                 worker.worker_id,
@@ -877,13 +886,17 @@ class Population:
 
                     logger.info("✓ Database snapshots restored successfully")
                 else:
-                    logger.warning("Snapshot restoration requested but env not available")
+                    logger.warning(
+                        "Snapshot restoration requested but env not available"
+                    )
             except Exception as e:
                 logger.error("Failed to restore databases from snapshots: %s", e)
                 logger.debug("Exception details:", exc_info=True)
                 raise
 
-        self.evaluate_generation(evaluate_fn, parallel=parallel, max_workers=max_workers)
+        self.evaluate_generation(
+            evaluate_fn, parallel=parallel, max_workers=max_workers
+        )
 
         rescued = self.rescue_dead_workers(evaluate_fn)
         if rescued > 0:
@@ -896,7 +909,7 @@ class Population:
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,
-            exclude_knobs=None  # No restrictions in multi-instance mode
+            exclude_knobs=None,  # No restrictions in multi-instance mode
         )
 
         result = self.record_generation()
@@ -906,8 +919,12 @@ class Population:
 
         logger.info(
             "Generation %s complete: best=%.4f, mean=%.4f, std=%.4f, exploited=%s, converged=%s",
-            result.generation, result.best_score, result.mean_score,
-            result.std_score, num_exploited, result.converged
+            result.generation,
+            result.best_score,
+            result.mean_score,
+            result.std_score,
+            num_exploited,
+            result.converged,
         )
 
         return result
@@ -915,12 +932,12 @@ class Population:
     def should_stop(self) -> bool:
         """
         Check if training should stop early.
-        
+
         Stops if:
         1. Maximum generations reached
         2. Early stopping patience exceeded (no improvement)
         3. Population has converged
-        
+
         Returns
         -------
         bool
@@ -933,7 +950,7 @@ class Population:
         if self.generations_without_improvement >= self.config.early_stopping_patience:
             logger.info(
                 "Stopping: no improvement for %s generations",
-                self.config.early_stopping_patience
+                self.config.early_stopping_patience,
             )
             return True
 
@@ -944,8 +961,7 @@ class Population:
         return False
 
     def _check_and_handle_saturation(
-        self,
-        evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]]
+        self, evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]]
     ) -> None:
         """
         Check if any workers' raw metrics exceed normalization bounds and expand if needed.
@@ -984,8 +1000,7 @@ class Population:
             if worker.metrics is not None:
                 pre_clamp_scores[worker.worker_id] = worker.performance_score
                 latency = getattr(
-                    worker.metrics,
-                    f"latency_{metric_config.latency_metric}"
+                    worker.metrics, f"latency_{metric_config.latency_metric}"
                 )
                 throughput = worker.metrics.throughput
 
@@ -1016,20 +1031,21 @@ class Population:
 
         logger.info(
             "⚠️  Metric bounds exceeded in %d/%d workers (generation %d)",
-            len(clamped_workers), len(self.workers), self.current_generation
+            len(clamped_workers),
+            len(self.workers),
+            self.current_generation,
         )
         logger.info(
             "    Best clamped: Worker-%d with PRE-expansion score %.4f",
-            best_clamped_worker.worker_id, best_clamped_pre_score
+            best_clamped_worker.worker_id,
+            best_clamped_pre_score,
         )
 
         # Expand ranges based on current generation's metrics
-        dead_threshold = (
-            self.config.dead_config_threshold
-            if self.config else 6.0
-        )
+        dead_threshold = self.config.dead_config_threshold if self.config else 6.0
         current_metrics = [
-            w.metrics for w in self.workers
+            w.metrics
+            for w in self.workers
             if w.metrics is not None and w.performance_score > dead_threshold
         ]
         if not current_metrics:
@@ -1037,7 +1053,7 @@ class Population:
 
         ranges_expanded = metric_config.expand_ranges_for_metrics(
             current_metrics,
-            expansion_factor=0.25  # 25% headroom for continued improvement
+            expansion_factor=0.25,  # 25% headroom for continued improvement
         )
 
         if not ranges_expanded:
@@ -1055,7 +1071,10 @@ class Population:
                 if abs(new_score - old_score) > 0.5:  # Log significant changes
                     logger.debug(
                         "  Worker-%d: %.4f → %.4f (Δ%.4f)",
-                        worker.worker_id, old_score, new_score, new_score - old_score
+                        worker.worker_id,
+                        old_score,
+                        new_score,
+                        new_score - old_score,
                     )
 
         old_unscaled_best = self.best_overall_score
@@ -1065,16 +1084,17 @@ class Population:
             )
             logger.info(
                 "♻️  Rescored historical best score on expanded bounds: %.4f → %.4f",
-                old_unscaled_best, self.best_overall_score
+                old_unscaled_best,
+                self.best_overall_score,
             )
 
-        # record_generation() will natively handle comparing the current workers 
+        # record_generation() will natively handle comparing the current workers
         # (now rescored) against the historical best (also rescored).
 
     def get_best_configuration(self) -> tuple[Dict[str, Any], float]:
         """
         Get the best configuration found so far.
-        
+
         Returns
         -------
         tuple[Dict[str, Any], float]
@@ -1088,7 +1108,7 @@ class Population:
     def get_population_summary(self) -> Dict[str, Any]:
         """
         Get summary statistics for the current population.
-        
+
         Returns
         -------
         Dict[str, Any]
@@ -1098,22 +1118,22 @@ class Population:
         best_worker = get_best_worker(self.workers)
 
         return {
-            'current_generation': self.current_generation,
-            'population_size': len(self.workers),
-            'best_score': stats['max'],
-            'mean_score': stats['mean'],
-            'std_score': stats['std'],
-            'min_score': stats['min'],
-            'best_worker_id': best_worker.worker_id,
-            'best_config': best_worker.knob_config.copy(),  # type: ignore
-            'converged': check_convergence(
+            "current_generation": self.current_generation,
+            "population_size": len(self.workers),
+            "best_score": stats["max"],
+            "mean_score": stats["mean"],
+            "std_score": stats["std"],
+            "min_score": stats["min"],
+            "best_worker_id": best_worker.worker_id,
+            "best_config": best_worker.knob_config.copy(),  # type: ignore
+            "converged": check_convergence(
                 self.workers,
                 self.config.convergence_threshold,
                 dead_config_threshold=self.config.dead_config_threshold,
                 min_valid_workers=2,
             ),
-            'best_overall_score': self.best_overall_score,
-            'generations_without_improvement': self.generations_without_improvement,
+            "best_overall_score": self.best_overall_score,
+            "generations_without_improvement": self.generations_without_improvement,
         }
 
     def __repr__(self) -> str:

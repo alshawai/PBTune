@@ -24,7 +24,7 @@ def load_csv_to_table(
 ) -> None:
     """
     Load data from a CSV file into a PostgreSQL table.
-    
+
     Parameters
     ----------
     csv_path : str
@@ -40,21 +40,21 @@ def load_csv_to_table(
         Database configuration. If None, uses get_db_config()
     engine : Optional[Engine], default=None
         SQLAlchemy engine. If None, creates a new engine
-        
+
     Raises
     ------
     FileNotFoundError
         If the CSV file does not exist
     ValueError
         If the table already exists and if_exists='fail'
-        
+
     Examples
     --------
     >>> from database import load_csv_to_table
     >>> load_csv_to_table("data/products.csv", "products")
     Loading 1000000 rows into 'products' table...
     🟢 Data loaded successfully!
-    
+
     >>> # Replace existing table
     >>> load_csv_to_table("data/products.csv", "products", if_exists="replace")
     """
@@ -92,12 +92,12 @@ def load_csv_to_table(
 def load_products_dataset(config: Optional[DatabaseConfig] = None) -> None:
     """
     Load the products dataset (convenience function).
-    
+
     Parameters
     ----------
     config : Optional[DatabaseConfig], default=None
         Database configuration. If None, uses get_db_config()
-        
+
     Examples
     --------
     >>> from database import load_products_dataset
@@ -113,12 +113,12 @@ def load_products_dataset(config: Optional[DatabaseConfig] = None) -> None:
 def load_leads_dataset(config: Optional[DatabaseConfig] = None) -> None:
     """
     Load the leads dataset (convenience function).
-    
+
     Parameters
     ----------
     config : Optional[DatabaseConfig], default=None
         Database configuration. If None, uses get_db_config()
-        
+
     Examples
     --------
     >>> from database import load_leads_dataset

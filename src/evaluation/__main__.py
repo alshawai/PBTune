@@ -107,10 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="F",
         type=float,
         default=None,
-        help=(
-            "TPC-H scale factor. "
-            "Auto-detected from session when not specified."
-        ),
+        help=("TPC-H scale factor. Auto-detected from session when not specified."),
     )
     bench_grp.add_argument(
         "--sysbench-duration",
@@ -128,8 +125,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "Number of sysbench tables. "
-            "Auto-detected from session when not specified."
+            "Number of sysbench tables. Auto-detected from session when not specified."
         ),
     )
     bench_grp.add_argument(
@@ -138,8 +134,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "Rows per sysbench table. "
-            "Auto-detected from session when not specified."
+            "Rows per sysbench table. Auto-detected from session when not specified."
         ),
     )
     bench_grp.add_argument(
@@ -237,7 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     logger = get_logger("evaluate_tuning")
 
     if args.repetitions < 2:
-        parser.error("--repetitions must be at least 2 (need paired observations for Wilcoxon).")
+        parser.error(
+            "--repetitions must be at least 2 (need paired observations for Wilcoxon)."
+        )
     if args.repetitions < 5:
         logger.warning(
             "Running only %d repetitions. Wilcoxon signed-rank requires "
@@ -263,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         runner = ComparisonRunner(config)
-        runner.run()   # Summary printed internally by runner._print_summary()
+        runner.run()  # Summary printed internally by runner._print_summary()
         logger.info("Evaluation complete. Exit 0.")
         return 0
 
@@ -273,7 +270,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
         return 130
-    except Exception as exc:  # broad catch intentional: CLI must not crash with traceback
+    except (
+        Exception
+    ) as exc:  # broad catch intentional: CLI must not crash with traceback
         logger.exception("Unexpected error during evaluation: %s", exc)
         return 1
 

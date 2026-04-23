@@ -47,7 +47,9 @@ def annotate_autotuning_policy(df: pd.DataFrame) -> pd.DataFrame:
 
     internal_mask = annotated["context"] == "internal"
     annotated.loc[internal_mask, "eligible_for_autotuning"] = False
-    annotated.loc[internal_mask, "autotuning_exclusion_reason_code"] = "internal_context"
+    annotated.loc[internal_mask, "autotuning_exclusion_reason_code"] = (
+        "internal_context"
+    )
     annotated.loc[
         internal_mask,
         "autotuning_exclusion_reason_detail",
@@ -59,7 +61,9 @@ def annotate_autotuning_policy(df: pd.DataFrame) -> pd.DataFrame:
         if knob_mask.any():  # type: ignore
             annotated.loc[knob_mask, "eligible_for_autotuning"] = False
             annotated.loc[knob_mask, "autotuning_exclusion_reason_code"] = reason_code
-            annotated.loc[knob_mask, "autotuning_exclusion_reason_detail"] = reason_detail
+            annotated.loc[knob_mask, "autotuning_exclusion_reason_detail"] = (
+                reason_detail
+            )
 
     return annotated
 

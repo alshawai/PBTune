@@ -60,11 +60,11 @@ def test_impact_tiers_derive_correctly_from_loaded_metadata():
         k for k, v in metadata_json.items() if v["impact_tier"] == "minimal"
     ]
     expected_core = [
-        k for k, v in metadata_json.items()
-        if v["impact_tier"] in ("minimal", "core")
+        k for k, v in metadata_json.items() if v["impact_tier"] in ("minimal", "core")
     ]
     expected_standard = [
-        k for k, v in metadata_json.items()
+        k
+        for k, v in metadata_json.items()
         if v["impact_tier"] in ("minimal", "core", "standard")
     ]
 
@@ -87,7 +87,9 @@ def test_missing_json_file_raises_actionable_filenotfounderror(tmp_path: Path):
     module = _load_knob_metadata_module()
     missing_path = tmp_path / "missing_knob_metadata.json"
 
-    with pytest.raises(FileNotFoundError, match="Knob metadata file not found") as exc_info:
+    with pytest.raises(
+        FileNotFoundError, match="Knob metadata file not found"
+    ) as exc_info:
         module._load_metadata(str(missing_path))
 
     message = str(exc_info.value)
@@ -109,8 +111,7 @@ def test_round_trip_dict_json_loaded_dict_values_identical(tmp_path: Path):
 
     loaded_metadata = module._load_metadata(str(json_path))
     loaded_dict = {
-        knob: dataclasses.asdict(metadata)
-        for knob, metadata in loaded_metadata.items()
+        knob: dataclasses.asdict(metadata) for knob, metadata in loaded_metadata.items()
     }
 
     assert loaded_dict == original_dict

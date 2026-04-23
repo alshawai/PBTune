@@ -194,7 +194,10 @@ def setup_sysbench_table():
                 values.append(f"({k}, '{c}', '{pad}')")
 
             cursor.execute(f"INSERT INTO sbtest1 (k, c, pad) VALUES {','.join(values)}")
-            print(f"  Inserted {min(batch_start + batch_size, 10000)}/10000 rows", end='\r')
+            print(
+                f"  Inserted {min(batch_start + batch_size, 10000)}/10000 rows",
+                end="\r",
+            )
 
         print("\n")
 

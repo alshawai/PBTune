@@ -60,6 +60,7 @@ from src.utils.rescoring import rescore_metrics_globally
 # loader.py tests
 # ===========================================================================
 
+
 class TestLoadTuningSession:
     """Tests for load_tuning_session()."""
 
@@ -114,7 +115,9 @@ class TestLoadTuningSession:
         with pytest.raises(TuningSessionLoadError, match="worker_resources"):
             load_tuning_session(p)
 
-    def test_negative_cpu_cores_raises(self, tmp_path: Path, sample_session_file: Path) -> None:
+    def test_negative_cpu_cores_raises(
+        self, tmp_path: Path, sample_session_file: Path
+    ) -> None:
         """Negative cpu_cores raises TuningSessionLoadError."""
         with open(sample_session_file, encoding="utf-8") as f:
             data = json.load(f)
@@ -124,7 +127,9 @@ class TestLoadTuningSession:
         with pytest.raises(TuningSessionLoadError, match="cpu_cores"):
             load_tuning_session(p)
 
-    def test_empty_knobs_raises(self, tmp_path: Path, sample_session_file: Path) -> None:
+    def test_empty_knobs_raises(
+        self, tmp_path: Path, sample_session_file: Path
+    ) -> None:
         """Empty knobs dict raises TuningSessionLoadError."""
         with open(sample_session_file, encoding="utf-8") as f:
             data = json.load(f)
@@ -134,11 +139,14 @@ class TestLoadTuningSession:
         with pytest.raises(TuningSessionLoadError, match="non-empty"):
             load_tuning_session(p)
 
-    @pytest.mark.parametrize("path_segment,expected", [
-        ("olap/pbt_runs", "tpch"),
-        ("oltp/pbt_runs", "sysbench"),
-        ("tpch/results", "tpch"),
-    ])
+    @pytest.mark.parametrize(
+        "path_segment,expected",
+        [
+            ("olap/pbt_runs", "tpch"),
+            ("oltp/pbt_runs", "sysbench"),
+            ("tpch/results", "tpch"),
+        ],
+    )
     def test_benchmark_inferred_from_path(
         self,
         tmp_path: Path,
@@ -187,6 +195,7 @@ class TestLoadTuningSession:
 # statistics.py tests
 # ===========================================================================
 
+
 class TestStatisticalPrimitives:
     """Tests for individual statistical functions."""
 
@@ -209,14 +218,16 @@ class TestStatisticalPrimitives:
     def test_wilcoxon_all_same_direction(self) -> None:
         """All differences in same direction → significant at α=0.05."""
         import numpy as np
+
         # All 5 differences positive → minimum p-value for N=5 Wilcoxon
         diffs = np.array([5.0, 3.0, 7.0, 4.0, 6.0])
         p = _wilcoxon_p(diffs)
-        assert p < 0.1   # Should be clearly significant for N=5
+        assert p < 0.1  # Should be clearly significant for N=5
 
     def test_wilcoxon_all_zero(self) -> None:
         """All-zero differences → p=1.0 (no effect)."""
         import numpy as np
+
         diffs = np.zeros(5)
         p = _wilcoxon_p(diffs)
         assert p == pytest.approx(1.0)
@@ -224,6 +235,7 @@ class TestStatisticalPrimitives:
     def test_wilcoxon_mixed_directions(self) -> None:
         """Mixed direction differences → high p-value (not significant)."""
         import numpy as np
+
         diffs = np.array([5.0, -5.0, 3.0, -3.0, 1.0])
         p = _wilcoxon_p(diffs)
         assert p > 0.2  # Not significant
@@ -231,6 +243,7 @@ class TestStatisticalPrimitives:
     def test_bootstrap_ci_contains_median(self) -> None:
         """Bootstrap 95% CI should contain the true sample median."""
         import numpy as np
+
         rng = np.random.default_rng(0)
         diffs = rng.normal(10.0, 1.0, size=5)
         lo, hi = _bootstrap_ci_median(diffs, n_bootstrap=1000)
@@ -239,6 +252,7 @@ class TestStatisticalPrimitives:
     def test_bootstrap_ci_width_reasonable(self) -> None:
         """CI should be non-zero width for non-constant differences."""
         import numpy as np
+
         diffs = np.array([8.0, 10.0, 9.0, 11.0, 7.0])
         lo, hi = _bootstrap_ci_median(diffs, n_bootstrap=1000)
         assert hi > lo
@@ -246,6 +260,7 @@ class TestStatisticalPrimitives:
     def test_cohens_d_large_effect(self) -> None:
         """Large consistent improvement → |d| > 0.8."""
         import numpy as np
+
         # All differences large and consistent
         diffs = np.array([20.0, 22.0, 19.0, 21.0, 23.0])
         d = _paired_cohens_d(diffs)
@@ -254,6 +269,7 @@ class TestStatisticalPrimitives:
     def test_cohens_d_zero_effect(self) -> None:
         """All-zero differences → d=0.0."""
         import numpy as np
+
         diffs = np.zeros(5)
         d = _paired_cohens_d(diffs)
         assert d == pytest.approx(0.0)
@@ -268,7 +284,9 @@ class TestComputeComparisonStatistics:
         tuned_runs: list[RunResult],
     ) -> None:
         """Clear improvement in all metrics → positive overall improvement."""
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
         assert stats.overall_improvement_pct > 0.0
 
     def test_primary_alpha_correct(
@@ -277,7 +295,9 @@ class TestComputeComparisonStatistics:
         tuned_runs: list[RunResult],
     ) -> None:
         """Primary endpoint is tested at alpha=0.05 without family correction."""
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
         assert stats.alpha == pytest.approx(0.05)
 
     def test_returns_primary_plus_three_secondary_metrics(
@@ -286,9 +306,16 @@ class TestComputeComparisonStatistics:
         tuned_runs: list[RunResult],
     ) -> None:
         """Statistics include score + benchmark latency + throughput + memory."""
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
         metric_names = {mc.metric_name for mc in stats.metrics}
-        assert metric_names == {"score", "latency_p95", "throughput", "memory_utilization"}
+        assert metric_names == {
+            "score",
+            "latency_p95",
+            "throughput",
+            "memory_utilization",
+        }
 
     def test_latency_higher_is_better_flag(
         self,
@@ -296,11 +323,15 @@ class TestComputeComparisonStatistics:
         tuned_runs: list[RunResult],
     ) -> None:
         """latency_p95 should have higher_is_better=False."""
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
         latency_mc = next(m for m in stats.metrics if m.metric_name == "latency_p95")
         assert latency_mc.higher_is_better is False
 
-    def test_memory_utilization_treated_as_lower_is_better(self, make_run_result) -> None:
+    def test_memory_utilization_treated_as_lower_is_better(
+        self, make_run_result
+    ) -> None:
         """Memory utilization should be penalized when tuned uses more memory."""
         default_runs = [
             make_run_result(
@@ -321,8 +352,12 @@ class TestComputeComparisonStatistics:
             for i in range(1, 6)
         ]
 
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
-        memory_mc = next(m for m in stats.metrics if m.metric_name == "memory_utilization")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        memory_mc = next(
+            m for m in stats.metrics if m.metric_name == "memory_utilization"
+        )
 
         assert memory_mc.higher_is_better is False
         assert memory_mc.improvement_pct < 0.0
@@ -333,7 +368,9 @@ class TestComputeComparisonStatistics:
         tuned_runs: list[RunResult],
     ) -> None:
         """TPC-H statistical endpoint uses latency_p99 instead of p95."""
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="tpch")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="tpch"
+        )
         metric_names = {mc.metric_name for mc in stats.metrics}
         assert "latency_p99" in metric_names
         assert "latency_p95" not in metric_names
@@ -344,7 +381,9 @@ class TestComputeComparisonStatistics:
         tuned_runs: list[RunResult],
     ) -> None:
         """Bootstrap CI lower bound < upper bound for all metrics."""
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
         for mc in stats.metrics:
             lo, hi = mc.improvement_ci
             assert lo <= hi, f"CI inverted for {mc.metric_name}: [{lo}, {hi}]"
@@ -369,7 +408,9 @@ class TestComputeComparisonStatistics:
         """When both configs produce identical scores → not significant."""
         same_default = [make_run_result("default", i, score=50.0) for i in range(1, 6)]
         same_tuned = [make_run_result("tuned", i, score=50.0) for i in range(1, 6)]
-        stats = compute_comparison_statistics(same_default, same_tuned, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            same_default, same_tuned, benchmark="sysbench"
+        )
         score_mc = next(m for m in stats.metrics if m.metric_name == "score")
         assert not score_mc.significant
 
@@ -382,14 +423,18 @@ class TestComputeComparisonStatistics:
         tuned_runs[0].pair_seed = 9999
 
         with pytest.raises(ValueError, match="not aligned"):
-            compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+            compute_comparison_statistics(
+                default_runs, tuned_runs, benchmark="sysbench"
+            )
 
     def test_statistics_metadata_includes_power_warning_for_n5(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        stats = compute_comparison_statistics(default_runs, tuned_runs, benchmark="sysbench")
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
 
         assert stats.n_pairs == 5
         assert stats.correction_method == "holm_secondary"
@@ -408,25 +453,34 @@ class TestComputeComparisonStatistics:
 # runner.py helper tests
 # ===========================================================================
 
+
 class TestRunnerHelpers:
     """Tests for standalone helper functions in runner.py."""
 
-    @pytest.mark.parametrize("pg_str,expected", [
-        ("PostgreSQL 16.2", "16"),
-        ("PostgreSQL 18.3", "18"),
-        ("PostgreSQL 14.0 (Ubuntu)", "14"),
-        ("unknown", "16"),
-        ("", "16"),
-    ])
+    @pytest.mark.parametrize(
+        "pg_str,expected",
+        [
+            ("PostgreSQL 16.2", "16"),
+            ("PostgreSQL 18.3", "18"),
+            ("PostgreSQL 14.0 (Ubuntu)", "14"),
+            ("unknown", "16"),
+            ("", "16"),
+        ],
+    )
     def test_extract_pg_major(self, pg_str: str, expected: str) -> None:
         assert _extract_pg_major(pg_str) == expected
 
     def test_metrics_to_score_sysbench_high_tps(self) -> None:
         """High TPS, low latency → score approaches 100."""
         snap = PerformanceMetrics(
-            latency_p50=50.0, latency_p95=80.0, latency_p99=100.0,
-            throughput=2000.0, error_rate=0.0, memory_utilization=0.4,
-            total_queries=120_000, total_time=60.0,
+            latency_p50=50.0,
+            latency_p95=80.0,
+            latency_p99=100.0,
+            throughput=2000.0,
+            error_rate=0.0,
+            memory_utilization=0.4,
+            total_queries=120_000,
+            total_time=60.0,
         )
         score = _metrics_to_score(snap, "sysbench")
         assert 0.0 < score <= 100.0
@@ -435,9 +489,14 @@ class TestRunnerHelpers:
     def test_metrics_to_score_sysbench_zero_tps(self) -> None:
         """Zero TPS → score = 0."""
         snap = PerformanceMetrics(
-            latency_p50=0.0, latency_p95=0.0, latency_p99=0.0,
-            throughput=0.0, error_rate=1.0, memory_utilization=0.0,
-            total_queries=0, total_time=60.0,
+            latency_p50=0.0,
+            latency_p95=0.0,
+            latency_p99=0.0,
+            throughput=0.0,
+            error_rate=1.0,
+            memory_utilization=0.0,
+            total_queries=0,
+            total_time=60.0,
         )
         score = _metrics_to_score(snap, "sysbench")
         assert score == pytest.approx(0.0)
@@ -445,9 +504,14 @@ class TestRunnerHelpers:
     def test_metrics_to_score_tpch(self) -> None:
         """TPC-H score capped at 100, non-negative."""
         snap = PerformanceMetrics(
-            latency_p50=5000.0, latency_p95=8000.0, latency_p99=10000.0,
-            throughput=0.5, error_rate=0.0, memory_utilization=0.8,
-            total_queries=22, total_time=3600.0,
+            latency_p50=5000.0,
+            latency_p95=8000.0,
+            latency_p99=10000.0,
+            throughput=0.5,
+            error_rate=0.0,
+            memory_utilization=0.8,
+            total_queries=22,
+            total_time=3600.0,
         )
         score = _metrics_to_score(snap, "tpch")
         assert 0.0 <= score <= 100.0
@@ -521,7 +585,9 @@ class TestBenchmarkParameterResolution:
         return TuningSessionData(
             best_knobs={},
             best_score=10.0,
-            worker_resources=WorkerResources(ram_bytes=1_000_000_000, cpu_cores=1, disk_type="SSD"),
+            worker_resources=WorkerResources(
+                ram_bytes=1_000_000_000, cpu_cores=1, disk_type="SSD"
+            ),
             system_info={},
             tuning_config=tuning_config,
             benchmark="sysbench",
@@ -533,7 +599,9 @@ class TestBenchmarkParameterResolution:
         self,
     ) -> None:
         config = ComparisonConfig(
-            tuning_session_path=Path("results/oltp/pbt_runs/core/tuning_sessions/session.json"),
+            tuning_session_path=Path(
+                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+            ),
             benchmark="sysbench",
         )
         runner = ComparisonRunner(config)
@@ -548,7 +616,9 @@ class TestBenchmarkParameterResolution:
             }
         )
 
-        resolved = runner._resolve_effective_benchmark_params(session, benchmark="sysbench")
+        resolved = runner._resolve_effective_benchmark_params(
+            session, benchmark="sysbench"
+        )
 
         assert resolved["sysbench_duration"] == 75
         assert resolved["sysbench_warmup_seconds"] == 9
@@ -561,7 +631,9 @@ class TestBenchmarkParameterResolution:
         self,
     ) -> None:
         config = ComparisonConfig(
-            tuning_session_path=Path("results/oltp/pbt_runs/core/tuning_sessions/session.json"),
+            tuning_session_path=Path(
+                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+            ),
             benchmark="sysbench",
             sysbench_duration=99,
             sysbench_warmup_seconds=14,
@@ -582,7 +654,9 @@ class TestBenchmarkParameterResolution:
             }
         )
 
-        resolved = runner._resolve_effective_benchmark_params(session, benchmark="sysbench")
+        resolved = runner._resolve_effective_benchmark_params(
+            session, benchmark="sysbench"
+        )
 
         assert resolved["sysbench_duration"] == 99
         assert resolved["sysbench_warmup_seconds"] == 14
@@ -610,7 +684,9 @@ class TestDockerPrerequisites:
         module = SimpleNamespace(from_env=MagicMock(return_value=client), errors=errors)
         return module, client
 
-    def test_preflight_noop_when_docker_disabled(self, sample_session_file: Path) -> None:
+    def test_preflight_noop_when_docker_disabled(
+        self, sample_session_file: Path
+    ) -> None:
         config = ComparisonConfig(
             tuning_session_path=sample_session_file,
             benchmark="sysbench",
@@ -637,7 +713,9 @@ class TestDockerPrerequisites:
         fake_client.images.pull.side_effect = fake_docker.errors.ImageNotFound()
 
         with patch.dict(sys.modules, {"docker": fake_docker}):
-            with pytest.raises(DockerEnvironmentError, match="docker build -f docker/eval\\.Dockerfile"):
+            with pytest.raises(
+                DockerEnvironmentError, match="docker build -f docker/eval\\.Dockerfile"
+            ):
                 runner._validate_docker_prerequisites()
 
         fake_client.close.assert_called_once()
@@ -706,7 +784,9 @@ class TestOutputPathResolution:
 
     def test_default_output_dir_uses_workload_type(self) -> None:
         config = ComparisonConfig(
-            tuning_session_path=Path("results/olap/pbt_runs/extensive/tuning_sessions/session.json"),
+            tuning_session_path=Path(
+                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+            ),
             benchmark="sysbench",
             output_dir=None,
         )
@@ -719,7 +799,9 @@ class TestOutputPathResolution:
 
     def test_metadata_tier_preferred_over_path_tier(self) -> None:
         config = ComparisonConfig(
-            tuning_session_path=Path("results/olap/pbt_runs/extensive/tuning_sessions/session.json"),
+            tuning_session_path=Path(
+                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+            ),
             benchmark="sysbench",
             output_dir=None,
         )
@@ -736,7 +818,9 @@ class TestOutputPathResolution:
 
     def test_metadata_tier_field_supported(self) -> None:
         config = ComparisonConfig(
-            tuning_session_path=Path("results/olap/pbt_runs/extensive/tuning_sessions/session.json"),
+            tuning_session_path=Path(
+                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+            ),
             benchmark="sysbench",
             output_dir=None,
         )
@@ -787,7 +871,9 @@ class TestOutputPathResolution:
         log_path = runner._resolve_log_output_path(config.output_dir, "20260412_090000")
 
         assert log_path == (
-            Path("results/oltp/comparisons/core") / "logs" / "evaluation_20260412_090000.html"
+            Path("results/oltp/comparisons/core")
+            / "logs"
+            / "evaluation_20260412_090000.html"
         )
 
 
@@ -796,7 +882,9 @@ class TestTunedKnobResolution:
 
     def test_hardware_relative_knobs_are_resolved_from_fractions(self) -> None:
         config = ComparisonConfig(
-            tuning_session_path=Path("results/oltp/pbt_runs/core/tuning_sessions/session.json"),
+            tuning_session_path=Path(
+                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+            ),
             benchmark="sysbench",
         )
         runner = ComparisonRunner(config)
@@ -833,14 +921,16 @@ class TestTunedKnobResolution:
 # CLI (__main__.py) tests
 # ===========================================================================
 
+
 class TestCLI:
     """Tests for the CLI argument parser (main() with mocked runner)."""
 
     def test_missing_session_exits_nonzero(self) -> None:
         """Calling without --session should exit with error via SystemExit."""
         from src.evaluation.__main__ import main
+
         with pytest.raises(SystemExit) as exc_info:
-            main(["--repetitions", "5"])   # Missing --session
+            main(["--repetitions", "5"])  # Missing --session
         assert exc_info.value.code != 0
 
     def test_repetitions_less_than_2_exits_nonzero(self, tmp_path: Path) -> None:
@@ -848,6 +938,7 @@ class TestCLI:
         fake = tmp_path / "s.json"
         fake.write_text("{}", encoding="utf-8")
         from src.evaluation.__main__ import main
+
         # argparse.error() calls sys.exit(2) which pytest catches as SystemExit
         with pytest.raises(SystemExit) as exc_info:
             main(["--session", str(fake), "--repetitions", "1"])
@@ -859,16 +950,19 @@ class TestCLI:
     ) -> None:
         """With a mocked ComparisonRunner, CLI should return 0."""
         mock_result = MagicMock()
-        with patch(
-            "src.evaluation.__main__.ComparisonRunner"
-        ) as MockRunner:
+        with patch("src.evaluation.__main__.ComparisonRunner") as MockRunner:
             MockRunner.return_value.run.return_value = mock_result
             from src.evaluation.__main__ import main
-            rc = main([
-                "--session", str(sample_session_file),
-                "--repetitions", "5",
-                "--no-docker",
-            ])
+
+            rc = main(
+                [
+                    "--session",
+                    str(sample_session_file),
+                    "--repetitions",
+                    "5",
+                    "--no-docker",
+                ]
+            )
         assert rc == 0
 
     def test_evaluation_error_returns_one(
@@ -876,15 +970,17 @@ class TestCLI:
         sample_session_file: Path,
     ) -> None:
         """EvaluationError from runner → exit code 1."""
-        with patch(
-            "src.evaluation.__main__.ComparisonRunner"
-        ) as MockRunner:
+        with patch("src.evaluation.__main__.ComparisonRunner") as MockRunner:
             MockRunner.return_value.run.side_effect = EvaluationError("fail")
             from src.evaluation.__main__ import main
-            rc = main([
-                "--session", str(sample_session_file),
-                "--no-docker",
-            ])
+
+            rc = main(
+                [
+                    "--session",
+                    str(sample_session_file),
+                    "--no-docker",
+                ]
+            )
         assert rc == 1
 
     def test_no_docker_flag_sets_use_docker_false(
@@ -893,16 +989,17 @@ class TestCLI:
     ) -> None:
         """--no-docker flag sets use_docker=False in ComparisonConfig."""
         captured_config = {}
-        with patch(
-            "src.evaluation.__main__.ComparisonRunner"
-        ) as MockRunner:
+        with patch("src.evaluation.__main__.ComparisonRunner") as MockRunner:
+
             def capture(config):
                 captured_config["use_docker"] = config.use_docker
                 m = MagicMock()
                 m.run.return_value = MagicMock()
                 return m
+
             MockRunner.side_effect = capture
             from src.evaluation.__main__ import main
+
             main(["--session", str(sample_session_file), "--no-docker"])
 
         assert captured_config.get("use_docker") is False
@@ -912,10 +1009,14 @@ class TestCLI:
         from src.evaluation.__main__ import main
 
         with pytest.raises(SystemExit) as exc_info:
-            main([
-                "--session", str(sample_session_file),
-                "--warmup", "30",
-            ])
+            main(
+                [
+                    "--session",
+                    str(sample_session_file),
+                    "--warmup",
+                    "30",
+                ]
+            )
         assert exc_info.value.code != 0
 
     def test_seed_and_sysbench_flags_propagate_to_config(
@@ -926,10 +1027,13 @@ class TestCLI:
         captured_config: dict[str, object] = {}
 
         with patch("src.evaluation.__main__.ComparisonRunner") as MockRunner:
+
             def capture(config):
                 captured_config["pair_seed"] = config.pair_seed
                 captured_config["sysbench_duration"] = config.sysbench_duration
-                captured_config["sysbench_warmup_seconds"] = config.sysbench_warmup_seconds
+                captured_config["sysbench_warmup_seconds"] = (
+                    config.sysbench_warmup_seconds
+                )
                 captured_config["sysbench_tables"] = config.sysbench_tables
                 captured_config["sysbench_table_size"] = config.sysbench_table_size
                 m = MagicMock()
@@ -939,14 +1043,22 @@ class TestCLI:
             MockRunner.side_effect = capture
             from src.evaluation.__main__ import main
 
-            main([
-                "--session", str(sample_session_file),
-                "--seed", "777",
-                "--sysbench-duration", "75",
-                "--sysbench-warmup-seconds", "12",
-                "--sysbench-tables", "16",
-                "--sysbench-table-size", "200000",
-            ])
+            main(
+                [
+                    "--session",
+                    str(sample_session_file),
+                    "--seed",
+                    "777",
+                    "--sysbench-duration",
+                    "75",
+                    "--sysbench-warmup-seconds",
+                    "12",
+                    "--sysbench-tables",
+                    "16",
+                    "--sysbench-table-size",
+                    "200000",
+                ]
+            )
 
         assert captured_config["pair_seed"] == 777
         assert captured_config["sysbench_duration"] == 75
@@ -962,13 +1074,16 @@ class TestCLI:
         captured_config: dict[str, object] = {}
 
         with patch("src.evaluation.__main__.ComparisonRunner") as MockRunner:
+
             def capture(config):
                 captured_config["repetitions"] = config.repetitions
                 captured_config["benchmark"] = config.benchmark
                 captured_config["use_docker"] = config.use_docker
                 captured_config["output_dir"] = config.output_dir
                 captured_config["sysbench_duration"] = config.sysbench_duration
-                captured_config["sysbench_warmup_seconds"] = config.sysbench_warmup_seconds
+                captured_config["sysbench_warmup_seconds"] = (
+                    config.sysbench_warmup_seconds
+                )
                 captured_config["tpch_warmup_passes"] = config.tpch_warmup_passes
                 captured_config["pair_seed"] = config.pair_seed
                 m = MagicMock()

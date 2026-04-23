@@ -71,7 +71,11 @@ def parse_enumvals(enumvals_str: Any) -> Optional[List[str]]:
 
         if enumvals_str.startswith("{") and enumvals_str.endswith("}"):
             clean = enumvals_str[1:-1]
-            return [value.strip().strip("\"'") for value in clean.split(",") if value.strip()]
+            return [
+                value.strip().strip("\"'")
+                for value in clean.split(",")
+                if value.strip()
+            ]
 
         return [enumvals_str]
 
@@ -89,8 +93,7 @@ def _parse_numeric_bound(raw_value: Any, knob_type: KnobType) -> Optional[float 
 
 
 def _resolve_numeric_bounds(
-    row: pd.Series,
-    knob_type: KnobType
+    row: pd.Series, knob_type: KnobType
 ) -> tuple[Optional[float | int], Optional[float | int]]:
     """Resolve effective numeric bounds by intersecting curated and native limits."""
     native_min = _parse_numeric_bound(row.get("min_val"), knob_type)
@@ -104,11 +107,7 @@ def _resolve_numeric_bounds(
     min_value = max(min_candidates) if min_candidates else None
     max_value = min(max_candidates) if max_candidates else None
 
-    if (
-        min_value is not None
-        and max_value is not None
-        and min_value > max_value
-    ):
+    if min_value is not None and max_value is not None and min_value > max_value:
         min_value = native_min if native_min is not None else tuning_min
         max_value = native_max if native_max is not None else tuning_max
 
@@ -137,17 +136,17 @@ def _infer_integer_step(row: pd.Series, knob_type: KnobType) -> Optional[int]:
 def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
     """
     Load KnobSpace from preprocessed CSV file.
-    
+
     Parameters
     ----------
     csv_path : str
         Path to preprocessed knob CSV
-        
+
     Returns
     -------
     KnobSpace
         Knob space loaded from CSV
-        
+
     Example
     -------
     >>> from src.tuner.config.knob_loader import load_knob_space_from_csv
@@ -202,8 +201,8 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
             hardware_relative=bool(row.get("hardware_relative", False)),
             resource_type=(
                 row.get("resource_type")
-                if pd.notna(row.get("resource_type")) and
-                row.get("resource_type") != "" else None
+                if pd.notna(row.get("resource_type")) and row.get("resource_type") != ""
+                else None
             ),
         )
 
@@ -213,24 +212,23 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
 
 
 def load_knob_space_for_tier(
-    tier: str,
-    data_dir: str = "data/tuner_knobs"
+    tier: str, data_dir: str = "data/tuner_knobs"
 ) -> KnobSpace:
     """
     Load KnobSpace for a specific tier.
-    
+
     Parameters
     ----------
     tier : str
         Tier name: 'minimal', 'core', 'standard', or 'extensive'
     data_dir : str
         Directory containing preprocessed CSVs
-        
+
     Returns
     -------
     KnobSpace
         Knob space for the tier
-        
+
     Example
     -------
     >>> from src.tuner.config.knob_loader import load_knob_space_for_tier
@@ -241,9 +239,7 @@ def load_knob_space_for_tier(
     valid_tiers = ["minimal", "core", "standard", "extensive"]
 
     if tier_lower not in valid_tiers:
-        raise ValueError(
-            f"Unknown tier: {tier}. Must be one of {valid_tiers}"
-        )
+        raise ValueError(f"Unknown tier: {tier}. Must be one of {valid_tiers}")
 
     csv_path = Path(data_dir) / f"{tier_lower}_knobs.csv"
 
@@ -265,14 +261,14 @@ _KNOB_SPACES: Dict[str, KnobSpace] = {}
 def get_knob_space(tier: str = "minimal", force_reload: bool = False) -> KnobSpace:
     """
     Get or load KnobSpace for a tier (cached).
-    
+
     Parameters
     ----------
     tier : str
         Tier name
     force_reload : bool
         Force reloading from CSV even if cached
-        
+
     Returns
     -------
     KnobSpace

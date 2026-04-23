@@ -57,24 +57,24 @@ from src.utils.logger.helpers import (
 
 __all__ = [
     # Colors
-    'ColorCode',
-    'ColorPalette',
-    'ModuleName',
+    "ColorCode",
+    "ColorPalette",
+    "ModuleName",
     # Formatters
-    'ColoredFormatter',
-    'HTMLFormatter',
-    'HTMLFileHandler',
+    "ColoredFormatter",
+    "HTMLFormatter",
+    "HTMLFileHandler",
     # Adapters
-    'WorkerLoggerAdapter',
+    "WorkerLoggerAdapter",
     # Setup
-    'setup_logging',
-    'add_html_file_logging',
-    'get_logger',
+    "setup_logging",
+    "add_html_file_logging",
+    "get_logger",
     # Banners
-    'print_startup_banner',
-    'get_evaluation_banner',
-    'get_isolation_warning_banner',
+    "print_startup_banner",
+    "get_evaluation_banner",
+    "get_isolation_warning_banner",
     # Helpers
-    'log_section_header',
-    'log_generation_summary',
+    "log_section_header",
+    "log_generation_summary",
 ]

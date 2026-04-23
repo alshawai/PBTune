@@ -23,15 +23,16 @@ from enum import Enum
 
 class ModuleName(Enum):
     """Module name identifiers for color mapping."""
-    MAIN = 'main'
-    EVALUATOR = 'evaluator'
-    APPLICATOR = 'applicator'
-    POPULATION = 'population'
-    WORKER = 'worker'
-    RESTART = 'restart'
-    INSTANCE = 'instance'
-    EVOLUTION = 'evolution'
-    SNAPSHOT = 'snapshot'
+
+    MAIN = "main"
+    EVALUATOR = "evaluator"
+    APPLICATOR = "applicator"
+    POPULATION = "population"
+    WORKER = "worker"
+    RESTART = "restart"
+    INSTANCE = "instance"
+    EVOLUTION = "evolution"
+    SNAPSHOT = "snapshot"
 
 
 class ColorPalette:
@@ -43,32 +44,32 @@ class ColorPalette:
     """
 
     _LEVEL_COLORS_RGB = {
-        'DEBUG': (26, 142, 188),     # Cyan
-        'INFO': (46, 204, 113),      # Green
-        'WARNING': (243, 156, 18),   # Orange
-        'ERROR': (231, 76, 60),      # Red
-        'CRITICAL': (155, 89, 182),  # Purple
+        "DEBUG": (26, 142, 188),  # Cyan
+        "INFO": (46, 204, 113),  # Green
+        "WARNING": (243, 156, 18),  # Orange
+        "ERROR": (231, 76, 60),  # Red
+        "CRITICAL": (155, 89, 182),  # Purple
     }
 
     _MODULE_COLORS_RGB = {
-        ModuleName.MAIN: (52, 152, 219),       # Blue
+        ModuleName.MAIN: (52, 152, 219),  # Blue
         ModuleName.EVALUATOR: (26, 188, 156),  # Teal
-        ModuleName.APPLICATOR: (155, 89, 182), # Purple
-        ModuleName.POPULATION: (46, 204, 113), # Green
-        ModuleName.WORKER: (241, 196, 15),     # Yellow
-        ModuleName.RESTART: (230, 126, 34),    # Orange
-        ModuleName.INSTANCE: (52, 231, 228),   # Bright Cyan
-        ModuleName.EVOLUTION: (175, 122, 197), # Light Purple
-        ModuleName.SNAPSHOT: (233, 30, 99),    # Pink/Magenta
+        ModuleName.APPLICATOR: (155, 89, 182),  # Purple
+        ModuleName.POPULATION: (46, 204, 113),  # Green
+        ModuleName.WORKER: (241, 196, 15),  # Yellow
+        ModuleName.RESTART: (230, 126, 34),  # Orange
+        ModuleName.INSTANCE: (52, 231, 228),  # Bright Cyan
+        ModuleName.EVOLUTION: (175, 122, 197),  # Light Purple
+        ModuleName.SNAPSHOT: (233, 30, 99),  # Pink/Magenta
     }
 
     _WORKER_COLORS_BASE_RGB = [
-        (52, 152, 219),   # Blue (Worker-0)
-        (46, 204, 113),   # Green (Worker-1)
-        (0, 188, 212),    # Cyan (Worker-2)
-        (241, 196, 15),   # Yellow (Worker-3)
-        (233, 30, 99),    # Pink/Magenta (Worker-4)
-        (231, 76, 60),    # Red (Worker-5)
+        (52, 152, 219),  # Blue (Worker-0)
+        (46, 204, 113),  # Green (Worker-1)
+        (0, 188, 212),  # Cyan (Worker-2)
+        (241, 196, 15),  # Yellow (Worker-3)
+        (233, 30, 99),  # Pink/Magenta (Worker-4)
+        (231, 76, 60),  # Red (Worker-5)
         (236, 240, 241),  # White (Worker-6)
         (149, 165, 166),  # Gray (Worker-7)
     ]
@@ -76,43 +77,43 @@ class ColorPalette:
     @staticmethod
     def _rgb_to_ansi(r: int, g: int, b: int) -> str:
         """Convert RGB to ANSI 24-bit color code."""
-        return f'\033[38;2;{r};{g};{b}m'
+        return f"\033[38;2;{r};{g};{b}m"
 
     @staticmethod
     def _rgb_to_hex(r: int, g: int, b: int) -> str:
         """Convert RGB to hex color code."""
-        return f'#{r:02x}{g:02x}{b:02x}'
+        return f"#{r:02x}{g:02x}{b:02x}"
 
     @classmethod
-    def get_level_color(cls, level: str, format_type: str = 'ansi') -> str:
+    def get_level_color(cls, level: str, format_type: str = "ansi") -> str:
         """Get color for log level."""
         rgb = cls._LEVEL_COLORS_RGB.get(level, (236, 240, 241))  # Default white
-        if format_type == 'ansi':
+        if format_type == "ansi":
             return cls._rgb_to_ansi(*rgb)
         return cls._rgb_to_hex(*rgb)
 
     @classmethod
-    def get_module_color(cls, module_name: str, format_type: str = 'ansi') -> str:
+    def get_module_color(cls, module_name: str, format_type: str = "ansi") -> str:
         """Get color for module name."""
         module_lower = module_name.lower()
 
         # Detect module type
         for module_type in ModuleName:
             if module_type.value in module_lower or (
-                module_type == ModuleName.MAIN and '__main__' in module_lower
+                module_type == ModuleName.MAIN and "__main__" in module_lower
             ):
                 rgb = cls._MODULE_COLORS_RGB[module_type]
-                if format_type == 'ansi':
-                    return f'\033[1m{cls._rgb_to_ansi(*rgb)}'  # Bold
+                if format_type == "ansi":
+                    return f"\033[1m{cls._rgb_to_ansi(*rgb)}"  # Bold
                 return cls._rgb_to_hex(*rgb)
 
         # Default color for unknown modules
-        if format_type == 'ansi':
-            return '\033[37m'  # White
-        return '#ecf0f1'  # Light gray
+        if format_type == "ansi":
+            return "\033[37m"  # White
+        return "#ecf0f1"  # Light gray
 
     @classmethod
-    def get_worker_color(cls, worker_id: int, format_type: str = 'ansi') -> str:
+    def get_worker_color(cls, worker_id: int, format_type: str = "ansi") -> str:
         """
         Get color for worker ID with dynamic generation for >8 workers.
 
@@ -144,19 +145,20 @@ class ColorPalette:
             r, g, b = colorsys.hls_to_rgb(hue / 360, lightness, saturation)
             rgb = (int(r * 255), int(g * 255), int(b * 255))
 
-        if format_type == 'ansi':
+        if format_type == "ansi":
             return cls._rgb_to_ansi(*rgb)
         return cls._rgb_to_hex(*rgb)
 
 
 class ColorCode:
     """ANSI control codes for terminal formatting."""
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    UNDERLINE = '\033[4m'
+
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKCYAN = "\033[96m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    UNDERLINE = "\033[4m"

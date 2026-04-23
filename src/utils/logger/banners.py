@@ -22,7 +22,7 @@ import shutil
 from src.utils.logger.colors import ColorCode, ColorPalette
 
 
-def print_startup_banner() -> None:
+def print_startup_banner(enable_colors: bool = True) -> None:
     """
     Print a colorful ASCII art banner directly to stdout.
     Bypasses the logging module to avoid adding timestamps and log levels.
@@ -35,10 +35,11 @@ def print_startup_banner() -> None:
 /_/   /_____/ /_/    /_/    \____/____/\__/\____/_/   \___/ /____/\___\_\/_____/  /_/  \__,_/_/ /_/\___/_/     
 """
 
-    # Use the INFO color (Green) for the banner and standard bold text for the subtitle
-    color = ColorPalette.get_level_color('INFO', 'ansi')
-    reset = ColorCode.RESET
-    bold = ColorCode.BOLD
+    # Use the INFO color (Green) for the banner and standard bold text for the subtitle.
+    # Allow disabling ANSI colors for plain-text terminal output.
+    color = ColorPalette.get_level_color("INFO", "ansi") if enable_colors else ""
+    reset = ColorCode.RESET if enable_colors else ""
+    bold = ColorCode.BOLD if enable_colors else ""
 
     # Get terminal width
     term_width = shutil.get_terminal_size().columns
@@ -47,7 +48,7 @@ def print_startup_banner() -> None:
     term_width = max(term_width, 100)
 
     # Calculate banner width based on the longest line
-    banner_lines = banner.strip('\n').split('\n')
+    banner_lines = banner.strip("\n").split("\n")
     banner_width = max(len(line) for line in banner_lines) if banner_lines else 105
 
     # Print the banner (already aligned relative to itself, we can print it directly)
@@ -88,10 +89,10 @@ def get_evaluation_banner(
         Multiline ANSI-colored banner string.
     """
     bench_display = "TPC-H" if benchmark == "tpch" else "Sysbench"
-    color = ColorPalette.get_level_color('INFO', 'ansi')
+    color = ColorPalette.get_level_color("INFO", "ansi")
     bold = ColorCode.BOLD
     reset = ColorCode.RESET
-    dim = ColorPalette.get_level_color('DEBUG', 'ansi')
+    dim = ColorPalette.get_level_color("DEBUG", "ansi")
 
     content_lines = [
         f"  Session   : {session_name}",
@@ -127,11 +128,11 @@ def get_isolation_warning_banner() -> str:
     str
         Multiline ANSI-colored warning string.
     """
-    warn_color = ColorPalette.get_level_color('WARNING', 'ansi')
-    err_color = ColorPalette.get_level_color('ERROR', 'ansi')
+    warn_color = ColorPalette.get_level_color("WARNING", "ansi")
+    err_color = ColorPalette.get_level_color("ERROR", "ansi")
     bold = ColorCode.BOLD
     reset = ColorCode.RESET
-    dim = ColorPalette.get_level_color('DEBUG', 'ansi')
+    dim = ColorPalette.get_level_color("DEBUG", "ansi")
 
     width = 72
     bar = f"{warn_color}{bold}{'━' * width}{reset}"
