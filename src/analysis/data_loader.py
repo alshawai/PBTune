@@ -2,8 +2,8 @@
 PBT Analysis Data Loader
 ========================
 
-This module provides loaders for parsing mult-session execution histories from Population 
-Based Training (PBT). It handles global metric re-scoring and dataframe encoding to prepare 
+This module provides loaders for parsing mult-session execution histories from Population
+Based Training (PBT). It handles global metric re-scoring and dataframe encoding to prepare
 data for downstream Machine Learning models and visualization.
 """
 
@@ -15,11 +15,7 @@ from typing import Any, Dict, List, Tuple, Optional
 
 import pandas as pd
 
-from src.utils.metrics import (
-    MetricConfig,
-    PerformanceMetrics,
-    create_metric_config
-)
+from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
 from src.utils.rescoring import rescore_metrics_globally
 from src.tuner.config.knob_loader import get_knob_space
 from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
@@ -27,11 +23,12 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 @dataclass
 class LoadedData:
     """
     Container for processed PBT results.
-    
+
     Attributes
     ----------
     config_df : pd.DataFrame
@@ -47,6 +44,7 @@ class LoadedData:
     n_observations : int
         Total number of valid evaluations extracted.
     """
+
     config_df: pd.DataFrame
     scores: pd.Series
     metadata: List[Dict[str, Any]]
@@ -58,16 +56,16 @@ class LoadedData:
 def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Encode DataFrame configuration parameters inplace for ML compatibility.
-    
+
     Converts:
     1. Booleans (and PostgreSQL "on"/"off" strings) to integers (0, 1)
     2. Enums directly to label encoded integers based on alphabetical sorting.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         Raw dataframe of decoded PostgreSQL configurations.
-        
+
     Returns
     -------
     pd.DataFrame
@@ -83,7 +81,10 @@ def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
         # Map explicit python booleans directly to 0/1.
         # json.load() produces Python bool objects, but pandas infers columns
         # of bools as object dtype, so we must also check infer_dtype.
-        if df[col].dtype == bool or pd.api.types.infer_dtype(df[col].dropna(), skipna=True) == 'boolean':
+        if (
+            df[col].dtype == bool
+            or pd.api.types.infer_dtype(df[col].dropna(), skipna=True) == "boolean"
+        ):
             df[col] = df[col].astype(bool).astype(int)
             continue
 
@@ -92,18 +93,25 @@ def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
             unique_vals = set(df[col].dropna().astype(str).str.lower())
 
             # PostgreSQL represents booleans as "on" or "off" primarily
-            if unique_vals.issubset({'on', 'off', 'true', 'false', '1', '0'}):
-                df[col] = df[col].astype(str).str.lower().map({
-                    'true': 1, 'on': 1, '1': 1, 'false': 0, 'off': 0, '0': 0
-                }).fillna(0).astype(int)
+            if unique_vals.issubset({"on", "off", "true", "false", "1", "0"}):
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.lower()
+                    .map({"true": 1, "on": 1, "1": 1, "false": 0, "off": 0, "0": 0})
+                    .fillna(0)
+                    .astype(int)
+                )
             else:
                 # Pure ENUM columns
                 # Sort valid enumeration options alphabetically to construct stable mapping
                 sorted_options = sorted(list(unique_vals))
                 mapping = {val: idx for idx, val in enumerate(sorted_options)}
-                
+
                 # Apply mapping to dataframe column
-                df[col] = df[col].astype(str).str.lower().map(mapping).fillna(-1).astype(int)
+                df[col] = (
+                    df[col].astype(str).str.lower().map(mapping).fillna(-1).astype(int)
+                )
 
     return df
 
@@ -121,7 +129,7 @@ def _extract_knob_bounds(df: pd.DataFrame, worker_resources: Optional[Dict] = No
 
     for col in df.columns:
         b_min, b_max = 0.0, 1.0
-        
+
         if space and col in space.knobs:
             kd = space.knobs[col]
             if kd.hardware_relative and col in HARDWARE_RELATIVE_SPECS:
@@ -145,15 +153,15 @@ def _extract_knob_bounds(df: pd.DataFrame, worker_resources: Optional[Dict] = No
 
     return bounds
 
+
 def load_pbt_results(
-    directory_path: str | Path, 
-    default_workload_type: str = "oltp"
+    directory_path: str | Path, default_workload_type: str = "oltp"
 ) -> LoadedData:
     """
     Load, validate, and globally re-score PBT training results across multiple files.
-    
-    This loader implements global re-scoring. It extracts metrics from several 
-    independent PBT JSON result files and normalizes them uniformly so that scores are 
+
+    This loader implements global re-scoring. It extracts metrics from several
+    independent PBT JSON result files and normalizes them uniformly so that scores are
     directly comparable downstream on an absolute scale.
 
     Parameters
@@ -162,12 +170,12 @@ def load_pbt_results(
         Directory containing `pbt_results_*.json` files.
     default_workload_type : str
         The default workload type to use for scoring if not specified in metadata.
-        
+
     Returns
     -------
     LoadedData
         Processed configurations, global scores, and metadata.
-        
+
     Raises
     ------
     FileNotFoundError
@@ -193,39 +201,42 @@ def load_pbt_results(
     # 1. Parsing and Extraction
     for file_path in json_files:
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse {file_path.name}: {e}")
             continue
-            
-        session_meta = data.get('tuning_session', {})
-        metadata_list.append({
-            'file_name': file_path.name,
-            'workload_type': session_meta.get('workload_type', default_workload_type),
-            'benchmark_name': session_meta.get('benchmark_name', 'unknown'),
-            'system_info': data.get('system_info', {}),
-            'worker_resources': data.get('worker_resources', {}),
-            'knob_tier': session_meta.get('knob_tier', 'extensive')
-        })
 
-        for gen in data.get('generation_history', []):
-            worker_configs = gen.get('worker_configs', [])
-            worker_scores = gen.get('worker_scores', [])
+        session_meta = data.get("tuning_session", {})
+        metadata_list.append(
+            {
+                "file_name": file_path.name,
+                "workload_type": session_meta.get(
+                    "workload_type", default_workload_type
+                ),
+                "benchmark_name": session_meta.get("benchmark_name", "unknown"),
+                "system_info": data.get("system_info", {}),
+                "worker_resources": data.get("worker_resources", {}),
+            }
+        )
+
+        for gen in data.get("generation_history", []):
+            worker_configs = gen.get("worker_configs", [])
+            worker_scores = gen.get("worker_scores", [])
 
             # Actual JSON format (written by main.py):
             #   worker_configs: [{worker_id, config}]
             #   worker_scores:  [{worker_id, score, metrics}]   ← metrics nested here
             # Join by worker_id so ordering differences don't corrupt alignment.
-            score_by_id = {ws['worker_id']: ws for ws in worker_scores}
+            score_by_id = {ws["worker_id"]: ws for ws in worker_scores}
 
             for config_obj in worker_configs:
-                worker_id = config_obj.get('worker_id')
-                config = config_obj.get('config', {})
+                worker_id = config_obj.get("worker_id")
+                config = config_obj.get("config", {})
                 score_obj = score_by_id.get(worker_id, {})
-                old_score = score_obj.get('score')
-                metrics_dict = score_obj.get('metrics') or {}
-                
+                old_score = score_obj.get("score")
+                metrics_dict = score_obj.get("metrics") or {}
+
                 # Validation: Mismatched dimensions crashes clustering models
                 current_knobs = frozenset(config.keys())
                 if target_knob_set is None:
@@ -236,18 +247,22 @@ def load_pbt_results(
                         f"{len(current_knobs)} knobs, expected {len(target_knob_set)}. "
                         "All sessions must share identical tunable parameters."
                     )
-                
+
                 # Omit null scores and degraded evaluation failures
-                if old_score is None or metrics_dict.get('failure_type') is not None:
+                if old_score is None or metrics_dict.get("failure_type") is not None:
                     continue
 
                 try:
                     # Construct metrics object bridging older json exports and current class structure
                     valid_keys = PerformanceMetrics.__dataclass_fields__.keys()
-                    filtered_metrics = {k: v for k, v in metrics_dict.items() if k in valid_keys}
+                    filtered_metrics = {
+                        k: v for k, v in metrics_dict.items() if k in valid_keys
+                    }
                     pm = PerformanceMetrics(**filtered_metrics)
                 except Exception as e:
-                    logger.debug(f"Failed to parse metric dictionary in {file_path.name}: {e}")
+                    logger.debug(
+                        f"Failed to parse metric dictionary in {file_path.name}: {e}"
+                    )
                     continue
 
                 raw_configs.append(config)
@@ -255,18 +270,20 @@ def load_pbt_results(
 
     n_valid = len(raw_configs)
     if n_valid == 0:
-        logger.warning(f"No valid observations successfully loaded from {len(json_files)} files.")
+        logger.warning(
+            f"No valid observations successfully loaded from {len(json_files)} files."
+        )
         return LoadedData(
             config_df=pd.DataFrame(),
             scores=pd.Series(dtype=float),
             metadata=metadata_list,
             metric_config=create_metric_config(default_workload_type),
             knob_bounds={},
-            n_observations=0
+            n_observations=0,
         )
 
     # 2. Global Rescoring
-    workload = str(metadata_list[0].get('workload_type', default_workload_type))
+    workload = str(metadata_list[0].get("workload_type", default_workload_type))
     global_metric_config, global_scores, rescoring_metadata = rescore_metrics_globally(
         valid_metrics,
         workload=workload,
@@ -288,7 +305,9 @@ def load_pbt_results(
     
     knob_bounds = _extract_knob_bounds(df_encoded, worker_resources, knob_tier)
 
-    logger.info(f"Loaded {n_valid} valid configurations with {len(df_encoded.columns)} variables.")
+    logger.info(
+        f"Loaded {n_valid} valid configurations with {len(df_encoded.columns)} variables."
+    )
 
     return LoadedData(
         config_df=df_encoded,
@@ -296,5 +315,5 @@ def load_pbt_results(
         metadata=metadata_list,
         metric_config=global_metric_config,
         knob_bounds=knob_bounds,
-        n_observations=n_valid
+        n_observations=n_valid,
     )
