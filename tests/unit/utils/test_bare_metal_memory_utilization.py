@@ -39,7 +39,10 @@ class _StubPostmasterProcess:
 
     def __init__(self, rss_bytes: int, child_rss_bytes: list[int]) -> None:
         self._rss_bytes = rss_bytes
-        self._children = [SimpleNamespace(memory_info=lambda rss=v: SimpleNamespace(rss=rss)) for v in child_rss_bytes]
+        self._children = [
+            SimpleNamespace(memory_info=lambda rss=v: SimpleNamespace(rss=rss))
+            for v in child_rss_bytes
+        ]
 
     def memory_info(self) -> SimpleNamespace:
         return SimpleNamespace(rss=self._rss_bytes)
@@ -81,7 +84,10 @@ def test_collect_memory_utilization_uses_worker_budget_when_available() -> None:
     backend = _StubBackendProcess(postmaster=postmaster)
 
     with (
-        patch("src.utils.environments.bare_metal.get_connection", return_value=_StubConnection()),
+        patch(
+            "src.utils.environments.bare_metal.get_connection",
+            return_value=_StubConnection(),
+        ),
         patch("src.utils.environments.bare_metal.psutil.Process", return_value=backend),
         patch(
             "src.utils.environments.bare_metal.psutil.virtual_memory",
@@ -100,7 +106,10 @@ def test_collect_memory_utilization_falls_back_to_host_total_without_budget() ->
     backend = _StubBackendProcess(postmaster=postmaster)
 
     with (
-        patch("src.utils.environments.bare_metal.get_connection", return_value=_StubConnection()),
+        patch(
+            "src.utils.environments.bare_metal.get_connection",
+            return_value=_StubConnection(),
+        ),
         patch("src.utils.environments.bare_metal.psutil.Process", return_value=backend),
         patch(
             "src.utils.environments.bare_metal.psutil.virtual_memory",
