@@ -111,11 +111,16 @@ secrets.json
 
 # Optimization results (ignore bulky timestamped traces and HTML logs)
 results/**/pbt_results_*.json
+results/**/bo_results_*.json
 results/**/best_config*.json
+results/**/bo_best_config*.json
 results/**/intermediate_*.json
 results/**/*.html
 results/oltp/comparisons/
 results/**/fanova_importance.json
+
+# SMAC3 optimizer output
+smac3_output/
 
 # Postgres Snapshots generated during execution
 pg_snapshots/

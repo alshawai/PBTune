@@ -147,3 +147,150 @@ The tuner connects to your `DB_HOST`, uses `pg_basebackup` to pull a binary snap
 ## Note on PBT Relative Scoring
 
 When configuring the population-based training, the internal PBT algorithm does not cross-compare raw numbers across these two methods. It simply records the relative percentage improvement (e.g., "Configuration X improved throughput by 43% against configuration Y"). Thus, both approaches are completely valid and scientifically sound so long as the developer does not switch from internal tests to external tests mid-run.
+
+## 3. Bayesian Optimization Baseline Comparison
+
+> Added: 2026-04-23
+
+Academic reviewers expect a direct comparison between PBT and the dominant paradigm for database auto-tuning: Bayesian Optimization (BO). The BO baseline runner (`src/scripts/run_bo_comparison.py`) provides a controlled, fair comparison by reusing the exact same evaluation pipeline as the PBT tuner.
+
+### Why BO as a Baseline?
+
+BO is the standard approach used by OtterTune (Aken et al., SIGMOD 2017), LlamaTune (Kanellis et al., VLDB 2022), and GPTuner (Lao et al., VLDB 2024). A direct PBT vs BO comparison on identical hardware, workloads, and scoring rules strengthens any claims about PBT's efficiency or quality.
+
+### Fairness Guarantees
+
+The BO runner shares these components with PBT to ensure an apples-to-apples comparison:
+
+| Component | Shared? | Details |
+|-----------|---------|---------|
+| Knob Space | ✅ | Same tier system, same `KnobSpace` and `KnobDefinition` objects |
+| Hardware Detection | ✅ | Same `detect_worker_resources()` and hardware-aware range resolution |
+| Scoring Formula | ✅ | Same `MetricConfig.compute_score()` with identical normalization and weights |
+| Workload Executor | ✅ | Same `SysbenchExecutor`, `TPCHExecutor`, or custom `WorkloadExecutor` |
+| Environment | ✅ | Same `EnvironmentFactory` (Docker or bare-metal PostgreSQL) |
+| Evaluation Pipeline | ✅ | Same `Evaluator.evaluate_worker()` method |
+
+Key difference: BO evaluates configurations **sequentially** using a single PostgreSQL instance (standard BO behavior), while PBT evaluates in **parallel** across multiple instances. This is the intended experimental contrast — BO's sample efficiency vs PBT's parallelism.
+
+### BO Backend: SMAC3
+
+The implementation uses [SMAC3](https://github.com/automl/SMAC3) (Lindauer et al., JMLR 2022) as the BO backend:
+
+- **Surrogate Model:** Random Forest (robust to mixed integer/categorical spaces)
+- **Acquisition Function:** Expected Improvement (EI) by default
+- **Initial Design:** Sobol sequence (quasi-random, better space coverage than pure random)
+- **ConfigSpace Integration:** Native support for integer, float, categorical, and log-scale hyperparameters
+
+### Search Space Mapping
+
+PBT knob types are translated to ConfigSpace hyperparameters:
+
+| PBT KnobType | ConfigSpace Type | Log-Scale? |
+|---------------|-----------------|------------|
+| `INTEGER` | `Integer` | Yes, if `KnobScale.LOG` and `min > 0` |
+| `REAL` | `Float` | Yes, if `KnobScale.LOG` and `min > 0` |
+| `BOOLEAN` | `Categorical(["true", "false"])` | N/A |
+| `ENUM` | `Categorical(enum_values)` | N/A |
+
+### Quick Start
+
+```bash
+# Minimal BO baseline (fastest, for testing)
+python -m src.scripts.run_bo_comparison --tier minimal --config rapid
+
+# Standard BO baseline comparable to PBT
+python -m src.scripts.run_bo_comparison --tier core --config standard --max-evaluations 30
+
+# BO with Sysbench benchmark
+python -m src.scripts.run_bo_comparison --benchmark sysbench --tier core --max-evaluations 50
+
+# BO with TPC-H benchmark
+python -m src.scripts.run_bo_comparison --benchmark tpch --tier standard --scale-factor 1.0
+
+# Custom BO parameters
+python -m src.scripts.run_bo_comparison \
+    --tier core \
+    --max-evaluations 100 \
+    --initial-design-size 15 \
+    --acquisition-function LCB \
+    --seed 123
+```
+
+### CLI Reference
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--optimizer-backend` | `smac` | BO library (currently only SMAC3) |
+| `--max-evaluations` | `30` | Total BO evaluation budget |
+| `--initial-design-size` | auto | Random evaluations before BO model (`max(5, num_knobs)`) |
+| `--acquisition-function` | `EI` | Acquisition function: `EI`, `LCB`, or `PI` |
+| `--seed` | `42` | Random seed for reproducibility |
+| `--tier` | `minimal` | Knob space tier (same as PBT) |
+| `--config` | `standard` | PBT config profile for workload settings |
+| `--benchmark` | — | External benchmark: `sysbench` or `tpch` |
+| `--duration` | config | Per-evaluation measurement duration (seconds) |
+| `--warmup` | config | Warmup duration (seconds) |
+| `--no-docker` | `false` | Use bare-metal PostgreSQL |
+| `--output-dir` | `results` | Base output directory |
+
+### Output Format
+
+Results are saved to `{output_dir}/{workload}/bo_runs/{tier}/tuning_sessions/bo_results_YYYYMMDD_HHMM.json`.
+
+The JSON schema is designed to be compatible with PBT results for direct comparison:
+
+```json
+{
+  "optimizer": "bayesian_optimization",
+  "optimizer_backend": "smac",
+  "tuning_session": {
+    "knob_tier": "core",
+    "num_knobs": 10,
+    "workload_type": "oltp",
+    "max_evaluations": 30,
+    "total_evaluations": 30,
+    "total_time_seconds": 1800.0
+  },
+  "best_configuration": {
+    "score": 78.5,
+    "knobs": { "shared_buffers": 0.25, "work_mem": 0.015 },
+    "metrics": { "throughput": 2100.0, "latency_p95": 8.5 }
+  },
+  "evaluation_history": [
+    { "evaluation": 1, "score": 45.2, "best_score_so_far": 45.2 }
+  ],
+  "convergence": {
+    "history": [45.2, 52.1, 62.8, 78.5],
+    "final_best_score": 78.5
+  }
+}
+```
+
+### Designing a Fair PBT vs BO Experiment
+
+For a controlled comparison, match these settings:
+
+1. **Same knob tier:** `--tier core` for both PBT and BO
+2. **Same benchmark:** `--benchmark sysbench` (or `tpch`) for both
+3. **Same evaluation duration:** `--duration 60` for both
+4. **Same random seed:** `--seed 42` for both (where applicable)
+5. **Same hardware:** Run both on the same machine, sequentially
+6. **Equal evaluation budget:** For wall-clock comparison, set BO's `--max-evaluations` equal to PBT's `population_size × generations`
+
+Example experiment:
+
+```bash
+# PBT: 4 workers × 30 generations = 120 total evaluations
+python -m src.tuner.main --tier core --config standard \
+    --benchmark sysbench --population 4 --generations 30
+
+# BO: 120 sequential evaluations (same total budget)
+python -m src.scripts.run_bo_comparison --tier core --config standard \
+    --benchmark sysbench --max-evaluations 120
+```
+
+Then compare:
+- **Sample efficiency:** Best score at each evaluation number
+- **Wall-clock efficiency:** Best score over elapsed time
+- **Final quality:** Best configuration score and metrics

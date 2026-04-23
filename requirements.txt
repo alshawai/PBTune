@@ -34,3 +34,6 @@ docker>=7.0.0          # Docker SDK for Python — container lifecycle managemen
 # Importance Analysis
 fanova>=2.0.18
 ConfigSpace>=0.6.1
+
+# Bayesian Optimization Baseline (BO vs PBT comparison)
+smac>=2.0.0
