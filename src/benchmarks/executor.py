@@ -38,14 +38,11 @@ class BenchmarkExecutor(ABC):
 
     @abstractmethod
     def execute(
-        self,
-        db_config: DatabaseConfig,
-        worker_id: Optional[int] = None,
-        **kwargs
+        self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
     ) -> PerformanceMetrics:
         """
         Execute the benchmark workload and collect metrics.
-        Implementation details (warmup, duration, query loops, etc.) 
+        Implementation details (warmup, duration, query loops, etc.)
         are handled via **kwargs inside the executor implementations.
 
         Parameters
@@ -67,7 +64,7 @@ class BenchmarkExecutor(ABC):
 
         Notes
         -----
-        Executing TPC-H Power Test doesn't require a fixed duration, 
+        Executing TPC-H Power Test doesn't require a fixed duration,
         but instead runs a fixed set of queries. It also doesn't need
         a random seed since the queries are static. Sysbench, on the other
         hand, typically runs for a fixed duration and can benefit from a

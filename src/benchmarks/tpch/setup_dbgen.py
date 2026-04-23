@@ -90,23 +90,31 @@ def _compile_dbgen() -> Path:
     makefile_path = DBGEN_SRC_DIR / "makefile"
     if makefile_path.exists():
         content = makefile_path.read_text()
-        patched = re.sub(r'^DATABASE\s*=\s*.*$', 'DATABASE= ORACLE', content, flags=re.MULTILINE)
-        patched = re.sub(r'^MACHINE\s*=\s*.*$', 'MACHINE = LINUX', patched, flags=re.MULTILINE)
-        patched = re.sub(r'^WORKLOAD\s*=\s*.*$', 'WORKLOAD = TPCH', patched, flags=re.MULTILINE)
+        patched = re.sub(
+            r"^DATABASE\s*=\s*.*$", "DATABASE= ORACLE", content, flags=re.MULTILINE
+        )
+        patched = re.sub(
+            r"^MACHINE\s*=\s*.*$", "MACHINE = LINUX", patched, flags=re.MULTILINE
+        )
+        patched = re.sub(
+            r"^WORKLOAD\s*=\s*.*$", "WORKLOAD = TPCH", patched, flags=re.MULTILINE
+        )
 
         # Fix compilation on GCC 14+: the legacy C code uses K&R-style
         # function pointers (empty parens = unspecified args) which
         # modern C23 treats as zero-argument declarations.
-        if '-std=gnu89' not in patched:
+        if "-std=gnu89" not in patched:
             patched = re.sub(
-                r'^(CFLAGS\s*=\s*)',
-                r'\1-std=gnu89 ',
+                r"^(CFLAGS\s*=\s*)",
+                r"\1-std=gnu89 ",
                 patched,
                 flags=re.MULTILINE,
             )
         if patched != content:
             makefile_path.write_text(patched)
-            logger.debug("Patched makefile: DATABASE=ORACLE, MACHINE=LINUX, CFLAGS+=-std=gnu89")
+            logger.debug(
+                "Patched makefile: DATABASE=ORACLE, MACHINE=LINUX, CFLAGS+=-std=gnu89"
+            )
 
     # Clean previous failed build artifacts
     subprocess.run(
@@ -119,7 +127,10 @@ def _compile_dbgen() -> Path:
     # Build with relaxed warnings for legacy C code.
     # GCC 14+ treats -Wincompatible-pointer-types as error by default,
     # but the old tpch-dbgen codebase relies on implicit pointer casts.
-    env = {**subprocess.os.environ, "CFLAGS": "-O2 -Wno-error=incompatible-pointer-types"}
+    env = {
+        **subprocess.os.environ,
+        "CFLAGS": "-O2 -Wno-error=incompatible-pointer-types",
+    }
     logger.info("Compiling dbgen...")
     result = subprocess.run(
         ["make", "-j4"],
@@ -191,8 +202,14 @@ def generate_data(dbgen_path: Path, scale_factor: float = 1.0) -> Path:
 
     # Verify key files exist
     expected_files = [
-        "lineitem.tbl", "orders.tbl", "customer.tbl", "part.tbl",
-        "partsupp.tbl", "supplier.tbl", "nation.tbl", "region.tbl",
+        "lineitem.tbl",
+        "orders.tbl",
+        "customer.tbl",
+        "part.tbl",
+        "partsupp.tbl",
+        "supplier.tbl",
+        "nation.tbl",
+        "region.tbl",
     ]
     for fname in expected_files:
         fpath = output_dir / fname
