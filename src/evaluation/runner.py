@@ -44,8 +44,9 @@ from src.utils.metrics import PerformanceMetrics, create_metric_config
 from src.utils.rescoring import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.tuner.evaluator.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor
 from src.tuner.config import get_knob_space
+from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
 from src.evaluation.loader import load_tuning_session
 from src.evaluation.statistics import compute_comparison_statistics
@@ -122,6 +123,15 @@ class ComparisonRunner:
 
         self._validate_docker_prerequisites()
 
+        session_tuning_mode = session.tuning_config.get("tuning_mode", "").lower()
+        if session_tuning_mode == "adaptive":
+            LOGGER.warning(
+                "Source tuning session used ADAPTIVE mode. "
+                "Best-config knobs may include restart-required values that were "
+                "never active during evaluation (phantom-config risk). "
+                "Verify results carefully."
+            )
+
         output_dir = self._resolve_output_dir_for(session)
         log_path = self._resolve_log_output_path(output_dir)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +166,7 @@ class ComparisonRunner:
 
         LOGGER.info(
             "Running paired default/tuned comparisons for %d repetitions...",
-            self.config.repetitions
+            self.config.repetitions,
         )
         default_runs, tuned_runs = self._run_paired_comparisons(
             tuned_knobs=tuned_knobs,
@@ -184,13 +194,13 @@ class ComparisonRunner:
         )
 
         result = ComparisonResult(
-            default_runs=default_runs,
-            tuned_runs=tuned_runs,
-            tuned_knobs=tuned_knobs,
-            statistics=statistics,
-            config=self.config,
-            session_data=session,
-            timestamp=self.timestamp,
+            default_runs,
+            tuned_runs,
+            tuned_knobs,
+            statistics,
+            self.config,
+            session,
+            self.timestamp,
             log_path=self._session_log_path,
             scoring_metadata=scoring_metadata,
         )
@@ -220,6 +230,7 @@ class ComparisonRunner:
 
         try:
             import docker  # local import keeps non-Docker paths lightweight
+            from docker import errors as docker_errors
         except ImportError as exc:
             raise DockerEnvironmentError(
                 "Docker evaluation requested, but the Docker SDK is unavailable. "
@@ -234,7 +245,7 @@ class ComparisonRunner:
             try:
                 client.images.get(image_name)
                 return
-            except docker.errors.ImageNotFound:
+            except docker_errors.ImageNotFound:
                 LOGGER.info(
                     "Docker image '%s' not found locally; attempting to pull once...",
                     image_name,
@@ -243,12 +254,12 @@ class ComparisonRunner:
                     client.images.pull(image_name)
                     LOGGER.info("Pulled Docker image '%s'.", image_name)
                     return
-                except (docker.errors.ImageNotFound, docker.errors.APIError) as exc:
+                except (docker_errors.ImageNotFound, docker_errors.APIError) as exc:
                     raise DockerEnvironmentError(
                         self._missing_docker_image_help(image_name)
                     ) from exc
 
-        except docker.errors.DockerException as exc:
+        except docker_errors.DockerException as exc:
             raise DockerEnvironmentError(
                 "Docker evaluation requested, but Docker daemon is unavailable. "
                 "Start Docker or rerun with --no-docker."
@@ -295,7 +306,9 @@ class ComparisonRunner:
         }
         session_cfg = session.tuning_config
 
-        def _pick_int(cli_value: Any, session_keys: list[str], default_value: int) -> int:
+        def _pick_int(
+            cli_value: Any, session_keys: list[str], default_value: int
+        ) -> int:
             if cli_value is not None:
                 return int(cli_value)
             for key in session_keys:
@@ -311,7 +324,9 @@ class ComparisonRunner:
                         )
             return default_value
 
-        def _pick_float(cli_value: Any, session_keys: list[str], default_value: float) -> float:
+        def _pick_float(
+            cli_value: Any, session_keys: list[str], default_value: float
+        ) -> float:
             if cli_value is not None:
                 return float(cli_value)
             for key in session_keys:
@@ -335,7 +350,11 @@ class ComparisonRunner:
             ),
             "sysbench_duration": _pick_int(
                 self.config.sysbench_duration,
-                ["sysbench_duration_seconds", "sysbench_duration", "evaluation_duration"],
+                [
+                    "sysbench_duration_seconds",
+                    "sysbench_duration",
+                    "evaluation_duration",
+                ],
                 int(defaults["sysbench_duration"]),
             ),
             "sysbench_tables": _pick_int(
@@ -395,7 +414,9 @@ class ComparisonRunner:
         PostgreSQL values for the local worker resource constraints.
         """
         LOGGER.debug("Resolving tuned knobs for evaluation session...")
-        tier = self._resolve_tier_slug_from_session(session, self.config.tuning_session_path)
+        tier = self._resolve_tier_slug_from_session(
+            session, self.config.tuning_session_path
+        )
         if tier == "unknown":
             LOGGER.warning(
                 "➤ Could not infer knob tier for session %s; "
@@ -541,7 +562,39 @@ class ComparisonRunner:
             active_config = env.get_db_config(worker_id=0)
 
             if knobs:
-                env.apply_knobs(worker_id=0, knobs=knobs)
+                applicator_config = ApplicatorConfig(rollback_on_error=False)
+                knob_applicator = KnobApplicator(
+                    db_config=active_config,
+                    config=applicator_config,
+                    worker_id=0,
+                )
+                apply_result = knob_applicator.apply(knobs)
+                if apply_result.restart_required:
+                    LOGGER.info(
+                        "Restart-required knobs applied (%s); restarting instance",
+                        list(apply_result.restart_required),
+                    )
+                    if not env.restart_instance(worker_id=0):
+                        raise RuntimeError(
+                            "Failed to restart instance after applying "
+                            f"restart-required knobs: {list(apply_result.restart_required)}"
+                        )
+                    # Refresh db_config after restart (port may have changed)
+                    active_config = env.get_db_config(worker_id=0)
+                    knob_applicator = KnobApplicator(
+                        db_config=active_config,
+                        config=applicator_config,
+                        worker_id=0,
+                    )
+
+                verification = knob_applicator.verify(knobs)
+                failed_params = [k for k, v in verification.items() if not v]
+                if failed_params:
+                    LOGGER.warning(
+                        "Configuration verification failed for %d parameters: %s",
+                        len(failed_params),
+                        failed_params,
+                    )
 
             if benchmark_name == "tpch":
                 metrics = executor.execute(
@@ -622,10 +675,14 @@ class ComparisonRunner:
         if workload not in ("oltp", "olap", "mixed"):
             workload = "mixed"
 
-        tier = self._resolve_tier_slug_from_session(session_data, self.config.tuning_session_path)
+        tier = self._resolve_tier_slug_from_session(
+            session_data, self.config.tuning_session_path
+        )
         return Path("results") / workload / "comparisons" / tier
 
-    def _resolve_log_output_path(self, output_dir: Path, timestamp: str | None = None) -> Path:
+    def _resolve_log_output_path(
+        self, output_dir: Path, timestamp: str | None = None
+    ) -> Path:
         """Return the HTML log artifact path for this evaluation invocation."""
         effective_ts = timestamp or self.timestamp
         return output_dir / "logs" / f"evaluation_{effective_ts}.html"
@@ -736,7 +793,9 @@ class ComparisonRunner:
                 f"{result.scoring_metadata.get('mode')} "
                 f"(latency={result.scoring_metadata.get('latency_metric')})"
             )
-        print(f"  Significant metrics: {', '.join(stats.significant_metrics) or 'none'}")
+        print(
+            f"  Significant metrics: {', '.join(stats.significant_metrics) or 'none'}"
+        )
         if result.output_path:
             print(f"\n  Results written to : {result.output_path}")
         if result.log_path:
@@ -795,6 +854,7 @@ def _sanitize_tier_name(raw_tier: Any) -> str | None:
 # Serialization
 # ---------------------------------------------------------------------------
 
+
 def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
     """Convert ComparisonResult to a plain JSON-serialisable dict."""
 
@@ -830,9 +890,11 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
 
     def _stat_sum(s) -> dict[str, Any]:
         return {
-            "mean": s.mean, "std": s.std,
+            "mean": s.mean,
+            "std": s.std,
             "median": s.median,
-            "iqr_lower": s.iqr_lower, "iqr_upper": s.iqr_upper,
+            "iqr_lower": s.iqr_lower,
+            "iqr_upper": s.iqr_upper,
             "values": s.values,
         }
 
@@ -880,7 +942,9 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
             },
             "reproducibility": {
                 "python_version": platform.python_version(),
-                "postgres_version": str(result.session_data.system_info.get("pg_version", "unknown")),
+                "postgres_version": str(
+                    result.session_data.system_info.get("pg_version", "unknown")
+                ),
                 "docker_image": cfg.docker_image if cfg.use_docker else None,
                 "benchmark_binary_paths": {
                     "sysbench": shutil.which("sysbench") or "not-found",

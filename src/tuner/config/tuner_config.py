@@ -17,90 +17,92 @@ Key PBT Hyperparameters:
 from dataclasses import dataclass
 from typing import Tuple, Optional
 
+from src.tuner.evaluator.restart_policy import TuningMode
+
 
 @dataclass
 class PBTConfig:
     """
     Configuration for Population Based Training algorithm.
-    
+
     Attributes
     ----------
     population_size : int
         Number of workers in the population. For parallel execution, this should
         match the number of available cores/database instances.
         Default: 4 (matching a budget laptop)
-        
+
     num_generations : int
         Number of evolution generations to run. Each generation evaluates all
         workers, then performs exploit-explore.
         Default: 20 (for quick prototyping)
-        
+
     exploit_quantile : float
         Fraction of population to exploit/explore. Bottom exploit_quantile will
         copy from top exploit_quantile.
         Default: 0.2 (20% - from DeepMind original paper)
-        
+
     ready_interval : int
         Number of evaluations a worker must complete before being eligible for
         exploit/explore. Prevents premature convergence.
         Default: 1 (exploit/explore every generation for quick iteration)
-        
+
     perturbation_factors : Tuple[float, float]
         (min_factor, max_factor) for perturbing numerical knobs during exploration.
         Default: (0.8, 1.2) means ±20% perturbation
-        
+
     num_parallel_workers : int
         Number of parallel workers for evaluation. Should be <= population_size.
         Default: 4 (use all cores)
-    
+
     evaluation_duration : float
         Duration in seconds for each worker's workload measurement.
         Longer = more accurate but slower. Shorter = faster iterations but noisier.
         Default: 30.0 seconds
-    
+
     warmup_duration : float
         Duration of warmup phase in seconds before measurement begins.
         Ensures database caches are populated for fair comparison.
         Default: 30.0 seconds
-        
+
     random_seed : Optional[int]
         Seed for workload query selection randomness. When set, all workers
         will execute the exact same sequence of queries, ensuring fair comparison
         regardless of cache state.
         Default: 42 (deterministic by default for fair comparison)
-        
+
     scale_factor : float
         Database size scale multiplier. For OLAP (TPC-H), this defines the GB generated
         by dbgen (e.g., 0.1 = ~100MB, 1.0 = ~1GB). For OLTP, this may govern table sizes.
         Default: 1.0
-        
+
     warmup_passes : int
-        Number of complete catalog warmup passes to execute silently before measurement. 
+        Number of complete catalog warmup passes to execute silently before measurement.
         Highly relevant for analytical workloads rather than arbitrary duration constraints.
         Default: 0
-        
+
     enable_snapshots : bool
         Whether to enable database snapshot restoration between generations.
         When True, workers' data directories are restored to a baseline state
         before each generation to prevent data drift from write operations.
         Default: False (must be explicitly enabled)
-        
+
     snapshot_restore_interval : int
         Restore snapshots every N generations. Only used if enable_snapshots=True.
         Default: 1
-        
+
     random_seed : Optional[int]
         Random seed for reproducibility. If None, results will be non-deterministic.
         Default: None
-        
+
     verbose : bool
         Whether to print detailed progress information.
         Default: True
-        
+
     sysbench_tables : int
         Number of tables for Sysbench workload.
         Default: 10
-        
+
     sysbench_table_size : int
         Number of rows per table for Sysbench workload.
         Default: 100000
@@ -139,6 +141,8 @@ class PBTConfig:
     dead_config_threshold: float = 6.0
     dead_config_score: float = 1.0
     crash_score: float = 5.0
+    tuning_mode: TuningMode = TuningMode.ONLINE
+    adaptive_restart_interval: int = 10
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -189,14 +193,17 @@ class PBTConfig:
                 "dead_config_threshold must be greater than crash_score and less than 100"
             )
 
+        if self.adaptive_restart_interval < 1:
+            raise ValueError("adaptive_restart_interval must be at least 1")
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
         Calculate number of workers in exploit/explore quantiles.
-        
+
         In standard PBT, this is symmetric: bottom N% get replaced,
         copying from top N%. This property returns N workers for both.
-        
+
         Returns
         -------
         int
@@ -226,6 +233,8 @@ class PBTConfig:
             "dead_config_threshold": self.dead_config_threshold,
             "dead_config_score": self.dead_config_score,
             "crash_score": self.crash_score,
+            "tuning_mode": self.tuning_mode.value,
+            "adaptive_restart_interval": self.adaptive_restart_interval,
         }
 
     def __repr__(self) -> str:
@@ -240,6 +249,8 @@ class PBTConfig:
             f"  ready_interval={self.ready_interval},\n"
             f"  perturbation_factors={self.perturbation_factors},\n"
             f"  num_parallel_workers={self.num_parallel_workers},\n"
+            f"  tuning_mode={self.tuning_mode.value},\n"
+            f"  adaptive_restart_interval={self.adaptive_restart_interval},\n"
             f"  dead_config_threshold={self.dead_config_threshold},\n"
             f"  dead_config_score={self.dead_config_score},\n"
             f"  crash_score={self.crash_score}\n"
@@ -262,7 +273,7 @@ RAPID_CONFIG = PBTConfig(
     sysbench_table_size=10000,
     warmup_passes=0,
     enable_snapshots=False,
-    verbose=True
+    verbose=True,
 )
 
 # Strategy: Moderate evaluations, balanced accuracy vs speed
@@ -281,7 +292,7 @@ STANDARD_CONFIG = PBTConfig(
     warmup_passes=1,
     enable_snapshots=True,
     snapshot_restore_interval=5,
-    verbose=True
+    verbose=True,
 )
 
 # Strategy: Longer evaluations for accuracy, more exploration
@@ -300,7 +311,7 @@ THOROUGH_CONFIG = PBTConfig(
     warmup_passes=1,
     enable_snapshots=True,
     snapshot_restore_interval=1,
-    verbose=True
+    verbose=True,
 )
 
 # Strategy: Production-grade measurements, extensive exploration
@@ -319,7 +330,7 @@ RESEARCH_CONFIG = PBTConfig(
     warmup_passes=2,
     enable_snapshots=True,
     snapshot_restore_interval=1,
-    verbose=True
+    verbose=True,
 )
 
 # Strategy: Heavy-duty benchmark requirements (>10GB analytical scaling)
@@ -338,5 +349,5 @@ EXTREME_CONFIG = PBTConfig(
     warmup_passes=2,
     enable_snapshots=True,
     snapshot_restore_interval=1,
-    verbose=True
+    verbose=True,
 )

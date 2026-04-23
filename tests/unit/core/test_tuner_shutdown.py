@@ -124,7 +124,9 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     tuner.pbt_config = SimpleNamespace(dead_config_score=0.0, crash_score=0.0)
 
     tuner.evaluator = MagicMock()
-    tuner.evaluator.evaluate_worker.side_effect = ConnectionError("postgres unreachable")
+    tuner.evaluator.evaluate_worker.side_effect = ConnectionError(
+        "postgres unreachable"
+    )
 
     tuner.env = MagicMock()
     tuner.env.recover_instance.side_effect = RuntimeError("docker read timeout")

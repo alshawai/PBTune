@@ -55,26 +55,20 @@ def _log_source_policy_exclusions(df: pd.DataFrame) -> None:
     logger.warning(
         "source_policy_exclusions total=%d reasons=%s",
         len(excluded_source),
-        ", ".join(
-            f"{reason}:{count}" for reason, count in reason_counts.items()
-        ),
+        ", ".join(f"{reason}:{count}" for reason, count in reason_counts.items()),
     )
-
 
 
 def _clean_enumvals(df: pd.DataFrame) -> pd.DataFrame:
     """Remove environment-specific aliases and unsafe OS constraints from enums.
-    
+
     This ensures that the tuner doesn't blindly sample values that are
     essentially aliases (like 'on' -> 'pglz' for wal_compression) or
     values known to crash most baseline UNIX systems (like 'io_uring').
     """
     df = df.copy()
 
-    exclusions = {
-        "wal_compression": {"on"},
-        "io_method": {"io_uring", "posix"}
-    }
+    exclusions = {"wal_compression": {"on"}, "io_method": {"io_uring", "posix"}}
 
     for knob, ex_set in exclusions.items():
         if knob in df["name"].values:
@@ -89,15 +83,16 @@ def _clean_enumvals(df: pd.DataFrame) -> pd.DataFrame:
                     pass
     return df
 
+
 def load_raw_knobs(csv_path: Optional[str] = None) -> pd.DataFrame:
     """
     Load raw knobs from CSV or database.
-    
+
     Parameters
     ----------
     csv_path : Optional[str]
         Path to CSV file. If None, retrieves from database.
-        
+
     Returns
     -------
     pd.DataFrame
@@ -117,12 +112,12 @@ def load_raw_knobs(csv_path: Optional[str] = None) -> pd.DataFrame:
 def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add tuning-specific metadata to knobs dataframe.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         Raw knobs dataframe
-        
+
     Returns
     -------
     pd.DataFrame
@@ -159,14 +154,21 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
     merged["tuning_min"] = merged["tuning_min_meta"].combine_first(merged["tuning_min"])
     merged["tuning_max"] = merged["tuning_max_meta"].combine_first(merged["tuning_max"])
     merged["scale"] = merged["scale_meta"].combine_first(merged["scale"])
-    merged["impact_tier"] = merged["impact_tier_meta"].combine_first(merged["impact_tier"])
-    merged["tuning_priority"] = merged[
-        "tuning_priority_meta"].combine_first(merged["tuning_priority"])
-    merged["tuning_notes"] = merged[
-        "tuning_notes_meta"].combine_first(merged["tuning_notes"])
-    merged["hardware_relative"] = merged[
-        "hardware_relative_meta"].combine_first(merged["hardware_relative"])
-    merged["resource_type"] = merged["resource_type_meta"].combine_first(merged["resource_type"])
+    merged["impact_tier"] = merged["impact_tier_meta"].combine_first(
+        merged["impact_tier"]
+    )
+    merged["tuning_priority"] = merged["tuning_priority_meta"].combine_first(
+        merged["tuning_priority"]
+    )
+    merged["tuning_notes"] = merged["tuning_notes_meta"].combine_first(
+        merged["tuning_notes"]
+    )
+    merged["hardware_relative"] = merged["hardware_relative_meta"].combine_first(
+        merged["hardware_relative"]
+    )
+    merged["resource_type"] = merged["resource_type_meta"].combine_first(
+        merged["resource_type"]
+    )
 
     return merged.drop(
         columns=[
@@ -185,17 +187,17 @@ def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
 def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     """
     Filter to knobs that are actually tunable.
-    
+
     Criteria:
     1. Marked as eligible by source-stage autotuning policy classification
     2. Numeric (integer/real), boolean, or enum type (or explicitly curated via metadata)
     3. Passes bounds safety gate (curated metadata or bounded native max)
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         Knobs dataframe
-        
+
     Returns
     -------
     pd.DataFrame
@@ -234,12 +236,12 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
 def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """
     Create separate dataframes for each impact tier.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         Preprocessed knobs
-        
+
     Returns
     -------
     Dict[str, pd.DataFrame]
@@ -262,24 +264,23 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
 
 def preprocess_and_save_knobs(
-    raw_csv_path: Optional[str] = None,
-    output_dir: str = "data/tuner_knobs"
+    raw_csv_path: Optional[str] = None, output_dir: str = "data/tuner_knobs"
 ) -> Dict[str, str]:
     """
     Complete preprocessing pipeline.
-    
+
     1. Load raw knobs
     2. Add tuning metadata
     3. Filter to tunable knobs
     4. Save tier-specific CSVs
-    
+
     Parameters
     ----------
     raw_csv_path : Optional[str]
         Path to raw knobs CSV. If None, retrieves from database.
     output_dir : str
         Directory to save preprocessed CSVs
-        
+
     Returns
     -------
     Dict[str, str]
@@ -335,19 +336,19 @@ def preprocess_and_save_knobs(
 def load_knobs_for_tier(tier: str, data_dir: str = "data/tuner_knobs") -> pd.DataFrame:
     """
     Load preprocessed knobs for a specific tier.
-    
+
     Parameters
     ----------
     tier : str
         Tier name: 'minimal', 'core', 'standard', or 'extensive'
     data_dir : str
         Directory containing preprocessed knob CSVs
-        
+
     Returns
     -------
     pd.DataFrame
         Preprocessed knobs for the tier
-        
+
     Raises
     ------
     FileNotFoundError
@@ -359,9 +360,7 @@ def load_knobs_for_tier(tier: str, data_dir: str = "data/tuner_knobs") -> pd.Dat
     valid_tiers = ["minimal", "core", "standard", "extensive"]
 
     if tier_lower not in valid_tiers:
-        raise ValueError(
-            f"Unknown tier: {tier}. Must be one of {valid_tiers}"
-        )
+        raise ValueError(f"Unknown tier: {tier}. Must be one of {valid_tiers}")
 
     csv_path = Path(data_dir) / f"{tier_lower}_knobs.csv"
 

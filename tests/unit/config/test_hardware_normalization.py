@@ -15,8 +15,9 @@ in database parameter tuning. The tests cover:
   to maintain consistency and respect resource constraints.
 
 Fixtures and mock objects are used to simulate various hardware environments and knob definitions.
-Unit tests for hardware normalization logic in KnobSpace. 
+Unit tests for hardware normalization logic in KnobSpace.
 """
+
 import pytest
 
 from src.tuner.config.knob_space import (
@@ -40,7 +41,7 @@ def mock_knob_space():
             hardware_relative=True,
             resource_type="ram",
             step=1,
-            unit="8kB"
+            unit="8kB",
         ),
         # RAM-relative: work_mem (Fraction Min 0.001, Max 0.02, unit 1024)
         KnobDefinition(
@@ -50,7 +51,7 @@ def mock_knob_space():
             hardware_relative=True,
             resource_type="ram",
             step=1,
-            unit="kB"
+            unit="kB",
         ),
         KnobDefinition(
             name="maintenance_work_mem",
@@ -59,7 +60,7 @@ def mock_knob_space():
             hardware_relative=True,
             resource_type="ram",
             step=1,
-            unit="kB"
+            unit="kB",
         ),
         # CPU-relative: max_worker_processes (Fraction Min 0.50, Max 2.0, floor 4)
         KnobDefinition(
@@ -68,7 +69,7 @@ def mock_knob_space():
             scale=KnobScale.LINEAR,
             hardware_relative=True,
             resource_type="cpu",
-            step=1
+            step=1,
         ),
         # Disk-relative: random_page_cost (SSD: 1.0-1.5, HDD: 3.0-4.0, unknown: 0.1-4.0)
         KnobDefinition(
@@ -76,7 +77,7 @@ def mock_knob_space():
             knob_type=KnobType.REAL,
             scale=KnobScale.LINEAR,
             hardware_relative=True,
-            resource_type="disk_type"
+            resource_type="disk_type",
         ),
         # Absolute knob
         KnobDefinition(
@@ -86,15 +87,15 @@ def mock_knob_space():
             hardware_relative=False,
             min_value=50,
             max_value=200,
-            step=1
-        )
+            step=1,
+        ),
     ]
     return KnobSpace(defs)
 
 
 def test_worker_resources_creation():
     """Test WorkerResources initialization bounds and constraints."""
-    wr = WorkerResources(ram_bytes=1024*1024*1024, cpu_cores=4, disk_type="SSD")
+    wr = WorkerResources(ram_bytes=1024 * 1024 * 1024, cpu_cores=4, disk_type="SSD")
     assert wr.ram_bytes == 1024**3
     assert wr.cpu_cores == 4
     assert wr.disk_type == "SSD"
@@ -151,12 +152,12 @@ def test_config_fractions_conversion_roundtrip(mock_knob_space):
     mock_knob_space.resolve_hardware_ranges(wr)
 
     original_config = {
-        "shared_buffers": 32768,       # 256MB
-        "work_mem": 4096,              # 4MB
-        "maintenance_work_mem": 32768, # 32MB => 0.03125 fraction (in bounds 0.01-0.05)
+        "shared_buffers": 32768,  # 256MB
+        "work_mem": 4096,  # 4MB
+        "maintenance_work_mem": 32768,  # 32MB => 0.03125 fraction (in bounds 0.01-0.05)
         "max_worker_processes": 8,
-        "random_page_cost": 1.2,       # disk type, remains absolute
-        "max_connections": 100         # absolute knob, remains absolute
+        "random_page_cost": 1.2,  # disk type, remains absolute
+        "max_connections": 100,  # absolute knob, remains absolute
     }
 
     fractions = mock_knob_space.config_to_fractions(original_config)
@@ -185,9 +186,9 @@ def test_memory_budget_repair_within_budget(mock_knob_space):
     budget = 800 * 1024 * 1024  # 800MB
     config = {
         "shared_buffers": 16384,  # 128MB
-        "work_mem": 1024,         # 1MB
-        "maintenance_work_mem": 65536, # 64MB
-        "max_connections": 100
+        "work_mem": 1024,  # 1MB
+        "maintenance_work_mem": 65536,  # 64MB
+        "max_connections": 100,
     }
     # Total = 128 + (100 * 1) + 64 = 292MB < 800MB
     repaired = mock_knob_space._repair_memory_budget(dict(config), budget)
@@ -200,10 +201,10 @@ def test_memory_budget_repair_exceeds_budget(mock_knob_space):
 
     # 256MB sb + (200 * 4MB) + 128MB mwm = 256 + 800 + 128 = 1184MB
     config = {
-        "shared_buffers": 32768,       # 256MB
-        "work_mem": 4096,              # 4MB
-        "maintenance_work_mem": 131072, # 128MB
-        "max_connections": 200
+        "shared_buffers": 32768,  # 256MB
+        "work_mem": 4096,  # 4MB
+        "maintenance_work_mem": 131072,  # 128MB
+        "max_connections": 200,
     }
 
     mock_knob_space.knobs["shared_buffers"].min_value = 0
@@ -225,26 +226,27 @@ def test_memory_budget_repair_exceeds_budget(mock_knob_space):
 
     # Check total memory is now <= budget
     total_repaired = (
-        repaired["shared_buffers"] * 8192 +
-        (repaired["max_connections"] * repaired["work_mem"] * 1024) +
-        repaired["maintenance_work_mem"] * 1024
+        repaired["shared_buffers"] * 8192
+        + (repaired["max_connections"] * repaired["work_mem"] * 1024)
+        + repaired["maintenance_work_mem"] * 1024
     )
 
     assert total_repaired <= budget
-    # The ratio of shared_buffers to work_mem to maintenance_work_mem should 
+    # The ratio of shared_buffers to work_mem to maintenance_work_mem should
     # be somewhat intact, though max_connections also scaled down, meaning
     # connection_memory = (scale^2 * original_connection_memory).
     # This is fine, as per the design.
+
 
 def test_repair_config_dependencies_triggers_budget(mock_knob_space):
     """Test that config dependency repair respects total memory budget overrides."""
     budget = 500 * 1024 * 1024
 
     config = {
-        "shared_buffers": 32768,       # 256MB
-        "work_mem": 4096,              # 4MB
-        "maintenance_work_mem": 131072, # 128MB
-        "max_connections": 200
+        "shared_buffers": 32768,  # 256MB
+        "work_mem": 4096,  # 4MB
+        "maintenance_work_mem": 131072,  # 128MB
+        "max_connections": 200,
     }
 
     # Override bounds limits to avoid clamp
@@ -253,11 +255,14 @@ def test_repair_config_dependencies_triggers_budget(mock_knob_space):
             mock_knob_space.knobs[k].min_value = 0
             mock_knob_space.knobs[k].max_value = 1000000
 
-    repaired = mock_knob_space.repair_config_dependencies(config, budget_ram_bytes=budget)
+    repaired = mock_knob_space.repair_config_dependencies(
+        config, budget_ram_bytes=budget
+    )
 
     # Should scale down. E.g max connections should be less than 200
     assert repaired["max_connections"] < 200
     assert repaired["shared_buffers"] < 32768
+
 
 def test_resolve_hardware_ranges_disk_unknown(mock_knob_space):
     """Test disk unknown resolution."""
@@ -267,6 +272,7 @@ def test_resolve_hardware_ranges_disk_unknown(mock_knob_space):
     assert rpc.min_value == 0.1
     assert rpc.max_value == 4.0
 
+
 def test_fractions_to_config_units(mock_knob_space):
     """Test unit conversions from fractions to absolute."""
     gb = 4 * 1024**3
@@ -274,8 +280,8 @@ def test_fractions_to_config_units(mock_knob_space):
     mock_knob_space.resolve_hardware_ranges(wr)
 
     fractions = {
-        "shared_buffers": 0.25, # 1GB
-        "work_mem": 0.02,       # 81.9MB (max allowed fraction)
+        "shared_buffers": 0.25,  # 1GB
+        "work_mem": 0.02,  # 81.9MB (max allowed fraction)
     }
     config = mock_knob_space.fractions_to_config(fractions)
 
@@ -284,23 +290,29 @@ def test_fractions_to_config_units(mock_knob_space):
     # work_mem is in kB = 1024 bytes. 0.02 * 4GB / 1024 = 83886.08 -> 83886
     assert config["work_mem"] == 83886
 
+
 def test_detect_worker_resources_bare_metal(mock_knob_space):
     """Integration test: resolve ranges with realistically detected bare-metal resources."""
     from src.utils.hardware_info import detect_worker_resources
     from unittest.mock import patch
-    with patch("src.utils.hardware_info._is_containerized", return_value=False), \
-         patch("src.utils.hardware_info.detect_disk_type", return_value="SSD"), \
-         patch("src.utils.hardware_info.psutil.virtual_memory") as mock_vm, \
-         patch("src.utils.hardware_info.psutil.Process") as mock_process, \
-         patch("src.utils.hardware_info.psutil.cpu_count") as mock_cpu_count:
+
+    with (
+        patch("src.utils.hardware_info._is_containerized", return_value=False),
+        patch("src.utils.hardware_info.detect_disk_type", return_value="SSD"),
+        patch("src.utils.hardware_info.psutil.virtual_memory") as mock_vm,
+        patch("src.utils.hardware_info.psutil.Process") as mock_process,
+        patch("src.utils.hardware_info.psutil.cpu_count") as mock_cpu_count,
+    ):
 
         class MockMem:
             total = 32 * 1024**3
+
         mock_vm.return_value = MockMem()
 
         class MockProcess:
             def cpu_affinity(self):
                 return list(range(16))
+
         mock_process.return_value = MockProcess()
         mock_cpu_count.return_value = 16
 
@@ -314,22 +326,28 @@ def test_detect_worker_resources_bare_metal(mock_knob_space):
         expected_sb_min = int(6.4 * 1024**3 * 0.15 / 8192)
         assert sb.min_value == expected_sb_min
 
+
 def test_detect_worker_resources_container(mock_knob_space):
     """Integration test: resolve ranges with container limits."""
     from src.utils.hardware_info import detect_worker_resources
     from unittest.mock import patch
-    with patch("src.utils.hardware_info._is_containerized", return_value=True), \
-         patch("src.utils.hardware_info.detect_disk_type", return_value="SSD"), \
-         patch("src.utils.hardware_info.psutil.virtual_memory") as mock_vm, \
-         patch("src.utils.hardware_info.psutil.Process") as mock_process:
+
+    with (
+        patch("src.utils.hardware_info._is_containerized", return_value=True),
+        patch("src.utils.hardware_info.detect_disk_type", return_value="SSD"),
+        patch("src.utils.hardware_info.psutil.virtual_memory") as mock_vm,
+        patch("src.utils.hardware_info.psutil.Process") as mock_process,
+    ):
 
         class MockMem:
             total = 8 * 1024**3
+
         mock_vm.return_value = MockMem()
 
         class MockProcess:
             def cpu_affinity(self):
                 return [0, 1]
+
         mock_process.return_value = MockProcess()
 
         wr = detect_worker_resources(max_parallel_workers=2)
@@ -340,14 +358,15 @@ def test_detect_worker_resources_container(mock_knob_space):
         # 2 cores * 0.8 / 2 = 0.8 => floor is 0 => max(1, 0) = 1
         assert mock_knob_space.worker_resources.cpu_cores == 1
 
+
 def test_memory_budget_repair_ratios(mock_knob_space):
     """Test that extreme memory budgets preserve relative ratios between knobs."""
-    budget = 100 * 1024 * 1024 # 100MB
+    budget = 100 * 1024 * 1024  # 100MB
     config = {
-        "shared_buffers": 32768,       # 256MB
-        "work_mem": 4096,              # 4MB
-        "maintenance_work_mem": 131072, # 128MB
-        "max_connections": 100
+        "shared_buffers": 32768,  # 256MB
+        "work_mem": 4096,  # 4MB
+        "maintenance_work_mem": 131072,  # 128MB
+        "max_connections": 100,
     }
 
     for k in config:
@@ -366,18 +385,19 @@ def test_memory_budget_repair_ratios(mock_knob_space):
 
     assert abs((sb_bytes_new / mwm_bytes_new) - 2.0) < 0.05
 
+
 def test_worker_clone_memory_budget_repair(mock_knob_space):
     """Test Worker clone_from enforces bounds AND budget repair."""
     from src.tuner.core.worker import Worker
 
-    wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type='ssd')
+    wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="ssd")
     mock_knob_space.resolve_hardware_ranges(wr)
 
     worker1 = Worker(worker_id=0, knob_space=mock_knob_space)
     worker1.knob_config = {
         "shared_buffers": 400000,
         "work_mem": 20480,
-        "maintenance_work_mem": 2000000
+        "maintenance_work_mem": 2000000,
     }
 
     worker2 = Worker(worker_id=1, knob_space=mock_knob_space)
@@ -386,24 +406,31 @@ def test_worker_clone_memory_budget_repair(mock_knob_space):
     assert worker2.knob_config is not None
     assert worker2.knob_config["shared_buffers"] < 400000
 
+
 def test_perturbation_bound_exceed_repairs(mock_knob_space):
     """Test that perturbations that exceed bounds are clamped properly."""
-    wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type='ssd')
+    wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="ssd")
     mock_knob_space.resolve_hardware_ranges(wr)
 
     config = {
         "shared_buffers": mock_knob_space.knobs["shared_buffers"].max_value,
-        "max_connections": mock_knob_space.knobs["max_connections"].max_value
+        "max_connections": mock_knob_space.knobs["max_connections"].max_value,
     }
 
     perturbed = mock_knob_space.perturb_config(config, (2.0, 2.0))
 
-    assert perturbed["shared_buffers"] <= mock_knob_space.knobs["shared_buffers"].max_value
-    assert perturbed["max_connections"] <= mock_knob_space.knobs["max_connections"].max_value
+    assert (
+        perturbed["shared_buffers"] <= mock_knob_space.knobs["shared_buffers"].max_value
+    )
+    assert (
+        perturbed["max_connections"]
+        <= mock_knob_space.knobs["max_connections"].max_value
+    )
+
 
 def test_config_to_fractions_cpu_knob(mock_knob_space):
     """Test fractions extraction for a CPU relative knob."""
-    wr = WorkerResources(ram_bytes=1024**3, cpu_cores=8, disk_type='ssd')
+    wr = WorkerResources(ram_bytes=1024**3, cpu_cores=8, disk_type="ssd")
     mock_knob_space.resolve_hardware_ranges(wr)
 
     frac = mock_knob_space.config_to_fractions({"max_worker_processes": 8})

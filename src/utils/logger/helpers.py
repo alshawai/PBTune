@@ -11,10 +11,8 @@ from typing import Optional
 
 
 def log_section_header(
-        logger: logging.Logger,
-        title: str,
-        width: Optional[int] = None
-    ) -> None:
+    logger: logging.Logger, title: str, width: Optional[int] = None
+) -> None:
     """
     Log a formatted section header.
 
@@ -50,7 +48,7 @@ def log_generation_summary(
     exploited: int,
     restarts: int,
     elapsed: float,
-    converged: bool
+    converged: bool,
 ) -> None:
     """
     Log a formatted generation summary.

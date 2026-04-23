@@ -21,10 +21,10 @@ load_dotenv()
 class DatabaseConfig:
     """
     Database configuration loaded from environment variables.
-    
+
     This class provides a centralized way to access database configuration
     and ensures that required variables are validated.
-    
+
     Attributes
     ----------
     user : str
@@ -49,12 +49,12 @@ class DatabaseConfig:
     def from_env(cls) -> "DatabaseConfig":
         """
         Create DatabaseConfig from environment variables.
-        
+
         Returns
         -------
         DatabaseConfig
             Database configuration instance
-            
+
         Raises
         ------
         ValueError
@@ -78,7 +78,7 @@ class DatabaseConfig:
     def to_dict(self) -> Dict[str, Union[str, int]]:
         """
         Get configuration as a dictionary (useful for psycopg2).
-        
+
         Returns
         -------
         Dict[str, Union[str, int]]
@@ -95,24 +95,26 @@ class DatabaseConfig:
     def get_connection_string(self, hide_password: bool = True) -> str:
         """
         Get PostgreSQL connection string.
-        
+
         Parameters
         ----------
         hide_password : bool, default=True
             If True, replaces password with asterisks in the returned string
-        
+
         Returns
         -------
         str
             PostgreSQL connection string (for display purposes)
         """
         password = "****" if hide_password else self.password
-        return f"postgresql://{self.user}:{password}@{self.host}:{self.port}/{self.dbname}"
+        return (
+            f"postgresql://{self.user}:{password}@{self.host}:{self.port}/{self.dbname}"
+        )
 
     def get_sqlalchemy_url(self) -> str:
         """
         Get SQLAlchemy database URL.
-        
+
         Returns
         -------
         str
@@ -130,6 +132,7 @@ class DatabaseConfig:
 
 class _ConfigHolder:
     """Holds the singleton database configuration instance."""
+
     _instance: Optional[DatabaseConfig] = None
 
     @classmethod
@@ -143,20 +146,20 @@ class _ConfigHolder:
 def get_db_config() -> DatabaseConfig:
     """
     Get the database configuration singleton.
-    
+
     This ensures that configuration is loaded only once and reused across
     the application, improving performance and consistency.
-    
+
     Returns
     -------
     DatabaseConfig
         Database configuration instance
-    
+
     Raises
     ------
     ValueError
         If DB_PASSWORD is not set in environment variables
-        
+
     Examples
     --------
     >>> from config.database import get_db_config
