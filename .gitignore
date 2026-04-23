@@ -95,6 +95,8 @@ data/raw/
 data/processed/
 *.csv
 *.parquet
+!data/tuner_knobs/
+!data/tuner_knobs/*.csv
 
 # IDE and editor files
 *.swp
