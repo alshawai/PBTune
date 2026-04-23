@@ -31,7 +31,8 @@ def test_data_dir(tmp_path_factory):
 def pytest_configure(config):
     """Configure custom pytest markers."""
     config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests (require real resources)"
+        "markers",
+        "integration: marks tests as integration tests (require real resources)",
     )
     config.addinivalue_line(
         "markers", "manual: marks tests as manual (not run in automated CI)"

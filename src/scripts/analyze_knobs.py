@@ -34,11 +34,11 @@ def main():
     print(f"  Total PostgreSQL knobs: {len(all_knobs)}")
     print(
         f"  Predefined tunable: {len(predefined)} "
-        f"({len(predefined)/len(all_knobs)*100:.1f}%)"
+        f"({len(predefined) / len(all_knobs) * 100:.1f}%)"
     )
     print(
         f"  Non-predefined: {len(non_predefined)} "
-        f"({len(non_predefined)/len(all_knobs)*100:.1f}%)"
+        f"({len(non_predefined) / len(all_knobs) * 100:.1f}%)"
     )
 
     print("\n3. Discovering New Tunable Candidates:")
@@ -170,7 +170,9 @@ def main():
 
     print("Key Insights:")
     print(f"  - We have access to {len(all_knobs)} PostgreSQL configuration parameters")
-    print(f"  - {len(candidates)} non-predefined knobs are runtime-modifiable & numeric")
+    print(
+        f"  - {len(candidates)} non-predefined knobs are runtime-modifiable & numeric"
+    )
     print(f"  - Consider expanding beyond the predefined {len(predefined)} knobs")
     print(f"  - {len(ml_ready)} knobs total are ideal for online ML optimization")
     print("=" * 62)

@@ -16,12 +16,12 @@ from src.database.connection import get_connection
 def create_database(config: Optional[DatabaseConfig] = None) -> None:
     """
     Create the database if it does not exist.
-    
+
     Parameters
     ----------
     config : Optional[DatabaseConfig], default=None
         Database configuration. If None, uses get_db_config()
-        
+
     Examples
     --------
     >>> from database import create_database
@@ -36,9 +36,7 @@ def create_database(config: Optional[DatabaseConfig] = None) -> None:
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT 1 FROM pg_database WHERE datname = %s", (config.dbname,)
-        )
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (config.dbname,))
         exists = cursor.fetchone()
 
         if not exists:
@@ -58,18 +56,18 @@ def create_database(config: Optional[DatabaseConfig] = None) -> None:
 def drop_database(config: Optional[DatabaseConfig] = None) -> None:
     """
     Drop the database if it exists.
-    
+
     This will terminate all connections to the database before dropping it.
-    
+
     Parameters
     ----------
     config : Optional[DatabaseConfig], default=None
         Database configuration. If None, uses get_db_config()
-        
+
     Warning
     -------
     This operation is destructive and cannot be undone.
-    
+
     Examples
     --------
     >>> from database import drop_database
@@ -109,19 +107,19 @@ def drop_database(config: Optional[DatabaseConfig] = None) -> None:
 def reset_database(config: Optional[DatabaseConfig] = None) -> None:
     """
     Drop and recreate the database.
-    
+
     This provides a clean slate by removing all data and recreating the database.
-    
+
     Parameters
     ----------
     config : Optional[DatabaseConfig], default=None
         Database configuration. If None, uses get_db_config()
-        
+
     Warning
     -------
     This operation is destructive and cannot be undone.
     All data in the database will be lost.
-    
+
     Examples
     --------
     >>> from database import reset_database

@@ -45,11 +45,11 @@ class ColoredFormatter(logging.Formatter):
         self.show_module = show_module
 
         if show_module:
-            fmt = '%(asctime)s - %(levelname)-8s - %(name)s - %(message)s'
+            fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
         else:
-            fmt = '%(asctime)s - %(levelname)-8s - %(message)s'
+            fmt = "%(asctime)s - %(levelname)-8s - %(message)s"
 
-        super().__init__(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S')
+        super().__init__(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record with colors."""
@@ -57,11 +57,11 @@ class ColoredFormatter(logging.Formatter):
             return super().format(record)
 
         message = super().format(record)
-        parts = message.split(' - ', 3)
+        parts = message.split(" - ", 3)
         if len(parts) < 3:
             return message  # Fallback if format doesn't match
 
-        level_color = ColorPalette.get_level_color(record.levelname, 'ansi')
+        level_color = ColorPalette.get_level_color(record.levelname, "ansi")
         timestamp = parts[0]
         levelname = parts[1].strip()
 
@@ -69,13 +69,13 @@ class ColoredFormatter(logging.Formatter):
             module = parts[2]
             msg = parts[3]
 
-            module_color = ColorPalette.get_module_color(record.name, 'ansi')
+            module_color = ColorPalette.get_module_color(record.name, "ansi")
 
-            worker_color = ''  # Get worker color if applicable
-            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+            worker_color = ""  # Get worker color if applicable
+            if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(
                     record.worker_id,  # type: ignore
-                    'ansi'
+                    "ansi",
                 )
 
             colored_message = (
@@ -91,11 +91,11 @@ class ColoredFormatter(logging.Formatter):
         else:  # No module
             msg = parts[2] if len(parts) >= 3 else parts[-1]
 
-            worker_color = ''
-            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+            worker_color = ""
+            if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(
                     record.worker_id,  # type: ignore
-                    'ansi'
+                    "ansi",
                 )
 
             colored_message = (
@@ -117,15 +117,15 @@ class HTMLFormatter(logging.Formatter):
     def __init__(self, show_module: bool = True):
         self.show_module = show_module
         if show_module:
-            fmt = '%(asctime)s - %(levelname)-8s - %(name)s - %(message)s'
+            fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
         else:
-            fmt = '%(asctime)s - %(levelname)-8s - %(message)s'
-        super().__init__(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S')
+            fmt = "%(asctime)s - %(levelname)-8s - %(message)s"
+        super().__init__(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as HTML."""
         message = super().format(record)
-        parts = message.split(' - ', 3)
+        parts = message.split(" - ", 3)
 
         if len(parts) < 3:
             return self._escape_html(message)
@@ -133,7 +133,7 @@ class HTMLFormatter(logging.Formatter):
         timestamp = self._escape_html(parts[0])
         levelname = parts[1].strip()
 
-        level_color = ColorPalette.get_level_color(levelname, 'html')
+        level_color = ColorPalette.get_level_color(levelname, "html")
 
         html = f'<span style="color: {level_color}">{timestamp}</span> - '
         html += (
@@ -145,7 +145,7 @@ class HTMLFormatter(logging.Formatter):
             module = self._escape_html(parts[2])
             msg = self._escape_html(parts[3])
 
-            module_color = ColorPalette.get_module_color(record.name, 'html')
+            module_color = ColorPalette.get_module_color(record.name, "html")
 
             html += (
                 f'<span style="color: {module_color}; '
@@ -153,10 +153,10 @@ class HTMLFormatter(logging.Formatter):
             )
 
             # Use record.worker_id instead of regex parsing
-            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+            if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(
                     record.worker_id,  # type: ignore
-                    'html'
+                    "html",
                 )
                 html += f'<span style="color: {worker_color}">{msg}</span>'
             else:
@@ -164,10 +164,10 @@ class HTMLFormatter(logging.Formatter):
         else:
             msg = self._escape_html(parts[2] if len(parts) >= 3 else parts[-1])
 
-            if hasattr(record, 'worker_id') and record.worker_id is not None:  # type: ignore
+            if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(
                     record.worker_id,  # type: ignore
-                    'html'
+                    "html",
                 )
                 html += f'<span style="color: {worker_color}">{msg}</span>'
             else:
@@ -179,18 +179,18 @@ class HTMLFormatter(logging.Formatter):
     def _escape_html(text: str) -> str:
         """Escape HTML special characters to prevent HTML injection."""
         return (
-            text.replace('&', '&amp;')
-            .replace('<', '&lt;')
-            .replace('>', '&gt;')
-            .replace('"', '&quot;')
-            .replace("'", '&#x27;')
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#x27;")
         )
 
 
 class HTMLFileHandler(logging.FileHandler):
     """Custom file handler that wraps logs in a styled HTML document."""
 
-    HTML_TEMPLATE = '''<!DOCTYPE html>
+    HTML_TEMPLATE = """<!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
@@ -269,23 +269,23 @@ class HTMLFileHandler(logging.FileHandler):
             <p>Generated: {timestamp}</p>
         </div>
         <div class="logs">
-    '''
+    """
 
-    HTML_FOOTER = '''    </div>
+    HTML_FOOTER = """    </div>
         <div class="footer">
             <p>End of log - Total runtime: {runtime}</p>
         </div>
     </body>
-    </html>'''
+    </html>"""
 
-    def __init__(self, filename, mode='w', encoding='utf-8'):
+    def __init__(self, filename, mode="w", encoding="utf-8"):
         super().__init__(filename, mode, encoding)
         self.start_time = datetime.datetime.now()
         self._write_html_header()
 
     def _write_html_header(self):
         """Write HTML header with styling."""
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         header = self.HTML_TEMPLATE.format(timestamp=timestamp)
         self.stream.write(header)
         self.stream.flush()
@@ -303,9 +303,7 @@ class HTMLFileHandler(logging.FileHandler):
     def close(self):
         """Close handler and write HTML footer."""
         runtime = datetime.datetime.now() - self.start_time
-        footer = self.HTML_FOOTER.format(
-            runtime=f"{runtime.total_seconds():.1f}s"
-        )
+        footer = self.HTML_FOOTER.format(runtime=f"{runtime.total_seconds():.1f}s")
         try:
             self.stream.write(footer)
             self.stream.flush()

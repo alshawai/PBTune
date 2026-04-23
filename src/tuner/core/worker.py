@@ -19,21 +19,21 @@ Example:
 --------
 >>> from src.tuner.config import get_knob_space
 >>> knob_space = get_knob_space('minimal')
->>> 
+>>>
 >>> worker = Worker(
 ...     worker_id=0,
 ...     knob_space=knob_space,
 ...     ready_interval=1
 ... )
->>> 
+>>>
 >>> # Check if ready for exploit/explore
 >>> worker.is_ready()  # False initially
->>> 
+>>>
 >>> # Simulate evaluation
 >>> from src.tuner.evaluator import PerformanceMetrics
 >>> metrics = PerformanceMetrics(latency_p95=50.0, throughput=100.0)
 >>> worker.update_metrics(metrics, score=0.85)
->>> 
+>>>
 >>> # Now ready!
 >>> worker.is_ready()  # True
 """
@@ -51,60 +51,60 @@ from src.config.database import DatabaseConfig
 class Worker:
     """
     Single member of the PBT population.
-    
+
     Each worker represents one database configuration being evaluated.
     Workers maintain their own configuration, performance metrics, and
     evolutionary history.
-    
+
     Attributes
     ----------
     worker_id : int
         Unique identifier for this worker (0 to population_size-1)
-        
+
     knob_space : KnobSpace
         The search space defining valid configurations
-        
+
     knob_config : Dict[str, Any]
         Current knob configuration (PostgreSQL parameters)
         If None at initialization, a random config will be sampled
-        
+
     performance_score : float
         Composite performance score (higher = better)
         This is what PBT optimizes (maximizes)
         Default: 0.0 (not yet evaluated)
-        
+
     metrics : Optional[PerformanceMetrics]
         Detailed performance measurements from last evaluation
         None until first evaluation completes
-        
+
     step_count : int
         Number of times this worker has been evaluated
         Used for the "ready mechanism" - workers must complete
         ready_interval evaluations before being eligible for exploit/explore
-        
+
     ready_interval : int
         How many evaluations before worker can be exploited/explored
         From PBT paper: prevents premature convergence
         Typical values: 1 (aggressive), 3-5 (conservative)
-        
+
     parent_id : Optional[int]
         Worker ID that this configuration was copied from
         None for initial random configs, set during exploit phase
         Used for lineage tracking and analysis
-        
+
     generation_created : int
         Which generation this worker was created/last exploited
         Used for tracking evolutionary history
-        
+
     config_history : list
         Optional: Track configuration changes over time
         Useful for analysis and debugging
-        
+
     port : Optional[int]
         PostgreSQL instance port for this worker
         Set by instance manager during initialization
         Each worker gets its own port (base_port + worker_id)
-        
+
     db_config : Optional[DatabaseConfig]
         Instance-specific database configuration
         Set by instance manager during initialization
@@ -114,7 +114,7 @@ class Worker:
         Whether evaluator should force a PostgreSQL restart on the next
         configuration application. Used after dead-worker rescue to ensure
         restart-required knobs are actually activated before benchmarking.
-        
+
     Notes
     -----
     **Performance Score:**
@@ -155,16 +155,16 @@ class Worker:
     def is_ready(self) -> bool:
         """
         Check if worker is ready for exploit/explore operations.
-        
+
         Workers must complete at least ready_interval evaluations before
         they can participate in exploit/explore. This is the "ready mechanism"
         from the PBT paper.
-        
+
         Returns
         -------
         bool
             True if step_count >= ready_interval, False otherwise
-            
+
         Notes
         -----
         From DeepMind PBT paper:
@@ -176,29 +176,29 @@ class Worker:
 
     def clone_from(
         self,
-        other: 'Worker',
+        other: "Worker",
         current_generation: int,
-        exclude_knobs: Optional[List[str]] = None
+        exclude_knobs: Optional[List[str]] = None,
     ) -> None:
         """
         Copy configuration from another worker (EXPLOIT phase).
-        
+
         Parameters
         ----------
         other : Worker
             The elite worker to copy from (must be in top quantile)
-            
+
         current_generation : int
             The current generation number (for tracking)
-            
+
         exclude_knobs : Optional[List[str]]
             Knobs to exclude from copying (e.g., restart-required knobs between restart intervals)
-            
+
         Notes
         -----
         What gets copied:
         - knob_config: The actual PostgreSQL parameters (excluding those in exclude_knobs)
-        
+
         What does NOT get copied:
         - performance_score: Will be recalculated after explore/evaluate
         - metrics: Will be measured fresh
@@ -217,81 +217,83 @@ class Worker:
 
         # Enforce memory budget validation after mixing configurations
         if self.knob_config:
-            self.knob_config = self.knob_space.repair_config_dependencies(self.knob_config)
+            self.knob_config = self.knob_space.repair_config_dependencies(
+                self.knob_config
+            )
 
         self.parent_id = other.worker_id
         self.generation_created = current_generation
 
         if self.config_history is not None:
-            self.config_history.append({
-                'generation': current_generation,
-                'action': 'exploit',
-                'parent_id': other.worker_id,
-                'config': copy.deepcopy(self.knob_config)
-            })
+            self.config_history.append(
+                {
+                    "generation": current_generation,
+                    "action": "exploit",
+                    "parent_id": other.worker_id,
+                    "config": copy.deepcopy(self.knob_config),
+                }
+            )
 
     def perturb(
         self,
         perturbation_factors: Tuple[float, float] = (0.8, 1.2),
         current_generation: Optional[int] = None,
         seed: Optional[int] = None,
-        exclude_knobs: Optional[List[str]] = None
+        exclude_knobs: Optional[List[str]] = None,
     ) -> None:
         """
         Perturb configuration (EXPLORE phase).
-        
+
         Parameters
         ----------
         perturbation_factors : Tuple[float, float]
             (min_factor, max_factor) for perturbation
             Default: (0.8, 1.2) means multiply by random value in [0.8, 1.2]
-            
+
         current_generation : Optional[int]
             Current generation number for history tracking
-            
+
         seed : Optional[int]
             Random seed for reproducibility
-        
+
         exclude_knobs : Optional[List[str]]
             Knobs to exclude from perturbation (keep constant)
-            
+
         Notes
         -----
         Without perturbation, all workers would eventually converge to the
         same configuration (the current best). Perturbation maintains
-        diversity and allows exploration of nearby configurations.        
+        diversity and allows exploration of nearby configurations.
         """
         self.knob_config = self.knob_space.perturb_config(
             config=self.knob_config,  # type: ignore
             perturbation_factor=perturbation_factors,
             seed=seed,
-            exclude_knobs=exclude_knobs
+            exclude_knobs=exclude_knobs,
         )
 
         if self.config_history is not None and current_generation is not None:
-            self.config_history.append({
-                'generation': current_generation,
-                'action': 'explore',
-                'perturbation_factors': perturbation_factors,
-                'config': copy.deepcopy(self.knob_config)
-            })
+            self.config_history.append(
+                {
+                    "generation": current_generation,
+                    "action": "explore",
+                    "perturbation_factors": perturbation_factors,
+                    "config": copy.deepcopy(self.knob_config),
+                }
+            )
 
-    def update_metrics(
-        self,
-        metrics: PerformanceMetrics,
-        score: float
-    ) -> None:
+    def update_metrics(self, metrics: PerformanceMetrics, score: float) -> None:
         """
         Update worker's performance after evaluation.
-        
+
         This is called after a workload evaluation completes. It updates
         the worker's performance metrics and increments the step counter.
-        
+
         Parameters
         ----------
         metrics : PerformanceMetrics
             Detailed performance measurements (latency, throughput, CPU, etc.)
-            
+
         score : float
             Composite performance score computed from metrics
             Higher = better performance
@@ -304,10 +306,10 @@ class Worker:
     def get_config_copy(self) -> Dict[str, Any]:
         """
         Get a deep copy of the current configuration.
-        
+
         Returns a copy to prevent accidental modification of the worker's
         internal state.
-        
+
         Returns
         -------
         Dict[str, Any]
@@ -318,10 +320,10 @@ class Worker:
     def reset_to_random(self, seed: Optional[int] = None) -> None:
         """
         Reset worker to a new random configuration.
-        
+
         Useful for restarting a worker or implementing advanced evolution
         strategies (e.g., periodic random restarts to avoid local optima).
-        
+
         Parameters
         ----------
         seed : Optional[int]
@@ -355,24 +357,24 @@ class Worker:
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert worker to dictionary for serialization.
-        
+
         Useful for logging, checkpointing, and analysis.
-        
+
         Returns
         -------
         Dict[str, Any]
             Dictionary containing worker state
         """
         return {
-            'worker_id': self.worker_id,
-            'knob_config': self.knob_config,
-            'performance_score': self.performance_score,
-            'metrics': self.metrics.to_dict() if self.metrics else None,
-            'step_count': self.step_count,
-            'ready_interval': self.ready_interval,
-            'is_ready': self.is_ready(),
-            'parent_id': self.parent_id,
-            'generation_created': self.generation_created,
-            'port': self.port,
-            'force_restart_next_eval': self.force_restart_next_eval,
+            "worker_id": self.worker_id,
+            "knob_config": self.knob_config,
+            "performance_score": self.performance_score,
+            "metrics": self.metrics.to_dict() if self.metrics else None,
+            "step_count": self.step_count,
+            "ready_interval": self.ready_interval,
+            "is_ready": self.is_ready(),
+            "parent_id": self.parent_id,
+            "generation_created": self.generation_created,
+            "port": self.port,
+            "force_restart_next_eval": self.force_restart_next_eval,
         }

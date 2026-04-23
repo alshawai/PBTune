@@ -50,7 +50,7 @@ def add_html_file_logging(
         The normalized HTML log path actually used.
     """
     root_logger = logging.getLogger()
-    html_log_file = output_file.with_suffix('.html')
+    html_log_file = output_file.with_suffix(".html")
     target = html_log_file.resolve()
 
     for handler in list(root_logger.handlers):
@@ -62,7 +62,7 @@ def add_html_file_logging(
             handler.close()
 
     html_formatter = HTMLFormatter(show_module=show_module)
-    file_handler = HTMLFileHandler(html_log_file, mode='w', encoding='utf-8')
+    file_handler = HTMLFileHandler(html_log_file, mode="w", encoding="utf-8")
     file_handler.setLevel(root_logger.level or logging.INFO)
     file_handler.setFormatter(html_formatter)
     root_logger.addHandler(file_handler)
@@ -71,10 +71,10 @@ def add_html_file_logging(
 
 
 def setup_logging(
-    verbosity: str = 'INFO',
+    verbosity: str = "INFO",
     enable_colors: bool = True,
     output_file: Optional[Path] = None,
-    show_module: bool = True
+    show_module: bool = True,
 ) -> None:
     """
     Setup global logging configuration.
@@ -93,18 +93,17 @@ def setup_logging(
         Show module name in output
     """
     level_map = {
-        'DEBUG': logging.DEBUG,
-        'INFO': logging.INFO,
-        'WARNING': logging.WARNING,
-        'ERROR': logging.ERROR,
-        'TRACE': 5,  # Custom level for TRACE
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "TRACE": 5,  # Custom level for TRACE
     }
 
     log_level = level_map.get(verbosity.upper())
 
     console_formatter = ColoredFormatter(
-        enable_colors=enable_colors,
-        show_module=show_module
+        enable_colors=enable_colors, show_module=show_module
     )
 
     # A console handler that sends log records to stdout (terminal/console)
@@ -120,22 +119,21 @@ def setup_logging(
     root_logger.addHandler(console_handler)
 
     if output_file:
-        file_path = add_html_file_logging(output_file=output_file, show_module=show_module)
+        file_path = add_html_file_logging(
+            output_file=output_file, show_module=show_module
+        )
         for handler in root_logger.handlers:
             if isinstance(handler, HTMLFileHandler):
                 handler.setLevel(log_level)  # type: ignore
                 if Path(handler.baseFilename).resolve() == file_path.resolve():
                     break
 
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('psycopg2').setLevel(logging.WARNING)
-    logging.getLogger('docker').setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("psycopg2").setLevel(logging.WARNING)
+    logging.getLogger("docker").setLevel(logging.WARNING)
 
 
-def get_logger(
-        name: str = __name__,
-        worker_id: Optional[int] = None
-    ) -> logging.Logger:
+def get_logger(name: str = __name__, worker_id: Optional[int] = None) -> logging.Logger:
     """
     Get a logger instance with optional worker ID.
 
@@ -160,6 +158,6 @@ def get_logger(
     base_logger = logging.getLogger(name)
 
     if worker_id is not None:
-        return WorkerLoggerAdapter(base_logger, {'worker_id': worker_id})  # type: ignore
+        return WorkerLoggerAdapter(base_logger, {"worker_id": worker_id})  # type: ignore
 
     return base_logger

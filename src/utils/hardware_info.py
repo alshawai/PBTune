@@ -26,9 +26,11 @@ import psutil
 @dataclass
 class WorkerResources:
     """Per-worker hardware resources for hardware-aware knob ranges."""
-    ram_bytes: int          # Available RAM for this worker (already divided if bare-metal)
-    cpu_cores: int          # Available CPU cores for this worker
-    disk_type: str          # "SSD", "HDD", or "unknown"
+
+    ram_bytes: int  # Available RAM for this worker (already divided if bare-metal)
+    cpu_cores: int  # Available CPU cores for this worker
+    disk_type: str  # "SSD", "HDD", or "unknown"
+
 
 def detect_cpu_model() -> str:
     """Detect CPU model name, either on supportsLinux, macOS, or Windows."""
@@ -98,7 +100,7 @@ def detect_ram_total() -> Dict[str, Any]:
     """Detect total system RAM in bytes and human-readable format."""
     mem = psutil.virtual_memory()
     total_bytes = mem.total
-    total_gb = round(total_bytes / (1024 ** 3), 2)
+    total_gb = round(total_bytes / (1024**3), 2)
     return {
         "total_bytes": total_bytes,
         "total_gb": total_gb,
@@ -144,7 +146,7 @@ def _is_containerized() -> bool:
 def detect_worker_resources(max_parallel_workers: int = 1) -> WorkerResources:
     """
     Detect per-worker hardware resources.
-    
+
     If in a container, uses cgroups via psutil limits.
     If bare-metal, divides system resources by max_parallel_workers.
     Reserves 20% of resources for OS/tuning system.
@@ -163,13 +165,15 @@ def detect_worker_resources(max_parallel_workers: int = 1) -> WorkerResources:
     usable_ram = int(ram_bytes * 0.8)
     usable_cpu = cpu_cores * 0.8
 
-    worker_ram = max(100 * 1024 * 1024, int(usable_ram / max_parallel_workers))  # min 100MB
-    worker_cpu = max(1, math.floor(usable_cpu / max_parallel_workers))  # min 1 logical core
+    worker_ram = max(
+        100 * 1024 * 1024, int(usable_ram / max_parallel_workers)
+    )  # min 100MB
+    worker_cpu = max(
+        1, math.floor(usable_cpu / max_parallel_workers)
+    )  # min 1 logical core
 
     return WorkerResources(
-        ram_bytes=worker_ram,
-        cpu_cores=worker_cpu,
-        disk_type=disk_type
+        ram_bytes=worker_ram, cpu_cores=worker_cpu, disk_type=disk_type
     )
 
 

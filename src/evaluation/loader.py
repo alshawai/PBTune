@@ -68,9 +68,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
             f"Failed to parse JSON from {path}: {exc}"
         ) from exc
     except OSError as exc:
-        raise TuningSessionLoadError(
-            f"Cannot read file {path}: {exc}"
-        ) from exc
+        raise TuningSessionLoadError(f"Cannot read file {path}: {exc}") from exc
 
     if not isinstance(data, dict):
         raise TuningSessionLoadError(
@@ -131,7 +129,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
     if not system_info:
         logger.warning(
             "  ➤ system_info missing from %s — hardware provenance will be incomplete",
-            path.name
+            path.name,
         )
 
     tuning_config = _normalize_tuning_config(ts_meta)
@@ -147,7 +145,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         best_score,
         len(best_knobs),
         worker_resources.cpu_cores,
-        worker_resources.ram_bytes / (1024 ** 3),
+        worker_resources.ram_bytes / (1024**3),
     )
 
     return TuningSessionData(
@@ -176,8 +174,7 @@ def _assert_fields(
 
 
 def _infer_benchmark_and_workload(
-    ts_meta: dict[str, Any],
-    path: Path
+    ts_meta: dict[str, Any], path: Path
 ) -> tuple[str, str]:
     """
     Infer the benchmark type and workload type from tuning_session metadata or the file path.
@@ -210,14 +207,12 @@ def _infer_benchmark_and_workload(
         elif workload_type == "olap":
             benchmark = "tpch"
         else:
-            raise TuningSessionLoadError(
-                f"Unknown workload type: {workload_type}"
-            )
+            raise TuningSessionLoadError(f"Unknown workload type: {workload_type}")
 
         logger.warning(
             "  ➤ benchmark name not found in session metadata, used workload"
             " type to infer benchmark: %s",
-            benchmark
+            benchmark,
         )
 
     return benchmark, workload_type
@@ -232,7 +227,8 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
     CLI override -> session metadata -> benchmark defaults.
     """
     config: dict[str, Any] = {
-        k: v for k, v in ts_meta.items()
+        k: v
+        for k, v in ts_meta.items()
         if k not in {"benchmark_name", "workload_type", "timestamp"}
     }
 
@@ -267,15 +263,13 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
         config["sysbench_duration_seconds"] = sysbench_duration
 
     sysbench_warmup = _as_int(
-        config.get("sysbench_warmup_seconds")
-        or config.get("warmup_duration")
+        config.get("sysbench_warmup_seconds") or config.get("warmup_duration")
     )
     if sysbench_warmup is not None:
         config["sysbench_warmup_seconds"] = sysbench_warmup
 
     tpch_warmup_passes = _as_int(
-        config.get("tpch_warmup_passes")
-        or config.get("warmup_passes")
+        config.get("tpch_warmup_passes") or config.get("warmup_passes")
     )
     if tpch_warmup_passes is not None:
         config["tpch_warmup_passes"] = tpch_warmup_passes

@@ -41,7 +41,6 @@ HARDWARE_RELATIVE_SPECS = {
     "effective_cache_size": (0.40, 0.75),
     "work_mem": (0.001, 0.02),
     "maintenance_work_mem": (0.01, 0.05),
-
     # CPU-Relative Knobs: (Fraction Min, Fraction Max, Floor Min)
     "max_worker_processes": (0.50, 2.0, 4),
     "max_parallel_workers": (0.25, 1.0, 0),
@@ -55,7 +54,11 @@ HARDWARE_RELATIVE_SPECS = {
 DISK_TYPE_CONDITIONAL_RANGES = {
     # SSD Range, HDD Range, Unknown Range
     "effective_io_concurrency": {"SSD": (100, 200), "HDD": (1, 4), "unknown": (1, 200)},
-    "maintenance_io_concurrency": {"SSD": (100, 200), "HDD": (1, 4), "unknown": (1, 200)},
+    "maintenance_io_concurrency": {
+        "SSD": (100, 200),
+        "HDD": (1, 4),
+        "unknown": (1, 200),
+    },
     "random_page_cost": {"SSD": (1.0, 1.5), "HDD": (3.0, 4.0), "unknown": (0.1, 4.0)},
     "seq_page_cost": {"SSD": (0.1, 1.0), "HDD": (1.0, 2.0), "unknown": (0.1, 2.0)},
 }
@@ -63,6 +66,7 @@ DISK_TYPE_CONDITIONAL_RANGES = {
 
 class KnobType(Enum):
     """Types of PostgreSQL configuration parameters"""
+
     INTEGER = "integer"
     REAL = "real"
     BOOLEAN = "boolean"
@@ -71,6 +75,7 @@ class KnobType(Enum):
 
 class KnobScale(Enum):
     """Scale types for numerical knobs"""
+
     LINEAR = "linear"
     LOG = "log"
     CATEGORICAL = "categorical"
@@ -80,7 +85,7 @@ class KnobScale(Enum):
 class KnobDefinition:
     """
     Definition of a single PostgreSQL configuration knob.
-    
+
     Attributes
     ----------
     name : str
@@ -171,12 +176,12 @@ class KnobDefinition:
     def validate_value(self, value: Any) -> bool:
         """
         Validate if a value is valid for this knob.
-        
+
         Parameters
         ----------
         value : Any
             Value to validate
-            
+
         Returns
         -------
         bool
@@ -217,12 +222,12 @@ class KnobDefinition:
     def sample_random_value(self, rng: Optional[np.random.Generator] = None) -> Any:
         """
         Sample a random valid value for this knob.
-        
+
         Parameters
         ----------
         rng : Optional[np.random.Generator]
             Random number generator (for reproducibility)
-            
+
         Returns
         -------
         Any
@@ -232,7 +237,11 @@ class KnobDefinition:
             rng = np.random.default_rng()
 
         if self.knob_type == KnobType.INTEGER:
-            if self.scale == KnobScale.LOG and self.min_value is not None and self.min_value > 0:
+            if (
+                self.scale == KnobScale.LOG
+                and self.min_value is not None
+                and self.min_value > 0
+            ):
                 log_min = np.log(self.min_value)  # type: ignore
                 log_max = np.log(self.max_value)  # type: ignore
                 log_value = rng.uniform(log_min, log_max)
@@ -268,10 +277,10 @@ class KnobDefinition:
 class KnobSpace:
     """
     Defines the search space for PostgreSQL knobs.
-    
+
     This class manages the collection of knobs that will be tuned,
     provides sampling and validation utilities, and handles normalization.
-    
+
     Attributes
     ----------
     knobs : Dict[str, KnobDefinition]
@@ -281,7 +290,7 @@ class KnobSpace:
     def __init__(self, knob_definitions: List[KnobDefinition]):
         """
         Initialize knob space.
-        
+
         Parameters
         ----------
         knob_definitions : List[KnobDefinition]
@@ -289,6 +298,37 @@ class KnobSpace:
         """
         self.knobs = {knob.name: knob for knob in knob_definitions}
         self.worker_resources: Optional[WorkerResources] = None
+
+    def create_online_view(self) -> "KnobSpace":
+        """Return a filtered KnobSpace containing only runtime-safe knobs.
+
+        Filters out knobs where ``restart_required=True``, producing a
+        view suitable for ONLINE tuning mode where restarts never occur.
+
+        The returned view preserves ``worker_resources`` so that
+        hardware-relative range resolution remains correct.
+
+        Returns
+        -------
+        KnobSpace
+            New KnobSpace containing only runtime (non-restart) knobs.
+        """
+        runtime_knobs = [
+            knob for knob in self.knobs.values() if not knob.restart_required
+        ]
+        view = KnobSpace(runtime_knobs)
+        view.worker_resources = self.worker_resources
+
+        filtered_count = len(self.knobs) - len(runtime_knobs)
+        if filtered_count > 0:
+            logger.info(
+                "Created ONLINE knob view: %d runtime knobs "
+                "(filtered %d restart-required)",
+                len(runtime_knobs),
+                filtered_count,
+            )
+
+        return view
 
     def _get_bytes_per_unit(self, knob: "KnobDefinition") -> int:
         """Parse unit string to bytes."""
@@ -321,7 +361,7 @@ class KnobSpace:
                     knob.min_value,
                     knob.max_value,
                     int(resources.ram_bytes / bytes_per_unit),
-                    knob.unit or "units"
+                    knob.unit or "units",
                 )
 
             elif knob.resource_type == "cpu" and name in HARDWARE_RELATIVE_SPECS:
@@ -333,12 +373,17 @@ class KnobSpace:
                     name,
                     knob.min_value,
                     knob.max_value,
-                    resources.cpu_cores
+                    resources.cpu_cores,
                 )
 
-            elif knob.resource_type == "disk_type" and name in DISK_TYPE_CONDITIONAL_RANGES:
+            elif (
+                knob.resource_type == "disk_type"
+                and name in DISK_TYPE_CONDITIONAL_RANGES
+            ):
                 ranges = DISK_TYPE_CONDITIONAL_RANGES[name]
-                disk_type = resources.disk_type if resources.disk_type in ranges else "unknown"
+                disk_type = (
+                    resources.disk_type if resources.disk_type in ranges else "unknown"
+                )
                 min_val, max_val = ranges[disk_type]
                 knob.min_value = min_val
                 knob.max_value = max_val
@@ -347,18 +392,18 @@ class KnobSpace:
                     name,
                     min_val,
                     max_val,
-                    disk_type
+                    disk_type,
                 )
 
     def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert absolute config values to fractional representation for serialization.
-        
+
         Parameters
         ----------
         config : Dict[str, Any]
             Absolute configuration values
-            
+
         Returns
         -------
         Dict[str, Any]
@@ -401,17 +446,17 @@ class KnobSpace:
     def fractions_to_config(self, fractions: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert fractional representation back to absolute values for this hardware.
-        
+
         Parameters
         ----------
         fractions : Dict[str, Any]
             Fractional configuration values
-            
+
         Returns
         -------
         Dict[str, Any]
             Absolute configuration values
-        
+
         Notes
         -----
         - Hardware-relative knobs are converted to absolute values based on total resources
@@ -427,9 +472,9 @@ class KnobSpace:
             knob = self.knobs[name]
             # Disk type knobs are absolute in fraction representation
             if (
-                not knob.hardware_relative or
-                knob.resource_type == "disk_type" or
-                self.worker_resources is None
+                not knob.hardware_relative
+                or knob.resource_type == "disk_type"
+                or self.worker_resources is None
             ):
                 config[name] = frac_val
                 continue
@@ -462,7 +507,7 @@ class KnobSpace:
     def get_restart_required_knobs(self) -> List[str]:
         """
         Get list of knobs that require PostgreSQL restart.
-        
+
         Returns
         -------
         List[str]
@@ -473,7 +518,7 @@ class KnobSpace:
     def get_runtime_modifiable_knobs(self) -> List[str]:
         """
         Get list of knobs that can be modified at runtime.
-        
+
         Returns
         -------
         List[str]
@@ -486,12 +531,12 @@ class KnobSpace:
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Split configuration into restart-required and runtime-modifiable parts.
-        
+
         Parameters
         ----------
         config : Dict[str, Any]
             Full configuration
-        
+
         Returns
         -------
         Tuple[Dict[str, Any], Dict[str, Any]]
@@ -512,12 +557,12 @@ class KnobSpace:
     def validate_config(self, config: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """
         Validate a configuration.
-        
+
         Parameters
         ----------
         config : Dict[str, Any]
             Configuration to validate
-            
+
         Returns
         -------
         Tuple[bool, List[str]]
@@ -543,9 +588,7 @@ class KnobSpace:
         return (len(errors) == 0, errors)
 
     def _repair_memory_budget(
-        self,
-        config: Dict[str, Any],
-        budget_bytes: int
+        self, config: Dict[str, Any], budget_bytes: int
     ) -> Dict[str, Any]:
         """Proportionally scale down memory allocations to fit budget."""
         sb_bytes = config.get("shared_buffers", 0) * 8192
@@ -558,33 +601,37 @@ class KnobSpace:
         if total <= budget_bytes:
             return config
 
-        scale = budget_bytes / total   # < 1.0
+        scale = budget_bytes / total  # < 1.0
 
         # Scale all memory allocations uniformly (preserves ratios)
         if "shared_buffers" in config and "shared_buffers" in self.knobs:
-            config["shared_buffers"] = self.knobs[
-                "shared_buffers"].normalize_value(config["shared_buffers"] * scale)
+            config["shared_buffers"] = self.knobs["shared_buffers"].normalize_value(
+                config["shared_buffers"] * scale
+            )
         if "work_mem" in config and "work_mem" in self.knobs:
-            config["work_mem"] = self.knobs[
-                "work_mem"].normalize_value(config["work_mem"] * scale)
+            config["work_mem"] = self.knobs["work_mem"].normalize_value(
+                config["work_mem"] * scale
+            )
         if "maintenance_work_mem" in config and "maintenance_work_mem" in self.knobs:
             config["maintenance_work_mem"] = self.knobs[
-                "maintenance_work_mem"].normalize_value(config["maintenance_work_mem"] * scale)
+                "maintenance_work_mem"
+            ].normalize_value(config["maintenance_work_mem"] * scale)
         if "max_connections" in config and "max_connections" in self.knobs:
-            config["max_connections"] = self.knobs[
-                "max_connections"].normalize_value(config["max_connections"] * scale)
+            config["max_connections"] = self.knobs["max_connections"].normalize_value(
+                config["max_connections"] * scale
+            )
 
         return config
 
     def repair_config_dependencies(
-            self,
-            config: Dict[str, Any],
-            worker_id: Optional[int] = None,
-            budget_ram_bytes: Optional[int] = None
-        ) -> Dict[str, Any]:
+        self,
+        config: Dict[str, Any],
+        worker_id: Optional[int] = None,
+        budget_ram_bytes: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Repair configuration to satisfy known dependencies and constraints between knobs.
-        
+
         Parameters
         ----------
         config : Dict[str, Any]
@@ -598,7 +645,7 @@ class KnobSpace:
         -------
         Dict[str, Any]
             Repaired configuration
-        
+
         Notes
         -----
         This method applies a series of heuristic rules to fix common invalid combinations of knobs.
@@ -607,7 +654,8 @@ class KnobSpace:
         """
         worker_logger = (
             get_logger(__name__, worker_id=worker_id)
-            if worker_id is not None else logger
+            if worker_id is not None
+            else logger
         )
         repaired = dict(config)
 
@@ -617,19 +665,19 @@ class KnobSpace:
                 worker_logger.warning(
                     "[REPAIR] Corrected 'archive_mode' from '%s' to 'off' "
                     "because wal_level is 'minimal'",
-                    repaired["archive_mode"]
+                    repaired["archive_mode"],
                 )
                 repaired["archive_mode"] = "off"
 
             max_wal_senders = repaired.get("max_wal_senders")
-            if isinstance(
-                max_wal_senders,
-                (int, np.integer, float, np.floating)
-            ) and max_wal_senders > 0:
+            if (
+                isinstance(max_wal_senders, (int, np.integer, float, np.floating))
+                and max_wal_senders > 0
+            ):
                 worker_logger.warning(
                     "[REPAIR] Corrected 'max_wal_senders' from %s to 0 "
                     "because wal_level is 'minimal'",
-                    repaired["max_wal_senders"]
+                    repaired["max_wal_senders"],
                 )
                 repaired["max_wal_senders"] = 0
 
@@ -638,7 +686,7 @@ class KnobSpace:
                 worker_logger.warning(
                     "[REPAIR] Corrected 'summarize_wal' from '%s' to 'off' "
                     "because wal_level is 'minimal'",
-                    repaired["summarize_wal"]
+                    repaired["summarize_wal"],
                 )
                 repaired["summarize_wal"] = "off"
 
@@ -650,7 +698,7 @@ class KnobSpace:
                 worker_logger.warning(
                     "[REPAIR] Corrected 'shared_memory_type' from 'sysv' to 'mmap' "
                     "because huge_pages is '%s'",
-                    huge_pages
+                    huge_pages,
                 )
                 repaired["shared_memory_type"] = "mmap"
 
@@ -667,31 +715,32 @@ class KnobSpace:
         # Handle max_worker_processes vs max_parallel_workers constraints
         max_worker = repaired.get("max_worker_processes")
         max_parallel = repaired.get("max_parallel_workers")
-        if (
-            isinstance(max_worker, (int, float, np.number)) and
-            isinstance(max_parallel, (int, float, np.number))
+        if isinstance(max_worker, (int, float, np.number)) and isinstance(
+            max_parallel, (int, float, np.number)
         ):
             if max_worker < max_parallel:
                 worker_logger.warning(
                     "[REPAIR] Corrected 'max_parallel_workers' from %s to %s "
                     "because it cannot exceed 'max_worker_processes'",
-                    max_parallel, max_worker
+                    max_parallel,
+                    max_worker,
                 )
                 repaired["max_parallel_workers"] = int(max_worker)
 
         # Handle min_wal_size vs max_wal_size constraint
         min_wal = repaired.get("min_wal_size")
         max_wal = repaired.get("max_wal_size")
-        if (
-            isinstance(min_wal, (int, float, np.number)) and
-            isinstance(max_wal, (int, float, np.number))
+        if isinstance(min_wal, (int, float, np.number)) and isinstance(
+            max_wal, (int, float, np.number)
         ):
             if min_wal > max_wal:
                 new_min_wal = max(1, int(max_wal) // 2)  # Give it a reasonable gap
                 worker_logger.warning(
                     "[REPAIR] Corrected 'min_wal_size' from %s to %s "
                     "because it cannot exceed 'max_wal_size' (%s)",
-                    min_wal, new_min_wal, max_wal
+                    min_wal,
+                    new_min_wal,
+                    max_wal,
                 )
                 repaired["min_wal_size"] = new_min_wal
 
@@ -701,27 +750,38 @@ class KnobSpace:
         super_res = repaired.get("superuser_reserved_connections", 0)
 
         if (
-            isinstance(max_conn, (int, float, np.number)) and
-            isinstance(res_conn, (int, float, np.number)) and
-            isinstance(super_res, (int, float, np.number))
+            isinstance(max_conn, (int, float, np.number))
+            and isinstance(res_conn, (int, float, np.number))
+            and isinstance(super_res, (int, float, np.number))
         ):
             reserved_total = int(res_conn) + int(super_res)
             if reserved_total >= int(max_conn):
-                new_max = reserved_total + 10  # Ensure at least 10 slots for regular users
+                new_max = (
+                    reserved_total + 10
+                )  # Ensure at least 10 slots for regular users
                 worker_logger.warning(
                     "[REPAIR] Corrected 'max_connections' from %s to %s "
                     "because reserved slots (%s) consumed all capacity",
-                    max_conn, new_max, reserved_total
+                    max_conn,
+                    new_max,
+                    reserved_total,
                 )
                 repaired["max_connections"] = new_max
 
         # Ensure all modified numerical knobs still strictly conform to their bounds/steps
         for k, v in repaired.items():
-            if k in self.knobs and self.knobs[k].knob_type in (KnobType.INTEGER, KnobType.REAL):
+            if k in self.knobs and self.knobs[k].knob_type in (
+                KnobType.INTEGER,
+                KnobType.REAL,
+            ):
                 repaired[k] = self.knobs[k].normalize_value(v)
 
         # Apply memory budget constraint
-        db_budget = int(self.worker_resources.ram_bytes * 0.8) if self.worker_resources else None
+        db_budget = (
+            int(self.worker_resources.ram_bytes * 0.8)
+            if self.worker_resources
+            else None
+        )
         budget = budget_ram_bytes if budget_ram_bytes is not None else db_budget
         if budget is not None:
             repaired = self._repair_memory_budget(repaired, budget)
@@ -731,12 +791,12 @@ class KnobSpace:
     def sample_random_config(self, seed: Optional[int] = None) -> Dict[str, Any]:
         """
         Sample a random configuration.
-        
+
         Parameters
         ----------
         seed : Optional[int]
             Random seed for reproducibility
-            
+
         Returns
         -------
         Dict[str, Any]
@@ -751,35 +811,33 @@ class KnobSpace:
         return self.repair_config_dependencies(config)
 
     def sample_diverse_configs(
-        self,
-        num_samples: int,
-        seed: Optional[int] = None
+        self, num_samples: int, seed: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Sample diverse configurations using Latin Hypercube Sampling (LHS).
-        
+
         LHS ensures better coverage of the search space compared to pure random sampling,
         reducing the likelihood of early convergence due to similar initial configurations.
-        
+
         Parameters
         ----------
         num_samples : int
             Number of configurations to sample
         seed : Optional[int]
             Random seed for reproducibility
-            
+
         Returns
         -------
         List[Dict[str, Any]]
             List of diverse configurations
-            
+
         Notes
         -----
         For numerical knobs (INTEGER, REAL):
         - Divides the range into num_samples equal intervals
         - Samples once from each interval
         - Randomly permutes the samples across dimensions
-        
+
         For categorical knobs (BOOLEAN, ENUM):
         - Uses stratified sampling when possible
         - Falls back to random sampling for small populations
@@ -788,11 +846,13 @@ class KnobSpace:
         configs = []
 
         numerical_knobs = [
-            (name, defn) for name, defn in self.knobs.items()
+            (name, defn)
+            for name, defn in self.knobs.items()
             if defn.knob_type in (KnobType.INTEGER, KnobType.REAL)
         ]
         categorical_knobs = [
-            (name, defn) for name, defn in self.knobs.items()
+            (name, defn)
+            for name, defn in self.knobs.items()
             if defn.knob_type in (KnobType.BOOLEAN, KnobType.ENUM)
         ]
 
@@ -805,9 +865,9 @@ class KnobSpace:
                 u = rng.uniform(intervals[i], intervals[i + 1])
 
                 if (
-                    knob_def.scale == KnobScale.LOG and
-                    knob_def.min_value is not None and
-                    knob_def.min_value > 0
+                    knob_def.scale == KnobScale.LOG
+                    and knob_def.min_value is not None
+                    and knob_def.min_value > 0
                 ):
                     log_min = np.log(knob_def.min_value)
                     log_max = np.log(knob_def.max_value)  # type: ignore
@@ -821,7 +881,7 @@ class KnobSpace:
                 else:
                     value = knob_def.min_value + u * (
                         knob_def.max_value - knob_def.min_value
-                        )  # type: ignore
+                    )  # type: ignore
 
                     if knob_def.knob_type == KnobType.INTEGER:
                         value = knob_def.normalize_value(value)
@@ -853,8 +913,7 @@ class KnobSpace:
                 else:
                     # Too few enum values or None, use random sampling
                     samples = [
-                        knob_def.sample_random_value(rng)
-                        for _ in range(num_samples)
+                        knob_def.sample_random_value(rng) for _ in range(num_samples)
                     ]
 
             categorical_samples[knob_name] = samples
@@ -878,14 +937,14 @@ class KnobSpace:
         perturbation_factor: Tuple[float, float] = (0.8, 1.2),
         seed: Optional[int] = None,
         worker_id: Optional[int] = None,
-        exclude_knobs: Optional[List[str]] = None
+        exclude_knobs: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Perturb a configuration (PBT exploration step).
-        
+
         For numerical knobs: Multiply by random factor from perturbation_factor range
         For categorical knobs: Randomly resample with some probability
-        
+
         Parameters
         ----------
         config : Dict[str, Any]
@@ -898,7 +957,7 @@ class KnobSpace:
             Worker ID for reproducibility
         exclude_knobs : Optional[List[str]]
             List of knob names to exclude from perturbation (keep unchanged)
-            
+
         Returns
         -------
         Dict[str, Any]
@@ -978,13 +1037,15 @@ class KnobSpace:
     def get_default_config(self) -> Dict[str, Any]:
         """
         Get default configuration (PostgreSQL defaults).
-        
+
         Returns
         -------
         Dict[str, Any]
             Default configuration
         """
-        return {knob_name: knob_def.default for knob_name, knob_def in self.knobs.items()}
+        return {
+            knob_name: knob_def.default for knob_name, knob_def in self.knobs.items()
+        }
 
     def get_knob_names(self) -> List[str]:
         """Get list of all knob names"""

@@ -7,6 +7,7 @@ mocking to simulate different hardware configurations and containerization
 states, ensuring that the resource detection logic behaves as expected in
 various scenarios.
 """
+
 from unittest.mock import patch
 from src.utils.hardware_info import (
     _is_containerized,
@@ -16,6 +17,7 @@ from src.utils.hardware_info import (
     detect_ram_total,
     get_system_info,
 )
+
 
 @patch("os.path.exists")
 @patch("builtins.open")
@@ -44,19 +46,24 @@ def test_detect_worker_resources_bare_metal(
     mock_cpu_count,
     mock_virtual_memory,
     _mock_disk_type,
-    _mock_is_containerized
+    _mock_is_containerized,
 ):
     """Test worker resource allocation on bare-metal systems."""
+
     class MockMem:
         """Mock psutil virtual_memory response."""
+
         total = 16 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         """Mock psutil process object."""
+
         def cpu_affinity(self):
             """Mock CPU affinity to 8 cores."""
             return list(range(8))
+
     mock_process.return_value = MockProcess()
     # Also mock cpu_count
     mock_cpu_count.return_value = 8
@@ -82,19 +89,24 @@ def test_detect_worker_resources_container(
     _mock_cpu_count,
     mock_virtual_memory,
     _mock_disk_type,
-    _mock_is_containerized
+    _mock_is_containerized,
 ):
     """Test worker resource allocation in containerized environments."""
+
     class MockMem:
         """Mock psutil virtual_memory response."""
+
         total = 4 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         """Mock psutil process object."""
+
         def cpu_affinity(self):
             """Mock CPU affinity to 2 cores."""
             return [0, 1]
+
     mock_process.return_value = MockProcess()
 
     # In container = 1 container per worker
@@ -111,13 +123,17 @@ def test_detect_worker_resources_container(
 
 
 @patch("src.utils.hardware_info.platform.system", return_value="Windows")
-@patch("src.utils.hardware_info.platform.processor", return_value="Mocked Intel(R) Core(TM) i9")
+@patch(
+    "src.utils.hardware_info.platform.processor",
+    return_value="Mocked Intel(R) Core(TM) i9",
+)
 def test_detect_cpu_model(_mock_processor, _mock_system):
     """Test CPU model detection returns a valid non-empty string."""
     cpu = detect_cpu_model()
     assert isinstance(cpu, str)
     assert len(cpu) > 0
     assert cpu == "Mocked Intel(R) Core(TM) i9"
+
 
 def test_detect_core_count():
     """Test core count detection returns positive integers."""
@@ -147,14 +163,7 @@ def test_detect_ram_total():
 def test_system_info_dict_keys(_mock_pg_version):
     """Test get_system_info returns dict with all expected keys."""
     sys_info = get_system_info()
-    expected_keys = {
-        "cpu_model",
-        "cpu_cores",
-        "ram",
-        "disk_type",
-        "os",
-        "pg_version"
-    }
+    expected_keys = {"cpu_model", "cpu_cores", "ram", "disk_type", "os", "pg_version"}
     assert isinstance(sys_info, dict)
     for key in expected_keys:
         assert key in sys_info

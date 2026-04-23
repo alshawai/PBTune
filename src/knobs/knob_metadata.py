@@ -24,7 +24,7 @@ from dataclasses import dataclass
 class TuningMetadata:
     """
     Tuning-specific metadata for a knob.
-    
+
     Attributes
     ----------
     tuning_min : Optional[Any]
@@ -42,13 +42,13 @@ class TuningMetadata:
         Example: Two 'core' knobs may have different priorities (1 vs 2)
     notes : str
         Tuning-specific notes
-        
+
     Distinction:
     -----------
     - impact_tier: Categorical grouping (which preset to include in)
     - tuning_priority: Numerical ranking (importance within and across tiers)
-    
-    Example: 
+
+    Example:
     - shared_buffers: tier='minimal', priority=1 (most critical)
     - checkpoint_timeout: tier='core', priority=2 (important but secondary)
     - enable_nestloop: tier='standard', priority=4 (fine-tuning)
@@ -93,16 +93,16 @@ IMPACT_TIERS = {
     "minimal": [
         k for k, v in KNOB_TUNING_METADATA.items() if v.impact_tier == "minimal"
     ],
-
     "core": [
-        k for k, v in KNOB_TUNING_METADATA.items()
+        k
+        for k, v in KNOB_TUNING_METADATA.items()
         if v.impact_tier in ("minimal", "core")
     ],
     "standard": [
-        k for k, v in KNOB_TUNING_METADATA.items()
+        k
+        for k, v in KNOB_TUNING_METADATA.items()
         if v.impact_tier in ("minimal", "core", "standard")
     ],
-
     "extensive": None,  # Will include all tunable knobs from pg_settings
 }
 
@@ -111,7 +111,9 @@ def get_knobs_by_tier(tier: str) -> list:
     """Return knob names for a tier, preserving the existing public API shape."""
     tier_lower = tier.lower()
     if tier_lower not in IMPACT_TIERS:
-        raise ValueError(f"Unknown tier: {tier}. Must be one of {list(IMPACT_TIERS.keys())}")
+        raise ValueError(
+            f"Unknown tier: {tier}. Must be one of {list(IMPACT_TIERS.keys())}"
+        )
 
     # Ensure a list is returned even if the tier value is None (e.g., 'extensive')
     result = IMPACT_TIERS[tier_lower]
