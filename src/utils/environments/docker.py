@@ -14,11 +14,16 @@ Responsibilities:
 """
 
 import time
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 import psycopg2
+import requests
 
 from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
@@ -53,12 +58,18 @@ class DockerEnvironment(DatabaseEnvironment):
         schema_provider: BenchmarkExecutor,
         cpu_cores: float = 0.0,
         ram_bytes: int = 0,
-        image_name: str = "postgres:17",
+        image_name: str = "postgres:18",
         base_port: int = 5440,
         base_dir: Path = Path("./pg_instances"),
         container_prefix: str = "pbt-worker",
+        force_recreate_baseline: bool = False,
     ):
-        super().__init__(run_id, db_config, schema_provider)
+        super().__init__(
+            run_id,
+            db_config,
+            schema_provider,
+            force_recreate_baseline=force_recreate_baseline,
+        )
         self.cpu_cores = cpu_cores
         self.ram_bytes = ram_bytes
         self.image_name = image_name
@@ -69,19 +80,259 @@ class DockerEnvironment(DatabaseEnvironment):
         self.client = docker.from_env(timeout=30)
         self.instances: Dict[int, InstanceConfig] = {}
         self._snapshot_timeout = self._derive_snapshot_timeout()
+        self._ready_timeout = 60
+        self._restore_ready_timeout = self._derive_restore_ready_timeout()
+        self._restore_api_timeout = self._derive_restore_api_timeout()
 
         # Ensure network exists
         self.network_name = "pbt-network"
         try:
             self.client.networks.get(self.network_name)
         except docker.errors.NotFound:
-            LOGGER.info("Creating Docker network '%s'", self.network_name)
+            LOGGER.info("Creating Docker network '%s'...", self.network_name)
             self.client.networks.create(self.network_name, driver="bridge")
             LOGGER.debug("➤ Network '%s' created successfully", self.network_name)
 
     def _container_name(self, worker_id: int) -> str:
         """Build the Docker container name for a worker."""
         return f"{self.container_prefix}-{worker_id}"
+
+    def _pgdata_volume_name(self, worker_id: int) -> str:
+        """Build a deterministic Docker volume name for a worker's PGDATA."""
+        return f"{self._container_name(worker_id)}-pgdata"
+
+    def _worker_port(self, worker_id: int) -> int:
+        """Resolve a worker's host port."""
+        return self.base_port + worker_id
+
+    def _container_runtime_kwargs(
+        self,
+        worker_id: int,
+        volumes: Optional[Dict[str, Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """Build runtime kwargs shared across worker container launches."""
+        kwargs: Dict[str, Any] = {
+            "environment": {
+                'POSTGRES_USER': self.base_config.user,
+                'POSTGRES_PASSWORD': self.base_config.password,
+                'POSTGRES_DB': self.base_config.dbname,
+                'PGDATA': '/pgdata/data',
+            },
+            "ports": {'5432/tcp': self._worker_port(worker_id)},
+            "mem_limit": self.ram_bytes if self.ram_bytes > 0 else None,
+            "nano_cpus": int(self.cpu_cores * 1e9) if self.cpu_cores > 0 else None,
+            "network": self.network_name,
+            "detach": True,
+        }
+
+        if volumes is not None:
+            kwargs["volumes"] = volumes
+
+        return kwargs
+
+    def _remove_worker_container(self, worker_id: int, purpose: str) -> bool:
+        """Remove an existing worker container if present."""
+        container_name = self._container_name(worker_id)
+        try:
+            old_container = self.client.containers.get(container_name)
+            old_container.remove(force=True)
+        except docker.errors.NotFound:
+            return True
+        except docker.errors.DockerException as exc:
+            LOGGER.error(
+                "Failed removing worker container '%s' during %s: %s",
+                container_name,
+                purpose,
+                exc,
+            )
+            return False
+        return True
+
+    def _recreate_worker_pgdata_volume(self, worker_id: int) -> Optional[str]:
+        """Replace worker-specific PGDATA volume with a fresh volume."""
+        volume_name = self._pgdata_volume_name(worker_id)
+        try:
+            try:
+                existing_volume = self.client.volumes.get(volume_name)
+                existing_volume.remove(force=True)
+            except docker.errors.NotFound:
+                pass
+
+            self.client.volumes.create(name=volume_name)
+            return volume_name
+        except docker.errors.DockerException as exc:
+            LOGGER.error(
+                "Failed preparing fresh PGDATA volume '%s' for worker %d: %s",
+                volume_name,
+                worker_id,
+                exc,
+            )
+            return None
+
+    def _ensure_container_running_after_timeout(
+        self,
+        worker_id: int,
+        action_label: str,
+    ) -> bool:
+        """Recover from Docker client timeout by checking container state."""
+        container_name = self._container_name(worker_id)
+        try:
+            container = self.client.containers.get(container_name)
+            container.reload()
+            if container.status != 'running':
+                container.start()
+            return True
+        except docker.errors.DockerException as state_exc:
+            LOGGER.error(
+                "Container '%s' unavailable after %s timeout: %s",
+                container_name,
+                action_label,
+                state_exc,
+            )
+            return False
+
+    def _launch_worker_container(
+        self,
+        image_name: str,
+        worker_id: int,
+        action_label: str,
+        volumes: Optional[Dict[str, Dict[str, str]]] = None,
+        timeout: Optional[int] = None,
+    ) -> tuple[bool, Optional[Exception]]:
+        """Launch a worker container with shared timeout + recovery handling."""
+        container_name = self._container_name(worker_id)
+        kwargs = self._container_runtime_kwargs(worker_id=worker_id, volumes=volumes)
+
+        try:
+            with self._with_timeout(timeout):
+                self.client.containers.run(
+                    image_name,
+                    name=container_name,
+                    **kwargs,
+                )
+            return True, None
+        except requests.exceptions.ReadTimeout as exc:
+            LOGGER.warning(
+                "Docker timed out %s '%s'; checking container state: %s",
+                action_label,
+                container_name,
+                exc,
+            )
+            recovered = self._ensure_container_running_after_timeout(
+                worker_id=worker_id,
+                action_label=action_label,
+            )
+            return recovered, (None if recovered else exc)
+        except docker.errors.DockerException as exc:
+            LOGGER.error(
+                "Failed %s '%s' for worker %d: %s",
+                action_label,
+                container_name,
+                worker_id,
+                exc,
+            )
+            return False, exc
+
+    def _seed_pgdata_volume_from_snapshot(
+        self,
+        worker_id: int,
+        snapshot_id: str,
+    ) -> Optional[str]:
+        """Create a fresh PGDATA volume and seed it from a snapshot image.
+
+        Restored workers should run on a Docker volume-backed PGDATA directory
+        instead of the snapshot image writable layer. This avoids overlayfs write
+        amplification and keeps runtime I/O paths consistent across restarts.
+        """
+        volume_name = self._recreate_worker_pgdata_volume(worker_id)
+        if not volume_name:
+            return None
+
+        try:
+            with self._with_timeout(self._restore_api_timeout):
+                self.client.containers.run(
+                    snapshot_id,
+                    entrypoint=["bash", "-lc"],
+                    command="set -euo pipefail; cp -a /pgdata/data/. /pgseed/",
+                    volumes={volume_name: {"bind": "/pgseed", "mode": "rw"}},
+                    remove=True,
+                    detach=False,
+                )
+
+            return volume_name
+        except docker.errors.DockerException as exc:
+            LOGGER.error(
+                "Failed to seed PGDATA volume '%s' from snapshot '%s': %s",
+                volume_name,
+                snapshot_id,
+                exc,
+            )
+            return None
+
+    def rebuild_worker_instance(self, worker_id: int) -> bool:
+        """Recreate one worker from scratch after snapshot restore failure.
+
+        This path mirrors startup-style clean initialization: remove worker
+        container + PGDATA volume, launch from base PostgreSQL image, then
+        prepare schema for the configured benchmark profile.
+        """
+        container_name = self._container_name(worker_id)
+        port = self._worker_port(worker_id)
+
+        LOGGER.error(
+            "Snapshot restore failed for worker %d; rebuilding clean slate instance",
+            worker_id,
+        )
+
+        if not self._remove_worker_container(worker_id=worker_id, purpose="rebuild"):
+            return False
+
+        volume_name = self._recreate_worker_pgdata_volume(worker_id)
+        if not volume_name:
+            return False
+
+        volumes = {volume_name: {'bind': '/pgdata/data', 'mode': 'rw'}}
+        launched, _ = self._launch_worker_container(
+            image_name=self.image_name,
+            worker_id=worker_id,
+            action_label="creating clean-slate worker",
+            volumes=volumes,
+            timeout=self._restore_api_timeout,
+        )
+        if not launched:
+            return False
+
+        try:
+            self._wait_for_ready(
+                container_name,
+                port,
+                timeout=self._restore_ready_timeout,
+                context="clean-rebuild",
+            )
+
+            config = self.get_db_config(worker_id)
+            self._ensure_database_exists(config)
+            self.schema_provider.prepare(config)
+
+            if not self.schema_provider.validate(config):
+                LOGGER.error(
+                    "Schema validation failed after clean-slate rebuild for worker %d",
+                    worker_id,
+                )
+                return False
+
+            if worker_id in self.instances:
+                self.instances[worker_id].running = True
+
+            LOGGER.info("Clean-slate rebuild completed for worker %d", worker_id)
+            return True
+        except (RuntimeError, psycopg2.Error, OSError, ValueError, docker.errors.DockerException) as exc:
+            LOGGER.error(
+                "Clean-slate rebuild failed for worker %d: %s",
+                worker_id,
+                exc,
+            )
+            return False
 
     def setup_instances(
             self,
@@ -100,28 +351,51 @@ class DockerEnvironment(DatabaseEnvironment):
             ColorCode.RESET
         )
 
+        if self.force_recreate_baseline:
+            self._remove_baseline_snapshot()
+
+        baseline_snapshot_available = bool(
+            self.schema_provider and self.snapshot_exists(worker_id=0)
+        )
+
         for worker_id in range(num_workers):
-            port = self.base_port + worker_id
+            port = self._worker_port(worker_id)
             container_name = self._container_name(worker_id)
             LOGGER.info("  Setting up container '%s' on port %d:", container_name, port)
 
-            if force_recreate:
-                try:
-                    LOGGER.debug("    Removing existing container '%s'...", container_name)
-                    c = self.client.containers.get(container_name)
-                    c.remove(force=True)
+            recreate_worker0_for_baseline = (
+                worker_id == 0
+                and self.schema_provider is not None
+                and not force_recreate
+                and not baseline_snapshot_available
+            )
 
-                    LOGGER.debug(
-                        "%s    ➤ Container '%s' removed successfully%s",
-                        ColorCode.OKGREEN,
-                        container_name,
-                        ColorCode.RESET
+            if force_recreate:
+                LOGGER.debug("    Removing existing container '%s'...", container_name)
+                if not self._remove_worker_container(
+                    worker_id=worker_id,
+                    purpose="forced recreate",
+                ):
+                    raise RuntimeError(
+                        f"Failed to remove container '{container_name}' during forced recreate"
                     )
-                except docker.errors.NotFound:
-                    pass
+
+                LOGGER.debug(
+                    "%s    ➤ Container '%s' removed successfully%s",
+                    ColorCode.OKGREEN,
+                    container_name,
+                    ColorCode.RESET
+                )
 
             try:  # Exists already
                 container = self.client.containers.get(container_name)
+                if recreate_worker0_for_baseline:
+                    LOGGER.debug(
+                        "    Recreating existing worker-0 container because baseline snapshot is missing"
+                    )
+                    container.remove(force=True)
+                    raise docker.errors.NotFound("recreate worker-0 for baseline")
+
                 if container.status != 'running':
                     LOGGER.debug("    Starting stopped container '%s'...", container_name)
                     container.start()
@@ -134,32 +408,18 @@ class DockerEnvironment(DatabaseEnvironment):
                     ColorCode.RESET
                 )
             except docker.errors.NotFound:  # Create it
-                volumes: Dict[str, Dict[str, str]] = {}
-                environment = {
-                    'POSTGRES_USER': self.base_config.user,
-                    'POSTGRES_PASSWORD': self.base_config.password,
-                    'POSTGRES_DB': self.base_config.dbname,
-                    'PGDATA': '/pgdata/data',
-                }
-                ports = {'5432/tcp': port}
-
-                nano_cpus = int(self.cpu_cores * 1e9) if self.cpu_cores > 0 else None
-
                 LOGGER.debug("    Creating container '%s'...", container_name)
-                try:
-                    self.client.containers.run(
-                        self.image_name,
-                        name=container_name,
-                        environment=environment,
-                        ports=ports,
-                        volumes=volumes,
-                        mem_limit=self.ram_bytes if self.ram_bytes > 0 else None,
-                        nano_cpus=nano_cpus,
-                        network=self.network_name,
-                        detach=True
-                    )
-                except docker.errors.APIError as e:
-                    raise RuntimeError(f"Failed to create container '{container_name}'") from e
+                launched, launch_error = self._launch_worker_container(
+                    image_name=self.image_name,
+                    worker_id=worker_id,
+                    action_label="creating worker container",
+                    volumes={},
+                    timeout=self._ready_timeout,
+                )
+                if not launched:
+                    raise RuntimeError(
+                        f"Failed to create container '{container_name}'"
+                    ) from launch_error
 
                 running = True
                 LOGGER.debug(
@@ -169,13 +429,13 @@ class DockerEnvironment(DatabaseEnvironment):
                     ColorCode.RESET
                 )
 
-            self._wait_for_ready(container_name, port)
             self.instances[worker_id] = InstanceConfig(
                 worker_id=worker_id,
                 port=port,
                 data_dir=self.base_dir / f"worker_{worker_id}",
                 running=running
             )
+            self._wait_for_ready(container_name, port)
 
             # Auto-initialize schema natively and leverage snapshots to accelerate parallel workers
             if self.schema_provider:
@@ -183,13 +443,15 @@ class DockerEnvironment(DatabaseEnvironment):
                 self.initialize_schema(worker_id)
 
                 if worker_id == 0:
-                    if self.snapshot_exists(worker_id=0):
+                    baseline_snapshot_available = self.snapshot_exists(worker_id=0)
+                    if baseline_snapshot_available:
                         LOGGER.debug("    Baseline snapshot already exists; skipping snapshot creation")
                     else:
                         LOGGER.debug(
                             "    Caching worker 0 baseline snapshot for fast-path initialization...",
                         )
                         self.create_snapshot(worker_id=0)
+                        baseline_snapshot_available = True
 
             LOGGER.debug(
                 "%s  ➤ Container '%s' set up successfully.%s",
@@ -214,9 +476,25 @@ class DockerEnvironment(DatabaseEnvironment):
         try:
             container = self.client.containers.get(container_name)
             container.start()
-            self.instances[worker_id].running = True
+            if worker_id in self.instances:
+                self.instances[worker_id].running = True
             return True
-        except docker.errors.APIError:
+        except docker.errors.DockerException as exc:
+            LOGGER.warning(
+                "Failed to start container '%s' for worker %d: %s",
+                container_name,
+                worker_id,
+                exc,
+            )
+            return False
+        except (requests.exceptions.RequestException, TimeoutError, OSError) as exc:
+            LOGGER.warning(
+                "Unexpected error while starting container '%s' for worker %d: %s",
+                container_name,
+                worker_id,
+                exc,
+                exc_info=True,
+            )
             return False
 
     def stop_instance(self, worker_id: int, mode: str = 'fast') -> bool:
@@ -225,20 +503,81 @@ class DockerEnvironment(DatabaseEnvironment):
         try:
             container = self.client.containers.get(container_name)
             container.stop(timeout=5)
-            self.instances[worker_id].running = False
+            if worker_id in self.instances:
+                self.instances[worker_id].running = False
             return True
-        except docker.errors.APIError:
+        except docker.errors.DockerException as exc:
+            LOGGER.warning(
+                "Failed to stop container '%s' for worker %d: %s",
+                container_name,
+                worker_id,
+                exc,
+            )
+            return False
+        except (requests.exceptions.RequestException, TimeoutError, OSError) as exc:
+            LOGGER.warning(
+                "Unexpected error while stopping container '%s' for worker %d: %s",
+                container_name,
+                worker_id,
+                exc,
+                exc_info=True,
+            )
             return False
 
     def stop_all(self, mode: str = 'fast') -> bool:
-        """Stop all known worker containers."""
-        for worker_id in self.instances:
+        """Stop all running containers associated with this environment."""
+        for worker_id in list(self.instances):
             self.stop_instance(worker_id, mode)
+
+        managed_name_pattern = re.compile(
+            rf"^{re.escape(self.container_prefix)}-\d+$"
+        )
+        try:
+            for container in self.client.containers.list(all=False):
+                container_name = getattr(container, "name", "")
+                if not managed_name_pattern.match(container_name):
+                    continue
+                try:
+                    container.stop(timeout=5)
+                except (
+                    docker.errors.DockerException,
+                    requests.exceptions.RequestException,
+                    TimeoutError,
+                    OSError,
+                ) as exc:
+                    LOGGER.debug(
+                        "Failed to stop container '%s' during stop_all: %s",
+                        container_name,
+                        exc,
+                    )
+        except (
+            docker.errors.DockerException,
+            requests.exceptions.RequestException,
+            TimeoutError,
+            OSError,
+        ) as exc:
+            LOGGER.debug("Unable to list running Docker containers during stop_all: %s", exc)
+
         return True
 
     def recover_instance(self, worker_id: int) -> bool:
         """Restart a failed container."""
-        return self.start_instance(worker_id)
+        try:
+            return self.start_instance(worker_id)
+        except (
+            docker.errors.DockerException,
+            requests.exceptions.RequestException,
+            TimeoutError,
+            OSError,
+            RuntimeError,
+        ) as exc:
+            LOGGER.warning(
+                "Unexpected error while recovering worker %d: %s",
+                worker_id,
+                exc,
+                exc_info=True,
+            )
+            return False
 
     def verify_instances(self) -> dict[int, bool]:
         """Check status of containers."""
@@ -249,19 +588,43 @@ class DockerEnvironment(DatabaseEnvironment):
                 container = self.client.containers.get(container_name)
                 res[worker_id] = container.status == 'running'
                 instance_config.running = res[worker_id]
-            except docker.errors.NotFound:
+            except (
+                docker.errors.DockerException,
+                requests.exceptions.RequestException,
+                TimeoutError,
+                OSError,
+            ) as exc:
                 res[worker_id] = False
+                instance_config.running = False
+                LOGGER.debug(
+                    "Unable to verify container '%s' for worker %d: %s",
+                    container_name,
+                    worker_id,
+                    exc,
+                )
         return res
 
     def cleanup(self, remove_data: bool = False) -> None:
         """Remove containers."""
-        for worker_id in self.instances:
+        for worker_id in list(self.instances):
             container_name = self._container_name(worker_id)
             try:
                 container = self.client.containers.get(container_name)
                 container.remove(force=True)
             except docker.errors.NotFound:
-                pass
+                continue
+            except (
+                docker.errors.DockerException,
+                requests.exceptions.RequestException,
+                TimeoutError,
+                OSError,
+            ) as exc:
+                LOGGER.debug(
+                    "Unable to remove container '%s' for worker %d during cleanup: %s",
+                    container_name,
+                    worker_id,
+                    exc,
+                )
         self.instances.clear()
 
     def apply_knobs(self, worker_id: int, knobs: Dict[str, Any]) -> None:
@@ -319,35 +682,215 @@ class DockerEnvironment(DatabaseEnvironment):
             return None
         return 120
 
+    def _derive_restore_ready_timeout(self) -> int:
+        """Derive startup timeout after snapshot restore.
+
+        Restoring from an image snapshot can trigger WAL replay/recovery,
+        especially for larger OLAP datasets. Keep normal startup strict,
+        but allow longer readiness for restore paths.
+        """
+        from src.benchmarks.tpch.executor import TPCHExecutor
+        if isinstance(self.schema_provider, TPCHExecutor):
+            return 240
+        return 90
+
+    def _derive_restore_api_timeout(self) -> Optional[int]:
+        """Derive Docker API timeout used by snapshot restore operations.
+
+        Snapshot restore can involve slow container creation on busy daemons.
+        Keep a longer timeout for Sysbench and disable timeout for TPC-H,
+        where larger images/volumes can exceed fixed API time budgets.
+        """
+        from src.benchmarks.tpch.executor import TPCHExecutor
+        if isinstance(self.schema_provider, TPCHExecutor):
+            return None
+        return 180
+
+    def _checkpoint_instance(self, worker_id: int) -> None:
+        """Issue a CHECKPOINT before snapshot creation to reduce recovery time on restore."""
+        db_config = self.get_db_config(worker_id)
+        conn = None
+        cursor = None
+        try:
+            conn = get_connection(config=db_config, connect_timeout=5)
+            cursor = conn.cursor()
+            cursor.execute("CHECKPOINT")
+            conn.commit()
+        except (psycopg2.Error, RuntimeError, OSError, ValueError) as exc:
+            LOGGER.warning(
+                "Failed to issue CHECKPOINT before snapshot for worker %d: %s",
+                worker_id,
+                exc,
+            )
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
+
+    def _snapshot_profile_context(self) -> Dict[str, Any]:
+        """Build a stable benchmark-profile payload used for snapshot identity."""
+        provider = self.schema_provider
+        provider_name = f"{provider.__class__.__module__}.{provider.__class__.__name__}"
+
+        context: Dict[str, Any] = {
+            "provider": provider_name,
+        }
+        for attribute in ("tables", "table_size", "num_tables", "scale_factor", "script"):
+            if not hasattr(provider, attribute):
+                continue
+            value = getattr(provider, attribute)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                context[attribute] = value
+
+        return context
+
+    def _snapshot_profile_signature(self) -> str:
+        """Compute a compact signature for the current benchmark schema profile."""
+        profile_payload = json.dumps(
+            self._snapshot_profile_context(),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha1(profile_payload.encode("utf-8")).hexdigest()[:12]
+
+    def _default_snapshot_id(self) -> str:
+        """Build a Docker-safe snapshot repository name for this run + profile."""
+        run_slug = re.sub(r"[^a-z0-9_.-]+", "-", self.run_id.lower()).strip("-")
+        if not run_slug:
+            run_slug = "default"
+        return f"pbt-snapshot-{run_slug}-{self._snapshot_profile_signature()}"
+
+    def _snapshot_manifest_path(self) -> Path:
+        """Path to snapshot metadata persisted in the project tree."""
+        return self.base_dir / "pg_snapshots" / f"{self._default_snapshot_id()}.json"
+
+    def _write_snapshot_manifest(self, snapshot_id: str, image_id: str) -> None:
+        """Persist snapshot metadata for traceability within the project workspace."""
+        manifest_path = self._snapshot_manifest_path()
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "snapshot_id": snapshot_id,
+            "image_id": image_id,
+            "run_id": self.run_id,
+            "base_image": self.image_name,
+            "profile_signature": self._snapshot_profile_signature(),
+            "profile_context": self._snapshot_profile_context(),
+            "created_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _read_snapshot_manifest(self) -> Optional[Dict[str, Any]]:
+        """Load snapshot metadata manifest, returning None when missing or invalid."""
+        manifest_path = self._snapshot_manifest_path()
+        if not manifest_path.exists():
+            return None
+
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError) as exc:
+            LOGGER.debug("Snapshot manifest '%s' is unreadable: %s", manifest_path, exc)
+            return None
+
+    def _remove_snapshot_manifest(self) -> None:
+        """Remove local snapshot metadata manifest if present."""
+        manifest_path = self._snapshot_manifest_path()
+        if manifest_path.exists():
+            manifest_path.unlink()
+
+    def _remove_baseline_snapshot(self) -> None:
+        """Remove existing baseline snapshot image and metadata."""
+        snapshot_id = self._default_snapshot_id()
+        try:
+            snapshot_image = self.client.images.get(snapshot_id)
+            LOGGER.info(
+                "Removing baseline Docker snapshot '%s' (force_recreate_baseline=True)",
+                snapshot_id,
+            )
+            self.client.images.remove(snapshot_image.id, force=True)
+        except docker.errors.ImageNotFound:
+            pass
+        except docker.errors.APIError as exc:
+            LOGGER.warning("Failed removing snapshot image '%s': %s", snapshot_id, exc)
+
+        self._remove_snapshot_manifest()
+
     def create_snapshot(self, worker_id: int = 0) -> str:
         """Create a baseline snapshot from the specified worker instance using Docker Commit."""
         container_name = self._container_name(worker_id)
-        snapshot_id = f"pbt-snapshot-{self.run_id}"
+        snapshot_id = self._default_snapshot_id()
+        port = self.base_port + worker_id
         try:
             container = self.client.containers.get(container_name)
+            self._checkpoint_instance(worker_id)
+
+            # Commit an exited container so the snapshot restores from a clean shutdown state
+            # and avoids unnecessary crash-recovery startup penalties.
+            container.reload()
+            if container.status == "running":
+                container.stop(timeout=45)
+
+            container = self.client.containers.get(container_name)
             with self._with_timeout(self._snapshot_timeout):
-                container.commit(repository=snapshot_id)
+                snapshot_image = container.commit(repository=snapshot_id, pause=False)
+
+            container.start()
+            self._wait_for_ready(
+                container_name,
+                port,
+                timeout=self._ready_timeout,
+                context="snapshot-post-start",
+            )
+
+            image_id = getattr(snapshot_image, "id", "")
+            self._write_snapshot_manifest(snapshot_id=snapshot_id, image_id=image_id)
             return snapshot_id
-        except docker.errors.APIError as e:
+        except (docker.errors.DockerException, RuntimeError) as e:
             LOGGER.error("Failed to create snapshot from %s: %s", container_name, e)
             return ""
 
     def snapshot_exists(self, worker_id: int = 0) -> bool:
         """Check whether the baseline snapshot image already exists."""
         del worker_id  # Snapshot identity is run-scoped, not worker-scoped.
-        snapshot_id = f"pbt-snapshot-{self.run_id}"
+        snapshot_id = self._default_snapshot_id()
         try:
             self.client.images.get(snapshot_id)
-            return True
         except docker.errors.ImageNotFound:
             return False
         except docker.errors.APIError:
             return False
 
+        manifest = self._read_snapshot_manifest()
+        if manifest is None:
+            LOGGER.debug(
+                "Snapshot image '%s' exists but manifest is missing/invalid; treating as stale",
+                snapshot_id,
+            )
+            return False
+
+        expected_signature = self._snapshot_profile_signature()
+        manifest_snapshot_id = str(manifest.get("snapshot_id", ""))
+        manifest_signature = str(manifest.get("profile_signature", ""))
+
+        if manifest_snapshot_id != snapshot_id or manifest_signature != expected_signature:
+            LOGGER.debug(
+                "Snapshot '%s' manifest mismatch (manifest_snapshot_id=%s, "
+                "manifest_signature=%s, expected_signature=%s); treating as stale",
+                snapshot_id,
+                manifest_snapshot_id,
+                manifest_signature,
+                expected_signature,
+            )
+            return False
+
+        return True
+
     def restore_snapshot(self, worker_id: int, snapshot_id: str = "") -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
         if not snapshot_id:
-            snapshot_id = f"pbt-snapshot-{self.run_id}"
+            snapshot_id = self._default_snapshot_id()
 
         try:
             self.client.images.get(snapshot_id)
@@ -356,40 +899,41 @@ class DockerEnvironment(DatabaseEnvironment):
             return False
 
         container_name = self._container_name(worker_id)
-        port = self.base_port + worker_id
+        port = self._worker_port(worker_id)
 
         # Stop and remove current container
-        try:
-            old_c = self.client.containers.get(container_name)
-            old_c.remove(force=True)
-        except docker.errors.NotFound:
-            pass
+        if not self._remove_worker_container(worker_id=worker_id, purpose="snapshot restore"):
+            return False
 
-        environment = {
-            'POSTGRES_USER': self.base_config.user,
-            'POSTGRES_PASSWORD': self.base_config.password,
-            'POSTGRES_DB': self.base_config.dbname,
-            'PGDATA': '/pgdata/data',
-        }
-        ports = {'5432/tcp': port}
-        nano_cpus = int(self.cpu_cores * 1e9) if self.cpu_cores > 0 else None
+        volume_name = self._seed_pgdata_volume_from_snapshot(
+            worker_id=worker_id,
+            snapshot_id=snapshot_id,
+        )
+        if not volume_name:
+            return False
+
+        volumes = {volume_name: {'bind': '/pgdata/data', 'mode': 'rw'}}
+        launched, _ = self._launch_worker_container(
+            image_name=snapshot_id,
+            worker_id=worker_id,
+            action_label="creating snapshot-restored worker",
+            volumes=volumes,
+            timeout=self._restore_api_timeout,
+        )
+        if not launched:
+            return False
 
         try:
-            self.client.containers.run(
-                snapshot_id,
-                name=container_name,
-                environment=environment,
-                ports=ports,
-                mem_limit=self.ram_bytes if self.ram_bytes > 0 else None,
-                nano_cpus=nano_cpus,
-                network=self.network_name,
-                detach=True
+            self._wait_for_ready(
+                container_name,
+                port,
+                timeout=self._restore_ready_timeout,
+                context="snapshot-restore",
             )
-            self._wait_for_ready(container_name, port)
             if worker_id in self.instances:
                 self.instances[worker_id].running = True
             return True
-        except Exception as e:
+        except (docker.errors.DockerException, RuntimeError) as e:
             LOGGER.error("Failed to restore snapshot to %s: %s", container_name, e)
             return False
 
@@ -404,7 +948,34 @@ class DockerEnvironment(DatabaseEnvironment):
             password=self.base_config.password
         )
 
-    def _wait_for_ready(self, container_name: str, port: int, timeout=60) -> None:
+    def collect_memory_utilization(self, worker_id: int) -> float:
+        """Collect container memory utilization ratio using cgroup usage/limit."""
+        container_name = self._container_name(worker_id)
+        try:
+            container = self.client.containers.get(container_name)
+            stats = container.stats(stream=False)
+        except (docker.errors.NotFound, docker.errors.APIError) as exc:
+            LOGGER.debug("Unable to collect Docker memory stats for %s: %s", container_name, exc)
+            return 0.0
+
+        try:
+            memory_stats = stats.get("memory_stats", {})
+            usage = float(memory_stats.get("usage", 0.0))
+            limit = float(memory_stats.get("limit", 0.0))
+            if limit <= 0.0:
+                return 0.0
+            return max(0.0, min(1.0, usage / limit))
+        except (TypeError, ValueError) as exc:
+            LOGGER.debug("Invalid Docker memory stats payload for %s: %s", container_name, exc)
+            return 0.0
+
+    def _wait_for_ready(
+        self,
+        container_name: str,
+        port: int,
+        timeout: int = 60,
+        context: str = "startup",
+    ) -> None:
         """Wait until PostgreSQL is accepting connections."""
         active_config = DatabaseConfig(
             host="127.0.0.1",
@@ -434,6 +1005,17 @@ class DockerEnvironment(DatabaseEnvironment):
             except psycopg2.OperationalError:
                 time.sleep(1)
 
+        log_excerpt = ""
+        try:
+            container = self.client.containers.get(container_name)
+            raw_logs = container.logs(tail=80)
+            decoded_logs = raw_logs.decode("utf-8", errors="replace")
+            if decoded_logs.strip():
+                log_excerpt = "\nRecent container logs:\n" + decoded_logs
+        except docker.errors.DockerException:
+            pass
+
         raise RuntimeError(
-            f"Database in container {container_name} failed to become ready within {timeout}s."
+            f"Database in container {container_name} failed to become ready "
+            f"within {timeout}s during {context}.{log_excerpt}"
         )

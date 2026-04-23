@@ -16,10 +16,11 @@ from typing import Any, Dict, List, Tuple, Optional
 import pandas as pd
 
 from src.utils.metrics import (
-    MetricConfig, 
-    PerformanceMetrics, 
+    MetricConfig,
+    PerformanceMetrics,
     create_metric_config
 )
+from src.utils.rescoring import rescore_metrics_globally
 from src.tuner.config.knob_loader import get_knob_space
 from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
 from src.utils.logger import get_logger
@@ -265,14 +266,17 @@ def load_pbt_results(
         )
 
     # 2. Global Rescoring
-    workload = metadata_list[0].get('workload_type', default_workload_type)
-    global_metric_config = create_metric_config(workload)
-    
-    # Scale ranges across ALL sessions (0 padding tightly bounds the range)
-    logger.info("Computing global bounds across all tuning sessions...")
-    global_metric_config.update_ranges(valid_metrics, padding_factor=0.0)
-
-    global_scores = [global_metric_config.compute_score(m) for m in valid_metrics]
+    workload = str(metadata_list[0].get('workload_type', default_workload_type))
+    global_metric_config, global_scores, rescoring_metadata = rescore_metrics_globally(
+        valid_metrics,
+        workload=workload,
+        padding_factor=0.0,
+    )
+    logger.info(
+        "Computed global ranges via shared rescoring utility: latency=%s calibrated=%s",
+        rescoring_metadata["latency_metric"],
+        rescoring_metadata["ranges_calibrated"],
+    )
 
     # 3. DataFrame Post-Processing
     df = pd.DataFrame(raw_configs)

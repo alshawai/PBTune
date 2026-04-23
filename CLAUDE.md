@@ -107,12 +107,13 @@ src/utils/
 ├── environments/    # Docker/Bare-metal database environment backends
 ├── logger/          # Logging setup and formatters
 ├── metrics.py       # Performance metrics and scoring
+├── rescoring.py     # Shared post-hoc global score recalibration utilities
 └── restart_manager.py
 
 src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
 ├── types.py         # Dataclasses: ComparisonConfig, RunResult, etc.
 ├── loader.py        # load_tuning_session() — parse pbt_results JSON
-├── statistics.py    # Wilcoxon + bootstrap CI + Bonferroni + Cohen's d
+├── statistics.py    # Wilcoxon + bootstrap CI + Holm-corrected secondary endpoints + Cohen's d
 ├── runner.py        # ComparisonRunner — main orchestrator
 └── __main__.py      # CLI: python -m src.evaluation
 

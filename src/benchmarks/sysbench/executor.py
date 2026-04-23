@@ -2,6 +2,8 @@ import subprocess
 import re
 from typing import Optional
 
+import psycopg2
+
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger
@@ -57,6 +59,18 @@ class SysbenchExecutor(BenchmarkExecutor):
             "Preparing %d sysbench tables (%d rows each) on %s:%s...",
             self.tables, self.table_size, db_config.host, db_config.port,
         )
+
+        # Cross-benchmark safety: ensure TPC-H leftovers do not survive into
+        # a Sysbench prepare fallback path after snapshot restore failure.
+        cleanup_conn = get_connection(config=db_config)
+        cleanup_conn.autocommit = True
+        cleanup_cursor = cleanup_conn.cursor()
+        try:
+            self._drop_existing_public_tables(cleanup_cursor, logger)
+        finally:
+            cleanup_cursor.close()
+            cleanup_conn.close()
+
         cmd = self._build_base_cmd(db_config)
         subprocess.run(
             cmd + ["cleanup"],
@@ -75,53 +89,74 @@ class SysbenchExecutor(BenchmarkExecutor):
             cursor.close()
             conn.close()
             logger.debug("Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables.")
-        except Exception as e:
+        except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
             logger.warning("Failed to post-vacuum sysbench tables: %s", e)
 
         logger.info("Sysbench prepare complete.")
 
     def validate(self, db_config: DatabaseConfig) -> bool:
-        """Return True if all required sbtest tables exist AND have expected rows."""
+        """Return True only when schema shape matches the configured Sysbench profile."""
         logger = get_logger(__name__)
+        conn = None
+        cursor = None
         try:
             conn = get_connection(config=db_config)
             cursor = conn.cursor()
 
-            # First check if all tables exist
+            # Schema must match the expected table set exactly.
             cursor.execute(
-                "SELECT count(*) FROM information_schema.tables "
+                "SELECT table_name FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name LIKE 'sbtest%'"
             )
-            count = cursor.fetchone()[0]  # type: ignore
+            found_tables = {str(row[0]) for row in cursor.fetchall()}
+            expected_tables = {f"sbtest{i}" for i in range(1, self.tables + 1)}
 
-            if count < self.tables:
-                logger.debug("Sysbench tables missing (found %d, expected %d)", count, self.tables)
-                cursor.close()
-                conn.close()
+            if found_tables != expected_tables:
+                missing_tables = sorted(expected_tables - found_tables)
+                extra_tables = sorted(found_tables - expected_tables)
+                logger.debug(
+                    "Sysbench table layout mismatch "
+                    "(missing=%s, extra=%s, expected_count=%d, found_count=%d)",
+                    missing_tables,
+                    extra_tables,
+                    len(expected_tables),
+                    len(found_tables),
+                )
                 return False
 
-            # Then check if they're actually populated (just sample table 1).
+            # Validate table cardinality against the configured profile.
             cursor.execute("SELECT max(id) FROM sbtest1")
             max_id = cursor.fetchone()[0]  # type: ignore
 
-            # Sysbench insert might not be exactly equal to table_size if there were errors
-            # during prepare, but it should be close or equal
-            if max_id is None or max_id < (self.table_size * 0.9):
+            # max(id) grows over time due delete+insert churn. Estimate table cardinality
+            # using row count to detect profile mismatches (e.g., standard -> rapid).
+            cursor.execute("SELECT count(*) FROM sbtest1")
+            row_count = cursor.fetchone()[0]  # type: ignore
+
+            lower_bound = int(self.table_size * 0.9)
+            upper_bound = int(self.table_size * 1.1)
+            if row_count is None or row_count < lower_bound or row_count > upper_bound:
                 logger.debug(
-                    "Sysbench tables exist but are empty/underpopulated "
-                    "(max id %s, expected ~%d)", max_id, self.table_size
+                    "Sysbench row cardinality mismatch "
+                    "(row_count=%s, max_id=%s, expected~%d, bounds=[%d,%d])",
+                    row_count,
+                    max_id,
+                    self.table_size,
+                    lower_bound,
+                    upper_bound,
                 )
-                cursor.close()
-                conn.close()
                 return False
 
-            cursor.close()
-            conn.close()
             return True
 
-        except Exception as e:
+        except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
             logger.debug("Sysbench validation failed: %s", e)
             return False
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
 
     def execute(
         self,

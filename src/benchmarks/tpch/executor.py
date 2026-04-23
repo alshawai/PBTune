@@ -124,8 +124,7 @@ class TPCHExecutor(BenchmarkExecutor):
             cursor = conn.cursor()
 
             logger.debug("[TPC-H] Dropping old schema if exists...")
-            for table_name in self.TABLES_DROP_ORDER:
-                cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+            self._drop_existing_public_tables(cursor, logger)
 
             logger.debug("[TPC-H] Creating schema (8 tables)...")
             schema_sql = SCHEMA_SQL.read_text()
@@ -169,6 +168,19 @@ class TPCHExecutor(BenchmarkExecutor):
 
         finally:
             conn.close()
+
+    def _drop_existing_public_tables(
+        self,
+        cursor,
+        logger: logging.Logger,
+        log_prefix: str = "[TPC-H]",
+    ) -> None:
+        """Drop all public tables before loading TPC-H data."""
+        super()._drop_existing_public_tables(
+            cursor,
+            logger,
+            log_prefix=log_prefix,
+        )
 
     @staticmethod
     def _strip_trailing_delimiter(file_obj):
