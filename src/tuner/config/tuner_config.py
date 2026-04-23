@@ -120,6 +120,14 @@ class PBTConfig:
         Score assigned to crash/timeout style failures that are severe but potentially
         less catastrophic than complete connection death.
         Default: 5.0
+
+    tuning_mode : TuningMode
+        Restart policy mode controlling how restart-required knobs are handled.
+        Default: TuningMode.ONLINE
+
+    adaptive_restart_interval : int
+        Restart interval used only when tuning_mode == TuningMode.ADAPTIVE.
+        Default: 10
     """
 
     population_size: int = 4
