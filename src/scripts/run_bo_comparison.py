@@ -88,6 +88,7 @@ from src.utils.logger import (
     ColorCode,
     ColorPalette,
 )
+from src.utils.rescoring import rescore_metrics_globally
 
 
 logger = get_logger(__name__)
@@ -363,6 +364,7 @@ class BOComparisonRunner:
         best_config: Dict[str, Any] = {}
         best_metrics: Optional[PerformanceMetrics] = None
         convergence_history: List[float] = []
+        observed_metrics: List[PerformanceMetrics] = []
 
         try:
             # Setup single PostgreSQL instance
@@ -395,6 +397,25 @@ class BOComparisonRunner:
             # Main BO loop
             log_section_header(self.logger, "Starting Bayesian Optimization")
 
+            # Collect metrics for adaptive normalization (mirrors PBT's approach)
+            metric_config = self.metric_config
+
+            # PBT waits for max(8, 2 * population_size) samples before
+            # calibrating adaptive ranges.  For BO we use the same formula
+            # with the PBT config's population_size to ensure identical
+            # calibration timing relative to exploration budget.
+            pbt_pop_size = self.pbt_config.population_size
+            adaptive_threshold = max(8, 2 * pbt_pop_size)
+            # Never exceed the total budget — degrade gracefully.
+            adaptive_threshold = min(
+                adaptive_threshold, self.bo_config.max_evaluations
+            )
+            self.logger.info(
+                "Adaptive normalization will activate after %d healthy observations "
+                "(PBT equivalent: 2 × generation size)",
+                adaptive_threshold,
+            )
+
             for i in range(self.bo_config.max_evaluations):
                 eval_start = time.time()
 
@@ -413,6 +434,144 @@ class BOComparisonRunner:
                 score, metrics = self._objective_function(knob_config, i + 1)
 
                 eval_time = time.time() - eval_start
+
+                # Collect healthy metrics for adaptive normalization
+                if metrics.failure_type is None:
+                    observed_metrics.append(metrics)
+
+                # === Adaptive normalization — mirrors PBT exactly ===
+                ranges_initialized = getattr(
+                    metric_config, "_ranges_initialized", False
+                )
+
+                # Phase 1: Initial calibration (PBT: update_metric_ranges_if_needed)
+                # Wait for adaptive_threshold healthy observations, then calibrate
+                # ranges from 5th/95th percentiles + 20 % padding.
+                if not ranges_initialized and len(observed_metrics) >= adaptive_threshold:
+                    self.logger.info(
+                        "Activating adaptive normalization from %d observations "
+                        "(threshold was %d)...",
+                        len(observed_metrics),
+                        adaptive_threshold,
+                    )
+                    metric_config.update_ranges(observed_metrics)
+
+                    # Rescore the current evaluation with calibrated ranges
+                    if metrics.failure_type is None:
+                        score = metric_config.compute_score(metrics)
+
+                    # Reset best tracker and rescore all prior evaluations
+                    # (PBT resets best_overall_score to 0.0 after calibration)
+                    best_score = -float("inf")
+                    best_config = {}
+                    best_metrics = None
+                    for entry in self.evaluation_history:
+                        entry_metrics_dict = entry.get("metrics", {})
+                        if entry_metrics_dict.get("failure_type") is not None:
+                            continue
+                        rescored = metric_config.compute_score(
+                            PerformanceMetrics(**{
+                                k: v
+                                for k, v in entry_metrics_dict.items()
+                                if k in PerformanceMetrics.__dataclass_fields__
+                            })
+                        )
+                        entry["score"] = float(rescored)
+                        if rescored > best_score:
+                            best_score = rescored
+                            best_config = entry["config"].copy()
+
+                    # Rebuild convergence history
+                    convergence_history.clear()
+                    running_best = -float("inf")
+                    for entry in self.evaluation_history:
+                        running_best = max(running_best, entry["score"])
+                        entry["best_score_so_far"] = float(running_best)
+                        convergence_history.append(running_best)
+
+                    self.logger.info(
+                        "✓ Adaptive normalization active — rescored %d prior "
+                        "evaluations, new best=%.4f",
+                        len(self.evaluation_history),
+                        best_score if best_score > -float("inf") else 0.0,
+                    )
+
+                # Phase 2: Bounds-exceedance expansion
+                # (PBT: _check_and_handle_saturation)
+                # PBT checks if any worker's RAW metric falls outside the
+                # current [min, max] bounds.  np.clip silently destroys
+                # ranking between configs when values exceed bounds, so we
+                # must expand before that happens.
+                elif ranges_initialized and metrics.failure_type is None:
+                    latency_val = getattr(
+                        metrics, f"latency_{metric_config.latency_metric}"
+                    )
+                    throughput_val = metrics.throughput
+
+                    exceeds_bounds = (
+                        (latency_val > 0 and latency_val < metric_config.latency_min)
+                        or (latency_val > 0 and latency_val > metric_config.latency_max)
+                        or (throughput_val > 0 and throughput_val < metric_config.throughput_min)
+                        or (throughput_val > 0 and throughput_val > metric_config.throughput_max)
+                    )
+
+                    if exceeds_bounds:
+                        self.logger.info(
+                            "⚠️  Metric bounds exceeded at evaluation %d "
+                            "(lat=%.2f, thr=%.1f vs ranges lat=[%.2f,%.2f] "
+                            "thr=[%.1f,%.1f]) — expanding...",
+                            i + 1,
+                            latency_val,
+                            throughput_val,
+                            metric_config.latency_min,
+                            metric_config.latency_max,
+                            metric_config.throughput_min,
+                            metric_config.throughput_max,
+                        )
+                        healthy_metrics = [
+                            m for m in observed_metrics if m.failure_type is None
+                        ]
+                        expanded = metric_config.expand_ranges_for_metrics(
+                            healthy_metrics,
+                            expansion_factor=0.25,  # 25 % headroom, same as PBT
+                        )
+                        if expanded:
+                            # Rescore current eval
+                            score = metric_config.compute_score(metrics)
+
+                            # Rescore all prior evaluations
+                            best_score = -float("inf")
+                            best_config = {}
+                            best_metrics = None
+                            for entry in self.evaluation_history:
+                                entry_metrics_dict = entry.get("metrics", {})
+                                if entry_metrics_dict.get("failure_type") is not None:
+                                    continue
+                                rescored = metric_config.compute_score(
+                                    PerformanceMetrics(**{
+                                        k: v
+                                        for k, v in entry_metrics_dict.items()
+                                        if k in PerformanceMetrics.__dataclass_fields__
+                                    })
+                                )
+                                entry["score"] = float(rescored)
+                                if rescored > best_score:
+                                    best_score = rescored
+                                    best_config = entry["config"].copy()
+
+                            convergence_history.clear()
+                            running_best = -float("inf")
+                            for entry in self.evaluation_history:
+                                running_best = max(running_best, entry["score"])
+                                entry["best_score_so_far"] = float(running_best)
+                                convergence_history.append(running_best)
+
+                            self.logger.info(
+                                "♻️  Rescored %d evaluations after range expansion, "
+                                "best=%.4f",
+                                len(self.evaluation_history),
+                                best_score if best_score > -float("inf") else 0.0,
+                            )
 
                 # Report result to BO (SMAC minimizes, so negate score)
                 optimizer.report(cs_config, -score)
@@ -475,6 +634,66 @@ class BOComparisonRunner:
                     self.logger.info("✓ Instance data removed")
                 except (RuntimeError, ValueError, ConnectionError, OSError) as e:
                     self.logger.warning("⚠ Failed to clean up: %s", e)
+
+        # === Post-hoc global rescoring ===
+        # Within-loop adaptive calibration sets ranges from only the first
+        # `adaptive_threshold` observations (typically 8).  PBT's final
+        # reported scores benefit from ranges that expand across ALL
+        # generations (120+ evaluations), producing naturally wider bounds
+        # that push top scores away from the 100-ceiling.  To produce a
+        # comparable score scale we recalibrate from the *complete*
+        # observation set using the same percentile + padding methodology.
+        if len(observed_metrics) >= 3:
+            self.logger.info(
+                "Applying post-hoc global rescoring from %d observations...",
+                len(observed_metrics),
+            )
+            posthoc_config, posthoc_scores, posthoc_meta = rescore_metrics_globally(
+                observed_metrics,
+                workload=self.workload_type.value,
+                padding_factor=0.2,  # Same as PBT's update_ranges default
+            )
+
+            # Map rescored values back to evaluation history.
+            # posthoc_scores aligns 1:1 with observed_metrics (failures excluded).
+            score_idx = 0
+            best_score = -float("inf")
+            best_config = {}
+            best_metrics = None
+
+            for entry in self.evaluation_history:
+                entry_metrics = entry.get("metrics", {})
+                if entry_metrics.get("failure_type") is not None:
+                    continue
+                entry["score"] = float(posthoc_scores[score_idx])
+                if posthoc_scores[score_idx] > best_score:
+                    best_score = float(posthoc_scores[score_idx])
+                    best_config = entry["config"].copy()
+                    best_metrics = observed_metrics[score_idx]
+                score_idx += 1
+
+            # Rebuild convergence history from rescored evaluation data
+            convergence_history = []
+            running_best = -float("inf")
+            for entry in self.evaluation_history:
+                entry_score = entry.get("score", 0.0)
+                if entry_score > running_best:
+                    running_best = entry_score
+                entry["best_score_so_far"] = float(running_best)
+                convergence_history.append(float(running_best))
+
+            # Update metric config so saved normalization_ranges reflect post-hoc
+            self.metric_config = posthoc_config
+
+            self.logger.info(
+                "✓ Post-hoc rescoring complete: best=%.4f "
+                "(latency [%.2f, %.2f] ms, throughput [%.1f, %.1f] TPS)",
+                best_score,
+                posthoc_config.latency_min,
+                posthoc_config.latency_max,
+                posthoc_config.throughput_min,
+                posthoc_config.throughput_max,
+            )
 
         total_time = time.time() - self.start_time if self.start_time else 0
         results = self._save_results(
@@ -566,6 +785,14 @@ class BOComparisonRunner:
                 "total_evaluations": len(self.evaluation_history),
             },
             "system_info": self.system_info,
+            "normalization_ranges": {
+                "adaptive": getattr(self.metric_config, "_ranges_initialized", False),
+                "latency_min": self.metric_config.latency_min,
+                "latency_max": self.metric_config.latency_max,
+                "throughput_min": self.metric_config.throughput_min,
+                "throughput_max": self.metric_config.throughput_max,
+                "latency_metric": self.metric_config.latency_metric,
+            },
         }
 
         # Save main results JSON
