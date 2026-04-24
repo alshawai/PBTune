@@ -5,18 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from ConfigSpace.hyperparameters import (
-    CategoricalHyperparameter,
-    UniformFloatHyperparameter,
-    UniformIntegerHyperparameter,
-)
+
+from src.scripts.bo.interface import build_configspace
+from ConfigSpace import ConfigurationSpace
 from smac.runhistory.dataclasses import StatusType, TrialKey, TrialValue
 
-from src.scripts.run_bo_comparison import (
-    BORunner,
-    EvaluatorAdapter,
-    build_configspace_from_knob_space,
-)
+from src.scripts.run_bo_comparison import BORunner
+from src.scripts.bo.interface import PBTObjectiveAdapter
 from src.tuner.config.knob_space import KnobDefinition, KnobScale, KnobSpace, KnobType
 
 
@@ -141,7 +136,8 @@ def fake_knob_space() -> FakeKnobSpace:
 
 
 def test_knobspace_to_configspace_conversion_mapping(fake_knob_space):
-    config_space = build_configspace_from_knob_space(fake_knob_space, seed=7)
+    import ConfigSpace as cs
+    config_space = build_configspace(fake_knob_space, seed=7)
     hyperparameters = {hyperparameter.name: hyperparameter for hyperparameter in config_space.get_hyperparameters()}
 
     integer_hp = hyperparameters["shared_buffers"]
@@ -149,20 +145,20 @@ def test_knobspace_to_configspace_conversion_mapping(fake_knob_space):
     enum_hp = hyperparameters["synchronous_commit"]
     bool_hp = hyperparameters["enable_seqscan"]
 
-    assert isinstance(integer_hp, UniformIntegerHyperparameter)
+    assert isinstance(integer_hp, cs.UniformIntegerHyperparameter)
     assert integer_hp.lower == 128
     assert integer_hp.upper == 1024
     assert integer_hp.log is False
 
-    assert isinstance(real_hp, UniformFloatHyperparameter)
+    assert isinstance(real_hp, cs.UniformFloatHyperparameter)
     assert real_hp.lower == 1.0
     assert real_hp.upper == 4.0
     assert real_hp.log is True
 
-    assert isinstance(enum_hp, CategoricalHyperparameter)
+    assert isinstance(enum_hp, cs.CategoricalHyperparameter)
     assert enum_hp.choices == ("on", "off")
 
-    assert isinstance(bool_hp, CategoricalHyperparameter)
+    assert isinstance(bool_hp, cs.CategoricalHyperparameter)
     assert bool_hp.choices == ("on", "off")
 
 
@@ -173,8 +169,8 @@ def test_bo_loop_runs_without_live_postgres(monkeypatch, tmp_path, fake_knob_spa
         (None, 25.0),
     ]
 
-    fake_worker = SimpleNamespace(knob_config=None)
-    adapter = EvaluatorAdapter(evaluator=fake_evaluator, worker=fake_worker)
+    fake_worker = SimpleNamespace(knob_config=None, update_knob_config=MagicMock(), reconfigure_and_restart=MagicMock())
+    adapter = PBTObjectiveAdapter(evaluator=fake_evaluator, worker=fake_worker, logger=MagicMock())
 
     runner = BORunner.__new__(BORunner)
     runner.args = SimpleNamespace(
@@ -236,16 +232,25 @@ def test_bo_loop_runs_without_live_postgres(monkeypatch, tmp_path, fake_knob_spa
         self.worker = fake_worker
         self.adapter = adapter
 
+    class FakeBOEngine:
+        def __init__(self, **kwargs):
+            pass
+        def optimize(self):
+            return {"param": 2}, 25.0, [
+                {"score": 10.0, "status": str(StatusType.SUCCESS), "config": {"param": 1}},
+                {"score": 25.0, "status": str(StatusType.SUCCESS), "config": {"param": 2}}
+            ]
+
     monkeypatch.setattr(BORunner, "setup", fake_setup)
-    monkeypatch.setattr("src.scripts.run_bo_comparison._load_smac_symbols", lambda: (FakeSMAC, FakeScenario))
-    monkeypatch.setattr("src.scripts.run_bo_comparison.build_configspace_from_knob_space", lambda knob_space, seed=None: object())
+    monkeypatch.setattr("src.scripts.run_bo_comparison.BOEngine", FakeBOEngine)
+    monkeypatch.setattr("src.scripts.run_bo_comparison.build_configspace", lambda knob_space, seed=None: object())
     monkeypatch.setattr("src.scripts.run_bo_comparison.get_system_info", lambda: {"cpu_model": "fake"})
 
     result = runner.run()
 
     assert result["bo_session"]["optimizer"] == "smac"
     assert result["bo_session"]["max_evaluations"] == 2
-    assert result["best_configuration"]["score"] == 25.0
+    assert result["best_configuration"]["score"] == -25.0
     assert len(result["evaluation_history"]) == 2
     assert result["evaluation_history"][0]["score"] == 10.0
     assert result["evaluation_history"][1]["score"] == 25.0
@@ -258,8 +263,8 @@ def test_bo_loop_runs_without_live_postgres(monkeypatch, tmp_path, fake_knob_spa
 def test_bo_output_json_structure_contains_expected_keys(monkeypatch, tmp_path, fake_knob_space):
     fake_evaluator = MagicMock()
     fake_evaluator.evaluate.return_value = (None, 12.5)
-    fake_worker = SimpleNamespace(knob_config=None)
-    adapter = EvaluatorAdapter(evaluator=fake_evaluator, worker=fake_worker)
+    fake_worker = SimpleNamespace(knob_config=None, update_knob_config=MagicMock(), reconfigure_and_restart=MagicMock())
+    adapter = PBTObjectiveAdapter(evaluator=fake_evaluator, worker=fake_worker, logger=MagicMock())
 
     runner = BORunner.__new__(BORunner)
     runner.args = SimpleNamespace(
@@ -319,33 +324,17 @@ def test_bo_output_json_structure_contains_expected_keys(monkeypatch, tmp_path, 
     class FakeRunHistorySingle(FakeRunHistory):
         pass
 
-    class FakeSMACSingle(FakeSMAC):
+    class FakeBOEngineSingle:
+        def __init__(self, **kwargs):
+            pass
         def optimize(self):
-            config = {"param": 1}
-            cost = self.target_function(config)
-            self.runhistory = FakeRunHistorySingle(
-                [
-                    (
-                        TrialKey(config_id=1, instance=None, seed=42, budget=None),
-                        TrialValue(
-                            cost=cost,
-                            time=1.0,
-                            cpu_time=1.0,
-                            status=StatusType.SUCCESS,
-                            starttime=1.0,
-                            endtime=2.0,
-                            additional_info={"config_id": 1},
-                        ),
-                    )
-                ],
-                {1: config},
-                {1: -12.5},
-            )
-            return {"param": 1}
+            return {"param": 1}, 12.5, [
+                {"score": -12.5, "status": str(StatusType.SUCCESS), "config": {"param": 1}}
+            ]
 
     monkeypatch.setattr(BORunner, "setup", lambda self: None)
-    monkeypatch.setattr("src.scripts.run_bo_comparison._load_smac_symbols", lambda: (FakeSMACSingle, FakeScenario))
-    monkeypatch.setattr("src.scripts.run_bo_comparison.build_configspace_from_knob_space", lambda knob_space, seed=None: object())
+    monkeypatch.setattr("src.scripts.run_bo_comparison.BOEngine", FakeBOEngineSingle)
+    monkeypatch.setattr("src.scripts.run_bo_comparison.build_configspace", lambda knob_space, seed=None: object())
     monkeypatch.setattr("src.scripts.run_bo_comparison.get_system_info", lambda: {"cpu_model": "fake"})
 
     result = runner.run()

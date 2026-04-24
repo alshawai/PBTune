@@ -475,6 +475,7 @@ See the curated analysis and references in:
 - [`docs/ALGORITHM_COMPARISON.md`](./docs/ALGORITHM_COMPARISON.md)
 - [`docs/COMPETITIVE_ANALYSIS.md`](./docs/COMPETITIVE_ANALYSIS.md)
 - [`docs/BENCHMARKING.md`](./docs/BENCHMARKING.md)
+- [`docs/BAYESIAN_OPTIMIZATION_BASELINE.md`](./docs/BAYESIAN_OPTIMIZATION_BASELINE.md)
 
 - Auto DBMS Tuner (5 papers)
 - Reinforcement Learning for DB tuning (4 papers)

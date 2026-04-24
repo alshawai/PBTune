@@ -181,14 +181,27 @@ class SysbenchExecutor(BenchmarkExecutor):
         seed: Optional[int] = None,
     ) -> tuple[str, str, int]:
         """Spawn the sysbench process and wait for completion."""
+        if warmup > 0:
+            warmup_cmd = self._build_base_cmd(db_config) + [
+                f"--time={warmup}",
+                f"--threads={self.threads}",
+                "--report-interval=0",
+            ]
+            if seed is not None:
+                warmup_cmd.append(f"--rand-seed={seed}")
+            warmup_cmd.append("run")
+            
+            try:
+                subprocess.run(warmup_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=warmup + 15)
+            except subprocess.TimeoutExpired:
+                pass
+
+
         cmd = self._build_base_cmd(db_config) + [
             f"--time={duration}",
             f"--threads={self.threads}",
             "--report-interval=0",
         ]
-
-        # if warmup > 0:
-        #     cmd.append(f"--warmup-time={warmup}")
 
         if seed is not None:
             cmd.append(f"--rand-seed={seed}")
@@ -202,7 +215,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             text=True,
         )
         try:
-            stdout, stderr = process.communicate(timeout=duration + warmup + 15)
+            stdout, stderr = process.communicate(timeout=duration + 15)
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate()

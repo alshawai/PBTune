@@ -1,25 +1,43 @@
-"""BO baseline runner using the same evaluation pipeline as PBT."""
+"""
+Bayesian Optimization (BO) baseline runner powered by SMAC.
+
+This script executes a traditional sequential Bayesian Optimization loop to find
+optimal database knobs. It is designed specifically to act as a 1:1 baseline
+comparison against the multi-agent Population-Based Training (PBT) tuner.
+
+By reusing the exact same evaluation pipeline, workload executors, hardware
+detection, and parameter scaling logic, it ensures fair comparisons between
+the sequential BO search and evolutionary PBT.
+
+Usage Examples:
+    # Run a rapid evaluation using Sysbench (OLTP) on a minimal knob tier
+    python -m src.scripts.run_bo_comparison --benchmark sysbench --config rapid --tier minimal
+
+    # Run a longer evaluation using TPC-H (OLAP) with 100 SMAC evaluations
+    python -m src.scripts.run_bo_comparison --benchmark tpch --config standard --max-evals 100
+
+    # Custom durations, random seed, and forcing container recreation
+    python -m src.scripts.run_bo_comparison --workload mixed --seed 42 --force-recreate-instances --duration 60
+"""
 
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional, TypedDict
 
-import numpy as np
+class BOResult(TypedDict):
+    bo_session: dict[str, Any]
+    best_configuration: dict[str, Any]
+    evaluation_history: list[dict[str, Any]]
+    system_info: dict[str, Any]
 
 from src.config.database import DatabaseConfig
 from src.tuner.config import (
-    KnobDefinition,
-    KnobScale,
-    KnobSpace,
-    KnobType,
     PBTConfig,
     RAPID_CONFIG,
     RESEARCH_CONFIG,
@@ -38,174 +56,19 @@ from src.tuner.evaluator.evaluator import (
 from src.tuner.evaluator.metrics import WorkloadType, create_metric_config
 from src.tuner.utils.hardware_info import detect_worker_resources, get_system_info
 from src.tuner.utils.instance_manager import PostgresInstanceManager
-from src.tuner.utils.logger_config import get_logger, setup_logging, print_startup_banner
+from src.tuner.utils.logger_config import get_logger, setup_logging
+from src.utils.logger.banners import print_bo_startup_banner
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
 
+from src.scripts.bo import (
+    BOEngine,
+    PBTObjectiveAdapter,
+    build_configspace,
+    convert_numpy_types,
+)
 
 logger = get_logger(__name__)
-
-
-def _load_configspace_symbols() -> tuple[Any, Any, Any, Any]:
-    """Load ConfigSpace symbols lazily to support environments without it preinstalled."""
-    configspace_module = importlib.import_module("ConfigSpace")
-    hyperparameters_module = importlib.import_module("ConfigSpace.hyperparameters")
-
-    return (
-        configspace_module.ConfigurationSpace,
-        hyperparameters_module.UniformIntegerHyperparameter,
-        hyperparameters_module.UniformFloatHyperparameter,
-        hyperparameters_module.CategoricalHyperparameter,
-    )
-
-
-def _load_smac_symbols() -> tuple[Any, Any]:
-    """Load SMAC symbols lazily to avoid static import failures."""
-    smac_module = importlib.import_module("smac")
-    return smac_module.HyperparameterOptimizationFacade, smac_module.Scenario
-
-
-def convert_numpy_types(obj: Any) -> Any:
-    """Recursively convert numpy values to JSON-safe native Python types."""
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
-        return int(obj)
-    if isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, dict):
-        return {key: convert_numpy_types(value) for key, value in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [convert_numpy_types(item) for item in obj]
-    return obj
-
-
-def _configuration_to_dict(configuration: Any) -> Dict[str, Any]:
-    """Convert ConfigSpace/SMAC configuration objects to a plain dictionary."""
-    if configuration is None:
-        return {}
-
-    if hasattr(configuration, "keys") and hasattr(configuration, "__getitem__"):
-        try:
-            return {key: configuration[key] for key in configuration.keys()}
-        except Exception:
-            pass
-
-    if hasattr(configuration, "get_dictionary"):
-        return dict(configuration.get_dictionary())
-
-    if hasattr(configuration, "get"):
-        maybe_items = configuration.get("items")
-        if maybe_items is not None:
-            return dict(configuration)
-
-    if isinstance(configuration, dict):
-        return dict(configuration)
-
-    return dict(configuration)
-
-
-def knob_to_hyperparameter(knob: KnobDefinition) -> Any:
-    """Translate a single KnobDefinition into a ConfigSpace hyperparameter."""
-    _, IntegerHyperparameter, FloatHyperparameter, CategoricalHyperparameter = (
-        _load_configspace_symbols()
-    )
-
-    if knob.knob_type == KnobType.INTEGER:
-        if knob.min_value is None or knob.max_value is None:
-            raise ValueError(f"Integer knob '{knob.name}' is missing min/max bounds.")
-
-        return IntegerHyperparameter(
-            name=knob.name,
-            lower=int(knob.min_value),
-            upper=int(knob.max_value),
-            log=(knob.scale == KnobScale.LOG and float(knob.min_value) > 0),
-        )
-
-    if knob.knob_type == KnobType.REAL:
-        if knob.min_value is None or knob.max_value is None:
-            raise ValueError(f"Real knob '{knob.name}' is missing min/max bounds.")
-
-        return FloatHyperparameter(
-            name=knob.name,
-            lower=float(knob.min_value),
-            upper=float(knob.max_value),
-            log=(knob.scale == KnobScale.LOG and float(knob.min_value) > 0),
-        )
-
-    if knob.knob_type == KnobType.ENUM:
-        if not knob.enum_values:
-            raise ValueError(f"Enum knob '{knob.name}' is missing enum values.")
-        return CategoricalHyperparameter(name=knob.name, choices=list(knob.enum_values))
-
-    if knob.knob_type == KnobType.BOOLEAN:
-        choices = list(knob.enum_values) if knob.enum_values else [True, False]
-        return CategoricalHyperparameter(name=knob.name, choices=choices)
-
-    raise ValueError(f"Unsupported knob type '{knob.knob_type}' for knob '{knob.name}'.")
-
-
-def build_configspace_from_knob_space(knob_space: KnobSpace, seed: int | None = None) -> Any:
-    """Build a ConfigSpace object from project KnobSpace metadata."""
-    ConfigurationSpace, _, _, _ = _load_configspace_symbols()
-    config_space = ConfigurationSpace(seed=seed)
-
-    hyperparameters = []
-    for knob_name in knob_space.get_knob_names():
-        hyperparameters.append(knob_to_hyperparameter(knob_space[knob_name]))
-
-    config_space.add_hyperparameters(hyperparameters)
-    return config_space
-
-
-def _extract_runhistory_entries(runhistory: Any) -> list[dict[str, Any]]:
-    """Extract evaluation history entries from SMAC runhistory in a robust way."""
-    history: list[dict[str, Any]] = []
-    ids_config = getattr(runhistory, "ids_config", {})
-
-    items: list[tuple[Any, Any]] = []
-    if hasattr(runhistory, "items"):
-        try:
-            items = list(runhistory.items())
-        except Exception:
-            items = []
-
-    # Backward-compatible fallback for alternative runhistory layouts.
-    if not items:
-        data = getattr(runhistory, "data", {})
-        if hasattr(data, "items"):
-            items = list(data.items())
-
-    for index, (run_key, run_value) in enumerate(items, start=1):
-        config_id = getattr(run_key, "config_id", None)
-        configuration = ids_config.get(config_id)
-        config_dict = _configuration_to_dict(configuration) if configuration is not None else {}
-
-        cost = float(getattr(run_value, "cost", float("nan")))
-        score = -cost
-        eval_time = float(getattr(run_value, "time", 0.0))
-        start_time = float(getattr(run_value, "starttime", 0.0))
-        end_time = float(getattr(run_value, "endtime", 0.0))
-        status = str(getattr(run_value, "status", "UNKNOWN"))
-        additional_info = getattr(run_value, "additional_info", None)
-
-        history.append(
-            {
-                "iteration": index,
-                "config": convert_numpy_types(config_dict),
-                "cost": cost,
-                "score": score,
-                "evaluation_time_seconds": eval_time,
-                "start_time_seconds": start_time,
-                "end_time_seconds": end_time,
-                "status": status,
-                "additional_info": convert_numpy_types(additional_info),
-            }
-        )
-
-    return history
 
 
 def _build_pbt_config(args: argparse.Namespace) -> PBTConfig:
@@ -274,24 +137,6 @@ def _build_workload_executor(
     )
 
 
-@dataclass
-class EvaluatorAdapter:
-    """Thin adapter to expose an evaluator.evaluate(config_dict) interface."""
-
-    evaluator: Evaluator
-    worker: Worker
-
-    def evaluate(self, config_dict: Dict[str, Any]) -> tuple[Any, float]:
-        self.worker.knob_config = config_dict
-        if hasattr(self.evaluator, "evaluate"):
-            result = self.evaluator.evaluate(config_dict)
-            if isinstance(result, tuple) and len(result) >= 2:
-                return result[0], float(result[1])
-
-        metrics, score, _ = self.evaluator.evaluate_worker(self.worker, apply_config=True)
-        return metrics, score
-
-
 class BORunner:
     """Bayesian Optimization runner with SMAC over project evaluator pipeline."""
 
@@ -348,7 +193,7 @@ class BORunner:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.worker: Optional[Worker] = None
-        self.adapter: Optional[EvaluatorAdapter] = None
+        self.adapter: Optional[PBTObjectiveAdapter] = None
 
     def setup(self) -> None:
         """Create and initialize the single worker instance used by sequential BO."""
@@ -370,62 +215,27 @@ class BORunner:
             password=self.db_config.password,
         )
 
-        self.adapter = EvaluatorAdapter(evaluator=self.evaluator, worker=self.worker)
+        self.adapter = PBTObjectiveAdapter(evaluator=self.evaluator, worker=self.worker, logger=logger)
 
-    def _objective(self, configuration: Any, seed: int = 0) -> float:
-        """SMAC target function: return cost to minimize (negative score)."""
-        if self.adapter is None:
-            raise RuntimeError("Runner is not initialized. Call setup() first.")
-
-        config_dict = _configuration_to_dict(configuration)
-        _, score = self.adapter.evaluate(config_dict)
-        return -float(score)
-
-    def run(self) -> Dict[str, Any]:
+    def run(self) -> BOResult:
         """Execute SMAC optimization and persist BO-comparison artifacts."""
         self.setup()
         self.start_time = time.time()
 
-        HyperparameterOptimizationFacade, Scenario = _load_smac_symbols()
-        config_space = build_configspace_from_knob_space(self.knob_space, seed=self.args.seed)
-
-        scenario_seed = self.args.seed if self.args.seed is not None else 42
-        scenario = Scenario(
-            configspace=config_space,
-            deterministic=True,
-            n_trials=self.args.max_evals,
-            seed=scenario_seed,
+        config_space = build_configspace(self.knob_space, seed=self.args.seed)
+        
+        engine = BOEngine(
+            config_space=config_space,
+            objective_function=self.adapter.bo_objective_function,
+            max_evaluations=self.args.max_evals,
+            initial_design_size=self.args.initial_design_size,
+            seed=self.args.seed if self.args.seed is not None else 42,
         )
 
-        initial_design = HyperparameterOptimizationFacade.get_initial_design(
-            scenario=scenario,
-            n_configs=self.args.initial_design_size,
-        )
-
-        smac = HyperparameterOptimizationFacade(
-            scenario=scenario,
-            target_function=self._objective,
-            initial_design=initial_design,
-            overwrite=True,
-        )
-
-        incumbent = smac.optimize()
-        runhistory = smac.runhistory
-        history = _extract_runhistory_entries(runhistory)
-
-        incumbent_dict = _configuration_to_dict(incumbent)
-        best_cost = None
-        if hasattr(runhistory, "get_cost"):
-            try:
-                best_cost = float(runhistory.get_cost(incumbent))
-            except Exception:
-                best_cost = None
-        if best_cost is None and history:
-            best_cost = min(entry["cost"] for entry in history)
-
+        incumbent_dict, best_cost, history = engine.optimize()
         best_score = -float(best_cost) if best_cost is not None else None
 
-        result = {
+        result: BOResult = {
             "bo_session": {
                 "optimizer": "smac",
                 "knob_tier": self.args.tier,
@@ -500,43 +310,31 @@ def parse_args() -> argparse.Namespace:
         help="Workload type (default: oltp)",
     )
     workload_exclusive.add_argument(
-        "--workload-file",
-        type=str,
-        help="Path to custom workload file (JSON/YAML). Overrides --workload.",
-    )
-    workload_exclusive.add_argument(
         "--benchmark",
         type=str,
         choices=["sysbench", "tpch"],
-        help="Run external benchmark pipeline (sysbench or tpch).",
+        help="Specific benchmark to use (overrides --workload)",
     )
-    workload_group.add_argument(
-        "--duration",
-        type=float,
-        help="Evaluation duration in seconds per BO trial.",
+    workload_exclusive.add_argument(
+        "--workload-file",
+        type=str,
+        help="Path to custom custom JSON workload (overrides --workload and --benchmark)",
     )
-    workload_group.add_argument(
-        "--warmup",
-        type=float,
-        help="Warmup duration in seconds before measurement.",
-    )
+
     workload_group.add_argument(
         "--scale-factor",
         type=float,
-        default=None,
-        help="TPC-H scale factor. Only used with --benchmark tpch.",
+        help="Database scale factor (overrides config defaults if set).",
     )
     workload_group.add_argument(
         "--sysbench-tables",
         type=int,
-        default=None,
-        help="Sysbench table count. Only used with --benchmark sysbench.",
+        help="Number of sysbench tables.",
     )
     workload_group.add_argument(
         "--sysbench-table-size",
         type=int,
-        default=None,
-        help="Sysbench rows per table. Only used with --benchmark sysbench.",
+        help="Rows per sysbench table.",
     )
 
     bo_group = parser.add_argument_group("Bayesian Optimization")
@@ -544,70 +342,76 @@ def parse_args() -> argparse.Namespace:
         "--max-evals",
         type=int,
         default=50,
-        help="Maximum BO evaluations (SMAC n_trials).",
-    )
-    bo_group.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for SMAC and workload reproducibility.",
+        help="Maximum number of BO evaluations (SMAC trials).",
     )
     bo_group.add_argument(
         "--initial-design-size",
         type=int,
         default=10,
-        help="Number of initial design points before model-guided BO.",
+        help="Number of initial random points before BO kicks in.",
+    )
+    bo_group.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for repeatable outcomes.",
     )
 
-    infra_group = parser.add_argument_group("Instance Management")
-    infra_group.add_argument(
-        "--force-recreate-instances",
-        action="store_true",
-        help="Force recreation of PostgreSQL instances (default: reuse existing).",
+    timing_group = parser.add_argument_group("Timing Overrides")
+    timing_group.add_argument(
+        "--duration",
+        type=int,
+        help="Override the evaluation duration in seconds.",
     )
-    infra_group.add_argument(
-        "--cleanup-instances",
-        action="store_true",
-        help="Remove PostgreSQL instance data after completion.",
-    )
-    infra_group.add_argument(
-        "--skip-schema-init",
-        action="store_true",
-        help="Skip schema initialization from template database.",
+    timing_group.add_argument(
+        "--warmup",
+        type=int,
+        help="Override the workload warmup duration in seconds.",
     )
 
-    output_group = parser.add_argument_group("Output")
-    output_group.add_argument(
-        "--verbose",
-        type=str,
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "TRACE"],
-        help="Logging verbosity level.",
-    )
-    output_group.add_argument(
+    storage_group = parser.add_argument_group("Storage / Restart")
+    storage_group.add_argument(
         "--output-dir",
         type=str,
         default="results",
-        help="Base output directory for BO result artifacts.",
+        help="Base directory for JSON outputs (default: results).",
+    )
+    storage_group.add_argument(
+        "--force-recreate-instances",
+        action="store_true",
+        help="Tear down existing PG containers and recreate them.",
+    )
+    storage_group.add_argument(
+        "--skip-schema-init",
+        action="store_true",
+        help="Assume schema/data are already present instead of reloading templates.",
+    )
+    storage_group.add_argument(
+        "--cleanup-instances",
+        action="store_true",
+        help="Stop and remove PostgreSQL containers after completion.",
+    )
+
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Increase logging verbosity to DEBUG."
     )
 
     return parser.parse_args()
 
 
 def main() -> int:
-    """CLI entrypoint for BO baseline comparison runs."""
     args = parse_args()
-    print_startup_banner()
-    setup_logging(verbosity=args.verbose, enable_colors=True, show_module=True)
+    verbosity = "DEBUG" if args.verbose else "INFO"
+    setup_logging(verbosity=verbosity, enable_colors=True)
+    logger.info("Starting Bayesian Optimization (BO) Runner with SMAC backend")
+    print_bo_startup_banner(logger)
 
     runner = BORunner(args)
-
     try:
         runner.run()
-        logger.info("BO baseline run completed successfully")
         return 0
-    except Exception as exc:
-        logger.error("BO baseline run failed: %s", exc, exc_info=True)
+    except Exception as e:
+        logger.error("BO tuning failed with error: %s", e, exc_info=True)
         return 1
     finally:
         runner.close()

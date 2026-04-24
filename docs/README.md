@@ -20,11 +20,13 @@ This index provides a quick navigation map for the project documentation set.
 ## Research and Positioning
 
 - [Algorithm Comparison](./ALGORITHM_COMPARISON.md)
+- [Bayesian Optimization Baseline](./BAYESIAN_OPTIMIZATION_BASELINE.md)
 - [Competitive Analysis](./COMPETITIVE_ANALYSIS.md)
 
 ## Setup and Extension
 
 - [Environment Setup](./ENVIRONMENT_SETUP.md)
+- [Running the BO Baseline](./RUNNING_BO.md)
 - [MySQL Integration Roadmap](./MYSQL_INTEGRATION.md)
 
 ## Related Top-Level Docs
