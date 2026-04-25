@@ -147,8 +147,15 @@ def _run_importance_pass(
     explainer = shap.TreeExplainer(rf)
     shap_values = explainer.shap_values(X)
     mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
+
+    if len(col_names) != len(mean_abs_shap):
+        raise ValueError(
+            "SHAP vector length does not match feature count: "
+            f"{len(mean_abs_shap)} vs {len(col_names)}"
+        )
+
     shap_importances = {
-        col: float(val) for col, val in zip(col_names, mean_abs_shap)
+        col: float(mean_abs_shap[idx]) for idx, col in enumerate(col_names)
     }
     shap_importances = dict(
         sorted(shap_importances.items(), key=lambda item: item[1], reverse=True)
