@@ -34,6 +34,22 @@ mock_fanova = MagicMock()
 mock_fanova.fANOVA = MockFANOVA
 sys.modules['fanova'] = mock_fanova
 
+class MockTreeExplainer:
+    def __init__(self, model):
+        pass
+    def shap_values(self, X):
+        # Return dummy SHAP values matching X shape
+        shap_vals = np.zeros_like(X, dtype=float)
+        if X.shape[1] > 0:
+            shap_vals[:, 0] = 5.0  # Feature 0 high SHAP
+        if X.shape[1] > 1:
+            shap_vals[:, 1] = 1.0  # Feature 1 lower SHAP
+        return shap_vals
+
+mock_shap = MagicMock()
+mock_shap.TreeExplainer = MockTreeExplainer
+sys.modules['shap'] = mock_shap
+
 from src.analysis.data_loader import LoadedData
 from src.utils.metrics import MetricConfig
 from src.analysis.importance import (
@@ -141,3 +157,52 @@ def test_config_space_uses_bounds():
     # The actual checks occur downstream successfully if fANOVA didn't crash.
     # If it was restricted incorrectly, fANOVA could raise bound warnings/errors.
     assert 'feature_0' in result.marginal_importances
+
+
+def test_shap_values_matrix_shape():
+    loaded_data = create_mock_loaded_data(n_samples=50, n_features=3)
+    result = analyze_knob_importance(loaded_data)
+    
+    assert result.shap_values is not None
+    assert result.shap_values.shape == (50, 3)
+
+
+def test_shap_global_importance():
+    loaded_data = create_mock_loaded_data(n_samples=50, n_features=3)
+    result = analyze_knob_importance(loaded_data)
+    
+    top_shap_feature = list(result.shap_importances.keys())[0]
+    assert top_shap_feature == 'feature_0'
+
+
+def test_fanova_shap_correlation():
+    loaded_data = create_mock_loaded_data(n_samples=50, n_features=3)
+    result = analyze_knob_importance(loaded_data)
+    
+    # In our mocks, both fANOVA and SHAP rank feature_0 as #1.
+    assert -1.0 <= result.fanova_shap_correlation <= 1.0
+    assert result.fanova_shap_correlation > 0.8
+
+
+def test_correlation_warning(caplog):
+    loaded_data = create_mock_loaded_data(n_samples=50, n_features=3)
+    
+    # Temporarily modify the mock to produce a negative correlation
+    original_shap_values = mock_shap.TreeExplainer.shap_values
+    
+    def bad_shap_values(self, X):
+        shap_vals = np.zeros_like(X, dtype=float)
+        if X.shape[1] > 0:
+            shap_vals[:, 0] = 0.1 # Now feature_0 is least important
+        if X.shape[1] > 1:
+            shap_vals[:, 1] = 5.0 # feature_1 is most important
+        return shap_vals
+        
+    mock_shap.TreeExplainer.shap_values = bad_shap_values
+    try:
+        analyze_knob_importance(loaded_data)
+    finally:
+        # Restore
+        mock_shap.TreeExplainer.shap_values = original_shap_values
+        
+    assert "Low correlation between fANOVA and SHAP importance rankings" in caplog.text
