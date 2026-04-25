@@ -3,6 +3,7 @@ import pytest
 import pandas as pd
 
 from src.analysis.data_loader import load_pbt_results, _encode_dataframe_features
+from src.utils.hardware_info import WorkerResources
 
 # We use known postgres knobs that exist in KNOB_TUNING_METADATA to test encoding
 # enable_indexscan is a boolean
@@ -275,6 +276,8 @@ def test_knob_bounds_hardware_relative(mock_get_knob_space, mock_pbt_directory):
     mock_space = MagicMock()
     mock_kd = MagicMock()
     mock_kd.hardware_relative = True
+    mock_kd.min_value = 10
+    mock_kd.max_value = 20
     mock_space.knobs = {"shared_buffers": mock_kd}
     mock_get_knob_space.return_value = mock_space
 
@@ -284,3 +287,59 @@ def test_knob_bounds_hardware_relative(mock_get_knob_space, mock_pbt_directory):
     assert "shared_buffers" in dataset.knob_bounds
     # HARDWARE_RELATIVE_SPECS["shared_buffers"] is (0.15, 0.40)
     assert dataset.knob_bounds["shared_buffers"] == (0.15, 0.40)
+
+
+@patch("src.analysis.data_loader.get_knob_space")
+def test_load_pbt_results_coerces_worker_resources_dict(
+    mock_get_knob_space, tmp_path
+):
+    """worker_resources JSON dicts are converted to WorkerResources before resolution."""
+    mock_space = MagicMock()
+    mock_kd = MagicMock()
+    mock_kd.hardware_relative = True
+    mock_kd.min_value = 10
+    mock_kd.max_value = 20
+    mock_space.knobs = {"shared_buffers": mock_kd}
+    mock_get_knob_space.return_value = mock_space
+
+    data_dir = tmp_path / "with_worker_resources"
+    data_dir.mkdir()
+
+    file_data = {
+        "tuning_session": {"workload_type": "oltp", "benchmark_name": "sysbench"},
+        "worker_resources": {
+            "ram_bytes": 1_073_741_824,
+            "cpu_cores": 2,
+            "disk_type": "SSD",
+        },
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {"worker_id": 0, "config": {"shared_buffers": 1024}}
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 150.0,
+                        "metrics": {
+                            "latency_p95": 15.0,
+                            "throughput": 1000.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    (data_dir / "pbt_results_1.json").write_text(json.dumps(file_data))
+
+    _ = load_pbt_results(data_dir)
+
+    mock_space.resolve_hardware_ranges.assert_called_once()
+    resolved_resources = mock_space.resolve_hardware_ranges.call_args.args[0]
+    assert isinstance(resolved_resources, WorkerResources)
+    assert resolved_resources.ram_bytes == 1_073_741_824
+    assert resolved_resources.cpu_cores == 2
+    assert resolved_resources.disk_type == "SSD"
+    assert _.knob_bounds["shared_buffers"] == (10.0, 20.0)
