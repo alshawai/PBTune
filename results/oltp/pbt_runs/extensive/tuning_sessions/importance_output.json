@@ -1,0 +1,1286 @@
+{
+  "results_dir": "/home/mohamed/learning/graduationProject/pbt/ai-database-optimization/results/oltp/pbt_runs/extensive/tuning_sessions",
+  "n_samples": 39,
+  "n_features": 161,
+  "workload_type": "oltp",
+  "model_r2": 0.7194461462007217,
+  "fanova_shap_correlation": 0.7938549574419141,
+  "marginal_importances": {
+    "vacuum_cost_page_dirty": 0.1564353338482184,
+    "recovery_prefetch": 0.08513151598382243,
+    "vacuum_freeze_min_age": 0.04512694646566548,
+    "backend_flush_after": 0.030879966345435984,
+    "geqo_seed": 0.029540922701540136,
+    "min_parallel_table_scan_size": 0.027140871027859566,
+    "autovacuum_vacuum_cost_delay": 0.026754831347293118,
+    "cursor_tuple_fraction": 0.025485226080562147,
+    "cpu_index_tuple_cost": 0.024623156724664565,
+    "recursive_worktable_factor": 0.018834042465511784,
+    "log_replication_commands": 0.018167548614395373,
+    "hot_standby": 0.01785453713024812,
+    "shared_buffers": 0.016347829411410206,
+    "min_wal_size": 0.01586487830591198,
+    "autovacuum_vacuum_insert_scale_factor": 0.01516550228366141,
+    "cpu_operator_cost": 0.014083210720623778,
+    "default_statistics_target": 0.013054875264083369,
+    "max_connections": 0.012821115555144164,
+    "quote_all_identifiers": 0.012268309355939772,
+    "vacuum_multixact_freeze_min_age": 0.009509967269755917,
+    "enable_sort": 0.00896416444626033,
+    "bgwriter_lru_multiplier": 0.008588817111157413,
+    "enable_bitmapscan": 0.007674793836938329,
+    "enable_async_append": 0.007560286856592515,
+    "temp_buffers": 0.007257667302175435,
+    "max_wal_size": 0.007093239515420841,
+    "checkpoint_completion_target": 0.0069091667254907,
+    "maintenance_work_mem": 0.006832489205849135,
+    "wal_writer_delay": 0.006205284388102262,
+    "commit_delay": 0.00613149514242782,
+    "wal_buffers": 0.005836912137712064,
+    "db_user_namespace": 0.005826487587882766,
+    "track_wal_io_timing": 0.005278515907938253,
+    "checkpoint_flush_after": 0.005230209368433956,
+    "bgwriter_flush_after": 0.005134380836066569,
+    "log_rotation_size": 0.005015474487725291,
+    "autovacuum_vacuum_cost_limit": 0.004460778043391249,
+    "log_connections": 0.004285921502034639,
+    "lo_compat_privileges": 0.004156920582167656,
+    "array_nulls": 0.0040182038644227805,
+    "log_truncate_on_rotation": 0.003780554868064288,
+    "vacuum_buffer_usage_limit": 0.003739686714863283,
+    "check_function_bodies": 0.003638432012088544,
+    "bgwriter_delay": 0.003517491212975615,
+    "seq_page_cost": 0.003377401794336237,
+    "parallel_setup_cost": 0.003305348174746016,
+    "old_snapshot_threshold": 0.003243678437155329,
+    "effective_cache_size": 0.003148323873028342,
+    "log_hostname": 0.002910062045537071,
+    "backslash_quote": 0.002756801055896821,
+    "wal_init_zero": 0.0025469529282861883,
+    "maintenance_io_concurrency": 0.0024922243331113813,
+    "escape_string_warning": 0.002480614679396635,
+    "enable_partitionwise_aggregate": 0.002424231059653892,
+    "track_functions": 0.002417262876555686,
+    "enable_hashagg": 0.0024007757822193977,
+    "autovacuum_vacuum_scale_factor": 0.0022414558036546652,
+    "log_disconnections": 0.002078381826120739,
+    "enable_memoize": 0.0020291952926087325,
+    "enable_partitionwise_join": 0.0019490227818842172,
+    "data_sync_retry": 0.0019207822312251066,
+    "log_min_error_statement": 0.0018862173756556762,
+    "synchronous_commit": 0.0018721922820838543,
+    "effective_io_concurrency": 0.0017972353604323154,
+    "row_security": 0.0017498547099104598,
+    "min_parallel_index_scan_size": 0.0017252355711622424,
+    "parallel_tuple_cost": 0.001720398213435138,
+    "archive_mode": 0.0016734743453995344,
+    "enable_gathermerge": 0.00165820075474709,
+    "checkpoint_timeout": 0.0016560906822949495,
+    "geqo": 0.0015679966115303868,
+    "IntervalStyle": 0.001468376266908378,
+    "plan_cache_mode": 0.0013763915243321374,
+    "wal_level": 0.0013236987830552995,
+    "autovacuum_analyze_scale_factor": 0.0010997269043155607,
+    "enable_tidscan": 0.0010881998335811733,
+    "hash_mem_multiplier": 0.0010846521074963345,
+    "vacuum_cost_limit": 0.001062077614644032,
+    "enable_indexscan": 0.0008729882666020649,
+    "max_worker_processes": 0.000834125365742409,
+    "compute_query_id": 0.0008318477565811579,
+    "trace_recovery_messages": 0.0008270461450428309,
+    "work_mem": 0.0008239372525805848,
+    "ssl_max_protocol_version": 0.000797204311263521,
+    "vacuum_cost_page_miss": 0.0007084412994983958,
+    "superuser_reserved_connections": 0.0006959669124252025,
+    "log_error_verbosity": 0.0006524363684569396,
+    "password_encryption": 0.0006227958204796562,
+    "max_logical_replication_workers": 0.0006180858772428726,
+    "shared_memory_type": 0.0005623050017689467,
+    "bgwriter_lru_maxpages": 0.0005583557960008553,
+    "recovery_target_action": 0.0005526282859830584,
+    "commit_siblings": 0.0005413277462158941,
+    "enable_presorted_aggregate": 0.0005067444208184502,
+    "wal_recycle": 0.0005063276154061269,
+    "geqo_selection_bias": 0.0005048813084008737,
+    "enable_hashjoin": 0.0004314267861774031,
+    "session_replication_role": 0.0004235993518156915,
+    "random_page_cost": 0.00038637523216924596,
+    "log_statement": 0.0003852831037439038,
+    "stats_fetch_consistency": 0.00036927626711283026,
+    "bytea_output": 0.0003683391208484953,
+    "parallel_leader_participation": 0.0003634248029165566,
+    "send_abort_for_kill": 0.0003573309329891134,
+    "wal_compression": 0.0003565409084891413,
+    "file_extend_method": 0.00032904283049117386,
+    "cpu_tuple_cost": 0.00032118192818823246,
+    "log_checkpoints": 0.00026627433380900755,
+    "constraint_exclusion": 0.00025433770046700356,
+    "track_counts": 0.00023234899503473685,
+    "max_wal_senders": 0.00021345701354623847,
+    "gss_accept_delegation": 0.0002092192856879391,
+    "autovacuum_max_workers": 0.0002090176411898342,
+    "ssl_min_protocol_version": 0.00020184567187815438,
+    "syslog_sequence_numbers": 0.00019729954762904162,
+    "dynamic_shared_memory_type": 0.00017606579585882336,
+    "enable_parallel_append": 0.00017287876543209486,
+    "enable_material": 0.0001607848172653276,
+    "autovacuum": 0.00013126185675741867,
+    "krb_caseins_users": 0.00012823048026861487,
+    "huge_pages": 0.00012389527748982,
+    "wal_sync_method": 0.0001232102024327116,
+    "log_recovery_conflict_waits": 0.0001159813306474878,
+    "max_parallel_workers": 0.00011210554657032518,
+    "geqo_effort": 0.00010429301366739835,
+    "enable_partition_pruning": 9.700216107510057e-05,
+    "wal_receiver_create_temp_slot": 9.4031511072709e-05,
+    "enable_mergejoin": 9.373063773170768e-05,
+    "default_toast_compression": 8.484633413246511e-05,
+    "reserved_connections": 8.169824193782836e-05,
+    "full_page_writes": 8.069567785296325e-05,
+    "max_parallel_workers_per_gather": 6.399665803299252e-05,
+    "syslog_facility": 6.39400099180637e-05,
+    "autovacuum_naptime": 6.285516890490976e-05,
+    "hot_standby_feedback": 6.177007449692473e-05,
+    "recovery_init_sync_method": 5.635322506920017e-05,
+    "max_parallel_apply_workers_per_subscription": 4.947099092659036e-05,
+    "max_parallel_maintenance_workers": 4.7929777000968376e-05,
+    "transform_null_equals": 4.049838521943549e-05,
+    "fsync": 3.833622207468826e-05,
+    "remove_temp_files_after_crash": 3.7640293284730986e-05,
+    "syslog_split_messages": 3.6548805490003923e-05,
+    "vacuum_cost_page_hit": 3.485407749110246e-05,
+    "default_transaction_isolation": 2.5450340190344775e-05,
+    "enable_seqscan": 2.5108625421924357e-05,
+    "enable_parallel_hash": 2.4368880496054798e-05,
+    "wal_log_hints": 2.3750412015286913e-05,
+    "icu_validation_level": 1.9464301068468142e-05,
+    "standard_conforming_strings": 1.6013907485756135e-05,
+    "send_abort_for_crash": 1.1174567971793873e-05,
+    "log_duration": 9.318802860365522e-06,
+    "track_io_timing": 7.668859168324113e-06,
+    "enable_indexonlyscan": 7.023483964462833e-06,
+    "synchronize_seqscans": 1.7228507802395255e-06,
+    "enable_incremental_sort": 1.6181826115913355e-06,
+    "recovery_target_inclusive": 1.5179442782585405e-06,
+    "log_lock_waits": 8.969052626106688e-07,
+    "update_process_title": 5.702613646932456e-07,
+    "enable_nestloop": 4.1531355863815337e-07,
+    "track_activities": 1.999188054962569e-07,
+    "track_commit_timestamp": 5.771381610905192e-10
+  },
+  "shap_importances": {
+    "vacuum_cost_page_dirty": 8.004233749922902,
+    "recovery_prefetch": 2.933359493404812,
+    "vacuum_freeze_min_age": 1.4193116870920688,
+    "cursor_tuple_fraction": 1.0987216698618363,
+    "min_parallel_table_scan_size": 1.082642096440758,
+    "log_replication_commands": 0.9954779432909965,
+    "autovacuum_vacuum_insert_scale_factor": 0.9270516627513364,
+    "geqo_seed": 0.8814694259663302,
+    "hot_standby": 0.8216327003734529,
+    "backend_flush_after": 0.6788939571342596,
+    "enable_bitmapscan": 0.669646276643756,
+    "parallel_setup_cost": 0.6253534526192472,
+    "quote_all_identifiers": 0.591171268693189,
+    "cpu_index_tuple_cost": 0.5392894691100752,
+    "autovacuum_vacuum_cost_delay": 0.46562956800846844,
+    "wal_buffers": 0.3826992969838774,
+    "max_wal_size": 0.35336229363695393,
+    "cpu_operator_cost": 0.3526250924994218,
+    "recursive_worktable_factor": 0.3094779262457014,
+    "max_connections": 0.29223777855776206,
+    "log_truncate_on_rotation": 0.2683946513191156,
+    "default_statistics_target": 0.26468465567184507,
+    "min_wal_size": 0.2606393877456878,
+    "enable_sort": 0.20234183183749535,
+    "checkpoint_flush_after": 0.20179030010618915,
+    "enable_partitionwise_aggregate": 0.1799298993263276,
+    "vacuum_multixact_freeze_min_age": 0.16463658090202596,
+    "shared_buffers": 0.15392220918028252,
+    "parallel_tuple_cost": 0.14212356607334423,
+    "temp_buffers": 0.13759532019502135,
+    "escape_string_warning": 0.13474916297974224,
+    "track_wal_io_timing": 0.10802426686540412,
+    "checkpoint_completion_target": 0.10640997258865849,
+    "bgwriter_lru_multiplier": 0.10410316503810726,
+    "effective_io_concurrency": 0.10302392374784787,
+    "wal_writer_delay": 0.09831681029478292,
+    "checkpoint_timeout": 0.09441522983676913,
+    "geqo": 0.09410240502536556,
+    "db_user_namespace": 0.09333400521885628,
+    "bgwriter_delay": 0.08919586966262615,
+    "seq_page_cost": 0.08902354456162866,
+    "work_mem": 0.08856207715155863,
+    "lo_compat_privileges": 0.08229264667652926,
+    "commit_delay": 0.0767540779422868,
+    "trace_recovery_messages": 0.07620297223118594,
+    "maintenance_io_concurrency": 0.07577787116035671,
+    "array_nulls": 0.07349647362233973,
+    "random_page_cost": 0.0724338807014391,
+    "geqo_selection_bias": 0.06984974342089424,
+    "bgwriter_flush_after": 0.06951736169610587,
+    "backslash_quote": 0.06443661019390427,
+    "vacuum_cost_limit": 0.0610530650798729,
+    "autovacuum_vacuum_cost_limit": 0.060916971624941266,
+    "log_statement": 0.06033949299054486,
+    "vacuum_buffer_usage_limit": 0.05954730685395777,
+    "log_rotation_size": 0.05813800571571791,
+    "maintenance_work_mem": 0.05734359647875742,
+    "log_disconnections": 0.05525906329246834,
+    "enable_hashagg": 0.0542161270055738,
+    "IntervalStyle": 0.051933505306239955,
+    "fsync": 0.05153383479944493,
+    "synchronous_commit": 0.05108949907140351,
+    "check_function_bodies": 0.050678505703882215,
+    "geqo_effort": 0.05063413974261744,
+    "old_snapshot_threshold": 0.05024973889727254,
+    "vacuum_cost_page_miss": 0.050157673040258796,
+    "shared_memory_type": 0.048673279157103004,
+    "max_worker_processes": 0.04695932069195351,
+    "autovacuum_naptime": 0.045744064144791124,
+    "default_transaction_isolation": 0.044184617292977575,
+    "wal_level": 0.04335591312056873,
+    "wal_compression": 0.04118366909014701,
+    "hash_mem_multiplier": 0.041176059713150935,
+    "max_logical_replication_workers": 0.04099112440458432,
+    "krb_caseins_users": 0.03919253456994474,
+    "cpu_tuple_cost": 0.03778534407462657,
+    "vacuum_cost_page_hit": 0.03731840418444887,
+    "enable_gathermerge": 0.03692004349109906,
+    "recovery_target_action": 0.035927167967154554,
+    "transform_null_equals": 0.03523633329441145,
+    "ssl_max_protocol_version": 0.03477957010025064,
+    "autovacuum_analyze_scale_factor": 0.034661188757162543,
+    "commit_siblings": 0.03388776689887853,
+    "log_hostname": 0.03382878047981294,
+    "bgwriter_lru_maxpages": 0.033513777790742584,
+    "dynamic_shared_memory_type": 0.03257715903028786,
+    "max_wal_senders": 0.03250678169351581,
+    "enable_presorted_aggregate": 0.03170832070621107,
+    "effective_cache_size": 0.03151258086378798,
+    "row_security": 0.029648626397636643,
+    "default_toast_compression": 0.02876141600225119,
+    "enable_partitionwise_join": 0.028710375473239295,
+    "min_parallel_index_scan_size": 0.028274108069666966,
+    "log_connections": 0.0276145241119913,
+    "bytea_output": 0.026775133938228553,
+    "enable_mergejoin": 0.026501221145696086,
+    "log_error_verbosity": 0.026479329623295682,
+    "recovery_init_sync_method": 0.02548485842161597,
+    "max_parallel_apply_workers_per_subscription": 0.02519725236970511,
+    "track_counts": 0.024046432430479762,
+    "constraint_exclusion": 0.023322474551114077,
+    "log_recovery_conflict_waits": 0.022674086931039537,
+    "file_extend_method": 0.021506751731271447,
+    "compute_query_id": 0.020055558386682052,
+    "wal_recycle": 0.019263762940900403,
+    "autovacuum_vacuum_scale_factor": 0.01874244230748975,
+    "archive_mode": 0.018066739793728973,
+    "track_functions": 0.01791393052402582,
+    "enable_memoize": 0.017656918868772613,
+    "log_duration": 0.017607881577131185,
+    "log_min_error_statement": 0.016957519466608298,
+    "enable_tidscan": 0.016890725152599345,
+    "standard_conforming_strings": 0.015145155564335057,
+    "enable_incremental_sort": 0.014330066391026183,
+    "wal_log_hints": 0.013789765776080444,
+    "huge_pages": 0.01314602720026667,
+    "hot_standby_feedback": 0.012434466309641191,
+    "enable_hashjoin": 0.012333222412684598,
+    "enable_parallel_append": 0.011549728395022668,
+    "track_activities": 0.011067038371150263,
+    "data_sync_retry": 0.011018878808161447,
+    "enable_indexonlyscan": 0.010485630375231111,
+    "enable_async_append": 0.010440000425667477,
+    "password_encryption": 0.010246473051157156,
+    "stats_fetch_consistency": 0.010121752520322474,
+    "superuser_reserved_connections": 0.010120053553652615,
+    "plan_cache_mode": 0.009841482447187445,
+    "enable_parallel_hash": 0.0097958069998855,
+    "send_abort_for_kill": 0.008267601022907401,
+    "remove_temp_files_after_crash": 0.007233280659247523,
+    "log_lock_waits": 0.006414801968798927,
+    "full_page_writes": 0.00567218580428856,
+    "enable_seqscan": 0.0055625220606161,
+    "enable_indexscan": 0.005302192908183585,
+    "track_io_timing": 0.005286124879542996,
+    "ssl_min_protocol_version": 0.004799643315755324,
+    "syslog_sequence_numbers": 0.004797503997376199,
+    "syslog_facility": 0.00462736642950304,
+    "autovacuum": 0.0044857973924360825,
+    "update_process_title": 0.003729027570572946,
+    "parallel_leader_participation": 0.003722283307251265,
+    "log_checkpoints": 0.0036290949852291923,
+    "wal_init_zero": 0.003251240052954829,
+    "autovacuum_max_workers": 0.0031444613765550613,
+    "wal_sync_method": 0.0029967080673648705,
+    "max_parallel_maintenance_workers": 0.002947823297077048,
+    "enable_nestloop": 0.002777488677443462,
+    "wal_receiver_create_temp_slot": 0.00261819499642901,
+    "enable_material": 0.0025125201061987255,
+    "session_replication_role": 0.0024526102636014484,
+    "reserved_connections": 0.002186679829280914,
+    "send_abort_for_crash": 0.001914984203049454,
+    "gss_accept_delegation": 0.0013042622930790652,
+    "track_commit_timestamp": 0.001148110715032775,
+    "max_parallel_workers_per_gather": 0.001120770667345346,
+    "max_parallel_workers": 0.0009699284025471849,
+    "icu_validation_level": 0.000801817029483321,
+    "syslog_split_messages": 0.0007597796859905962,
+    "enable_partition_pruning": 0.0007186162961652,
+    "synchronize_seqscans": 0.0006004387216101509,
+    "recovery_target_inclusive": 0.00030292942481924696
+  },
+  "pairwise_interactions": [
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "recovery_prefetch",
+      "importance": 0.006755702530334314
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "geqo_seed",
+      "importance": 0.003226308759081131
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "vacuum_freeze_min_age",
+      "importance": 0.002550310344087256
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "log_replication_commands",
+      "importance": 0.00229560170732349
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 0.0017609638767212973
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "backend_flush_after",
+      "importance": 0.0016482280920853236
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0015407507857804373
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.0014690486433626372
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "hot_standby",
+      "importance": 0.0014158068035540277
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 0.0011539096940009958
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "backend_flush_after",
+      "importance": 0.0011190942222121926
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "backend_flush_after",
+      "importance": 0.0010418856334706234
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 0.0010142501077454013
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 0.0009593101533087795
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "cpu_operator_cost",
+      "importance": 0.0009197604582821345
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 0.0008866130635624944
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "autovacuum_vacuum_cost_delay",
+      "importance": 0.0008793788624388808
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.000861088574126507
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "log_replication_commands",
+      "importance": 0.0008587172211257745
+    },
+    {
+      "knob_a": "autovacuum_vacuum_insert_scale_factor",
+      "knob_b": "default_statistics_target",
+      "importance": 0.0008369549343945568
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "default_statistics_target",
+      "importance": 0.0008284532468213345
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "log_replication_commands",
+      "importance": 0.0007577996659255273
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "max_connections",
+      "importance": 0.0007317747570013228
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "min_parallel_table_scan_size",
+      "importance": 0.0005812426337899801
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "default_statistics_target",
+      "importance": 0.000574287255341322
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 0.0005595836068867414
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "min_wal_size",
+      "importance": 0.0005380531493011841
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "min_parallel_table_scan_size",
+      "importance": 0.0005305709346958285
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 0.0005146724821075783
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 0.0005094054443630588
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "max_connections",
+      "importance": 0.00041952963214449726
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.00040236361568100594
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0003995123420577281
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 0.0003988032349714352
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "max_connections",
+      "importance": 0.00039438056135789463
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "log_replication_commands",
+      "importance": 0.0003749671289913797
+    },
+    {
+      "knob_a": "default_statistics_target",
+      "knob_b": "max_connections",
+      "importance": 0.0003742245496089165
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0003601878765008482
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "shared_buffers",
+      "importance": 0.0003554457159413388
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "max_connections",
+      "importance": 0.00035391342713382025
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "min_wal_size",
+      "importance": 0.0003535035729180846
+    },
+    {
+      "knob_a": "min_wal_size",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.00032465226985047246
+    },
+    {
+      "knob_a": "min_wal_size",
+      "knob_b": "default_statistics_target",
+      "importance": 0.00032273023740350557
+    },
+    {
+      "knob_a": "autovacuum_vacuum_insert_scale_factor",
+      "knob_b": "cpu_operator_cost",
+      "importance": 0.0003150852549643914
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "min_wal_size",
+      "importance": 0.0003093781663538054
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "shared_buffers",
+      "importance": 0.00030445011722142734
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0002931892737283368
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 0.0002924044286058747
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.0002851940543150799
+    },
+    {
+      "knob_a": "autovacuum_vacuum_insert_scale_factor",
+      "knob_b": "max_connections",
+      "importance": 0.00028189225907139997
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.0002751395640987355
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "log_replication_commands",
+      "importance": 0.0002718539271375124
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 0.0002714752225629151
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 0.0002689278840522344
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "max_connections",
+      "importance": 0.0002650671472369919
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "autovacuum_vacuum_cost_delay",
+      "importance": 0.0002604919652830434
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "cpu_operator_cost",
+      "importance": 0.0002589810811347774
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "geqo_seed",
+      "importance": 0.0002586282172719442
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "default_statistics_target",
+      "importance": 0.00025858278885109934
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.00025079296735387404
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "min_wal_size",
+      "importance": 0.00023764899326569406
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.00023622738510131245
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "max_connections",
+      "importance": 0.00023301828772632295
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "shared_buffers",
+      "importance": 0.00023250206125137156
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "vacuum_freeze_min_age",
+      "importance": 0.00022947137643167403
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "max_connections",
+      "importance": 0.00022834349789572302
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 0.00020911532959835616
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "log_replication_commands",
+      "importance": 0.00019553222252456407
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "min_wal_size",
+      "importance": 0.00018501842299683234
+    },
+    {
+      "knob_a": "cpu_operator_cost",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.00017476323693704006
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.0001723451324523971
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.00016160908266396498
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0001543842292301337
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "cpu_operator_cost",
+      "importance": 0.0001505330795577439
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "cpu_operator_cost",
+      "importance": 0.00014765247902628686
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "shared_buffers",
+      "importance": 0.00014721702054562021
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "default_statistics_target",
+      "importance": 0.0001465018473307037
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 0.00014511984257355913
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "shared_buffers",
+      "importance": 0.00013365562875804367
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0001269678692968648
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 0.000124210270912769
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 0.00010053347841479477
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "autovacuum_vacuum_cost_delay",
+      "importance": 9.998113092131615e-05
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "hot_standby",
+      "importance": 9.962433382197997e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "min_parallel_table_scan_size",
+      "importance": 9.202108406857935e-05
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "quote_all_identifiers",
+      "importance": 9.182032768113767e-05
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "hot_standby",
+      "importance": 8.026467843438605e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 7.813126911152851e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "cpu_operator_cost",
+      "importance": 6.984912496238693e-05
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 6.158616072868008e-05
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 5.1621643259580794e-05
+    },
+    {
+      "knob_a": "default_statistics_target",
+      "knob_b": "quote_all_identifiers",
+      "importance": 4.5870478470013724e-05
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "max_connections",
+      "importance": 4.454309936619065e-05
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "max_connections",
+      "importance": 3.714507257122128e-05
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "min_wal_size",
+      "importance": 3.661664979005693e-05
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "min_wal_size",
+      "importance": 3.6305305408488354e-05
+    },
+    {
+      "knob_a": "vacuum_cost_page_dirty",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 3.4404969081294904e-05
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 3.3397536623616845e-05
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "max_connections",
+      "importance": 3.195646981280101e-05
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "shared_buffers",
+      "importance": 2.8746066530213703e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "geqo_seed",
+      "importance": 2.7206032526381172e-05
+    },
+    {
+      "knob_a": "min_wal_size",
+      "knob_b": "quote_all_identifiers",
+      "importance": 2.5465141373140463e-05
+    },
+    {
+      "knob_a": "autovacuum_vacuum_insert_scale_factor",
+      "knob_b": "quote_all_identifiers",
+      "importance": 2.458412234439004e-05
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "shared_buffers",
+      "importance": 2.3117127755005308e-05
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 2.1844713499731892e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 2.1812475918310973e-05
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "min_wal_size",
+      "importance": 2.1280165729808413e-05
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 2.0438210685636543e-05
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 1.99660983443909e-05
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "default_statistics_target",
+      "importance": 1.9622442547158183e-05
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 1.9241194318058498e-05
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 1.8663744849670048e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "autovacuum_vacuum_cost_delay",
+      "importance": 1.803010116207392e-05
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "min_wal_size",
+      "importance": 1.657063827168001e-05
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "min_wal_size",
+      "importance": 1.5245402915170661e-05
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 1.4737791314371826e-05
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "log_replication_commands",
+      "importance": 1.3534611615424487e-05
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "shared_buffers",
+      "importance": 1.2962598048389976e-05
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "cpu_index_tuple_cost",
+      "importance": 1.1752303388863125e-05
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "autovacuum_vacuum_cost_delay",
+      "importance": 1.1344984341631873e-05
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "default_statistics_target",
+      "importance": 1.055317325403327e-05
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "min_wal_size",
+      "importance": 9.561433393252149e-06
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "log_replication_commands",
+      "importance": 8.79674629187623e-06
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "log_replication_commands",
+      "importance": 8.48926688770587e-06
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "default_statistics_target",
+      "importance": 7.390854638085456e-06
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "autovacuum_vacuum_cost_delay",
+      "importance": 7.033847618999396e-06
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 7.018404308184215e-06
+    },
+    {
+      "knob_a": "default_statistics_target",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 7.017275447455131e-06
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "hot_standby",
+      "importance": 6.9012879957770105e-06
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "default_statistics_target",
+      "importance": 6.862855687353862e-06
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "min_parallel_table_scan_size",
+      "importance": 6.8370215655067876e-06
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 6.82453355597682e-06
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 6.242400654060801e-06
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "default_statistics_target",
+      "importance": 5.82492744913854e-06
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "cpu_operator_cost",
+      "importance": 5.60928553527462e-06
+    },
+    {
+      "knob_a": "max_connections",
+      "knob_b": "quote_all_identifiers",
+      "importance": 5.378143770070288e-06
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 4.71943030145766e-06
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "min_wal_size",
+      "importance": 4.047882632594614e-06
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "geqo_seed",
+      "importance": 3.900003386795581e-06
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "cpu_operator_cost",
+      "importance": 3.819622647036068e-06
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "default_statistics_target",
+      "importance": 3.75602322742514e-06
+    },
+    {
+      "knob_a": "max_connections",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 3.6441806057038806e-06
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "max_connections",
+      "importance": 3.151248404110859e-06
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "cpu_operator_cost",
+      "importance": 3.038304757693131e-06
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "hot_standby",
+      "importance": 2.773364685590169e-06
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "cpu_operator_cost",
+      "importance": 2.7032226356374497e-06
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "quote_all_identifiers",
+      "importance": 2.58655328913764e-06
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "shared_buffers",
+      "importance": 2.4334714425481693e-06
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 2.3776452740624225e-06
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "cursor_tuple_fraction",
+      "importance": 1.9437341572938775e-06
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "log_replication_commands",
+      "importance": 1.8641977154624823e-06
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "min_wal_size",
+      "importance": 1.8371871331330943e-06
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "default_statistics_target",
+      "importance": 1.4794071653918504e-06
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "cpu_operator_cost",
+      "importance": 1.4277141334895626e-06
+    },
+    {
+      "knob_a": "cpu_operator_cost",
+      "knob_b": "max_connections",
+      "importance": 1.4124236676547842e-06
+    },
+    {
+      "knob_a": "min_wal_size",
+      "knob_b": "cpu_operator_cost",
+      "importance": 1.3220399877029057e-06
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 1.235073805949451e-06
+    },
+    {
+      "knob_a": "autovacuum_vacuum_insert_scale_factor",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 1.165668293196914e-06
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 1.0986362201703153e-06
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "quote_all_identifiers",
+      "importance": 1.0115930847966373e-06
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "min_parallel_table_scan_size",
+      "importance": 1.0017805207822749e-06
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "hot_standby",
+      "importance": 8.859973762649015e-07
+    },
+    {
+      "knob_a": "vacuum_freeze_min_age",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 8.688009360399747e-07
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "max_connections",
+      "importance": 8.205079708781135e-07
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "recursive_worktable_factor",
+      "importance": 6.164778569956798e-07
+    },
+    {
+      "knob_a": "recovery_prefetch",
+      "knob_b": "shared_buffers",
+      "importance": 3.732225676826212e-07
+    },
+    {
+      "knob_a": "geqo_seed",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 3.386410735864759e-07
+    },
+    {
+      "knob_a": "cpu_operator_cost",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 3.0305453326817347e-07
+    },
+    {
+      "knob_a": "cpu_operator_cost",
+      "knob_b": "default_statistics_target",
+      "importance": 2.6446512410064406e-07
+    },
+    {
+      "knob_a": "min_wal_size",
+      "knob_b": "max_connections",
+      "importance": 2.3532023475339983e-07
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "cpu_operator_cost",
+      "importance": 2.278825702819588e-07
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "default_statistics_target",
+      "importance": 1.8301879936311656e-07
+    },
+    {
+      "knob_a": "min_wal_size",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 8.632124571104435e-08
+    },
+    {
+      "knob_a": "shared_buffers",
+      "knob_b": "quote_all_identifiers",
+      "importance": 5.7059416406859685e-08
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "shared_buffers",
+      "importance": 2.45402612535232e-08
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "autovacuum_vacuum_insert_scale_factor",
+      "importance": 2.191691279421725e-08
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "cpu_operator_cost",
+      "importance": 9.303221239033442e-09
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "cpu_operator_cost",
+      "importance": 8.907064632917013e-09
+    },
+    {
+      "knob_a": "autovacuum_vacuum_cost_delay",
+      "knob_b": "hot_standby",
+      "importance": 2.7489532851595054e-09
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "hot_standby",
+      "importance": 2.143326018038825e-09
+    },
+    {
+      "knob_a": "cpu_index_tuple_cost",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 9.150791812117311e-10
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "shared_buffers",
+      "importance": 1.1373984538616178e-10
+    },
+    {
+      "knob_a": "cursor_tuple_fraction",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 1.0666678123662602e-17
+    },
+    {
+      "knob_a": "min_parallel_table_scan_size",
+      "knob_b": "max_connections",
+      "importance": 7.510370140376973e-18
+    },
+    {
+      "knob_a": "quote_all_identifiers",
+      "knob_b": "vacuum_multixact_freeze_min_age",
+      "importance": 5.968633254981061e-18
+    },
+    {
+      "knob_a": "hot_standby",
+      "knob_b": "default_statistics_target",
+      "importance": 1.2965007804124125e-18
+    },
+    {
+      "knob_a": "recursive_worktable_factor",
+      "knob_b": "hot_standby",
+      "importance": 7.34776488352415e-19
+    },
+    {
+      "knob_a": "log_replication_commands",
+      "knob_b": "hot_standby",
+      "importance": 5.665250002740819e-22
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "hot_standby",
+      "importance": 0.0
+    },
+    {
+      "knob_a": "backend_flush_after",
+      "knob_b": "quote_all_identifiers",
+      "importance": 0.0
+    }
+  ]
+}
