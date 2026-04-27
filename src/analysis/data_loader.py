@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -19,6 +19,7 @@ from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_co
 from src.utils.rescoring import rescore_metrics_globally
 from src.tuner.config.knob_loader import get_knob_space
 from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
+from src.utils.hardware_info import WorkerResources
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,11 +36,11 @@ class LoadedData:
         DataFrame of all valid configurations from all sessions.
     scores : pd.Series
         Globally re-scored objective metrics for each configuration.
-    metadata : List[Dict[str, Any]]
+    metadata : list[dict[str, Any]]
         System and setup metadata collected from each session.
     metric_config : MetricConfig
         The globally calibrated MetricConfig used for scoring.
-    knob_bounds: Dict[str, Tuple[float, float]]
+    knob_bounds: dict[str, tuple[float, float]]
         Domain bounds for each variable used by fANOVA or HyperOpt algorithms.
     n_observations : int
         Total number of valid evaluations extracted.
@@ -47,9 +48,9 @@ class LoadedData:
 
     config_df: pd.DataFrame
     scores: pd.Series
-    metadata: List[Dict[str, Any]]
+    metadata: list[dict[str, Any]]
     metric_config: MetricConfig
-    knob_bounds: Dict[str, Tuple[float, float]]
+    knob_bounds: dict[str, tuple[float, float]]
     n_observations: int
 
 
@@ -116,13 +117,67 @@ def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _extract_knob_bounds(df: pd.DataFrame, worker_resources: Optional[Dict] = None, tier: str = "extensive") -> Dict[str, Tuple[float, float]]:
+def _coerce_worker_resources(
+    worker_resources: Optional[WorkerResources | dict[str, Any]],
+) -> Optional[WorkerResources]:
+    """Normalize serialized worker resources into WorkerResources dataclass."""
+    if worker_resources is None:
+        return None
+
+    if isinstance(worker_resources, WorkerResources):
+        return worker_resources
+
+    if not isinstance(worker_resources, dict) or not worker_resources:
+        return None
+
+    required_fields = {"ram_bytes", "cpu_cores", "disk_type"}
+    missing_fields = required_fields - set(worker_resources.keys())
+    if missing_fields:
+        logger.warning(
+            "worker_resources missing required fields (%s); "
+            "skipping hardware-aware bound resolution.",
+            ", ".join(sorted(missing_fields)),
+        )
+        return None
+
+    try:
+        resources = WorkerResources(
+            ram_bytes=int(worker_resources["ram_bytes"]),
+            cpu_cores=int(worker_resources["cpu_cores"]),
+            disk_type=str(worker_resources["disk_type"]),
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Invalid worker_resources values; "
+            "skipping hardware-aware bound resolution: %s",
+            exc,
+        )
+        return None
+
+    if resources.ram_bytes <= 0 or resources.cpu_cores <= 0:
+        logger.warning(
+            "worker_resources must be positive (ram_bytes=%s, cpu_cores=%s); "
+            "skipping hardware-aware bound resolution.",
+            resources.ram_bytes,
+            resources.cpu_cores,
+        )
+        return None
+
+    return resources
+
+
+def _extract_knob_bounds(
+    df: pd.DataFrame,
+    worker_resources: Optional[WorkerResources | dict[str, Any]] = None,
+    tier: str = "extensive",
+) -> dict[str, tuple[float, float]]:
     """Determine continuous/discrete bounds for fANOVA ConfigSpace using KnobSpecs."""
-    bounds = {}
+    bounds: dict[str, tuple[float, float]] = {}
+    parsed_resources = _coerce_worker_resources(worker_resources)
     try:
         space = get_knob_space(tier)
-        if worker_resources:
-            space.resolve_hardware_ranges(worker_resources)
+        if parsed_resources is not None:
+            space.resolve_hardware_ranges(parsed_resources)
     except Exception as e:
         logger.warning(f"Knob space unavailable, using empirical fallback bounds: {e}")
         space = None
@@ -132,7 +187,11 @@ def _extract_knob_bounds(df: pd.DataFrame, worker_resources: Optional[Dict] = No
 
         if space and col in space.knobs:
             kd = space.knobs[col]
-            if kd.hardware_relative and col in HARDWARE_RELATIVE_SPECS:
+            if (
+                kd.hardware_relative
+                and col in HARDWARE_RELATIVE_SPECS
+                and parsed_resources is None
+            ):
                 specs = HARDWARE_RELATIVE_SPECS[col]
                 b_min, b_max = float(specs[0]), float(specs[1])
             elif kd.knob_type.name == "BOOLEAN":
@@ -152,6 +211,22 @@ def _extract_knob_bounds(df: pd.DataFrame, worker_resources: Optional[Dict] = No
         bounds[col] = (max(b_min, 0.0), b_max)
 
     return bounds
+
+
+def _build_session_metadata(
+    file_path: Path,
+    session_meta: dict[str, Any],
+    data: dict[str, Any],
+    default_workload_type: str,
+) -> dict[str, Any]:
+    """Build normalized metadata payload for one tuning session file."""
+    return {
+        "file_name": file_path.name,
+        "workload_type": session_meta.get("workload_type", default_workload_type),
+        "benchmark_name": session_meta.get("benchmark_name", "unknown"),
+        "system_info": data.get("system_info", {}),
+        "worker_resources": data.get("worker_resources", {}),
+    }
 
 
 def load_pbt_results(
@@ -193,9 +268,9 @@ def load_pbt_results(
 
     logger.info(f"Loading {len(json_files)} PBT result records from {directory_path}")
 
-    raw_configs = []
-    valid_metrics: List[PerformanceMetrics] = []
-    metadata_list = []
+    raw_configs: list[dict[str, Any]] = []
+    valid_metrics: list[PerformanceMetrics] = []
+    metadata_list: list[dict[str, Any]] = []
     target_knob_set = None
 
     # 1. Parsing and Extraction
@@ -209,16 +284,12 @@ def load_pbt_results(
 
         session_meta = data.get("tuning_session", {})
         metadata_list.append(
-            {
-                "file_name": file_path.name,
-                "workload_type": session_meta.get(
-                    "workload_type", default_workload_type
-                ),
-                "benchmark_name": session_meta.get("benchmark_name", "unknown"),
-                "sysbench_workload": session_meta.get("sysbench_workload"),
-                "system_info": data.get("system_info", {}),
-                "worker_resources": data.get("worker_resources", {}),
-            }
+            _build_session_metadata(
+                file_path=file_path,
+                session_meta=session_meta,
+                data=data,
+                default_workload_type=default_workload_type,
+            )
         )
 
         for gen in data.get("generation_history", []):
@@ -300,10 +371,12 @@ def load_pbt_results(
     df = pd.DataFrame(raw_configs)
     df_encoded = _encode_dataframe_features(df)
     scores_series = pd.Series(global_scores, name="score")
-    
-    worker_resources = metadata_list[0].get("worker_resources", {}) if metadata_list else {}
+
+    worker_resources = (
+        metadata_list[0].get("worker_resources", {}) if metadata_list else {}
+    )
     knob_tier = metadata_list[0].get("knob_tier", "extensive") if metadata_list else "extensive"
-    
+
     knob_bounds = _extract_knob_bounds(df_encoded, worker_resources, knob_tier)
 
     logger.info(
