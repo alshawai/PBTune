@@ -42,7 +42,11 @@ from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
 from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
 from src.utils.metrics import PerformanceMetrics, create_metric_config
 from src.utils.rescoring import rescore_metrics_globally
-from src.benchmarks.sysbench.executor import SysbenchExecutor
+from src.benchmarks.sysbench.executor import (
+    SysbenchExecutor,
+    DEFAULT_SYSBENCH_WORKLOAD,
+    validate_sysbench_workload,
+)
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.benchmarks.executor import BenchmarkExecutor
 from src.tuner.config import get_knob_space
@@ -117,6 +121,7 @@ class ComparisonRunner:
             sysbench_duration=int(effective_params["sysbench_duration"]),
             sysbench_tables=int(effective_params["sysbench_tables"]),
             sysbench_table_size=int(effective_params["sysbench_table_size"]),
+            sysbench_workload=str(effective_params["sysbench_workload"]),
             sysbench_warmup_seconds=int(effective_params["sysbench_warmup_seconds"]),
             tpch_warmup_passes=int(effective_params["tpch_warmup_passes"]),
         )
@@ -147,7 +152,9 @@ class ComparisonRunner:
         LOGGER.info("  HTML Log: %s", self._session_log_path)
         if benchmark == "sysbench":
             LOGGER.info(
-                "  Effective Sysbench params: tables=%d table_size=%d duration=%ds warmup=%ds",
+                "  Effective Sysbench params: workload=%s tables=%d table_size=%d"
+                " duration=%ds warmup=%ds",
+                self.config.sysbench_workload,
                 self.config.sysbench_tables,
                 self.config.sysbench_table_size,
                 self.config.sysbench_duration,
@@ -281,13 +288,14 @@ class ComparisonRunner:
         return SysbenchExecutor(
             tables=int(self.config.sysbench_tables or 10),
             table_size=int(self.config.sysbench_table_size or 100_000),
+            script=str(self.config.sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD),
         )
 
     def _resolve_effective_benchmark_params(
         self,
         session: TuningSessionData,
         benchmark: str,
-    ) -> dict[str, float | int]:
+    ) -> dict[str, float | int | str]:
         """
         Resolve effective benchmark runtime parameters using strict precedence.
 
@@ -342,6 +350,8 @@ class ComparisonRunner:
                         )
             return default_value
 
+        sysbench_workload = self._resolve_sysbench_workload(session, benchmark)
+
         resolved = {
             "scale_factor": _pick_float(
                 self.config.scale_factor,
@@ -377,12 +387,40 @@ class ComparisonRunner:
                 ["tpch_warmup_passes", "warmup_passes"],
                 int(defaults["tpch_warmup_passes"]),
             ),
+            "sysbench_workload": sysbench_workload,
         }
 
         if benchmark == "tpch":
             # Keep sysbench fields resolved for metadata completeness.
             resolved["sysbench_duration"] = int(resolved["sysbench_duration"])
         return resolved
+
+    def _resolve_sysbench_workload(
+        self,
+        session: TuningSessionData,
+        benchmark: str,
+    ) -> str:
+        """Resolve sysbench workload mode using CLI -> session -> default precedence."""
+        if benchmark != "sysbench":
+            return DEFAULT_SYSBENCH_WORKLOAD
+
+        if self.config.sysbench_workload is not None:
+            return validate_sysbench_workload(self.config.sysbench_workload)
+
+        if session.sysbench_workload is not None:
+            return validate_sysbench_workload(session.sysbench_workload)
+
+        session_cfg_mode = session.tuning_config.get("sysbench_workload")
+        if session_cfg_mode is not None:
+            try:
+                return validate_sysbench_workload(str(session_cfg_mode))
+            except ValueError:
+                LOGGER.warning(
+                    "Ignoring invalid sysbench_workload value from tuning config: %r",
+                    session_cfg_mode,
+                )
+
+        return DEFAULT_SYSBENCH_WORKLOAD
 
     def _build_environment(
         self,
@@ -683,6 +721,13 @@ class ComparisonRunner:
         tier = self._resolve_tier_slug_from_session(
             session_data, self.config.tuning_session_path
         )
+        if (self.config.benchmark or session_data.benchmark) == "sysbench":
+            sysbench_workload = str(
+                self.config.sysbench_workload
+                or session_data.sysbench_workload
+                or DEFAULT_SYSBENCH_WORKLOAD
+            )
+            return Path("results") / workload / sysbench_workload / "comparisons" / tier
         return Path("results") / workload / "comparisons" / tier
 
     def _resolve_log_output_path(
@@ -935,6 +980,7 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
                 "scale_factor": cfg.scale_factor,
                 "sysbench_tables": cfg.sysbench_tables,
                 "sysbench_table_size": cfg.sysbench_table_size,
+                "sysbench_workload": cfg.sysbench_workload,
                 "sysbench_duration": cfg.sysbench_duration,
                 "sysbench_warmup_seconds": cfg.sysbench_warmup_seconds,
                 "tpch_warmup_passes": cfg.tpch_warmup_passes,

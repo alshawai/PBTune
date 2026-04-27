@@ -42,9 +42,10 @@ To ensure **overhead-free, scientifically rigorous evaluations**, the tuner supp
 ### Supported External Drivers:
 
 - **Sysbench (OLTP)**: The industry standard for transactional database benchmarking.
+  - _Modes_: `oltp_read_only`, `oltp_read_write`, `oltp_write_only`
   - _Configuration_: 10 tables × 100,000 rows (scale factor 1), 8 threads per worker
   - _Metrics_: TPS (Transactions Per Second) + p95 Transaction Latency (ms)
-  - _Usage_: `python -m src.tuner.main --benchmark sysbench`
+  - _Usage_: `python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_write`
 - **TPC-H (OLAP)**: The gold standard for analytical queries.
   - _Configuration_: 8 tables, 22 standard decision-support queries, configurable scale factor (default SF=1 → ~1GB data, ~6M `lineitem` rows per worker)
   - _Metrics_: Query Throughput (QPS) + p50/p95 Query Latency (ms)

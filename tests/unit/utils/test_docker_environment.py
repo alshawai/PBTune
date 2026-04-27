@@ -143,6 +143,24 @@ def test_restore_snapshot_removes_container_before_volume_reseed() -> None:
     )
 
 
+def test_restore_snapshot_uses_extended_timeout_for_container_removal() -> None:
+    """Restore should apply the restore-specific Docker timeout before removal."""
+    env = _make_environment()
+    env.client.images.get.return_value = MagicMock()
+    env.client.volumes.get.side_effect = docker.errors.NotFound("not found")
+    env.client.volumes.create.return_value = MagicMock()
+    env.client.containers.run.return_value = MagicMock()
+
+    env._remove_worker_container = MagicMock(return_value=True)
+
+    assert env.restore_snapshot(worker_id=0, snapshot_id="pbt-snapshot-test") is True
+    env._remove_worker_container.assert_called_once_with(
+        worker_id=0,
+        purpose="snapshot restore",
+        timeout=180,
+    )
+
+
 def test_rebuild_worker_instance_recreates_clean_slate_and_prepares_schema() -> None:
     """Clean-slate rebuild should recreate volume/container and prepare schema."""
     env = _make_environment()
@@ -345,6 +363,49 @@ def test_stop_all_stops_untracked_running_prefixed_containers() -> None:
 
     managed.stop.assert_called_once_with(timeout=5)
     other.stop.assert_not_called()
+
+
+def test_stop_instance_recovers_when_stop_timeout_but_container_exited() -> None:
+    """Timeout during stop should be treated as success if container already exited."""
+    env = _make_environment()
+
+    container = MagicMock()
+    container.status = "exited"
+    container.stop.side_effect = requests.exceptions.ReadTimeout("timeout")
+    env.client.containers.get.return_value = container
+
+    assert env.stop_instance(worker_id=0) is True
+    assert env.instances[0].running is False
+    container.reload.assert_called_once()
+
+
+def test_stop_instance_fails_when_stop_timeout_and_container_still_running() -> None:
+    """Timeout during stop should return False when container stays running."""
+    env = _make_environment()
+
+    container = MagicMock()
+    container.status = "running"
+    container.stop.side_effect = requests.exceptions.ReadTimeout("timeout")
+    env.client.containers.get.return_value = container
+
+    assert env.stop_instance(worker_id=0) is False
+    assert env.instances[0].running is True
+    container.reload.assert_called_once()
+
+
+def test_stop_all_recovers_from_stop_timeout_if_container_exited() -> None:
+    """stop_all should tolerate stop timeout when container already exited."""
+    env = _make_environment()
+    env.instances = {}
+
+    managed = MagicMock()
+    managed.name = "pbt-worker-9"
+    managed.status = "exited"
+    managed.stop.side_effect = requests.exceptions.ReadTimeout("timeout")
+    env.client.containers.list.return_value = [managed]
+
+    assert env.stop_all() is True
+    managed.reload.assert_called_once()
 
 
 def test_start_instance_returns_false_on_read_timeout() -> None:

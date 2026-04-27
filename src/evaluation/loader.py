@@ -16,6 +16,10 @@ from typing import Any, Optional
 from src.utils.logger import get_logger
 from src.evaluation.exceptions import TuningSessionLoadError
 from src.evaluation.types import TuningSessionData, WorkerResources
+from src.benchmarks.sysbench.executor import (
+    DEFAULT_SYSBENCH_WORKLOAD,
+    validate_sysbench_workload,
+)
 
 logger = get_logger(__name__)
 
@@ -124,6 +128,20 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         ) from exc
     logger.debug("  ➤ Benchmark and workload type inferred successfully.")
 
+    sysbench_workload: Optional[str] = None
+    if benchmark == "sysbench":
+        raw_mode = ts_meta.get("sysbench_workload", DEFAULT_SYSBENCH_WORKLOAD)
+        try:
+            sysbench_workload = validate_sysbench_workload(str(raw_mode))
+        except ValueError:
+            logger.warning(
+                "  ➤ Invalid sysbench_workload=%r in session metadata; "
+                "falling back to %s",
+                raw_mode,
+                DEFAULT_SYSBENCH_WORKLOAD,
+            )
+            sysbench_workload = DEFAULT_SYSBENCH_WORKLOAD
+
     logger.debug("  Processing system info and tuning config...")
     system_info: dict[str, Any] = data.get("system_info", {})
     if not system_info:
@@ -156,6 +174,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         tuning_config=tuning_config,
         benchmark=benchmark,
         workload_type=workload_type,
+        sysbench_workload=sysbench_workload,
         session_id=session_id,
     )
 
@@ -281,5 +300,17 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
     sysbench_table_size = _as_int(config.get("sysbench_table_size"))
     if sysbench_table_size is not None:
         config["sysbench_table_size"] = sysbench_table_size
+
+    sysbench_workload = config.get("sysbench_workload")
+    if sysbench_workload is not None:
+        try:
+            config["sysbench_workload"] = validate_sysbench_workload(
+                str(sysbench_workload)
+            )
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid sysbench_workload value in tuning metadata: %r",
+                sysbench_workload,
+            )
 
     return config

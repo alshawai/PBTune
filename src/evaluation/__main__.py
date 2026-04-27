@@ -19,7 +19,7 @@ Examples:
 
     # Override benchmark type (normally auto-detected from session)
     python -m src.evaluation \\
-        --session results/oltp/pbt_runs/standard/tuning_sessions/pbt_results_20260402_1559.json \\
+        --session results/oltp/oltp_read_write/pbt_runs/standard/tuning_sessions/pbt_results_20260402_1559.json \\
         --benchmark sysbench
 
     # Bare-metal fallback (no Docker — reduced isolation)
@@ -67,7 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "    --session results/olap/pbt_runs/extensive/tuning_sessions/"
             "pbt_results_20260326_2115.json\n\n"
             "  python -m src.evaluation \\\n"
-            "    --session results/oltp/pbt_runs/standard/tuning_sessions/"
+            "    --session results/oltp/oltp_read_write/pbt_runs/standard/tuning_sessions/"
             "pbt_results_20260402_1559.json \\\n"
             "    --repetitions 10 --benchmark sysbench\n"
         ),
@@ -80,7 +80,8 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Path to the PBT tuning session results JSON file.\n"
-            "e.g. results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_20260326_2115.json"
+            "e.g. results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_20260326_2115.json\n"
+            "or results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_20260402_1559.json"
         ),
     )
 
@@ -135,6 +136,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Rows per sysbench table. Auto-detected from session when not specified."
+        ),
+    )
+    bench_grp.add_argument(
+        "--sysbench-workload",
+        metavar="MODE",
+        choices=["oltp_read_only", "oltp_read_write", "oltp_write_only"],
+        default=None,
+        help=(
+            "Sysbench workload script mode. "
+            "Auto-detected from session metadata when not specified."
         ),
     )
     bench_grp.add_argument(
@@ -250,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         sysbench_duration=args.sysbench_duration,
         sysbench_tables=args.sysbench_tables,
         sysbench_table_size=args.sysbench_table_size,
+        sysbench_workload=args.sysbench_workload,
         sysbench_warmup_seconds=args.sysbench_warmup_seconds,
         tpch_warmup_passes=args.tpch_warmup_passes,
         pair_seed=args.seed,

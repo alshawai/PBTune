@@ -66,7 +66,10 @@ from src.tuner.evaluator.evaluator import (
     WorkloadExecutor,
 )
 from src.tuner.evaluator.workload import WorkloadFileLoader
-from src.benchmarks.sysbench.executor import SysbenchExecutor
+from src.benchmarks.sysbench.executor import (
+    SysbenchExecutor,
+    DEFAULT_SYSBENCH_WORKLOAD,
+)
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.utils.environments import EnvironmentFactory
 from src.utils.metrics import (
@@ -255,9 +258,11 @@ class PBTTuner:
             workload_executor = SysbenchExecutor(
                 tables=self.pbt_config.sysbench_tables,
                 table_size=self.pbt_config.sysbench_table_size,
+                script=self.pbt_config.sysbench_workload,
             )
             self.snapshot_identifier = (
-                f"sysbench_t{self.pbt_config.sysbench_tables}_"
+                f"sysbench_{self.pbt_config.sysbench_workload}_"
+                f"t{self.pbt_config.sysbench_tables}_"
                 f"s{self.pbt_config.sysbench_table_size}"
             )
 
@@ -314,12 +319,7 @@ class PBTTuner:
             force_recreate_baseline=self.force_recreate_baseline,
         )
 
-        self.output_dir = (
-            Path(kwargs.get("output_dir", "results"))
-            / self.workload_type.value
-            / "pbt_runs"
-            / self.knob_tier
-        )
+        self.output_dir = self._build_output_dir(Path(kwargs.get("output_dir", "results")))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.evaluator = Evaluator(self.evaluator_config, workload_executor, self.env)
@@ -370,6 +370,18 @@ class PBTTuner:
             "-"
         )
         return normalized or "default"
+
+    def _build_output_dir(self, base_output_dir: Path) -> Path:
+        """Build structured output directory, partitioning Sysbench runs by workload mode."""
+        if self.benchmark_name == "sysbench":
+            return (
+                base_output_dir
+                / self.workload_type.value
+                / self.pbt_config.sysbench_workload
+                / "pbt_runs"
+                / self.knob_tier
+            )
+        return base_output_dir / self.workload_type.value / "pbt_runs" / self.knob_tier
 
     def _get_runtime_supported_knobs(self, worker_id: int = 0) -> Tuple[set[str], str]:
         """Get runtime pg_settings knob names and server version from a worker instance."""
@@ -886,6 +898,7 @@ class PBTTuner:
                 "tpch_warmup_passes": self.pbt_config.warmup_passes,
                 "sysbench_tables": self.pbt_config.sysbench_tables,
                 "sysbench_table_size": self.pbt_config.sysbench_table_size,
+                "sysbench_workload": self.pbt_config.sysbench_workload,
                 "sysbench_duration_seconds": self.pbt_config.evaluation_duration,
                 "sysbench_warmup_seconds": self.pbt_config.warmup_duration,
                 "population_size": self.pbt_config.population_size,
@@ -1254,6 +1267,17 @@ on your hardware, configuration, and workload/benchmark.
         "Only used with --benchmark sysbench",
     )
 
+    workload_group.add_argument(
+        "--sysbench-workload",
+        type=str,
+        default=None,
+        choices=["oltp_read_only", "oltp_read_write", "oltp_write_only"],
+        help=(
+            "Sysbench workload profile (default: oltp_read_write). "
+            "Only used with --benchmark sysbench"
+        ),
+    )
+
     instance_group = parser.add_argument_group("Instance Management")
     instance_group.add_argument(
         "--no-docker",
@@ -1316,8 +1340,9 @@ on your hardware, configuration, and workload/benchmark.
         type=str,
         default="results",
         help=(
-            "Base output directory (default: results). Results are organized into"
-            "{output_dir}/{workload}/pbt_runs/{tier}/"
+            "Base output directory (default: results). Results are organized into "
+            "{output_dir}/oltp/{sysbench_workload}/pbt_runs/{tier}/ for Sysbench "
+            "and {output_dir}/{workload}/pbt_runs/{tier}/ for other workloads"
         ),
     )
 
@@ -1336,9 +1361,19 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     enable_colors = not args.no_color
 
-    # Compute structured log directory: {base}/{workload}/pbt_runs/{tier}/
-    workload_for_dir = "olap" if args.benchmark == "tpch" else args.workload
-    log_output_dir = Path(args.output_dir) / workload_for_dir / "pbt_runs" / args.tier
+    # Compute structured log directory.
+    if args.benchmark == "sysbench":
+        sysbench_workload = args.sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD
+        log_output_dir = (
+            Path(args.output_dir)
+            / "oltp"
+            / sysbench_workload
+            / "pbt_runs"
+            / args.tier
+        )
+    else:
+        workload_for_dir = "olap" if args.benchmark == "tpch" else args.workload
+        log_output_dir = Path(args.output_dir) / workload_for_dir / "pbt_runs" / args.tier
     log_output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = log_output_dir / f"pbt_tuning_{timestamp}.html"
@@ -1383,6 +1418,7 @@ def main():
         "scale_factor": args.scale_factor,
         "sysbench_tables": args.sysbench_tables,
         "sysbench_table_size": args.sysbench_table_size,
+        "sysbench_workload": args.sysbench_workload,
     }
     config_dict.update(
         {key: value for key, value in cli_overrides.items() if value is not None}
