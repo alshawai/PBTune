@@ -364,7 +364,29 @@ python -m src.tuner.main --help
 | `--generations` | 10-100                                     | 30         | Optimization iterations                |
 | `--workload`    | `oltp`, `olap`, `mixed`                    | `oltp`     | Workload type                          |
 | `--duration`    | seconds                                    | 30         | Evaluation duration per worker         |
+| `--sysbench-workload` | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | `oltp_read_write` | Sysbench OLTP mode when `--benchmark sysbench` |
 | `--verbose`     | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG`      | `NORMAL`   | Logging level                          |
+
+### Sysbench Benchmark Modes
+
+Use explicit Sysbench workload mode selection when running OLTP benchmarks:
+
+```bash
+# Read-only OLTP benchmark
+python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
+
+# Read-write OLTP benchmark (default)
+python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
+
+# Write-only OLTP benchmark
+python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
+```
+
+Sysbench outputs are partitioned by mode:
+
+- PBT sessions: `results/oltp/{sysbench_workload}/pbt_runs/{tier}/...`
+- BO sessions: `results/oltp/{sysbench_workload}/bo_runs/{tier}/...`
+- Evaluation comparisons: `results/oltp/{sysbench_workload}/comparisons/{tier}/...`
 
 ### Dual-Evaluation Strategy
 

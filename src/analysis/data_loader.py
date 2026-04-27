@@ -215,6 +215,7 @@ def load_pbt_results(
                     "workload_type", default_workload_type
                 ),
                 "benchmark_name": session_meta.get("benchmark_name", "unknown"),
+                "sysbench_workload": session_meta.get("sysbench_workload"),
                 "system_info": data.get("system_info", {}),
                 "worker_resources": data.get("worker_resources", {}),
             }

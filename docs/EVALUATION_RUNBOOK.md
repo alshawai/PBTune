@@ -54,12 +54,31 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-  --session results/oltp/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
   --repetitions 8 \
+  --sysbench-workload oltp_read_write \
   --sysbench-tables 16 \
   --sysbench-table-size 200000 \
   --sysbench-duration 90 \
   --sysbench-warmup-seconds 15
+```
+
+### Option C1: Evaluate Read-Only Sysbench Session
+
+```bash
+python -m src.evaluation \
+  --session results/oltp/oltp_read_only/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --repetitions 8 \
+  --sysbench-workload oltp_read_only
+```
+
+### Option C2: Evaluate Write-Only Sysbench Session
+
+```bash
+python -m src.evaluation \
+  --session results/oltp/oltp_write_only/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --repetitions 8 \
+  --sysbench-workload oltp_write_only
 ```
 
 ### Option D: Explicit TPC-H Runtime Overrides
@@ -87,7 +106,7 @@ When omitted, `--seed` defaults to `50000`.
 
 By default, evaluation outputs are written to:
 
-- `results/oltp/comparisons/{tier}/` for OLTP workloads
+- `results/oltp/{sysbench_workload}/comparisons/{tier}/` for Sysbench OLTP workloads
 - `results/olap/comparisons/{tier}/` for OLAP workloads
 - `results/mixed/comparisons/{tier}/` for mixed or unknown workloads
 

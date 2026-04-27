@@ -55,6 +55,7 @@ class ComparisonConfig:
     sysbench_duration: Optional[int] = None
     sysbench_tables: Optional[int] = None
     sysbench_table_size: Optional[int] = None
+    sysbench_workload: Optional[str] = None
     sysbench_warmup_seconds: Optional[int] = None
     tpch_warmup_passes: Optional[int] = None
     pair_seed: int = 50_000
@@ -87,6 +88,7 @@ class TuningSessionData:
     benchmark: str
     workload_type: str
     session_id: str
+    sysbench_workload: Optional[str] = None
 
 
 @dataclass
