@@ -43,7 +43,7 @@ from src.evaluation.types import (
 LOGGER = get_logger(__name__)
 
 _PRIMARY_ENDPOINT = "score"
-_SECONDARY_ENDPOINT_BASE = ("throughput", "memory_utilization")
+_SECONDARY_ENDPOINT_BASE = ("throughput",)
 
 # Number of bootstrap resamples for CI estimation
 _N_BOOTSTRAP = 10_000
@@ -122,7 +122,7 @@ def compute_comparison_statistics(
     metric_comparisons.append(primary_metric)
 
     secondary_metrics: list[MetricComparison] = []
-    lower_is_better_metrics = {latency_endpoint, "memory_utilization"}
+    lower_is_better_metrics = {latency_endpoint}
     for metric_name in secondary_endpoints:
         higher_is_better = metric_name not in lower_is_better_metrics
         extractor = _build_extractor(metric_name)
@@ -343,7 +343,6 @@ def _build_extractor(metric_name: str) -> Callable[[RunResult], float]:
         "latency_p95": lambda r: r.metrics.latency_p95,
         "latency_p99": lambda r: r.metrics.latency_p99,
         "throughput": lambda r: r.metrics.throughput,
-        "memory_utilization": lambda r: r.metrics.memory_utilization,
     }
     if metric_name not in extractors:
         raise ValueError(

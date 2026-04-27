@@ -23,3 +23,25 @@ def test_parse_args_no_color_enables_plain_output(monkeypatch) -> None:
     args = parse_args()
 
     assert args.no_color is True
+
+
+def test_parse_args_sysbench_workload_default_none(monkeypatch) -> None:
+    """CLI keeps sysbench workload unset unless explicitly provided."""
+    monkeypatch.setattr(sys, "argv", ["tuner"])
+
+    args = parse_args()
+
+    assert args.sysbench_workload is None
+
+
+def test_parse_args_sysbench_workload_value(monkeypatch) -> None:
+    """CLI should parse explicit sysbench workload mode."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["tuner", "--sysbench-workload", "oltp_write_only"],
+    )
+
+    args = parse_args()
+
+    assert args.sysbench_workload == "oltp_write_only"

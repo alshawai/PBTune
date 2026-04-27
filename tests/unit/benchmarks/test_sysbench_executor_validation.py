@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.benchmarks.sysbench.executor import SysbenchExecutor
+import pytest
+
+from src.benchmarks.sysbench.executor import (
+    SysbenchExecutor,
+    DEFAULT_SYSBENCH_WORKLOAD,
+)
 from src.config.database import DatabaseConfig
 
 
@@ -190,3 +195,25 @@ def test_prepare_drops_tpch_leftovers_before_sysbench_prepare() -> None:
     assert cleanup_conn.closed is True
     assert vacuum_cursor.closed is True
     assert vacuum_conn.closed is True
+
+
+def test_default_sysbench_workload_is_read_write() -> None:
+    """Sysbench executor should default to canonical read-write mode."""
+    executor = SysbenchExecutor()
+    assert executor.script == DEFAULT_SYSBENCH_WORKLOAD
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["oltp_read_only", "oltp_read_write", "oltp_write_only"],
+)
+def test_sysbench_workload_mode_is_accepted(mode: str) -> None:
+    """All supported sysbench workload modes should be accepted."""
+    executor = SysbenchExecutor(script=mode)
+    assert executor.script == mode
+
+
+def test_invalid_sysbench_workload_mode_raises() -> None:
+    """Invalid sysbench workload mode should fail fast with ValueError."""
+    with pytest.raises(ValueError, match="Unsupported sysbench workload"):
+        SysbenchExecutor(script="oltp_invalid")

@@ -190,6 +190,44 @@ class TestLoadTuningSession:
         assert result.tuning_config["sysbench_warmup_seconds"] == 12
         assert result.tuning_config["tpch_warmup_passes"] == 2
 
+    def test_sysbench_workload_defaults_for_legacy_session(
+        self,
+        tmp_path: Path,
+        sample_session_file: Path,
+    ) -> None:
+        """Legacy sessions missing sysbench_workload should default to read-write."""
+        with open(sample_session_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        data["tuning_session"]["benchmark_name"] = "sysbench"
+        data["tuning_session"]["workload_type"] = "oltp"
+        data["tuning_session"].pop("sysbench_workload", None)
+
+        p = tmp_path / "legacy_sysbench.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+        result = load_tuning_session(p)
+        assert result.sysbench_workload == "oltp_read_write"
+
+    def test_sysbench_workload_parsed_from_session(
+        self,
+        tmp_path: Path,
+        sample_session_file: Path,
+    ) -> None:
+        """Session-provided sysbench workload should be parsed into session data."""
+        with open(sample_session_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        data["tuning_session"]["benchmark_name"] = "sysbench"
+        data["tuning_session"]["workload_type"] = "oltp"
+        data["tuning_session"]["sysbench_workload"] = "oltp_write_only"
+
+        p = tmp_path / "mode_sysbench.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+        result = load_tuning_session(p)
+        assert result.sysbench_workload == "oltp_write_only"
+
 
 # ===========================================================================
 # statistics.py tests
@@ -300,12 +338,12 @@ class TestComputeComparisonStatistics:
         )
         assert stats.alpha == pytest.approx(0.05)
 
-    def test_returns_primary_plus_three_secondary_metrics(
+    def test_returns_primary_plus_two_secondary_metrics(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Statistics include score + benchmark latency + throughput + memory."""
+        """Statistics include score + benchmark latency + throughput."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
@@ -314,7 +352,6 @@ class TestComputeComparisonStatistics:
             "score",
             "latency_p95",
             "throughput",
-            "memory_utilization",
         }
 
     def test_latency_higher_is_better_flag(
@@ -329,38 +366,17 @@ class TestComputeComparisonStatistics:
         latency_mc = next(m for m in stats.metrics if m.metric_name == "latency_p95")
         assert latency_mc.higher_is_better is False
 
-    def test_memory_utilization_treated_as_lower_is_better(
-        self, make_run_result
+    def test_memory_utilization_not_in_secondary_endpoints(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
     ) -> None:
-        """Memory utilization should be penalized when tuned uses more memory."""
-        default_runs = [
-            make_run_result(
-                "default",
-                i,
-                score=50.0,
-                memory_utilization=0.10,
-            )
-            for i in range(1, 6)
-        ]
-        tuned_runs = [
-            make_run_result(
-                "tuned",
-                i,
-                score=50.0,
-                memory_utilization=0.20,
-            )
-            for i in range(1, 6)
-        ]
-
+        """Memory utilization is intentionally excluded from comparison endpoints."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
-        memory_mc = next(
-            m for m in stats.metrics if m.metric_name == "memory_utilization"
-        )
-
-        assert memory_mc.higher_is_better is False
-        assert memory_mc.improvement_pct < 0.0
+        metric_names = {m.metric_name for m in stats.metrics}
+        assert "memory_utilization" not in metric_names
 
     def test_tpch_uses_latency_p99_endpoint(
         self,
@@ -443,7 +459,6 @@ class TestComputeComparisonStatistics:
         assert set(stats.secondary_endpoints) == {
             "latency_p95",
             "throughput",
-            "memory_utilization",
         }
         assert stats.power_warning is not None
         assert "0.0625" in stats.power_warning
@@ -593,6 +608,7 @@ class TestBenchmarkParameterResolution:
             benchmark="sysbench",
             workload_type="oltp",
             session_id="s1",
+            sysbench_workload=tuning_config.get("sysbench_workload", None),
         )
 
     def test_session_values_used_when_cli_omits(
@@ -626,6 +642,7 @@ class TestBenchmarkParameterResolution:
         assert resolved["sysbench_table_size"] == 123456
         assert resolved["tpch_warmup_passes"] == 2
         assert resolved["scale_factor"] == pytest.approx(3.0)
+        assert resolved["sysbench_workload"] == "oltp_read_write"
 
     def test_cli_values_override_session(
         self,
@@ -664,6 +681,39 @@ class TestBenchmarkParameterResolution:
         assert resolved["sysbench_table_size"] == 222222
         assert resolved["tpch_warmup_passes"] == 4
         assert resolved["scale_factor"] == pytest.approx(7.0)
+
+    def test_cli_sysbench_workload_overrides_session(self) -> None:
+        config = ComparisonConfig(
+            tuning_session_path=Path(
+                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+            ),
+            benchmark="sysbench",
+            sysbench_workload="oltp_read_only",
+        )
+        runner = ComparisonRunner(config)
+        session = self._make_session({"sysbench_workload": "oltp_write_only"})
+
+        resolved = runner._resolve_effective_benchmark_params(
+            session, benchmark="sysbench"
+        )
+
+        assert resolved["sysbench_workload"] == "oltp_read_only"
+
+    def test_session_sysbench_workload_used_when_cli_omits(self) -> None:
+        config = ComparisonConfig(
+            tuning_session_path=Path(
+                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+            ),
+            benchmark="sysbench",
+        )
+        runner = ComparisonRunner(config)
+        session = self._make_session({"sysbench_workload": "oltp_read_only"})
+
+        resolved = runner._resolve_effective_benchmark_params(
+            session, benchmark="sysbench"
+        )
+
+        assert resolved["sysbench_workload"] == "oltp_read_only"
 
 
 class TestDockerPrerequisites:
@@ -794,7 +844,11 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="olap")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "comparisons" / "extensive"
+            Path("results")
+            / "olap"
+            / "oltp_read_write"
+            / "comparisons"
+            / "extensive"
         )
 
     def test_metadata_tier_preferred_over_path_tier(self) -> None:
@@ -813,7 +867,11 @@ class TestOutputPathResolution:
         )
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "comparisons" / "core"
+            Path("results")
+            / "olap"
+            / "oltp_read_write"
+            / "comparisons"
+            / "core"
         )
 
     def test_metadata_tier_field_supported(self) -> None:
@@ -832,7 +890,11 @@ class TestOutputPathResolution:
         )
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "comparisons" / "minimal"
+            Path("results")
+            / "olap"
+            / "oltp_read_write"
+            / "comparisons"
+            / "minimal"
         )
 
     def test_unknown_workload_falls_back_to_mixed(self) -> None:
@@ -845,7 +907,46 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="custom")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "mixed" / "comparisons" / "unknown"
+            Path("results")
+            / "mixed"
+            / "oltp_read_write"
+            / "comparisons"
+            / "unknown"
+        )
+
+    def test_default_output_dir_uses_explicit_sysbench_workload(self) -> None:
+        config = ComparisonConfig(
+            tuning_session_path=Path(
+                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+            ),
+            benchmark="sysbench",
+            output_dir=None,
+            sysbench_workload="oltp_write_only",
+        )
+        runner = ComparisonRunner(config)
+        result = self._build_result(config, workload_type="oltp")
+
+        assert runner._resolve_output_dir(result) == (
+            Path("results")
+            / "oltp"
+            / "oltp_write_only"
+            / "comparisons"
+            / "core"
+        )
+
+    def test_tpch_output_dir_unchanged(self) -> None:
+        config = ComparisonConfig(
+            tuning_session_path=Path(
+                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+            ),
+            benchmark="tpch",
+            output_dir=None,
+        )
+        runner = ComparisonRunner(config)
+        result = self._build_result(config, workload_type="olap")
+
+        assert runner._resolve_output_dir(result) == (
+            Path("results") / "olap" / "comparisons" / "extensive"
         )
 
     def test_custom_output_dir_is_used_as_is(self, tmp_path: Path) -> None:
@@ -1036,6 +1137,7 @@ class TestCLI:
                 )
                 captured_config["sysbench_tables"] = config.sysbench_tables
                 captured_config["sysbench_table_size"] = config.sysbench_table_size
+                captured_config["sysbench_workload"] = config.sysbench_workload
                 m = MagicMock()
                 m.run.return_value = MagicMock()
                 return m
@@ -1057,6 +1159,8 @@ class TestCLI:
                     "16",
                     "--sysbench-table-size",
                     "200000",
+                    "--sysbench-workload",
+                    "oltp_read_only",
                 ]
             )
 
@@ -1065,6 +1169,7 @@ class TestCLI:
         assert captured_config["sysbench_warmup_seconds"] == 12
         assert captured_config["sysbench_tables"] == 16
         assert captured_config["sysbench_table_size"] == 200000
+        assert captured_config["sysbench_workload"] == "oltp_read_only"
 
     def test_cli_defaults_are_owned_by_python_entrypoint(
         self,
