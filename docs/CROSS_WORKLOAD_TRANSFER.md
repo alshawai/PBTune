@@ -13,7 +13,7 @@ Our current PBT implementation supports **same-workload transfer across hardware
 - **Warm-starting** seeds a population from a previously optimized `best_config.json`, accelerating convergence on the _same_ benchmark with potentially different hardware.
 - **Fractional normalization** stores configurations as resource fractions (e.g., `shared_buffers = 0.25` of available RAM), making them portable across machines with different resource capacities.
 
-However, **neither mechanism addresses the scenario where the workload itself changes**: a configuration tuned for a write-intensive Sysbench OLTP workload may perform poorly under a read-heavy TPC-H analytical workload, because the optimal trade-offs between buffer pool sizing, parallelism settings, and I/O scheduling are workload-dependent. Cross-workload transfer—the ability to leverage tuning experience from one workload class to accelerate optimization on a different workload class—remains an open and actively studied research challenge across the database auto-tuning community.
+However, **neither mechanism addresses the scenario where the workload itself changes**: a configuration tuned for Sysbench `oltp_write_only` may perform poorly under Sysbench `oltp_read_only` or under read-heavy TPC-H analytical workload, because the optimal trade-offs between buffer pool sizing, parallelism settings, and I/O scheduling are workload-dependent. Cross-workload transfer—the ability to leverage tuning experience from one workload class to accelerate optimization on a different workload class—remains an open and actively studied research challenge across the database auto-tuning community.
 
 ---
 
@@ -80,7 +80,7 @@ We propose a **population archive** that stores the final-generation population 
 ```
 archive_entry = {
     workload_fingerprint: vector,
-    benchmark: "sysbench_oltp_rw" | "tpch_sf10" | ...,
+    benchmark: "sysbench_oltp_read_only" | "sysbench_oltp_read_write" | "sysbench_oltp_write_only" | "tpch_sf10" | ...,
     population: [fractional_config_1, ..., fractional_config_N],
     fitness: [score_1, ..., score_N],
     hardware: WorkerResources,

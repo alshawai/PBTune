@@ -10,6 +10,24 @@ from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics
 from src.benchmarks.executor import BenchmarkExecutor
 
+SYSBENCH_WORKLOADS = (
+    "oltp_read_only",
+    "oltp_read_write",
+    "oltp_write_only",
+)
+DEFAULT_SYSBENCH_WORKLOAD = "oltp_read_write"
+
+
+def validate_sysbench_workload(mode: str) -> str:
+    """Validate and normalize a sysbench workload mode."""
+    normalized = str(mode).strip().lower()
+    if normalized not in SYSBENCH_WORKLOADS:
+        raise ValueError(
+            f"Unsupported sysbench workload '{mode}'. "
+            f"Expected one of {SYSBENCH_WORKLOADS}."
+        )
+    return normalized
+
 
 class SysbenchExecutor(BenchmarkExecutor):
     """
@@ -33,7 +51,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         threads: int = 8,
         tables: int = 10,
         table_size: int = 100000,
-        script: str = "oltp_read_write",
+        script: str = DEFAULT_SYSBENCH_WORKLOAD,
     ):
         """
         Parameters
@@ -50,7 +68,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         self.threads = threads
         self.tables = tables
         self.table_size = table_size
-        self.script = script
+        self.script = validate_sysbench_workload(script)
 
     def prepare(self, db_config: DatabaseConfig) -> None:
         """Run native `sysbench prepare` to create all sbtest tables."""

@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from typing import Tuple, Optional
 
 from src.tuner.evaluator.restart_policy import TuningMode
+from src.benchmarks.sysbench.executor import (
+    DEFAULT_SYSBENCH_WORKLOAD,
+    validate_sysbench_workload,
+)
 
 
 @dataclass
@@ -107,6 +111,11 @@ class PBTConfig:
         Number of rows per table for Sysbench workload.
         Default: 100000
 
+    sysbench_workload : str
+        Sysbench Lua script profile used for OLTP benchmarking.
+        Allowed values: "oltp_read_only", "oltp_read_write", "oltp_write_only".
+        Default: "oltp_read_write"
+
     dead_config_threshold : float
         Score threshold below which a worker is considered dead and marked
         for end-of-generation rescue logic.
@@ -146,6 +155,7 @@ class PBTConfig:
     verbose: bool = True
     sysbench_tables: int = 10
     sysbench_table_size: int = 100000
+    sysbench_workload: str = DEFAULT_SYSBENCH_WORKLOAD
     dead_config_threshold: float = 6.0
     dead_config_score: float = 1.0
     crash_score: float = 5.0
@@ -193,6 +203,8 @@ class PBTConfig:
         if self.warmup_passes < 0:
             raise ValueError("warmup_passes cannot be negative")
 
+        self.sysbench_workload = validate_sysbench_workload(self.sysbench_workload)
+
         if not 0.0 < self.dead_config_score < self.crash_score:
             raise ValueError("dead_config_score must be > 0 and less than crash_score")
 
@@ -238,6 +250,7 @@ class PBTConfig:
             "verbose": self.verbose,
             "sysbench_tables": self.sysbench_tables,
             "sysbench_table_size": self.sysbench_table_size,
+            "sysbench_workload": self.sysbench_workload,
             "dead_config_threshold": self.dead_config_threshold,
             "dead_config_score": self.dead_config_score,
             "crash_score": self.crash_score,

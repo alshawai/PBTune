@@ -18,7 +18,11 @@ def mock_pbt_directory(tmp_path):
 
     # File 1: Session A — two valid workers
     file1_data = {
-        "tuning_session": {"workload_type": "oltp", "benchmark_name": "sysbench"},
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+            "sysbench_workload": "oltp_read_write",
+        },
         "system_info": {"cpu": 4},
         "generation_history": [
             {
@@ -66,7 +70,11 @@ def mock_pbt_directory(tmp_path):
 
     # File 2: Session B — one valid worker, one crashed (failure_type set)
     file2_data = {
-        "tuning_session": {"workload_type": "oltp", "benchmark_name": "sysbench"},
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+            "sysbench_workload": "oltp_read_write",
+        },
         "generation_history": [
             {
                 "worker_configs": [
@@ -243,6 +251,7 @@ def test_load_pbt_results_empty_history(tmp_path):
                 "tuning_session": {
                     "workload_type": "oltp",
                     "benchmark_name": "sysbench",
+                    "sysbench_workload": "oltp_read_write",
                 },
                 "system_info": {"ram": "16GB"},
                 "generation_history": [],
@@ -260,6 +269,7 @@ def test_metadata_and_rescoring_checks(mock_pbt_directory):
     # 1. Metadata extraction correctness
     assert len(dataset.metadata) == 2
     assert dataset.metadata[0]["benchmark_name"] == "sysbench"
+    assert dataset.metadata[0]["sysbench_workload"] == "oltp_read_write"
     assert "cpu" in dataset.metadata[0]["system_info"]
 
     # 2. Rescored values differ from raw JSON values (proving re-scoring is active)
