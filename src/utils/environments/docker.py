@@ -130,12 +130,18 @@ class DockerEnvironment(DatabaseEnvironment):
 
         return kwargs
 
-    def _remove_worker_container(self, worker_id: int, purpose: str) -> bool:
+    def _remove_worker_container(
+        self,
+        worker_id: int,
+        purpose: str,
+        timeout: Optional[int] = None,
+    ) -> bool:
         """Remove an existing worker container if present."""
         container_name = self._container_name(worker_id)
         try:
-            old_container = self.client.containers.get(container_name)
-            old_container.remove(force=True)
+            with self._with_timeout(timeout):
+                old_container = self.client.containers.get(container_name)
+                old_container.remove(force=True)
         except docker_errors.NotFound:
             return True
         except docker_errors.DockerException as exc:
@@ -181,6 +187,36 @@ class DockerEnvironment(DatabaseEnvironment):
             container.reload()
             if container.status != "running":
                 container.start()
+            return True
+        except docker_errors.DockerException as state_exc:
+            LOGGER.error(
+                "Container '%s' unavailable after %s timeout: %s",
+                container_name,
+                action_label,
+                state_exc,
+            )
+            return False
+
+    def _ensure_container_stopped_after_timeout(
+        self,
+        worker_id: int,
+        action_label: str,
+    ) -> bool:
+        """Recover from Docker client timeout by checking stop completion."""
+        container_name = self._container_name(worker_id)
+        try:
+            container = self.client.containers.get(container_name)
+            container.reload()
+            if container.status == "running":
+                LOGGER.warning(
+                    "Container '%s' is still running after %s timeout",
+                    container_name,
+                    action_label,
+                )
+                return False
+            return True
+        except docker_errors.NotFound:
+            # If container is gone, stop/remove succeeded from caller perspective.
             return True
         except docker_errors.DockerException as state_exc:
             LOGGER.error(
@@ -509,11 +545,25 @@ class DockerEnvironment(DatabaseEnvironment):
         """Stop a running container."""
         container_name = self._container_name(worker_id)
         try:
-            container = self.client.containers.get(container_name)
-            container.stop(timeout=5)
+            with self._with_timeout(self._restore_api_timeout):
+                container = self.client.containers.get(container_name)
+                container.stop(timeout=5)
             if worker_id in self.instances:
                 self.instances[worker_id].running = False
             return True
+        except requests.exceptions.ReadTimeout as exc:
+            LOGGER.warning(
+                "Docker timed out stopping container '%s'; checking state: %s",
+                container_name,
+                exc,
+            )
+            stopped = self._ensure_container_stopped_after_timeout(
+                worker_id=worker_id,
+                action_label="stopping worker container",
+            )
+            if stopped and worker_id in self.instances:
+                self.instances[worker_id].running = False
+            return stopped
         except docker_errors.DockerException as exc:
             LOGGER.warning(
                 "Failed to stop container '%s' for worker %d: %s",
@@ -544,7 +594,27 @@ class DockerEnvironment(DatabaseEnvironment):
                 if not managed_name_pattern.match(container_name):
                     continue
                 try:
-                    container.stop(timeout=5)
+                    with self._with_timeout(self._restore_api_timeout):
+                        container.stop(timeout=5)
+                except requests.exceptions.ReadTimeout as exc:
+                    LOGGER.debug(
+                        "Docker timed out stopping container '%s' during stop_all; checking state: %s",
+                        container_name,
+                        exc,
+                    )
+                    try:
+                        container.reload()
+                        if getattr(container, "status", "") == "running":
+                            LOGGER.debug(
+                                "Container '%s' is still running after timeout in stop_all",
+                                container_name,
+                            )
+                    except docker_errors.DockerException as reload_exc:
+                        LOGGER.debug(
+                            "Unable to verify container '%s' state after stop timeout: %s",
+                            container_name,
+                            reload_exc,
+                        )
                 except (
                     docker_errors.DockerException,
                     requests.exceptions.RequestException,
@@ -928,42 +998,39 @@ class DockerEnvironment(DatabaseEnvironment):
         if not snapshot_id:
             snapshot_id = self._default_snapshot_id()
 
-        try:
-            self.client.images.get(snapshot_id)
-        except docker_errors.ImageNotFound:
-            LOGGER.debug(
-                "  No snapshot image '%s' found, skipping restore", snapshot_id
-            )
-            return False
-
         container_name = self._container_name(worker_id)
         port = self._worker_port(worker_id)
 
-        # Stop and remove current container
-        if not self._remove_worker_container(
-            worker_id=worker_id, purpose="snapshot restore"
-        ):
-            return False
-
-        volume_name = self._seed_pgdata_volume_from_snapshot(
-            worker_id=worker_id,
-            snapshot_id=snapshot_id,
-        )
-        if not volume_name:
-            return False
-
-        volumes = {volume_name: {"bind": "/pgdata/data", "mode": "rw"}}
-        launched, _ = self._launch_worker_container(
-            image_name=snapshot_id,
-            worker_id=worker_id,
-            action_label="creating snapshot-restored worker",
-            volumes=volumes,
-            timeout=self._restore_api_timeout,
-        )
-        if not launched:
-            return False
-
         try:
+            with self._with_timeout(self._restore_api_timeout):
+                self.client.images.get(snapshot_id)
+
+            # Stop and remove current container
+            if not self._remove_worker_container(
+                worker_id=worker_id,
+                purpose="snapshot restore",
+                timeout=self._restore_api_timeout,
+            ):
+                return False
+
+            volume_name = self._seed_pgdata_volume_from_snapshot(
+                worker_id=worker_id,
+                snapshot_id=snapshot_id,
+            )
+            if not volume_name:
+                return False
+
+            volumes = {volume_name: {"bind": "/pgdata/data", "mode": "rw"}}
+            launched, _ = self._launch_worker_container(
+                image_name=snapshot_id,
+                worker_id=worker_id,
+                action_label="creating snapshot-restored worker",
+                volumes=volumes,
+                timeout=self._restore_api_timeout,
+            )
+            if not launched:
+                return False
+
             self._wait_for_ready(
                 container_name,
                 port,
