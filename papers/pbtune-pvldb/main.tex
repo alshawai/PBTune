@@ -1,0 +1,85 @@
+% Requires acmart.cls and ACM-Reference-Format.bst from the official PVLDB template.
+\documentclass[sigconf, nonacm]{acmart}
+
+\usepackage{booktabs}
+\usepackage{etoolbox}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xspace}
+
+\input{macros}
+
+% PVLDB metadata (update for camera-ready)
+\newcommand\vldbdoi{TBD}
+\newcommand\vldbpages{TBD}
+\newcommand\vldbvolume{19}
+\newcommand\vldbissue{1}
+\newcommand\vldbyear{2026}
+\newcommand\vldbauthors{\authors}
+\newcommand\vldbtitle{\shorttitle}
+\newcommand\vldbavailabilityurl{https://github.com/Data-Vanta/ai-database-optimization}
+\newcommand\vldbpagestyle{plain}
+
+\begin{document}
+
+\title{PBTune: Population-Based Training for Automatic Database Parameter Tuning}
+\shorttitle{PBTune}
+
+\author{Author Name}
+\affiliation{%
+	\institution{Affiliation}
+	\city{City}
+	\country{Country}
+}
+\email{email@domain.com}
+
+\begin{abstract}
+We present \sysname, a Population-Based Training system for automatic
+PostgreSQL configuration tuning.
+This abstract is a placeholder and will be replaced with the final
+summary.
+\end{abstract}
+
+\maketitle
+
+%%% do not modify the following VLDB block %%
+%%% VLDB block start %%%
+\pagestyle{\vldbpagestyle}
+\begingroup\small\noindent\raggedright\textbf{PVLDB Reference Format:}\\
+\vldbauthors. \vldbtitle. PVLDB, \vldbvolume(\vldbissue): \vldbpages, \vldbyear.\\
+\href{https://doi.org/\vldbdoi}{doi:\vldbdoi}
+\endgroup
+\begingroup
+\renewcommand\thefootnote{}\footnote{\noindent
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International License. Visit
+\url{https://creativecommons.org/licenses/by-nc-nd/4.0/} to view a copy of this license.
+For any use beyond those covered by this license, obtain permission by emailing
+\href{mailto:info@vldb.org}{info@vldb.org}. Copyright is held by the owner/author(s).
+Publication rights licensed to the VLDB Endowment. \\
+\raggedright Proceedings of the VLDB Endowment, Vol. \vldbvolume, No. \vldbissue\ %
+ISSN 2150-8097. \\
+\href{https://doi.org/\vldbdoi}{doi:\vldbdoi} \\
+}\addtocounter{footnote}{-1}\endgroup
+%%% VLDB block end %%%
+
+%%% do not modify the following VLDB block %%
+%%% VLDB block start %%%
+\ifdefempty{\vldbavailabilityurl}{}{
+\vspace{.3cm}
+\begingroup\small\noindent\raggedright\textbf{PVLDB Artifact Availability:}\\
+The source code, data, and/or other artifacts have been made available at
+\url{\vldbavailabilityurl}.
+\endgroup
+}
+%%% VLDB block end %%%
+
+\input{sections/introduction}
+\input{sections/background}
+\input{sections/methodology}
+\input{sections/evaluation}
+\input{sections/conclusion}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}
