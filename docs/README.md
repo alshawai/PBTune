@@ -15,6 +15,8 @@ This index provides a quick navigation map for the project documentation set.
 
 - [Performance Evaluation](./PERFORMANCE_EVALUATION.md)
 - [Evaluation Reproducibility Runbook](./EVALUATION_RUNBOOK.md)
+- [Bayesian Optimization Baseline](./BO_BASELINE.md)
+- [PBT vs BO Comparison Script](./PBT_VS_BO_COMPARISON.md)
 - [Metrics Validation](./METRICS_VALIDATION.md)
 - [Benchmarking Strategy](./BENCHMARKING.md)
 

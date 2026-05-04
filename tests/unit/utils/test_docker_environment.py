@@ -312,6 +312,28 @@ def test_setup_instances_recreates_worker0_when_baseline_snapshot_missing() -> N
     env.create_snapshot.assert_called_once_with(worker_id=0)
 
 
+def test_setup_instances_raises_when_baseline_snapshot_creation_fails() -> None:
+    """Setup should fail immediately when the required baseline snapshot is missing."""
+    env = _make_environment()
+
+    env.client.containers.get.side_effect = docker.errors.NotFound("missing")
+    env.client.containers.run.return_value = MagicMock()
+
+    env._wait_for_ready = MagicMock()
+    env.initialize_schema = MagicMock()
+    env.schema_provider = _DummySchemaProvider()
+    env.snapshot_exists = MagicMock(return_value=False)
+    env.create_snapshot = MagicMock(return_value="")
+
+    with pytest.raises(
+        RuntimeError,
+        match="Failed to create baseline Docker snapshot for worker 0",
+    ):
+        env.setup_instances(num_workers=1, force_recreate=False)
+
+    env.create_snapshot.assert_called_once_with(worker_id=0)
+
+
 def test_setup_instances_force_recreate_baseline_removes_snapshot_once() -> None:
     """Forced baseline recreation should remove stale snapshots before worker setup."""
     env = _make_environment()
