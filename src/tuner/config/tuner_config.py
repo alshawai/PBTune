@@ -137,6 +137,23 @@ class PBTConfig:
     adaptive_restart_interval : int
         Restart interval used only when tuning_mode == TuningMode.ADAPTIVE.
         Default: 10
+
+    scoring_policy : str
+        Scoring policy to use (e.g., 'fixed_v1', 'feature_driven_v2').
+        Default: 'feature_driven_v2'
+
+    scoring_policy_version : Optional[str]
+        Version of the scoring policy for reproducibility.
+        Default: None
+
+    metric_reference_version : Optional[str]
+        Version of the metric reference set for calibration.
+        Default: None
+
+    scoring_calibration_evals : int
+        Number of initial evaluations used to calibrate the normalizer before
+        switching from uniform priors to data-driven percentile anchors.
+        Default: 5
     """
 
     population_size: int = 4
@@ -161,6 +178,10 @@ class PBTConfig:
     crash_score: float = 5.0
     tuning_mode: TuningMode = TuningMode.ONLINE
     adaptive_restart_interval: int = 10
+    scoring_policy: str = "feature_driven_v2"
+    scoring_policy_version: Optional[str] = None
+    metric_reference_version: Optional[str] = None
+    scoring_calibration_evals: int = 5
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -216,6 +237,9 @@ class PBTConfig:
         if self.adaptive_restart_interval < 1:
             raise ValueError("adaptive_restart_interval must be at least 1")
 
+        if self.scoring_calibration_evals < 1:
+            raise ValueError("scoring_calibration_evals must be at least 1")
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -256,6 +280,10 @@ class PBTConfig:
             "crash_score": self.crash_score,
             "tuning_mode": self.tuning_mode.value,
             "adaptive_restart_interval": self.adaptive_restart_interval,
+            "scoring_policy": self.scoring_policy,
+            "scoring_policy_version": self.scoring_policy_version,
+            "metric_reference_version": self.metric_reference_version,
+            "scoring_calibration_evals": self.scoring_calibration_evals,
         }
 
     def __repr__(self) -> str:
@@ -274,7 +302,11 @@ class PBTConfig:
             f"  adaptive_restart_interval={self.adaptive_restart_interval},\n"
             f"  dead_config_threshold={self.dead_config_threshold},\n"
             f"  dead_config_score={self.dead_config_score},\n"
-            f"  crash_score={self.crash_score}\n"
+            f"  crash_score={self.crash_score},\n"
+            f"  scoring_policy={self.scoring_policy},\n"
+            f"  scoring_policy_version={self.scoring_policy_version},\n"
+            f"  metric_reference_version={self.metric_reference_version},\n"
+            f"  scoring_calibration_evals={self.scoring_calibration_evals}\n"
             f")"
         )
 
