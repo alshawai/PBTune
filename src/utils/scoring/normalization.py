@@ -10,7 +10,7 @@ to single-point outliers (e.g. a single query timeout permanently compressing
 all future reward variance).
 """
 
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 import numpy as np
 
 from src.utils.logger import get_logger
@@ -143,7 +143,7 @@ class QuantileUtilityNormalizer:
         min_saturated_workers: int = 2,
     ) -> Dict[str, str]:
         """Detect per-metric saturation across multiple workers.
-        
+
         Returns dict of metric_name -> "upper" | "lower" for saturated metrics.
         A metric is saturated when >= min_saturated_workers hit the same bound.
         """
@@ -151,11 +151,11 @@ class QuantileUtilityNormalizer:
             return {}
 
         saturated: Dict[str, str] = {}
-        
+
         for metric_name in self.anchors:
             upper_count = 0
             lower_count = 0
-            
+
             for m in metrics_list:
                 raw_dict = m.to_dict()
                 val = raw_dict.get(metric_name)
@@ -163,31 +163,31 @@ class QuantileUtilityNormalizer:
                     continue
                 if metric_name in self.NATURALLY_BOUNDED_METRICS:
                     continue
-                
+
                 utility = self.score_metric(metric_name, float(val))
                 if utility >= 1.0 - saturation_epsilon:
                     upper_count += 1
                 elif utility <= saturation_epsilon:
                     lower_count += 1
-            
+
             if upper_count >= min_saturated_workers:
                 saturated[metric_name] = "upper"
             elif lower_count >= min_saturated_workers:
                 saturated[metric_name] = "lower"
-        
+
         return saturated
 
     def expand_metric_anchor(self, metric_name: str, bound: str) -> bool:
         """Expand a single metric's anchor on the saturated bound.
-        
+
         Uses the history buffer to recompute the anchor with a wider percentile,
         expanding only the saturated side.
         """
         if metric_name not in self._history or metric_name not in self.anchors:
             return False
-        
+
         direction, old_low, old_high = self.anchors[metric_name]
-        
+
         # We need the NEVER_ZERO_METRICS defined in fit() logic
         NEVER_ZERO_METRICS = {
             "latency_p99",
@@ -196,30 +196,35 @@ class QuantileUtilityNormalizer:
             "latency_variance",
             "tail_amplification",
         }
-        
-        values = [v for v in self._history[metric_name] if v > 0.0 or metric_name not in NEVER_ZERO_METRICS]
-        
+
+        values = [
+            v
+            for v in self._history[metric_name]
+            if v > 0.0 or metric_name not in NEVER_ZERO_METRICS
+        ]
+
         if len(values) < 2:
             return False
-        
+
         import numpy as np
+
         arr = np.array(values)
         new_low = float(np.percentile(arr, self.lower_quantile * 100))
         new_high = float(np.percentile(arr, self.upper_quantile * 100))
-        
+
         # Apply 20% expansion headroom on the saturated side
         rng = new_high - new_low
         if rng == 0:
             rng = max(abs(new_high), 1e-6) * 0.2
-        
+
         if bound == "upper":
             new_high = new_high + rng * 0.2
         elif bound == "lower":
             new_low = max(0.0, new_low - rng * 0.2)
-        
+
         if new_low == new_high:
             return False
-        
+
         self.anchors[metric_name] = (direction, new_low, new_high)
         return True
 
@@ -269,7 +274,9 @@ class QuantileUtilityNormalizer:
             logger.debug("fit() called with empty metrics list, skipping")
             return
 
-        logger.info("Calibrating normalizer anchors from %d observations", len(metrics_list))
+        logger.info(
+            "Calibrating normalizer anchors from %d observations", len(metrics_list)
+        )
 
         # Extract flat dictionary of values
         series = {}
@@ -343,7 +350,9 @@ class QuantileUtilityNormalizer:
 
         self._total_samples_since_calibration = 0
         self._is_calibrated = True
-        logger.info("Normalizer calibration complete: %d metrics anchored", len(self.anchors))
+        logger.info(
+            "Normalizer calibration complete: %d metrics anchored", len(self.anchors)
+        )
 
     def update(self, metrics: PerformanceMetrics) -> None:
         """
@@ -384,7 +393,10 @@ class QuantileUtilityNormalizer:
         """
         logger = get_logger(__name__)
 
-        if not self._is_calibrated or self._total_samples_since_calibration < self.min_samples_for_drift:
+        if (
+            not self._is_calibrated
+            or self._total_samples_since_calibration < self.min_samples_for_drift
+        ):
             return False
 
         drifted_metrics = []
@@ -479,7 +491,11 @@ class QuantileUtilityNormalizer:
                 if key in self.NATURALLY_BOUNDED_METRICS:
                     direction = self._get_metric_direction(key)
                     clamped = max(0.0, min(1.0, float(val)))
-                    scores[key] = clamped if direction == MetricDirection.HIGHER_IS_BETTER else 1.0 - clamped
+                    scores[key] = (
+                        clamped
+                        if direction == MetricDirection.HIGHER_IS_BETTER
+                        else 1.0 - clamped
+                    )
                 elif key in self.anchors:  # Only score calibrated metrics
                     scores[key] = self.score_metric(key, float(val))
 
