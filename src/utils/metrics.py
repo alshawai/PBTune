@@ -292,7 +292,10 @@ class MetricConfig:
         -----
         Uses 5th/95th percentiles instead of absolute min/max to be robust
         to outliers. Adds padding to allow room for future improvements.
+        Applies IQR-based outlier filtering before percentile computation.
         """
+        from src.utils.scoring.outlier_filtering import iqr_filter
+
         if len(historical_metrics) < 3:
             logger.warning(
                 "Only %d metrics available. "
@@ -317,10 +320,34 @@ class MetricConfig:
             )
             return
 
-        lat_p05 = np.percentile(latencies, 5)
-        lat_p95 = np.percentile(latencies, 95)
-        thr_p05: float = float(np.percentile(throughputs, 5))
-        thr_p95: float = float(np.percentile(throughputs, 95))
+        latencies_arr = np.array(latencies)
+        throughputs_arr = np.array(throughputs)
+
+        latencies_filtered, lat_filter_meta = iqr_filter(latencies_arr)
+        throughputs_filtered, thr_filter_meta = iqr_filter(throughputs_arr)
+
+        if lat_filter_meta["n_removed"] > 0:
+            logger.info(
+                "IQR filter removed %d/%d latency outliers (bounds: [%.1f, %.1f] ms)",
+                lat_filter_meta["n_removed"],
+                lat_filter_meta["original_size"],
+                lat_filter_meta["lower_bound"],
+                lat_filter_meta["upper_bound"],
+            )
+
+        if thr_filter_meta["n_removed"] > 0:
+            logger.info(
+                "IQR filter removed %d/%d throughput outliers (bounds: [%.1f, %.1f] TPS)",
+                thr_filter_meta["n_removed"],
+                thr_filter_meta["original_size"],
+                thr_filter_meta["lower_bound"],
+                thr_filter_meta["upper_bound"],
+            )
+
+        lat_p05 = np.percentile(latencies_filtered, 5)
+        lat_p95 = np.percentile(latencies_filtered, 95)
+        thr_p05: float = float(np.percentile(throughputs_filtered, 5))
+        thr_p95: float = float(np.percentile(throughputs_filtered, 95))
 
         lat_range = lat_p95 - lat_p05
         thr_range = thr_p95 - thr_p05
@@ -332,7 +359,7 @@ class MetricConfig:
 
         self._ranges_initialized = True
         logger.info(
-            "Updated normalization ranges from %d observations:\n"
+            "Updated normalization ranges from %d observations (after IQR filtering):\n"
             "  Latency (%s): [%.2f, %.2f] ms\n"
             "  Throughput: [%.2f, %.2f] TPS\n"
             "  (using 5th/95th percentiles + %.0f%% padding)",
