@@ -115,6 +115,7 @@ class HTMLFormatter(logging.Formatter):
     """Format log records as HTML with proper color styling."""
 
     def __init__(self, show_module: bool = True):
+        """Initialize HTMLFormatter with optional module name display."""
         self.show_module = show_module
         if show_module:
             fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
@@ -279,6 +280,7 @@ class HTMLFileHandler(logging.FileHandler):
     </html>"""
 
     def __init__(self, filename, mode="w", encoding="utf-8"):
+        """Initialize HTMLFileHandler with HTML header."""
         super().__init__(filename, mode, encoding)
         self.start_time = datetime.datetime.now()
         self._write_html_header()
