@@ -626,8 +626,8 @@ class Population:
                     excluded_failure_metrics += 1
 
         # Need samples from multiple generations to capture variability
-        # Minimum: 2 generations worth of data (2 * population_size)
-        min_samples_needed = max(8, 2 * len(self.workers))
+        # Minimum: 5 generations worth of data (5 * population_size), or 20, whichever is larger
+        min_samples_needed = max(20, 5 * len(self.workers))
 
         if len(all_metrics) < min_samples_needed:
             logger.debug(
