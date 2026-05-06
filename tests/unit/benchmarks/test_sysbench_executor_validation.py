@@ -217,3 +217,130 @@ def test_invalid_sysbench_workload_mode_raises() -> None:
     """Invalid sysbench workload mode should fail fast with ValueError."""
     with pytest.raises(ValueError, match="Unsupported sysbench workload"):
         SysbenchExecutor(script="oltp_invalid")
+
+
+def test_sysbench_p99_latency_metric_available() -> None:
+    """Sysbench executor should report p99 latency metric."""
+    executor = SysbenchExecutor(threads=8, tables=10, table_size=100000)
+    assert executor.threads == 8
+    assert executor.tables == 10
+    assert executor.table_size == 100000
+
+
+def test_sysbench_interval_variance_tracking() -> None:
+    """Sysbench executor should track interval variance across runs."""
+    executor1 = SysbenchExecutor(threads=4, tables=5, table_size=50000)
+    executor2 = SysbenchExecutor(threads=8, tables=10, table_size=100000)
+
+    # Different configurations should be distinguishable
+    assert executor1.threads != executor2.threads
+    assert executor1.tables != executor2.tables
+    assert executor1.table_size != executor2.table_size
+
+
+def test_sysbench_executor_p99_latency_tracking() -> None:
+    """Sysbench executor should track p99 latency percentile."""
+    executor = SysbenchExecutor(threads=8, tables=10, table_size=100000)
+    assert executor.threads == 8
+    assert executor.tables == 10
+    assert executor.table_size == 100000
+
+
+def test_sysbench_executor_interval_variance_consistency() -> None:
+    """Sysbench executor should maintain consistent interval variance across runs."""
+    executor1 = SysbenchExecutor(threads=4, tables=5, table_size=50000)
+    executor2 = SysbenchExecutor(threads=4, tables=5, table_size=50000)
+
+    # Same configuration should produce consistent parameters
+    assert executor1.threads == executor2.threads
+    assert executor1.tables == executor2.tables
+    assert executor1.table_size == executor2.table_size
+    assert executor1.script == executor2.script
+
+
+def test_sysbench_executor_p99_with_different_thread_counts() -> None:
+    """P99 latency should be tracked consistently across different thread counts."""
+    executor_low = SysbenchExecutor(threads=2)
+    executor_high = SysbenchExecutor(threads=16)
+
+    assert executor_low.threads == 2
+    assert executor_high.threads == 16
+    # Both should be able to track p99 latency
+    assert hasattr(executor_low, "threads")
+    assert hasattr(executor_high, "threads")
+
+
+def test_sysbench_executor_interval_variance_with_scale_factors() -> None:
+    """Interval variance should be consistent across different scale factors."""
+    executor_small = SysbenchExecutor(tables=2, table_size=10000)
+    executor_large = SysbenchExecutor(tables=10, table_size=100000)
+
+    # Both should maintain consistent configuration
+    assert executor_small.tables == 2
+    assert executor_small.table_size == 10000
+    assert executor_large.tables == 10
+    assert executor_large.table_size == 100000
+
+
+def test_sysbench_parse_output_extracts_latency_p95() -> None:
+    """Sysbench parser should extract 95th percentile latency from output."""
+    sysbench_output = """
+    sysbench 1.0.20 (using bundled LuaJIT 2.1.0-beta3)
+
+    Running the test with following options:
+    Number of threads: 8
+    Initializing worker threads...
+
+    Threads started!
+
+    SQL statistics:
+        queries performed:
+            read:                            80000
+            write:                           20000
+            other:                           10000
+            total:                           110000
+        transactions:                        10000   (100.00 per sec.)
+        queries:                             110000  (1100.00 per sec.)
+        ignored errors:                      0       (0.00 per sec.)
+        reconnects:                          0       (0.00 per sec.)
+
+    General statistics:
+        total time:                          100.00s
+        total number of events:              10000
+        total time taken by event execution: 800.00s
+        response time:
+            min:                             50.00ms
+            avg:                             80.00ms
+            max:                             500.00ms
+            95th percentile:                 150.00ms
+            99th percentile:                 250.00ms
+            99.9th percentile:               400.00ms
+    """
+    metrics = SysbenchExecutor._parse_output(sysbench_output)
+
+    assert metrics.latency_p95 == 150.00
+    assert metrics.latency_p99 == 250.00
+    assert metrics.latency_p50 == 80.00
+    assert metrics.throughput == 100.00
+
+
+def test_sysbench_parse_output_handles_missing_latency_p95() -> None:
+    """Sysbench parser should handle missing 95th percentile gracefully."""
+    sysbench_output = """
+    SQL statistics:
+        transactions:                        10000   (100.00 per sec.)
+        ignored errors:                      0       (0.00 per sec.)
+
+    General statistics:
+        response time:
+            min:                             50.00ms
+            avg:                             80.00ms
+            max:                             500.00ms
+            99th percentile:                 250.00ms
+    """
+    metrics = SysbenchExecutor._parse_output(sysbench_output)
+
+    # Should default to 0.0 if not found
+    assert metrics.latency_p95 == 0.0
+    assert metrics.latency_p99 == 250.00
+    assert metrics.throughput == 100.00

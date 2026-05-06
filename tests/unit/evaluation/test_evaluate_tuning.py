@@ -228,6 +228,66 @@ class TestLoadTuningSession:
         result = load_tuning_session(p)
         assert result.sysbench_workload == "oltp_write_only"
 
+    def test_scoring_metadata_defaults_for_legacy_session(
+        self,
+        sample_session_file: Path,
+    ) -> None:
+        """Legacy sessions without scoring metadata should receive defaults."""
+        result = load_tuning_session(sample_session_file)
+
+        assert result.scoring_policy == "fixed_v1"
+        assert result.scoring_policy_version == "1.0"
+        assert result.metric_reference_version == "v1"
+        assert result.workload_features == {}
+        assert result.normalization_metadata == {}
+        assert result.score_breakdown == {}
+
+    def test_scoring_metadata_loaded_when_present(
+        self,
+        tmp_path: Path,
+        sample_session_file: Path,
+    ) -> None:
+        """Loader should parse persisted scoring metadata payloads."""
+        with open(sample_session_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        data["scoring_policy"] = "feature_driven_v2"
+        data["scoring_policy_version"] = "2.0"
+        data["metric_reference_version"] = "v2"
+        data["workload_features"] = {
+            "read_ratio": 0.8,
+            "write_ratio": 0.2,
+        }
+        data["normalization_metadata"] = {"normalizer": "quantile_utility"}
+        data["score_breakdown"] = {"total": 91.5, "latency": 0.42}
+
+        p = tmp_path / "scoring_metadata.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+        result = load_tuning_session(p)
+        assert result.scoring_policy == "feature_driven_v2"
+        assert result.scoring_policy_version == "2.0"
+        assert result.metric_reference_version == "v2"
+        assert result.workload_features["read_ratio"] == pytest.approx(0.8)
+        assert result.normalization_metadata["normalizer"] == "quantile_utility"
+        assert result.score_breakdown["total"] == pytest.approx(91.5)
+
+    def test_invalid_scoring_metadata_type_raises(
+        self,
+        tmp_path: Path,
+        sample_session_file: Path,
+    ) -> None:
+        """Malformed scoring metadata shape should raise load errors."""
+        with open(sample_session_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        data["workload_features"] = ["invalid", "payload"]
+        p = tmp_path / "invalid_scoring_metadata.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+        with pytest.raises(TuningSessionLoadError, match="workload_features"):
+            load_tuning_session(p)
+
 
 # ===========================================================================
 # statistics.py tests
@@ -343,7 +403,7 @@ class TestComputeComparisonStatistics:
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Statistics include score + benchmark latency + throughput."""
+        """Statistics include score, benchmark latency, throughput, and memory endpoints."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
@@ -352,6 +412,12 @@ class TestComputeComparisonStatistics:
             "score",
             "latency_p95",
             "throughput",
+            "memory_utilization",
+            "memory_pressure",
+            "buffer_miss_rate",
+            "tail_amplification",
+            "scan_efficiency",
+            "latency_variance",
         }
 
     def test_latency_higher_is_better_flag(
@@ -366,17 +432,17 @@ class TestComputeComparisonStatistics:
         latency_mc = next(m for m in stats.metrics if m.metric_name == "latency_p95")
         assert latency_mc.higher_is_better is False
 
-    def test_memory_utilization_not_in_secondary_endpoints(
+    def test_memory_utilization_in_secondary_endpoints(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Memory utilization is intentionally excluded from comparison endpoints."""
+        """Memory utilization is tracked as a secondary comparison endpoint."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
         metric_names = {m.metric_name for m in stats.metrics}
-        assert "memory_utilization" not in metric_names
+        assert "memory_utilization" in metric_names
 
     def test_tpch_uses_latency_p99_endpoint(
         self,
@@ -390,6 +456,70 @@ class TestComputeComparisonStatistics:
         metric_names = {mc.metric_name for mc in stats.metrics}
         assert "latency_p99" in metric_names
         assert "latency_p95" not in metric_names
+
+    def test_endpoint_directionality_score(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
+    ) -> None:
+        """Score endpoint should have higher_is_better=True."""
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        score_mc = next(m for m in stats.metrics if m.metric_name == "score")
+        assert score_mc.higher_is_better is True
+
+    def test_endpoint_directionality_throughput(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
+    ) -> None:
+        """Throughput endpoint should have higher_is_better=True."""
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        throughput_mc = next(m for m in stats.metrics if m.metric_name == "throughput")
+        assert throughput_mc.higher_is_better is True
+
+    def test_endpoint_directionality_latency(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
+    ) -> None:
+        """Latency endpoints should have higher_is_better=False."""
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        latency_mc = next(m for m in stats.metrics if m.metric_name == "latency_p95")
+        assert latency_mc.higher_is_better is False
+
+    def test_endpoint_directionality_memory_utilization(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
+    ) -> None:
+        """Memory utilization should have higher_is_better=False (lower is better)."""
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        mem_util_mc = next(
+            m for m in stats.metrics if m.metric_name == "memory_utilization"
+        )
+        assert mem_util_mc.higher_is_better is False
+
+    def test_endpoint_directionality_buffer_miss_rate(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
+    ) -> None:
+        """Buffer miss rate should have higher_is_better=False (lower is better)."""
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        miss_rate_mc = next(
+            m for m in stats.metrics if m.metric_name == "buffer_miss_rate"
+        )
+        assert miss_rate_mc.higher_is_better is False
 
     def test_ci_is_ordered(
         self,
@@ -459,6 +589,12 @@ class TestComputeComparisonStatistics:
         assert set(stats.secondary_endpoints) == {
             "latency_p95",
             "throughput",
+            "memory_utilization",
+            "memory_pressure",
+            "buffer_miss_rate",
+            "tail_amplification",
+            "scan_efficiency",
+            "latency_variance",
         }
         assert stats.power_warning is not None
         assert "0.0625" in stats.power_warning
@@ -844,11 +980,7 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="olap")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results")
-            / "olap"
-            / "oltp_read_write"
-            / "comparisons"
-            / "extensive"
+            Path("results") / "olap" / "oltp_read_write" / "comparisons" / "extensive"
         )
 
     def test_metadata_tier_preferred_over_path_tier(self) -> None:
@@ -867,11 +999,7 @@ class TestOutputPathResolution:
         )
 
         assert runner._resolve_output_dir(result) == (
-            Path("results")
-            / "olap"
-            / "oltp_read_write"
-            / "comparisons"
-            / "core"
+            Path("results") / "olap" / "oltp_read_write" / "comparisons" / "core"
         )
 
     def test_metadata_tier_field_supported(self) -> None:
@@ -890,11 +1018,7 @@ class TestOutputPathResolution:
         )
 
         assert runner._resolve_output_dir(result) == (
-            Path("results")
-            / "olap"
-            / "oltp_read_write"
-            / "comparisons"
-            / "minimal"
+            Path("results") / "olap" / "oltp_read_write" / "comparisons" / "minimal"
         )
 
     def test_unknown_workload_falls_back_to_mixed(self) -> None:
@@ -907,11 +1031,7 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="custom")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results")
-            / "mixed"
-            / "oltp_read_write"
-            / "comparisons"
-            / "unknown"
+            Path("results") / "mixed" / "oltp_read_write" / "comparisons" / "unknown"
         )
 
     def test_default_output_dir_uses_explicit_sysbench_workload(self) -> None:
@@ -927,11 +1047,7 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="oltp")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results")
-            / "oltp"
-            / "oltp_write_only"
-            / "comparisons"
-            / "core"
+            Path("results") / "oltp" / "oltp_write_only" / "comparisons" / "core"
         )
 
     def test_tpch_output_dir_unchanged(self) -> None:

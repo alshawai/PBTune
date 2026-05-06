@@ -299,10 +299,350 @@ def test_knob_bounds_hardware_relative(mock_get_knob_space, mock_pbt_directory):
     assert dataset.knob_bounds["shared_buffers"] == (0.15, 0.40)
 
 
+def test_load_pbt_results_mixed_version_metadata(tmp_path):
+    """Test that mixed metric_reference_version across files is handled correctly."""
+    data_dir = tmp_path / "mixed_version"
+    data_dir.mkdir()
+
+    # File 1: metric_reference_version = "v1"
+    file1_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "metric_reference_version": "v1",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 1024,
+                            "enable_indexscan": "on",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 150.0,
+                        "metrics": {
+                            "latency_p95": 15.0,
+                            "throughput": 1000.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    # File 2: metric_reference_version = "v2"
+    file2_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "metric_reference_version": "v2",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 2048,
+                            "enable_indexscan": "off",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 200.0,
+                        "metrics": {
+                            "latency_p95": 10.0,
+                            "throughput": 1500.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    (data_dir / "pbt_results_1.json").write_text(json.dumps(file1_data))
+    (data_dir / "pbt_results_2.json").write_text(json.dumps(file2_data))
+
+    # Load and verify that the first file's version is used for global rescoring
+    dataset = load_pbt_results(data_dir)
+    assert dataset.n_observations == 2
+    assert len(dataset.metadata) == 2
+    # The first file's metric_reference_version should be used for global rescoring
+    assert dataset.metadata[0]["metric_reference_version"] == "v1"
+    assert dataset.metadata[1]["metric_reference_version"] == "v2"
+
+
+def test_load_pbt_results_mixed_scoring_policy(tmp_path):
+    """Test that mixed scoring_policy across files is handled correctly."""
+    data_dir = tmp_path / "mixed_policy"
+    data_dir.mkdir()
+
+    # File 1: scoring_policy = "default"
+    file1_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "scoring_policy": "default",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 1024,
+                            "enable_indexscan": "on",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 150.0,
+                        "metrics": {
+                            "latency_p95": 15.0,
+                            "throughput": 1000.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    # File 2: scoring_policy = "aggressive"
+    file2_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "scoring_policy": "aggressive",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 2048,
+                            "enable_indexscan": "off",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 200.0,
+                        "metrics": {
+                            "latency_p95": 10.0,
+                            "throughput": 1500.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    (data_dir / "pbt_results_1.json").write_text(json.dumps(file1_data))
+    (data_dir / "pbt_results_2.json").write_text(json.dumps(file2_data))
+
+    # Load and verify that the first file's policy is used for global rescoring
+    dataset = load_pbt_results(data_dir)
+    assert dataset.n_observations == 2
+    assert len(dataset.metadata) == 2
+    # The first file's scoring_policy should be used for global rescoring
+    assert dataset.metadata[0]["scoring_policy"] == "default"
+    assert dataset.metadata[1]["scoring_policy"] == "aggressive"
+
+
+def test_mixed_version_scoring_policy_propagation(tmp_path):
+    """Test that mixed scoring_policy versions are handled correctly."""
+    data_dir = tmp_path / "mixed_version"
+    data_dir.mkdir()
+
+    # File 1: scoring_policy_version = "v1"
+    file1_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "scoring_policy": "default",
+        "scoring_policy_version": "v1",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 1024,
+                            "enable_indexscan": "on",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 150.0,
+                        "metrics": {
+                            "latency_p95": 15.0,
+                            "throughput": 1000.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    # File 2: scoring_policy_version = "v2"
+    file2_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "scoring_policy": "default",
+        "scoring_policy_version": "v2",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 2048,
+                            "enable_indexscan": "off",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 200.0,
+                        "metrics": {
+                            "latency_p95": 10.0,
+                            "throughput": 1500.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    (data_dir / "pbt_results_1.json").write_text(json.dumps(file1_data))
+    (data_dir / "pbt_results_2.json").write_text(json.dumps(file2_data))
+
+    # Load and verify that the first file's version is used for global rescoring
+    dataset = load_pbt_results(data_dir)
+    assert dataset.n_observations == 2
+    assert len(dataset.metadata) == 2
+    # Verify that rescoring_metadata is propagated to all metadata entries
+    assert "rescoring_metadata" in dataset.metadata[0]
+    assert "rescoring_metadata" in dataset.metadata[1]
+    # Both should have the same rescoring metadata (from first file's version)
+    assert dataset.metadata[0]["rescoring_metadata"]["scoring_policy_version"] == "v1"
+    assert dataset.metadata[1]["rescoring_metadata"]["scoring_policy_version"] == "v1"
+
+
+def test_mixed_version_metric_reference_version(tmp_path):
+    """Test that mixed metric_reference_version values are handled correctly."""
+    data_dir = tmp_path / "mixed_metric_ref"
+    data_dir.mkdir()
+
+    # File 1: metric_reference_version = "2024-01"
+    file1_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "metric_reference_version": "2024-01",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 1024,
+                            "enable_indexscan": "on",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 150.0,
+                        "metrics": {
+                            "latency_p95": 15.0,
+                            "throughput": 1000.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    # File 2: metric_reference_version = "2024-02"
+    file2_data = {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+        },
+        "metric_reference_version": "2024-02",
+        "generation_history": [
+            {
+                "worker_configs": [
+                    {
+                        "worker_id": 0,
+                        "config": {
+                            "shared_buffers": 2048,
+                            "enable_indexscan": "off",
+                        },
+                    }
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 200.0,
+                        "metrics": {
+                            "latency_p95": 10.0,
+                            "throughput": 1500.0,
+                            "failure_type": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    (data_dir / "pbt_results_1.json").write_text(json.dumps(file1_data))
+    (data_dir / "pbt_results_2.json").write_text(json.dumps(file2_data))
+
+    # Load and verify that the first file's version is used for global rescoring
+    dataset = load_pbt_results(data_dir)
+    assert dataset.n_observations == 2
+    # Verify that rescoring_metadata contains the first file's metric_reference_version
+    assert (
+        dataset.metadata[0]["rescoring_metadata"]["metric_reference_version"]
+        == "2024-01"
+    )
+    assert (
+        dataset.metadata[1]["rescoring_metadata"]["metric_reference_version"]
+        == "2024-01"
+    )
+
+
 @patch("src.analysis.data_loader.get_knob_space")
-def test_load_pbt_results_coerces_worker_resources_dict(
-    mock_get_knob_space, tmp_path
-):
+def test_load_pbt_results_coerces_worker_resources_dict(mock_get_knob_space, tmp_path):
     """worker_resources JSON dicts are converted to WorkerResources before resolution."""
     mock_space = MagicMock()
     mock_kd = MagicMock()
