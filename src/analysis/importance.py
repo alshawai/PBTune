@@ -51,6 +51,33 @@ class InsufficientDataError(Exception):
 class ImportanceResult:
     """
     Container for fANOVA importance variance decomposition results.
+
+    Attributes
+    ----------
+    marginal_importances : dict[str, float]
+        Marginal importance scores for each knob (0-1 normalized)
+    pairwise_interactions : dict[tuple[str, str], float]
+        Pairwise interaction importance scores between knob pairs
+    model_r2 : float
+        R² score of the underlying Random Forest model
+    n_samples : int
+        Number of tuning samples used for analysis
+    n_features : int
+        Number of knobs analyzed
+    workload_type : str
+        Type of workload (OLTP, OLAP, MIXED)
+    shap_importances : dict[str, float]
+        SHAP-based importance scores for each knob
+    shap_values : np.ndarray
+        Raw SHAP values for all samples and features
+    fanova_shap_correlation : float
+        Correlation between fANOVA and SHAP importance rankings
+    scoring_policy : str
+        Scoring policy used during tuning (default: "fixed_v1")
+    scoring_policy_version : str
+        Version of the scoring policy (default: "1.0")
+    metric_reference_version : str
+        Version of metric reference used (default: "v1")
     """
 
     marginal_importances: dict[str, float]
@@ -62,6 +89,9 @@ class ImportanceResult:
     shap_importances: dict[str, float]
     shap_values: np.ndarray
     fanova_shap_correlation: float
+    scoring_policy: str = "fixed_v1"
+    scoring_policy_version: str = "1.0"
+    metric_reference_version: str = "v1"
 
 
 @dataclass
@@ -204,11 +234,11 @@ def analyze_knob_importance(
     max_depth: Optional[int] = 5,
     random_state: int = 42,
     top_k: int = 20,
-    interaction_order: int = 2
+    interaction_order: int = 2,
 ) -> ImportanceResult:
     """
     Train a Random Forest and perform fANOVA decomposition to measure knob importance.
-    
+
     Parameters
     ----------
     loaded_data : LoadedData
@@ -223,7 +253,7 @@ def analyze_knob_importance(
         Number of top features strictly evaluated for pairwise interactions, by default 20.
     interaction_order : int, optional
         Maximum order of fANOVA interaction calculated, by default 2. Note: Order 3+ is computationally expensive.
-        
+
     Returns
     -------
     ImportanceResult
@@ -231,7 +261,7 @@ def analyze_knob_importance(
     """
     df = _drop_zero_variance_columns(loaded_data.config_df.copy())
     scores = loaded_data.scores
-    
+
     n_samples = len(df)
     if n_samples < 30:
         raise InsufficientDataError(
@@ -262,9 +292,7 @@ def analyze_knob_importance(
     if primary_pass.fanova_shap_correlation < CORRELATION_THRESHOLD:
         retry_n_estimators = max(RETRY_MIN_ESTIMATORS, n_estimators * 2)
         retry_max_depth = (
-            RETRY_MIN_DEPTH
-            if max_depth is None
-            else max(RETRY_MIN_DEPTH, max_depth)
+            RETRY_MIN_DEPTH if max_depth is None else max(RETRY_MIN_DEPTH, max_depth)
         )
 
         if retry_n_estimators != n_estimators or retry_max_depth != max_depth:
@@ -338,13 +366,30 @@ def analyze_knob_importance(
 
         # Sort descending
         pairwise_interactions = dict(
-            sorted(pairwise_interactions.items(), key=lambda item: item[1], reverse=True)
+            sorted(
+                pairwise_interactions.items(), key=lambda item: item[1], reverse=True
+            )
         )
 
     workload_type = (
         loaded_data.metadata[0].get("workload_type", "unknown")
         if loaded_data.metadata
         else "unknown"
+    )
+    scoring_policy = (
+        loaded_data.metadata[0].get("scoring_policy", "fixed_v1")
+        if loaded_data.metadata
+        else "fixed_v1"
+    )
+    scoring_policy_version = (
+        loaded_data.metadata[0].get("scoring_policy_version", "1.0")
+        if loaded_data.metadata
+        else "1.0"
+    )
+    metric_reference_version = (
+        loaded_data.metadata[0].get("metric_reference_version", "v1")
+        if loaded_data.metadata
+        else "v1"
     )
 
     return ImportanceResult(
@@ -357,4 +402,7 @@ def analyze_knob_importance(
         shap_importances=selected_pass.shap_importances,
         shap_values=selected_pass.shap_values,
         fanova_shap_correlation=selected_pass.fanova_shap_correlation,
+        scoring_policy=scoring_policy,
+        scoring_policy_version=scoring_policy_version,
+        metric_reference_version=metric_reference_version,
     )
