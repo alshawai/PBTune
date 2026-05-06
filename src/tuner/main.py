@@ -65,7 +65,10 @@ from src.tuner.evaluator.evaluator import (
     EvaluatorConfig,
     WorkloadExecutor,
 )
-from src.tuner.evaluator.workload import WorkloadFileLoader
+from src.tuner.evaluator.workload import (
+    WorkloadFileLoader,
+    extract_workload_template_metadata,
+)
 from src.benchmarks.sysbench.executor import (
     SysbenchExecutor,
     DEFAULT_SYSBENCH_WORKLOAD,
@@ -77,6 +80,7 @@ from src.utils.metrics import (
     WorkloadType,
     create_metric_config,
 )
+from src.utils.scoring.workload_features import WorkloadFeatureExtractor
 from src.utils.logger import (
     setup_logging,
     get_logger,
@@ -223,7 +227,15 @@ class PBTTuner:
 
         self.db_config = get_db_config()
 
-        self.metric_config = create_metric_config(workload_type.value)
+        self.metric_config = create_metric_config(
+            workload_type.value,
+            scoring_policy=self.pbt_config.scoring_policy,
+            scoring_policy_version=self.pbt_config.scoring_policy_version,
+            metric_reference_version=self.pbt_config.metric_reference_version,
+        )
+
+        self.workload_features: Dict[str, float] = {}
+        self.feature_extractor = WorkloadFeatureExtractor()
 
         self.evaluator_config = EvaluatorConfig(
             workload_type=workload_type,
@@ -260,6 +272,13 @@ class PBTTuner:
                 table_size=self.pbt_config.sysbench_table_size,
                 script=self.pbt_config.sysbench_workload,
             )
+            self.workload_features = self.feature_extractor.extract_sysbench_features(
+                script=self.pbt_config.sysbench_workload,
+                threads=self.pbt_config.num_parallel_workers,
+                cpu_cores=int(self.worker_resources.cpu_cores or 1),
+                table_size=self.pbt_config.sysbench_table_size,
+                tables=self.pbt_config.sysbench_tables,
+            )
             self.snapshot_identifier = (
                 f"sysbench_{self.pbt_config.sysbench_workload}_"
                 f"t{self.pbt_config.sysbench_tables}_"
@@ -277,6 +296,10 @@ class PBTTuner:
                 reset,
             )
             workload_executor = TPCHExecutor(scale_factor=self.pbt_config.scale_factor)
+            self.workload_features = self.feature_extractor.extract_tpch_features(
+                scale_factor=self.pbt_config.scale_factor,
+                warmup_passes=self.pbt_config.warmup_passes,
+            )
             self.snapshot_identifier = f"tpch_sf{self.pbt_config.scale_factor}"
 
             self.logger.debug(
@@ -298,6 +321,10 @@ class PBTTuner:
             workload_executor = self._create_workload_executor(
                 workload_type, workload_file
             )
+            template_metadata = extract_workload_template_metadata(workload_executor)
+            self.workload_features = self.feature_extractor.extract_template_features(
+                metadata=template_metadata,
+            )
             self.snapshot_identifier = (
                 f"{self.benchmark_name}_sf{self.pbt_config.scale_factor}"
             )
@@ -310,7 +337,7 @@ class PBTTuner:
         self.env = EnvironmentFactory.create(
             schema_provider=workload_executor,
             use_docker=not no_docker,
-            base_dir=Path(f"./pg_instances/{self.benchmark_name}"),
+            base_dir=Path("./.instances"),
             base_port=5440,
             db_config=self.db_config,
             worker_resources=self.worker_resources,
@@ -319,8 +346,12 @@ class PBTTuner:
             force_recreate_baseline=self.force_recreate_baseline,
         )
 
-        self.output_dir = self._build_output_dir(Path(kwargs.get("output_dir", "results")))
+        self.output_dir = self._build_output_dir(
+            Path(kwargs.get("output_dir", "results"))
+        )
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.metric_config.workload_features = dict(self.workload_features)
 
         self.evaluator = Evaluator(self.evaluator_config, workload_executor, self.env)
 
@@ -667,10 +698,10 @@ class PBTTuner:
 
         # Notify user of new high score conditionally (handles dynamic rescales upwards too)
         _, current_global_best_score = self.population.get_best_configuration()
-        if self._last_logged_best_score != current_global_best_score:
-            if current_global_best_score > self._last_logged_best_score:
-                self.logger.info("🎉 NEW BEST SCORE: %.4f", current_global_best_score)
-            self._last_logged_best_score = current_global_best_score
+        if self.population.generations_without_improvement == 0 and generation > 0:
+            self.logger.info("🎉 NEW BEST SCORE: %.4f", current_global_best_score)
+
+        self._last_logged_best_score = current_global_best_score
 
         gen_summary = {
             "generation": generation,
@@ -859,6 +890,34 @@ class PBTTuner:
 
         return "Unknown reason"
 
+    def _build_scoring_payload(
+        self, metrics: Optional[PerformanceMetrics]
+    ) -> Dict[str, Any]:
+        """Build score metadata payload persisted into tuning artifacts."""
+        score_breakdown: Dict[str, Any] = {}
+        if metrics is not None:
+            score_breakdown = convert_numpy_types(
+                self.metric_config.compute_detailed_scores(metrics)
+            )
+
+        scoring_metadata = convert_numpy_types(
+            self.metric_config.get_scoring_metadata()
+        )
+        return {
+            "scoring_policy": scoring_metadata.get("scoring_policy", "fixed_v1"),
+            "scoring_policy_version": scoring_metadata.get(
+                "scoring_policy_version", "1.0"
+            ),
+            "metric_reference_version": scoring_metadata.get(
+                "metric_reference_version", "v1"
+            ),
+            "workload_features": scoring_metadata.get("workload_features", {}),
+            "normalization_metadata": scoring_metadata.get(
+                "normalization_metadata", {}
+            ),
+            "score_breakdown": score_breakdown,
+        }
+
     def save_intermediate_results(self, generation: int):
         """Save intermediate results during training"""
         interim_output_dir = (
@@ -878,6 +937,11 @@ class PBTTuner:
             "elapsed_time": time.time() - self.start_time if self.start_time else 0,
         }
 
+        scoring_payload = self._build_scoring_payload(
+            metrics=self.population.best_overall_metrics
+        )
+        results.update(scoring_payload)
+
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
 
@@ -887,6 +951,7 @@ class PBTTuner:
         """Save final tuning results"""
         best_metrics = self.population.best_overall_metrics
         worker_resources = self.knob_space.worker_resources
+        scoring_payload = self._build_scoring_payload(metrics=best_metrics)
 
         results = {
             "tuning_session": {
@@ -907,6 +972,9 @@ class PBTTuner:
                 "timestamp": self.timestamp,
                 "tuning_mode": self.pbt_config.tuning_mode.value,
                 "adaptive_restart_interval": self.pbt_config.adaptive_restart_interval,
+                "scoring_policy": scoring_payload["scoring_policy"],
+                "scoring_policy_version": scoring_payload["scoring_policy_version"],
+                "metric_reference_version": scoring_payload["metric_reference_version"],
             },
             "best_configuration": {
                 "score": float(self.best_score) if self.best_score else 0.0,
@@ -935,6 +1003,12 @@ class PBTTuner:
                 ),
             },
             "system_info": self.system_info,
+            "scoring_policy": scoring_payload["scoring_policy"],
+            "scoring_policy_version": scoring_payload["scoring_policy_version"],
+            "metric_reference_version": scoring_payload["metric_reference_version"],
+            "workload_features": scoring_payload["workload_features"],
+            "normalization_metadata": scoring_payload["normalization_metadata"],
+            "score_breakdown": scoring_payload["score_breakdown"],
         }
 
         tuning_output_dir = self.output_dir / "tuning_sessions"
@@ -1207,6 +1281,33 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    scoring_group = parser.add_argument_group("Scoring & Normalization")
+    scoring_group.add_argument(
+        "--scoring-policy",
+        type=str,
+        default=None,
+        choices=["fixed_v1", "feature_driven_v2"],
+        help="Policy for performance score aggregation (default: falls back to PBT config)",
+    )
+    scoring_group.add_argument(
+        "--scoring-policy-version",
+        type=str,
+        default=None,
+        help="Frozen policy version string for reproducibility (e.g., 'v2.1')",
+    )
+    scoring_group.add_argument(
+        "--metric-reference-version",
+        type=str,
+        default=None,
+        help="Frozen normalizer metadata reference version (e.g., 'v1.0')",
+    )
+    scoring_group.add_argument(
+        "--scoring-calibration-evals",
+        type=int,
+        default=None,
+        help="Number of initial evaluations for normalizer calibration (default: 5)",
+    )
+
     workload_group = parser.add_argument_group("Workload Settings")
     workload_exclusive = workload_group.add_mutually_exclusive_group()
     workload_exclusive.add_argument(
@@ -1365,15 +1466,13 @@ def main():
     if args.benchmark == "sysbench":
         sysbench_workload = args.sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD
         log_output_dir = (
-            Path(args.output_dir)
-            / "oltp"
-            / sysbench_workload
-            / "pbt_runs"
-            / args.tier
+            Path(args.output_dir) / "oltp" / sysbench_workload / "pbt_runs" / args.tier
         )
     else:
         workload_for_dir = "olap" if args.benchmark == "tpch" else args.workload
-        log_output_dir = Path(args.output_dir) / workload_for_dir / "pbt_runs" / args.tier
+        log_output_dir = (
+            Path(args.output_dir) / workload_for_dir / "pbt_runs" / args.tier
+        )
     log_output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = log_output_dir / f"pbt_tuning_{timestamp}.html"
@@ -1430,6 +1529,15 @@ def main():
         config_dict["tuning_mode"] = args.tuning_mode
     if isinstance(config_dict.get("tuning_mode"), str):
         config_dict["tuning_mode"] = TuningMode(config_dict["tuning_mode"])
+
+    if args.scoring_policy:
+        config_dict["scoring_policy"] = args.scoring_policy
+    if args.scoring_policy_version:
+        config_dict["scoring_policy_version"] = args.scoring_policy_version
+    if args.metric_reference_version:
+        config_dict["metric_reference_version"] = args.metric_reference_version
+    if args.scoring_calibration_evals is not None:
+        config_dict["scoring_calibration_evals"] = args.scoring_calibration_evals
 
     pbt_config = PBTConfig(**config_dict)
 
