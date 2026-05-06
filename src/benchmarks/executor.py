@@ -60,7 +60,9 @@ class BenchmarkExecutor(ABC):
         Returns
         -------
         PerformanceMetrics
-            Collected metrics from the execution
+            Collected metrics from the execution. Must include core metrics (throughput,
+            latency percentiles) as well as derived scoring attributes (latency_variance,
+            throughput_variance, and tail_amplification).
 
         Notes
         -----

@@ -262,6 +262,7 @@ class TPCHExecutor(BenchmarkExecutor):
     def execute(
         self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
     ) -> PerformanceMetrics:
+        """Execute TPC-H benchmark and return performance metrics."""
         logger = get_logger(__name__, worker_id=worker_id)
 
         warmup_passes = kwargs.get("warmup_passes", 0)
@@ -416,6 +417,10 @@ class TPCHExecutor(BenchmarkExecutor):
             metrics.latency_p50 = float(np.percentile(sorted_lat, 50))
             metrics.latency_p95 = float(np.percentile(sorted_lat, 95))
             metrics.latency_p99 = float(np.percentile(sorted_lat, 99))
+            metrics.latency_variance = float(np.std(latencies))
+
+            if metrics.latency_p50 > 0:
+                metrics.tail_amplification = metrics.latency_p99 / metrics.latency_p50
 
             # Throughput as Queries Per Hour (QphH metric analogous)
             metrics.throughput = (
