@@ -22,7 +22,6 @@ Usage::
 from src.utils.logger.colors import (
     ColorCode,
     ColorPalette,
-    ModuleName,
 )
 
 # Formatters
@@ -59,7 +58,6 @@ __all__ = [
     # Colors
     "ColorCode",
     "ColorPalette",
-    "ModuleName",
     # Formatters
     "ColoredFormatter",
     "HTMLFormatter",

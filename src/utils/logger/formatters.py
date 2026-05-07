@@ -21,6 +21,7 @@ import datetime
 import logging
 
 from src.utils.logger.colors import ColorCode, ColorPalette
+from src.utils.logger.helpers import ansi_to_html
 
 
 class ColoredFormatter(logging.Formatter):
@@ -144,7 +145,8 @@ class HTMLFormatter(logging.Formatter):
 
         if self.show_module and len(parts) == 4:
             module = self._escape_html(parts[2])
-            msg = self._escape_html(parts[3])
+            # Convert any raw ANSI in the message to HTML-safe spans
+            msg = ansi_to_html(parts[3])
 
             module_color = ColorPalette.get_module_color(record.name, "html")
 
@@ -163,7 +165,7 @@ class HTMLFormatter(logging.Formatter):
             else:
                 html += msg
         else:
-            msg = self._escape_html(parts[2] if len(parts) >= 3 else parts[-1])
+            msg = ansi_to_html(parts[2] if len(parts) >= 3 else parts[-1])
 
             if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(
