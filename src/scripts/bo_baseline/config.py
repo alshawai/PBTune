@@ -44,8 +44,11 @@ class BOConfig:
     output_dir: Path = field(default_factory=lambda: Path("results"))
     verbose: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
-    # Adaptive Range Update
-    range_update_interval: int = 5
+    # Pilot+Freeze: number of initial design iterations before freezing ranges
+    range_update_interval: int = 10
+
+    # SMAC surrogate model
+    bo_surrogate: str = "rf"  # gp, rf
 
     # PBT parity configuration
     pbt_session_path: Optional[Path] = None
@@ -138,12 +141,21 @@ class BOConfig:
             output_dir=Path(args.output_dir),
             verbose=args.verbose,
             range_update_interval=args.range_update_interval,
+            bo_surrogate=args.bo_surrogate,
         )
 
         if args.pbt_session:
-            config.apply_pbt_session(
-                Path(args.pbt_session),
-                set_iteration_budget=args.iterations is None,
-            )
+            try:
+                config.apply_pbt_session(
+                    Path(args.pbt_session),
+                    set_iteration_budget=args.iterations is None,
+                )
+            except Exception as e:
+                from src.utils.logger import get_logger
+                logger = get_logger(__name__)
+                logger.warning(
+                    f"Failed to load PBT session from {args.pbt_session}: {e}. "
+                    f"Falling back to default or CLI-provided settings."
+                )
 
         return config
