@@ -1,22 +1,19 @@
 """Main Bayesian Optimization baseline runner orchestrator."""
 
 import time
-import json
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Dict, Any, Tuple
 from datetime import datetime
 
 from smac import BlackBoxFacade, HyperparameterOptimizationFacade
 from smac.initial_design import SobolInitialDesign
 from smac.random_design import ProbabilityRandomDesign
 from smac.scenario import Scenario
-from ConfigSpace import Configuration
 
 from src.tuner.config import get_knob_space
 from src.tuner.core.worker import Worker
 from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
 from src.tuner.evaluator.restart_policy import TuningMode
-from src.tuner.evaluator.workload import WorkloadFileLoader
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.utils.environments import EnvironmentFactory
@@ -27,7 +24,7 @@ from src.config.database import get_db_config
 from src.database.connection import get_connection
 
 from src.scripts.bo_baseline.config import BOConfig
-from src.scripts.bo_baseline.search_space import build_configspace, configspace_to_knobs
+from src.scripts.bo_baseline.search_space import build_configspace
 from src.scripts.bo_baseline.objective import create_objective
 from src.scripts.bo_baseline.result_writer import write_bo_results
 
@@ -97,9 +94,7 @@ class BOBaselineRunner:
             supported_knobs = {str(row[0]) for row in cursor.fetchall()}
             return supported_knobs, server_version
         except Exception as exc:
-            self.logger.warning(
-                f"Failed to inspect runtime pg_settings: {exc}"
-            )
+            self.logger.warning(f"Failed to inspect runtime pg_settings: {exc}")
             return set(self.knob_space.knobs.keys()), "unknown"
         finally:
             if cursor is not None:
@@ -135,7 +130,9 @@ class BOBaselineRunner:
                 "No runtime-compatible knobs remain after pg_settings compatibility pruning."
             )
 
-        self.logger.info(f"✓ Continuing with {len(self.knob_space)} runtime-compatible knobs")
+        self.logger.info(
+            f"✓ Continuing with {len(self.knob_space)} runtime-compatible knobs"
+        )
 
     def _apply_pbt_knob_filter(self) -> None:
         """Restrict BO search to the knob names present in the reference PBT run."""
@@ -222,10 +219,12 @@ class BOBaselineRunner:
 
             # Build ConfigSpace
             self.logger.info("Building ConfigSpace...")
-            configspace = build_configspace(self.knob_space, seed=self.config.random_seed)
+            configspace = build_configspace(
+                self.knob_space, seed=self.config.random_seed
+            )
 
             # Create iteration log
-            iteration_log = []
+            iteration_log: list = []
 
             # Pilot phase size: use range_update_interval as the freeze point
             pilot_size = max(
@@ -246,13 +245,17 @@ class BOBaselineRunner:
 
             # Create SMAC scenario — deterministic=False because database
             # benchmarks have inherent measurement variance
-            self.logger.info(f"Creating SMAC scenario with {self.config.n_iterations} iterations...")
+            self.logger.info(
+                f"Creating SMAC scenario with {self.config.n_iterations} iterations..."
+            )
             scenario = Scenario(
                 configspace=configspace,
                 n_trials=self.config.n_iterations,
                 seed=self.config.random_seed,
                 deterministic=False,
-                output_directory=Path(f"./smac_output/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"),
+                output_directory=Path(
+                    f"./smac_output/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"
+                ),
             )
 
             # Sobol initial design for uniform pilot-phase coverage
@@ -296,10 +299,9 @@ class BOBaselineRunner:
             # Run optimization
             self.logger.info("Starting Bayesian Optimization...")
             try:
-                incumbent = facade.optimize()
+                facade.optimize()
             except KeyboardInterrupt:
                 self.logger.warning("Optimization interrupted by user")
-                incumbent = facade.runhistory.get_incumbent_config()
 
             # Write results
             self.logger.info("Writing results...")
@@ -317,7 +319,9 @@ class BOBaselineRunner:
             )
 
             self.logger.info(f"BO tuning completed in {total_time:.2f} seconds")
-            self.logger.info(f"Best score: {results['best_configuration']['score']:.4f}")
+            self.logger.info(
+                f"Best score: {results['best_configuration']['score']:.4f}"
+            )
 
             return results
 

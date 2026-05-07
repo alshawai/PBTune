@@ -2,9 +2,9 @@
 """
 pbt_vs_bo_comparison.py
 
-Analyzes and compares the results of Population-Based Training (PBT) and 
-Bayesian Optimization (BO) for PostgreSQL auto-tuning. Supports dynamic 
-global rescoring, statistical significance testing, and generates 
+Analyzes and compares the results of Population-Based Training (PBT) and
+Bayesian Optimization (BO) for PostgreSQL auto-tuning. Supports dynamic
+global rescoring, statistical significance testing, and generates
 publication-ready plots.
 """
 
@@ -27,15 +27,17 @@ from src.utils.rescoring import rescore_metrics_globally
 
 # Configure academic plotting aesthetics
 sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
-plt.rcParams.update({
-    "font.family": "serif",
-    "figure.figsize": (8, 6),
-    "axes.titlesize": 16,
-    "axes.labelsize": 14,
-    "legend.fontsize": 12,
-    "xtick.labelsize": 11,
-    "ytick.labelsize": 11,
-})
+plt.rcParams.update(
+    {
+        "font.family": "serif",
+        "figure.figsize": (8, 6),
+        "axes.titlesize": 16,
+        "axes.labelsize": 14,
+        "legend.fontsize": 12,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+    }
+)
 
 logger = logging.getLogger(__name__)
 METRIC_FIELD_NAMES = {field.name for field in fields(PerformanceMetrics)}
@@ -66,13 +68,13 @@ class TuningRun:
 
         self.workload: str = "mixed"
         self.benchmark: str = "unknown"
-        
+
         self._parse_json()
 
     def _parse_json(self) -> None:
         """Loads JSON and parses the sequence of evaluations."""
         import dateutil.parser
-        
+
         with open(self.filepath, "r") as f:
             data = json.load(f)
 
@@ -91,14 +93,16 @@ class TuningRun:
 
         best_cfg = data.get("best_configuration", {})
         valid_keys = {
-            k: v for k, v in best_cfg.get("metrics", {}).items() if k in METRIC_FIELD_NAMES
+            k: v
+            for k, v in best_cfg.get("metrics", {}).items()
+            if k in METRIC_FIELD_NAMES
         }
         self.best_config_metrics = PerformanceMetrics(**valid_keys)
 
         history = data.get("generation_history", [])
         evals_so_far = 0
         start_time = None
-        
+
         for gen in history:
             # Parse timestamp for wall time calculation
             ts_str = gen.get("timestamp")
@@ -106,7 +110,7 @@ class TuningRun:
                 current_time = dateutil.parser.isoparse(ts_str)
                 if start_time is None:
                     # Give it a tiny offset (e.g. 20 seconds) for the very first step
-                    start_time = current_time - pd.Timedelta(seconds=20) 
+                    start_time = current_time - pd.Timedelta(seconds=20)
                 wall_time = (current_time - start_time).total_seconds()
             else:
                 wall_time = 0.0
@@ -154,7 +158,7 @@ class Analyzer:
         self.all_runs = pbt_runs + bo_runs
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         if not self.all_runs:
             raise ValueError("No runs provided for analysis.")
 
@@ -184,9 +188,14 @@ class Analyzer:
                     eval_pt.global_score = current_score
                 else:
                     prev_best = run.evaluations[eval_pt.evals_so_far - 2].global_score
-                    eval_pt.global_score = max(prev_best, current_score)
+                    if prev_best is None:
+                        eval_pt.global_score = current_score
+                    elif current_score is None:
+                        eval_pt.global_score = prev_best
+                    else:
+                        eval_pt.global_score = max(prev_best, current_score)
                 score_idx += 1
-                
+
             if run.best_config_metrics:
                 run.best_global_score = rescored_values[score_idx]
                 score_idx += 1
@@ -198,13 +207,15 @@ class Analyzer:
         rows = []
         for run in self.all_runs:
             for eval_pt in run.evaluations:
-                rows.append({
-                    "Method": run.method,
-                    "Seed": run.seed,
-                    "Evaluations": eval_pt.evals_so_far,
-                    "WallTimeSeconds": eval_pt.wall_time,
-                    "GlobalScore": eval_pt.global_score
-                })
+                rows.append(
+                    {
+                        "Method": run.method,
+                        "Seed": run.seed,
+                        "Evaluations": eval_pt.evals_so_far,
+                        "WallTimeSeconds": eval_pt.wall_time,
+                        "GlobalScore": eval_pt.global_score,
+                    }
+                )
         return pd.DataFrame(rows)
 
     def plot_convergence(self) -> None:
@@ -215,8 +226,14 @@ class Analyzer:
 
         # 1. Sample Efficiency
         sns.lineplot(
-            data=df, x="Evaluations", y="GlobalScore", hue="Method", 
-            errorbar="sd", ax=ax1, marker="o", markersize=4
+            data=df,
+            x="Evaluations",
+            y="GlobalScore",
+            hue="Method",
+            errorbar="sd",
+            ax=ax1,
+            marker="o",
+            markersize=4,
         )
         ax1.set_title("Sample Efficiency\n(Global Score vs. Total Evaluations)")
         ax1.set_xlabel("Cumulative Evaluations")
@@ -224,8 +241,14 @@ class Analyzer:
 
         # 2. Wall-Clock Efficiency
         sns.lineplot(
-            data=df, x="WallTimeSeconds", y="GlobalScore", hue="Method", 
-            errorbar="sd", ax=ax2, marker="o", markersize=4
+            data=df,
+            x="WallTimeSeconds",
+            y="GlobalScore",
+            hue="Method",
+            errorbar="sd",
+            ax=ax2,
+            marker="o",
+            markersize=4,
         )
         ax2.set_title("Wall-Clock Efficiency\n(Global Score vs. Elapsed Time)")
         ax2.set_xlabel("Elapsed Wall-Clock Time (s)")
@@ -242,12 +265,14 @@ class Analyzer:
         rows = []
         for run in self.all_runs:
             if run.best_config_metrics:
-                rows.append({
-                    "Method": run.method,
-                    "Seed": run.seed,
-                    "Throughput": run.best_config_metrics.throughput,
-                    "Latency (p95)": run.best_config_metrics.latency_p95
-                })
+                rows.append(
+                    {
+                        "Method": run.method,
+                        "Seed": run.seed,
+                        "Throughput": run.best_config_metrics.throughput,
+                        "Latency (p95)": run.best_config_metrics.latency_p95,
+                    }
+                )
 
         if not rows:
             logger.warning("No best configuration metrics found for Pareto plot.")
@@ -256,14 +281,20 @@ class Analyzer:
         df = pd.DataFrame(rows)
         plt.figure()
         sns.scatterplot(
-            data=df, x="Throughput", y="Latency (p95)", hue="Method", 
-            style="Method", s=150, alpha=0.8, edgecolor="black"
+            data=df,
+            x="Throughput",
+            y="Latency (p95)",
+            hue="Method",
+            style="Method",
+            s=150,
+            alpha=0.8,
+            edgecolor="black",
         )
-        
+
         plt.title("Pareto Front of Best Configurations")
         plt.xlabel("Throughput (Queries/sec) $\\uparrow$")
         plt.ylabel("95th Percentile Latency (ms) $\\downarrow$")
-        
+
         plt.tight_layout()
         output_file = self.output_dir / "publication_ready_pareto.pdf"
         plt.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -275,22 +306,33 @@ class Analyzer:
         rows = []
         for run in self.all_runs:
             if run.best_config_metrics:
-                rows.append({
-                    "Method": run.method,
-                    "Memory Utilization": run.best_config_metrics.memory_utilization
-                })
+                rows.append(
+                    {
+                        "Method": run.method,
+                        "Memory Utilization": run.best_config_metrics.memory_utilization,
+                    }
+                )
 
         if not rows:
             return
 
         df = pd.DataFrame(rows)
         plt.figure(figsize=(6, 6))
-        sns.boxplot(data=df, x="Method", y="Memory Utilization", width=0.4, showmeans=True)
-        sns.stripplot(data=df, x="Method", y="Memory Utilization", color="black", alpha=0.6, jitter=True)
+        sns.boxplot(
+            data=df, x="Method", y="Memory Utilization", width=0.4, showmeans=True
+        )
+        sns.stripplot(
+            data=df,
+            x="Method",
+            y="Memory Utilization",
+            color="black",
+            alpha=0.6,
+            jitter=True,
+        )
 
         plt.title("Resource Efficiency\n(Memory Utilization of Best Configs)")
         plt.ylabel("Memory Utilization (Fraction)")
-        
+
         plt.tight_layout()
         output_file = self.output_dir / "publication_ready_resource_efficiency.pdf"
         plt.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -299,8 +341,14 @@ class Analyzer:
 
     def statistical_significance_test(self, alpha: float = 0.05) -> pd.DataFrame:
         """Runs the Mann-Whitney U test on final best scores."""
-        pbt_scores = [r.best_global_score for r in self.pbt_runs if r.best_global_score is not None]
-        bo_scores = [r.best_global_score for r in self.bo_runs if r.best_global_score is not None]
+        pbt_scores = [
+            r.best_global_score
+            for r in self.pbt_runs
+            if r.best_global_score is not None
+        ]
+        bo_scores = [
+            r.best_global_score for r in self.bo_runs if r.best_global_score is not None
+        ]
 
         if not pbt_scores or not bo_scores:
             logger.warning(
@@ -311,16 +359,24 @@ class Analyzer:
             )
             return pd.DataFrame()
 
-        stat, p_value = stats.mannwhitneyu(pbt_scores, bo_scores, alternative="two-sided")
-        
+        stat, p_value = stats.mannwhitneyu(
+            pbt_scores, bo_scores, alternative="two-sided"
+        )
+
         logger.info("=== Statistical Significance (Mann-Whitney U) ===")
-        logger.info(f"PBT best scores (N={len(pbt_scores)}): {np.mean(pbt_scores):.4f} ± {np.std(pbt_scores):.4f}")
-        logger.info(f"BO best scores (N={len(bo_scores)}): {np.mean(bo_scores):.4f} ± {np.std(bo_scores):.4f}")
+        logger.info(
+            f"PBT best scores (N={len(pbt_scores)}): {np.mean(pbt_scores):.4f} ± {np.std(pbt_scores):.4f}"
+        )
+        logger.info(
+            f"BO best scores (N={len(bo_scores)}): {np.mean(bo_scores):.4f} ± {np.std(bo_scores):.4f}"
+        )
         logger.info(f"U-Statistic: {stat}, p-value: {p_value:.5f}")
-        
+
         if p_value < alpha:
             winner = "PBT" if np.mean(pbt_scores) > np.mean(bo_scores) else "BO"
-            logger.info(f"Result: SIGNIFICANT at α={alpha}. Method {winner} is superior.")
+            logger.info(
+                f"Result: SIGNIFICANT at α={alpha}. Method {winner} is superior."
+            )
         else:
             logger.info(f"Result: NOT SIGNIFICANT at α={alpha}.")
 
@@ -354,36 +410,45 @@ class Analyzer:
                 continue
             # Get the final wall time measured
             final_time = run.evaluations[-1].wall_time if run.evaluations else 0.0
-            
-            rows.append({
-                "Method": run.method,
-                "Seed": run.seed,
-                "SourceFile": str(run.filepath),
-                "BestScore": run.best_global_score,
-                "WallClockTime": final_time,
-                "Throughput": run.best_config_metrics.throughput,
-                "LatencyP95": run.best_config_metrics.latency_p95,
-                "MemoryUtilization": run.best_config_metrics.memory_utilization,
-            })
+
+            rows.append(
+                {
+                    "Method": run.method,
+                    "Seed": run.seed,
+                    "SourceFile": str(run.filepath),
+                    "BestScore": run.best_global_score,
+                    "WallClockTime": final_time,
+                    "Throughput": run.best_config_metrics.throughput,
+                    "LatencyP95": run.best_config_metrics.latency_p95,
+                    "MemoryUtilization": run.best_config_metrics.memory_utilization,
+                }
+            )
 
         df = pd.DataFrame(rows)
         detail_file = self.output_dir / "comparison_runs.csv"
         df.round(6).to_csv(detail_file, index=False)
 
         # Compute aggregates per method
-        summary = df.groupby("Method").agg(
-            Mean_Best_Score=("BestScore", "mean"),
-            StdDev_Best_Score=("BestScore", "std"),
-            Mean_WallClock_Time=("WallClockTime", "mean"),
-            Mean_Throughput=("Throughput", "mean"),
-            Mean_LatencyP95=("LatencyP95", "mean"),
-            Mean_MemoryUtilization=("MemoryUtilization", "mean"),
-            Trials=("BestScore", "count")
-        ).round(4).reset_index()
+        summary = (
+            df.groupby("Method")
+            .agg(
+                Mean_Best_Score=("BestScore", "mean"),
+                StdDev_Best_Score=("BestScore", "std"),
+                Mean_WallClock_Time=("WallClockTime", "mean"),
+                Mean_Throughput=("Throughput", "mean"),
+                Mean_LatencyP95=("LatencyP95", "mean"),
+                Mean_MemoryUtilization=("MemoryUtilization", "mean"),
+                Trials=("BestScore", "count"),
+            )
+            .round(4)
+            .reset_index()
+        )
 
         summary_file = self.output_dir / "comparison_summary.csv"
         summary.to_csv(summary_file, index=False)
-        logger.info("\nComparison Summary written to %s:\n%s", summary_file, summary.to_string())
+        logger.info(
+            "\nComparison Summary written to %s:\n%s", summary_file, summary.to_string()
+        )
 
     def export_timeseries(self) -> None:
         """Exports the rescored convergence data used by the plots."""
@@ -401,33 +466,42 @@ def main(
     """Main execution entry point."""
     logger.info("Loading PBT tuning runs...")
     pbt_runs = [TuningRun(Path(p), "PBT") for p in pbt_paths]
-    
+
     logger.info("Loading BO tuning runs...")
     bo_runs = [TuningRun(Path(p), "BO") for p in bo_paths]
 
     analyzer = Analyzer(pbt_runs, bo_runs, output_dir=output_dir)
-    
+
     # 1. Critical Requirement: Global Rescoring
     analyzer.apply_global_rescoring()
     analyzer.export_timeseries()
-    
+
     # Generate Visualizations & Analysis
     analyzer.plot_convergence()
     analyzer.plot_pareto_front()
     analyzer.plot_resource_efficiency()
-    
+
     # Compute Statistics
     analyzer.statistical_significance_test()
     analyzer.generate_summary_table()
 
+
 if __name__ == "__main__":
     import argparse
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    
+
     parser = argparse.ArgumentParser(description="Analyze PBT vs BO tuning runs.")
-    parser.add_argument("--pbt", nargs="+", required=True, help="List of PBT JSON files")
+    parser.add_argument(
+        "--pbt", nargs="+", required=True, help="List of PBT JSON files"
+    )
     parser.add_argument("--bo", nargs="+", required=True, help="List of BO JSON files")
-    parser.add_argument("--output-dir", type=Path, default=Path("analysis"), help="Directory for CSV and PDF analysis outputs")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("analysis"),
+        help="Directory for CSV and PDF analysis outputs",
+    )
     args = parser.parse_args()
-    
+
     main(args.pbt, args.bo, args.output_dir)

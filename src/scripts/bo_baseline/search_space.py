@@ -2,7 +2,14 @@
 
 from typing import Dict, Any
 import numpy as np
-from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical, Constant, Configuration
+from ConfigSpace import (
+    ConfigurationSpace,
+    Integer,
+    Float,
+    Categorical,
+    Constant,
+    Configuration,
+)
 
 from src.tuner.config.knob_space import KnobSpace, KnobType, KnobScale
 from src.utils.logger import get_logger
@@ -42,7 +49,9 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
 
         elif knob_def.knob_type == KnobType.INTEGER:
             min_val = int(knob_def.min_value) if knob_def.min_value is not None else 0
-            max_val = int(knob_def.max_value) if knob_def.max_value is not None else 2**31 - 1
+            max_val = (
+                int(knob_def.max_value) if knob_def.max_value is not None else 2**31 - 1
+            )
 
             # For log scale, ensure min > 0
             if knob_def.scale == KnobScale.LOG:
@@ -64,27 +73,33 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
             cs.add(param)
 
         elif knob_def.knob_type == KnobType.REAL:
-            min_val = float(knob_def.min_value) if knob_def.min_value is not None else 0.0
-            max_val = float(knob_def.max_value) if knob_def.max_value is not None else 1.0
+            min_val_f: float = (
+                float(knob_def.min_value) if knob_def.min_value is not None else 0.0
+            )
+            max_val_f: float = (
+                float(knob_def.max_value) if knob_def.max_value is not None else 1.0
+            )
 
             # For log scale, ensure min > 0
             if knob_def.scale == KnobScale.LOG:
-                min_val = max(min_val, 1e-9)
+                min_val_f = max(min_val_f, 1e-9)
 
             # Ensure default is within range
-            default = None
+            default_f: float | None = None
             if knob_def.default is not None:
-                default = float(knob_def.default)
-                if default < min_val or default > max_val:
-                    default = None
+                default_val_f = float(knob_def.default)
+                if default_val_f < min_val_f or default_val_f > max_val_f:
+                    default_f = None
+                else:
+                    default_f = default_val_f
 
-            param = Float(
+            param_f = Float(
                 name,
-                bounds=(min_val, max_val),
+                bounds=(min_val_f, max_val_f),
                 log=(knob_def.scale == KnobScale.LOG),
-                default=default,
+                default=default_f,
             )
-            cs.add(param)
+            cs.add(param_f)
 
         elif knob_def.knob_type == KnobType.BOOLEAN:
             param = Categorical(
@@ -100,7 +115,10 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
                 continue
 
             default = None
-            if knob_def.default is not None and knob_def.default in knob_def.enum_values:
+            if (
+                knob_def.default is not None
+                and knob_def.default in knob_def.enum_values
+            ):
                 default = knob_def.default
 
             param = Categorical(
@@ -131,7 +149,7 @@ def configspace_to_knobs(
     Dict[str, Any]
         Knob configuration dictionary with proper Python types
     """
-    config_dict = {}
+    config_dict: Dict[str, Any] = {}
 
     for knob_def in knob_space.knobs.values():
         name = knob_def.name
