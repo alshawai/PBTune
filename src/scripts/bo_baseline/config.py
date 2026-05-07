@@ -28,7 +28,9 @@ class BOConfig:
     # Sysbench Configuration
     sysbench_tables: int = 4
     sysbench_table_size: int = 100000
-    sysbench_workload: str = "oltp_read_write"  # oltp_read_only, oltp_read_write, oltp_write_only
+    sysbench_workload: str = (
+        "oltp_read_write"  # oltp_read_only, oltp_read_write, oltp_write_only
+    )
 
     # TPC-H Configuration
     scale_factor: float = 1.0
@@ -121,7 +123,9 @@ class BOConfig:
             raise ValueError("Either --tier or --pbt-session must be provided")
 
         config = cls(
-            n_iterations=args.iterations if args.iterations is not None else cls.n_iterations,
+            n_iterations=args.iterations
+            if args.iterations is not None
+            else cls.n_iterations,
             random_seed=args.seed,
             knob_tier=args.tier or cls.knob_tier,
             benchmark=args.benchmark,
@@ -152,6 +156,7 @@ class BOConfig:
                 )
             except Exception as e:
                 from src.utils.logger import get_logger
+
                 logger = get_logger(__name__)
                 logger.warning(
                     f"Failed to load PBT session from {args.pbt_session}: {e}. "
