@@ -41,10 +41,11 @@ class BareMetalEnvironment(DatabaseEnvironment):
         db_config: DatabaseConfig,
         schema_provider: BenchmarkExecutor,
         base_port: int = 5440,
-        base_dir: Path = Path("./pg_instances"),
+        base_dir: Path = Path("./.instances"),
         ram_bytes: int = 0,
         force_recreate_baseline: bool = False,
     ):
+        """Initialize bare metal environment with configuration."""
         logger.info(
             "Initializing BareMetalEnvironment with base_port=%d, base_dir=%s...",
             base_port,
@@ -85,7 +86,9 @@ class BareMetalEnvironment(DatabaseEnvironment):
 
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
-            data_dir = self.base_dir / f"worker_{worker_id}"
+            data_dir = (
+                self.base_dir / self._get_instance_subpath() / f"worker_{worker_id}"
+            )
 
             # --- Phase 1: Clean up any pre-existing state ---
             # Do NOT use `pg_ctl stop -w` here — it blocks indefinitely if the
@@ -231,11 +234,13 @@ class BareMetalEnvironment(DatabaseEnvironment):
             return False
 
     def stop_all(self, mode: str = "fast") -> bool:
+        """Stop all worker instances."""
         for worker_id in list(self.instances.keys()):
             self.stop_instance(worker_id, mode)
         return True
 
     def recover_instance(self, worker_id: int) -> bool:
+        """Recover a worker instance by stopping and restarting it."""
         self.stop_instance(worker_id, mode="immediate")
         return self.start_instance(worker_id)
 
@@ -259,6 +264,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
         return success
 
     def verify_instances(self) -> dict[int, bool]:
+        """Verify the status of all worker instances."""
         res = {}
         for worker_id, inst in self.instances.items():
             try:

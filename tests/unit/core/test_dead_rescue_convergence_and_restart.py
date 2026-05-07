@@ -199,7 +199,7 @@ def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
     population.evaluate_generation = MagicMock()
     population.rescue_dead_workers = MagicMock(return_value=0)
     population.update_metric_ranges_if_needed = MagicMock()
-    population._check_and_handle_saturation = MagicMock()
+    population._finalize_scores = MagicMock()
     population.exploit_and_explore = MagicMock(return_value=0)
     population.record_generation = MagicMock(
         return_value=MagicMock(
@@ -288,8 +288,8 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     old_latency_max = metric_config.latency_max
     old_throughput_min = metric_config.throughput_min
 
-    saturation_check = population._check_and_handle_saturation
-    saturation_check(lambda _w: (PerformanceMetrics(), 0.0))
+    saturation_check = population._finalize_scores
+    saturation_check()
 
     assert metric_config.latency_max > old_latency_max
     assert metric_config.throughput_min < old_throughput_min

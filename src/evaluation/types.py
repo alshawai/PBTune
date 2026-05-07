@@ -62,6 +62,9 @@ class ComparisonConfig:
     use_docker: bool = True
     docker_image: str = "pbt-eval"
     output_dir: Optional[Path] = None
+    scoring_policy: Optional[str] = None
+    scoring_policy_version: Optional[str] = None
+    metric_reference_version: Optional[str] = None
 
 
 @dataclass
@@ -78,6 +81,12 @@ class TuningSessionData:
         benchmark: Benchmark used during tuning ("sysbench" or "tpch").
         workload_type: Workload type string ("OLTP", "OLAP", or "MIXED").
         session_id: Timestamp-based session identifier.
+        scoring_policy: Scoring policy identifier used during tuning.
+        scoring_policy_version: Version identifier for the scoring policy.
+        metric_reference_version: Version of metric schema used for scoring.
+        workload_features: Feature vector metadata persisted by the tuner.
+        normalization_metadata: Normalization state metadata for rescoring.
+        score_breakdown: Best-configuration score component contributions.
     """
 
     best_knobs: dict[str, Any]
@@ -89,6 +98,12 @@ class TuningSessionData:
     workload_type: str
     session_id: str
     sysbench_workload: Optional[str] = None
+    scoring_policy: str = "fixed_v1"
+    scoring_policy_version: str = "1.0"
+    metric_reference_version: str = "v1"
+    workload_features: dict[str, Any] = field(default_factory=dict)
+    normalization_metadata: dict[str, Any] = field(default_factory=dict)
+    score_breakdown: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -229,6 +244,7 @@ class ComparisonResult:
         output_path: Path where the JSON result was saved.
         log_path: Path where the HTML session log was saved.
         scoring_metadata: Rescoring provenance and normalization ranges.
+        session_scoring_metadata: Scoring metadata loaded from tuning session.
     """
 
     default_runs: list[RunResult]
@@ -241,3 +257,4 @@ class ComparisonResult:
     output_path: Optional[Path] = None
     log_path: Optional[Path] = None
     scoring_metadata: Optional[dict[str, Any]] = None
+    session_scoring_metadata: dict[str, Any] = field(default_factory=dict)

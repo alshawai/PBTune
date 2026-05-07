@@ -238,6 +238,7 @@ class PostgreSQLKnobRetriever:
         tunable = all_params[all_params["name"].isin(knob_names)].copy()
 
         def get_custom_category(name):
+            """Map knob name to its custom category."""
             for category, knobs in self.TUNABLE_KNOBS.items():
                 if name in knobs:
                     return category.value

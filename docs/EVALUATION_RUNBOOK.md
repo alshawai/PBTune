@@ -102,6 +102,26 @@ defaults, and CLI contract are defined only in `python -m src.evaluation`.
 
 When omitted, `--seed` defaults to `50000`.
 
+### Scoring Policy Override
+
+Override the scoring policy used during comparison (useful for re-evaluating
+historical sessions under the newer feature-driven model):
+
+```bash
+python -m src.evaluation \
+    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --repetitions 5 \
+    --scoring-policy feature_driven_v2
+```
+
+Available policies:
+- `fixed_v1` — legacy static weights (default for historical sessions)
+- `feature_driven_v2` — dynamic workload-feature-conditioned weights
+
+**Note:** Using `feature_driven_v2` may shift which metrics dominate the composite score
+compared to the original tuning session, potentially changing the ranking of configurations.
+This is expected behavior and reflects the improved metric weighting strategy.
+
 ## Output Location
 
 By default, evaluation outputs are written to:
@@ -129,6 +149,12 @@ For each run, verify the generated comparison JSON includes:
 - `comparison_metadata.repetitions`
 - `comparison_metadata.evaluation_environment`
 - `comparison_metadata.resource_constraints`
+- `comparison_metadata.scoring_policy`
+- `comparison_metadata.scoring_policy_version`
+- `comparison_metadata.metric_reference_version`
+- `comparison_metadata.workload_features`
+- `comparison_metadata.normalization_metadata`
+- `comparison_metadata.score_breakdown`
 - `comparison_metadata.reproducibility.python_version`
 - `comparison_metadata.reproducibility.postgres_version`
 - `comparison_metadata.reproducibility.docker_image` (when Docker mode is used)
@@ -159,6 +185,8 @@ For each run, verify the generated comparison JSON includes:
   - Sysbench secondary latency endpoint: `latency_p95`.
   - TPC-H secondary latency endpoint: `latency_p99`.
 - Secondary p-values use Holm correction.
+- Score comparisons should be interpreted with the recorded scoring policy and
+  policy version from the comparison JSON when comparing results across runs.
 
 ### Practical limits
 

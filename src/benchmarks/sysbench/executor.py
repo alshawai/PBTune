@@ -186,6 +186,7 @@ class SysbenchExecutor(BenchmarkExecutor):
     def execute(
         self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
     ) -> PerformanceMetrics:
+        """Execute Sysbench benchmark and return performance metrics."""
         logger = get_logger(__name__, worker_id=worker_id)
 
         duration = kwargs.get("duration", 60.0)
@@ -225,6 +226,35 @@ class SysbenchExecutor(BenchmarkExecutor):
             logger.error("STDERR:\\n%s", stderr)
             raise RuntimeError("Sysbench executed but parsed 0 throughput. Check logs.")
 
+        logger.debug(
+            "Sysbench metrics extracted: latency_p50=%.2f, latency_p95=%.2f, latency_p99=%.2f, throughput=%.2f",
+            metrics.latency_p50,
+            metrics.latency_p95,
+            metrics.latency_p99,
+            metrics.throughput,
+        )
+
+        if metrics.latency_p95 == 0.0 or metrics.latency_p99 == 0.0:
+            logger.warning(
+                "Sysbench extracted 0 for p95=%s or p99=%s! This may indicate output format mismatch. "
+                "Raw output (first 5000 chars):\n%s",
+                metrics.latency_p95,
+                metrics.latency_p99,
+                stdout[:5000],
+            )
+            # Also dump the section that contains percentile data
+            if "General statistics:" in stdout:
+                idx = stdout.find("General statistics:")
+                logger.warning(
+                    "Percentile section (from 'General statistics:'):\n%s",
+                    stdout[idx : idx + 2000],
+                )
+            # Dump sample interval lines to debug format
+            logger.warning("Sample interval lines:")
+            for i, line in enumerate(stdout.splitlines()[:30]):
+                if "[" in line and "s ]" in line:
+                    logger.warning("  Line %d: %s", i, line)
+
         return metrics
 
     def _build_base_cmd(self, db_config: DatabaseConfig) -> list[str]:
@@ -253,7 +283,9 @@ class SysbenchExecutor(BenchmarkExecutor):
         cmd = self._build_base_cmd(db_config) + [
             f"--time={duration + warmup}",
             f"--threads={self.threads}",
-            "--report-interval=0",
+            "--report-interval=1",
+            "--percentile=99",
+            "--histogram=on",
         ]
 
         if seed is not None:
@@ -276,17 +308,135 @@ class SysbenchExecutor(BenchmarkExecutor):
         return stdout, stderr, process.returncode
 
     @staticmethod
+    def _parse_histogram(stdout: str) -> dict[str, float]:
+        """Parse Sysbench latency histogram to compute exact percentiles and variance."""
+        import numpy as np
+
+        in_histogram = False
+        bins = []
+        counts = []
+
+        for line in stdout.splitlines():
+            if "Latency histogram" in line:
+                in_histogram = True
+                continue
+            if in_histogram:
+                if not line.strip() or "SQL statistics:" in line:
+                    break
+                # Match line like: "       1.219 |***     10"
+                m = re.match(r"^\s*([\d.]+)\s*\|.*?\s+(\d+)$", line)
+                if m:
+                    bins.append(float(m.group(1)))
+                    counts.append(int(m.group(2)))
+
+        if not bins or not counts:
+            return {}
+
+        bins_arr = np.array(bins)
+        counts_arr = np.array(counts)
+        total_count = counts_arr.sum()
+
+        if total_count == 0:
+            return {}
+
+        cumulative = np.cumsum(counts_arr)
+        percentiles = cumulative / total_count
+
+        # Find exact percentiles
+        p50_idx = np.searchsorted(percentiles, 0.50)
+        p95_idx = np.searchsorted(percentiles, 0.95)
+        p99_idx = np.searchsorted(percentiles, 0.99)
+
+        # Standard deviation from histogram
+        mean_val = np.sum(bins_arr * counts_arr) / total_count
+        variance = np.sum(counts_arr * ((bins_arr - mean_val) ** 2)) / total_count
+
+        return {
+            "p50": bins_arr[p50_idx] if p50_idx < len(bins_arr) else bins_arr[-1],
+            "p95": bins_arr[p95_idx] if p95_idx < len(bins_arr) else bins_arr[-1],
+            "p99": bins_arr[p99_idx] if p99_idx < len(bins_arr) else bins_arr[-1],
+            "variance": float(np.sqrt(variance)),  # technically stddev
+        }
+
+    @staticmethod
     def _parse_output(stdout: str) -> PerformanceMetrics:
-        """Extract TPS, p95 latency, and error rate from sysbench stdout."""
+        """Extract TPS, p95/p99 latency, and error rate from sysbench stdout."""
+        import numpy as np
+
         metrics = PerformanceMetrics()
 
         tps_match = re.search(r"transactions:\s+\d+\s+\(([\d.]+)\s+per sec\.\)", stdout)
         if tps_match:
             metrics.throughput = float(tps_match.group(1))
 
-        lat_match = re.search(r"95th percentile:\s+([\d.]+)", stdout)
-        if lat_match:
-            metrics.latency_p95 = float(lat_match.group(1))
+        # Attempt precise extraction via histogram first
+        hist_data = SysbenchExecutor._parse_histogram(stdout)
+        if hist_data:
+            metrics.latency_p50 = hist_data["p50"]
+            metrics.latency_p95 = hist_data["p95"]
+            metrics.latency_p99 = hist_data["p99"]
+            metrics.latency_variance = hist_data["variance"]
+        else:
+            # Fallback to summary/interval estimation
+            lat_p95_match = re.search(r"95th percentile:\s+([\d.]+)", stdout)
+            if lat_p95_match:
+                metrics.latency_p95 = float(lat_p95_match.group(1))
+
+            lat_p99_match = re.search(r"99th percentile:\s+([\d.]+)", stdout)
+            if lat_p99_match:
+                metrics.latency_p99 = float(lat_p99_match.group(1))
+
+            if metrics.latency_p95 == 0.0 or metrics.latency_p99 == 0.0:
+                interval_p95 = []
+                interval_p99 = []
+                for line in stdout.splitlines():
+                    m95 = re.search(r"lat \(ms,95%\):\s+([\d.]+)", line)
+                    if m95:
+                        interval_p95.append(float(m95.group(1)))
+
+                    m99 = re.search(r"lat \(ms,99%\):\s+([\d.]+)", line)
+                    if m99:
+                        interval_p99.append(float(m99.group(1)))
+
+                if interval_p99:
+                    if metrics.latency_p99 == 0.0:
+                        metrics.latency_p99 = float(np.mean(interval_p99))
+                    warmup_skip = max(0, len(interval_p99) // 4)
+                    steady_state_lat = (
+                        interval_p99[warmup_skip:]
+                        if len(interval_p99) > 4
+                        else interval_p99
+                    )
+                    metrics.latency_variance = float(np.std(steady_state_lat))
+
+                if interval_p95 and metrics.latency_p95 == 0.0:
+                    metrics.latency_p95 = float(np.mean(interval_p95))
+                elif metrics.latency_p95 == 0.0 and interval_p99:
+                    metrics.latency_p95 = metrics.latency_p99 / 1.2
+
+            avg_match = re.search(r"avg:\s+([\d.]+)", stdout)
+            if avg_match:
+                metrics.latency_p50 = float(avg_match.group(1))
+
+        # Parse interval lines for throughput variance
+        interval_tps = []
+        for line in stdout.splitlines():
+            # Example: [ 1s ] thds: 8 tps: 100.00 qps: ...
+            m = re.search(r"\[\s*\d+s\s*\]\s*thds:\s*\d+\s*tps:\s*([\d.]+)", line)
+            if m:
+                interval_tps.append(float(m.group(1)))
+
+        if interval_tps:
+            # Drop the first few seconds if possible to avoid warmup noise
+            warmup_skip = max(0, len(interval_tps) // 4)
+            steady_state = (
+                interval_tps[warmup_skip:] if len(interval_tps) > 4 else interval_tps
+            )
+            metrics.throughput_variance = float(np.std(steady_state))
+
+        # Calculate tail amplification
+        if metrics.latency_p50 > 0:
+            metrics.tail_amplification = metrics.latency_p99 / metrics.latency_p50
 
         # Error rate = ignored_errors / total_transactions
         err_match = re.search(r"ignored errors:\s+(\d+)", stdout)
@@ -296,5 +446,15 @@ class SysbenchExecutor(BenchmarkExecutor):
             total_txns = int(txn_match.group(1)) if txn_match else 0
             if total_txns > 0:
                 metrics.error_rate = error_count / total_txns
+
+        # Extract total queries
+        queries_match = re.search(r"queries:\s+(\d+)\s+\(", stdout)
+        if queries_match:
+            metrics.total_queries = int(queries_match.group(1))
+
+        # Extract total time
+        time_match = re.search(r"total time:\s+([\d.]+)s", stdout)
+        if time_match:
+            metrics.total_time = float(time_match.group(1))
 
         return metrics

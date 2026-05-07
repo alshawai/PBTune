@@ -26,6 +26,7 @@ from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
 from src.utils.metrics import PerformanceMetrics
 from src.utils.logger import get_logger
+from src.utils.scoring.workload_features import TemplateWorkloadMetadata
 
 logger = get_logger(__name__)
 
@@ -46,6 +47,8 @@ class WorkloadExecutor:
         table_size: int = 100000,
         num_tables: int = 10,
         num_threads: int = 8,
+        schema: Optional[dict[str, int]] = None,
+        query_definitions: Optional[list[dict[str, str | float]]] = None,
     ):
         """
         Initialize template workload executor.
@@ -62,6 +65,10 @@ class WorkloadExecutor:
             Number of sbtest tables to use (default: 10, academic standard)
         num_threads : int
             Number of concurrent threads (default: 8)
+        schema : Optional[dict[str, int]]
+            Optional workload schema metadata loaded from workload file.
+        query_definitions : Optional[list[dict[str, str | float]]]
+            Optional original query definitions (sql, weight, description).
         """
         self.queries = queries
         self.weights = weights or [1.0] * len(queries)
@@ -70,6 +77,11 @@ class WorkloadExecutor:
         self.table_size = table_size
         self.num_tables = num_tables
         self.num_threads = num_threads
+        self.schema = schema or {
+            "tables": num_tables,
+            "table_size": table_size,
+        }
+        self.query_definitions = query_definitions or []
         # Placeholder, will be seeded in execute() if random_seed is provided
         self.rng = np.random.default_rng()
 
@@ -319,8 +331,10 @@ class WorkloadExecutor:
             p50 = latencies_sorted[len(latencies_sorted) // 2]
             p95 = latencies_sorted[int(len(latencies_sorted) * 0.95)]
             p99 = latencies_sorted[int(len(latencies_sorted) * 0.99)]
+            stddev = float(np.std(all_latencies))
         else:
             p50 = p95 = p99 = 0.0
+            stddev = 0.0
 
         throughput = total_queries / total_time if total_time > 0 else 0.0
         error_rate = total_errors / total_queries if total_queries > 0 else 0.0
@@ -329,6 +343,7 @@ class WorkloadExecutor:
             latency_p50=p50,
             latency_p95=p95,
             latency_p99=p99,
+            latency_stddev=stddev,
             throughput=throughput,
             total_queries=total_queries,
             total_time=total_time,
@@ -374,8 +389,10 @@ class WorkloadExecutor:
             p50 = latencies_sorted[len(latencies_sorted) // 2]
             p95 = latencies_sorted[int(len(latencies_sorted) * 0.95)]
             p99 = latencies_sorted[int(len(latencies_sorted) * 0.99)]
+            stddev = float(np.std(latencies))
         else:
             p50 = p95 = p99 = 0.0
+            stddev = 0.0
 
         throughput = query_count / total_time if total_time > 0 else 0.0
         error_rate = error_count / query_count if query_count > 0 else 0.0
@@ -384,6 +401,7 @@ class WorkloadExecutor:
             latency_p50=p50,
             latency_p95=p95,
             latency_p99=p99,
+            latency_stddev=stddev,
             throughput=throughput,
             total_queries=query_count,
             total_time=total_time,
@@ -484,17 +502,33 @@ class WorkloadFileLoader:
 
         query_list = []
         weight_list = []
+        query_definitions: list[dict[str, str | float]] = []
 
         for i, query_def in enumerate(queries):
             if isinstance(query_def, str):
                 query_list.append(query_def)
                 weight_list.append(1.0)
+                query_definitions.append(
+                    {
+                        "sql": query_def,
+                        "weight": 1.0,
+                        "description": "",
+                    }
+                )
             elif isinstance(query_def, dict):
                 if "sql" not in query_def:
                     raise ValueError(f"Query {i} missing 'sql' field")
 
                 query_list.append(query_def["sql"])
-                weight_list.append(query_def.get("weight", 1.0))
+                weight = float(query_def.get("weight", 1.0))
+                weight_list.append(weight)
+                query_definitions.append(
+                    {
+                        "sql": str(query_def["sql"]),
+                        "weight": weight,
+                        "description": str(query_def.get("description", "")),
+                    }
+                )
             else:
                 raise ValueError(f"Query {i} must be a string or dict with 'sql' field")
 
@@ -526,4 +560,21 @@ class WorkloadFileLoader:
             weights=weight_list,
             num_tables=num_tables,
             table_size=table_size,
+            schema={
+                "tables": num_tables,
+                "table_size": table_size,
+            },
+            query_definitions=query_definitions,
         )
+
+
+def extract_workload_template_metadata(
+    executor: WorkloadExecutor,
+) -> TemplateWorkloadMetadata:
+    """Build normalized feature-extraction metadata from a template executor."""
+    return TemplateWorkloadMetadata(
+        queries=list(executor.queries),
+        weights=list(executor.weights),
+        num_threads=int(executor.num_threads),
+        schema=dict(executor.schema),
+    )

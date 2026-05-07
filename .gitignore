@@ -58,8 +58,10 @@ ENV/
 .idea/
 
 # Database files
-pg_instances/
-pg_instances/**
+.instances/
+.instances/**
+.snapshots/
+.snapshots/**
 *.db
 *.sqlite
 *.sqlite3
@@ -119,9 +121,6 @@ results/**/intermediate_*.json
 results/**/*.html
 results/oltp/comparisons/
 results/**/fanova_importance.json
-
-# Postgres Snapshots generated during execution
-pg_snapshots/
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*

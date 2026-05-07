@@ -70,6 +70,22 @@ class DatabaseEnvironment(ABC):
         self.schema_provider = schema_provider
         self.force_recreate_baseline = force_recreate_baseline
 
+    def _get_instance_subpath(self) -> str:
+        """Determine the logical subpath for runtime data based on the schema."""
+        if self.schema_provider is None:
+            return "unknown_benchmark"
+
+        provider_name = self.schema_provider.__class__.__name__.lower()
+        if "sysbench" in provider_name:
+            tables = getattr(self.schema_provider, "tables", 10)
+            table_size = getattr(self.schema_provider, "table_size", 100000)
+            return f"sysbench/t{tables}_s{table_size}"
+        elif "tpch" in provider_name:
+            scale_factor = getattr(self.schema_provider, "scale_factor", 1.0)
+            return f"tpch/sf_{scale_factor}"
+
+        return "unknown_benchmark"
+
     def initialize_schema(self, worker_id: int) -> None:
         """
         Initialize schema by delegating to the schema_provider.

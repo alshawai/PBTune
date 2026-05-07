@@ -218,7 +218,7 @@ Useful for loading metrics from checkpoints or logs.
 
 ### Purpose
 
-The scoring system converts **multiple raw metrics** into a **single composite score** that PBT can optimize. This is the **fitness function** that drives evolution.
+The scoring system converts **multiple raw metrics** into a **single composite score** that PBT can optimize. This is the **fitness function** that drives evolution. The canonical scoring-v2 design is documented in [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md).
 
 ### Why Composite Scoring?
 
@@ -231,24 +231,23 @@ The scoring system converts **multiple raw metrics** into a **single composite s
 - Increase `work_mem` → better query performance, but higher memory usage
 - Increase `shared_buffers` → better cache hits, but less memory for other processes
 
-**Solution**: Weighted composite score captures trade-offs using normalized components:
+**Solution**: Policy-driven composite scoring captures trade-offs using normalized components:
 ```
-score = w_latency·latency_norm + w_throughput·throughput_norm
-    + w_memory·(1 - memory_utilization) + w_error·(1 - error_rate)
+score = 100 × G × Σ(w_i × u_i)
 ```
 
-### MetricConfig: Workload-Specific Weights
+### MetricConfig and Scoring Policies
 
 ```python
 @dataclass
 class MetricConfig:
     """
     Configuration for metric scoring.
-    Weights determine importance of each metric.
+    Policy metadata determines how weights are derived.
     """
     workload_type: WorkloadType
     
-    # Scoring weights (must sum to 1.0)
+    # Compatibility policy weights or policy-derived weights (sum to 1.0)
     weight_latency: float = 0.5
     weight_throughput: float = 0.3
     weight_memory: float = 0.05
@@ -257,6 +256,11 @@ class MetricConfig:
     # Latency percentile by workload objective
     latency_metric: str = "p95"  # or "p99" for OLAP
 
+    # Scoring policy metadata persisted in session artifacts
+    scoring_policy: str = "fixed_v1"
+    scoring_policy_version: str = "1.0"
+    workload_features: dict[str, float] = field(default_factory=dict)
+
     # Adaptive normalization ranges
     latency_min: float = 1.0
     latency_max: float = 1000.0
@@ -264,16 +268,17 @@ class MetricConfig:
     throughput_max: float = 10000.0
 ```
 
-**Default workload profiles**:
-- OLTP: `weight_latency=0.50`, `weight_throughput=0.40`, `weight_memory=0.05`, `weight_error=0.05`, `latency_metric=p95`
-- OLAP: `weight_latency=0.55`, `weight_throughput=0.30`, `weight_memory=0.10`, `weight_error=0.05`, `latency_metric=p99`
-- MIXED: `weight_latency=0.40`, `weight_throughput=0.35`, `weight_memory=0.15`, `weight_error=0.10`, `latency_metric=p95`
+**Policy behavior**:
+- `fixed_v1` keeps the legacy workload-specific weights for backward compatibility.
+- `feature_driven_v2` derives active weights from workload features while enforcing minimum floors and bounded outputs.
+- Both policies normalize metric values into utilities before aggregation.
 
 ### Composite Scoring Function
 
 The implementation uses a single `compute_score()` path with workload-specific
 `MetricConfig`, not separate `compute_oltp_score()`/`compute_olap_score()`
-functions.
+functions. The scorer applies a reliability gate before aggregation and uses
+the same policy metadata during tuning, rescoring, and evaluation.
 
 ```python
 def compute_score(metrics: PerformanceMetrics) -> float:
@@ -288,7 +293,7 @@ def compute_score(metrics: PerformanceMetrics) -> float:
     memory_norm = 1.0 - clamp(metrics.memory_utilization, 0.0, 1.0)
     error_norm = 1.0 - clamp(metrics.error_rate, 0.0, 1.0)
 
-    score_01 = (
+    score_01 = G * (
         weight_latency * latency_norm
         + weight_throughput * throughput_norm
         + weight_memory * memory_norm
@@ -300,17 +305,16 @@ def compute_score(metrics: PerformanceMetrics) -> float:
 ### Adaptive Range Calibration
 
 For post-hoc rescoring and mid-run adaptation, normalization ranges are
-calibrated from observed data via `MetricConfig.update_ranges()`:
+calibrated from observed data via the robust normalizer-backed path:
 
-- Uses robust 5th/95th percentiles (not fragile raw min/max)
-- Adds optional headroom padding
+- Uses robust percentile anchors instead of fragile raw min/max
+- Tracks out-of-support drift and recalibrates from retained history when needed
 - Enables fair score comparability across hardware/workload regimes
 
 ### Usage in Evaluation/PBT
 
 ```python
-metric_config = create_metric_config(workload)
-metric_config.update_ranges(observations, padding_factor=0.0)
+metric_config = create_metric_config(workload, scoring_policy="feature_driven_v2")
 score = metric_config.compute_score(metrics)
 ```
 
