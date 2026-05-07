@@ -7,6 +7,8 @@ from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 
 from smac import BlackBoxFacade, HyperparameterOptimizationFacade
+from smac.initial_design import SobolInitialDesign
+from smac.random_design import ProbabilityRandomDesign
 from smac.scenario import Scenario
 from ConfigSpace import Configuration
 
@@ -225,40 +227,69 @@ class BOBaselineRunner:
             # Create iteration log
             iteration_log = []
 
-            # Create objective function
+            # Pilot phase size: use range_update_interval as the freeze point
+            pilot_size = max(
+                self.config.range_update_interval,
+                len(self.knob_space.knobs) + 1,
+            )
+            pilot_size = min(pilot_size, self.config.n_iterations)
+
+            # Create objective function with freeze-after-pilot logic
             objective = create_objective(
                 evaluator=evaluator,
                 worker=worker,
                 knob_space=self.knob_space,
-                env=self.env,
                 metric_config=self.metric_config,
                 iteration_log=iteration_log,
-                range_update_interval=self.config.range_update_interval,
+                pilot_phase_size=pilot_size,
             )
 
-            # Create SMAC scenario
+            # Create SMAC scenario — deterministic=False because database
+            # benchmarks have inherent measurement variance
             self.logger.info(f"Creating SMAC scenario with {self.config.n_iterations} iterations...")
             scenario = Scenario(
                 configspace=configspace,
                 n_trials=self.config.n_iterations,
                 seed=self.config.random_seed,
-                deterministic=True,
-                output_directory=Path(f"./smac_output/run_{datetime.now().strftime('%Y%md%d_%H%M%S')}_{self.config.random_seed}"),
+                deterministic=False,
+                output_directory=Path(f"./smac_output/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"),
             )
 
-            # Select facade based on tier
+            # Sobol initial design for uniform pilot-phase coverage
+            initial_design = SobolInitialDesign(
+                scenario=scenario,
+                n_configs=pilot_size,
+            )
 
+            # Select facade based on surrogate arg
             num_knobs = len(self.knob_space.knobs)
-            if num_knobs <= 13:
-                self.logger.info(f"Using BlackBoxFacade (GP) for {num_knobs} knobs")
+            if self.config.bo_surrogate.lower() == "gp":
+                self.logger.info(
+                    f"Using BlackBoxFacade (GP) for {num_knobs} knobs, "
+                    f"pilot_size={pilot_size}"
+                )
                 facade = BlackBoxFacade(
-                    scenario, objective, logging_level=False
+                    scenario,
+                    objective,
+                    initial_design=initial_design,
+                    logging_level=False,
                 )
                 bo_surrogate = "gp"
             else:
-                self.logger.info(f"Using HyperparameterOptimizationFacade (RF) for {num_knobs} knobs")
+                self.logger.info(
+                    f"Using HyperparameterOptimizationFacade (RF) for {num_knobs} knobs, "
+                    f"pilot_size={pilot_size}"
+                )
+                # 20% random interleaving prevents surrogate over-exploitation
+                random_design = ProbabilityRandomDesign(
+                    probability=0.2, seed=self.config.random_seed
+                )
                 facade = HyperparameterOptimizationFacade(
-                    scenario, objective, logging_level=False
+                    scenario,
+                    objective,
+                    initial_design=initial_design,
+                    random_design=random_design,
+                    logging_level=False,
                 )
                 bo_surrogate = "rf"
 
@@ -437,6 +468,12 @@ def main():
         help="Output directory (default: results)",
     )
     parser.add_argument(
+        "--bo-surrogate",
+        choices=["rf", "gp"],
+        default="rf",
+        help="SMAC Surrogate model: Random Forest (rf) or Gaussian Process (gp). Default: rf",
+    )
+    parser.add_argument(
         "--verbose",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
@@ -445,8 +482,8 @@ def main():
     parser.add_argument(
         "--range-update-interval",
         type=int,
-        default=5,
-        help="Adaptive range update interval (default: 5)",
+        default=10,
+        help="Pilot phase size: number of Sobol initial-design iterations before freezing normalization ranges (default: 10)",
     )
 
     args = parser.parse_args()
