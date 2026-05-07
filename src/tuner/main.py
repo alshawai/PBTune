@@ -967,6 +967,7 @@ class PBTTuner:
                 "sysbench_duration_seconds": self.pbt_config.evaluation_duration,
                 "sysbench_warmup_seconds": self.pbt_config.warmup_duration,
                 "population_size": self.pbt_config.population_size,
+                "seed": self.random_seed,
                 "total_generations": self.population.current_generation,
                 "total_time_seconds": total_time,
                 "timestamp": self.timestamp,

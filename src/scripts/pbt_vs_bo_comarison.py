@@ -56,10 +56,10 @@ class EvaluationPoint:
 class TuningRun:
     """Parses and encapsulates the data of a single tuning run (one seed)."""
 
-    def __init__(self, filepath: Path, method: str, seed: int):
+    def __init__(self, filepath: Path, method: str):
         self.filepath = filepath
         self.method = method.upper()
-        self.seed = seed
+        self.seed: Optional[int] = None
         self.evaluations: List[EvaluationPoint] = []
         self.best_config_metrics: Optional[PerformanceMetrics] = None
         self.best_global_score: Optional[float] = None
@@ -77,10 +77,17 @@ class TuningRun:
             data = json.load(f)
 
         session = data.get("tuning_session", {})
+        self.seed = self._extract_seed(session)
         self.workload = session.get("workload_type", session.get("workload", "mixed"))
         self.benchmark = session.get(
             "benchmark_name", session.get("benchmark", "unknown")
         )
+        if self.seed is None:
+            logger.warning(
+                "No seed metadata found in %s tuning session: %s",
+                self.method,
+                self.filepath,
+            )
 
         best_cfg = data.get("best_configuration", {})
         valid_keys = {
@@ -107,7 +114,23 @@ class TuningRun:
             workers = gen.get("worker_scores", [])
             for worker in workers:
                 evals_so_far += 1
-                self.evaluations.append(EvaluationPoint(worker.get("metrics", {}), wall_time, evals_so_far))
+                self.evaluations.append(
+                    EvaluationPoint(worker.get("metrics", {}), wall_time, evals_so_far)
+                )
+
+    @staticmethod
+    def _extract_seed(session: dict) -> Optional[int]:
+        """Return the tuning-session seed when it is persisted."""
+        for key in ("seed", "random_seed"):
+            value = session.get(key)
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                logger.warning("Ignoring non-integer %s metadata: %r", key, value)
+                return None
+        return None
 
     def get_all_metrics(self) -> List[PerformanceMetrics]:
         """Returns all metric objects (including the final best) for global pooling."""
@@ -377,10 +400,10 @@ def main(
 ):
     """Main execution entry point."""
     logger.info("Loading PBT tuning runs...")
-    pbt_runs = [TuningRun(Path(p), "PBT", seed) for seed, p in enumerate(pbt_paths)]
+    pbt_runs = [TuningRun(Path(p), "PBT") for p in pbt_paths]
     
     logger.info("Loading BO tuning runs...")
-    bo_runs = [TuningRun(Path(p), "BO", seed) for seed, p in enumerate(bo_paths)]
+    bo_runs = [TuningRun(Path(p), "BO") for p in bo_paths]
 
     analyzer = Analyzer(pbt_runs, bo_runs, output_dir=output_dir)
     

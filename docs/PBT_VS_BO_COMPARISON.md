@@ -32,6 +32,7 @@ python -m src.scripts.pbt_vs_bo_comarison \
 Each input file should use the tuning-session schema produced by the tuner or BO baseline writer:
 
 - `tuning_session` - Run metadata. The first input run provides the benchmark/workload context used for global rescoring.
+- `tuning_session.seed` - Tuning seed used for the run. Legacy files with `tuning_session.random_seed` are still accepted.
 - `best_configuration.metrics` - Final best metrics for the run.
 - `generation_history[].worker_scores[].metrics` - Evaluation metrics over time.
 - `generation_history[].timestamp` - Used to estimate elapsed wall-clock time.
@@ -74,7 +75,7 @@ Per-run detail table.
 
 Columns:
 - `Method` - `PBT` or `BO`
-- `Seed` - Positional seed index assigned from the input order
+- `Seed` - Tuning seed read from `tuning_session.seed`; blank for legacy files that do not record seed metadata.
 - `SourceFile` - Input JSON path
 - `BestScore` - Final globally rescored best score
 - `WallClockTime` - Final elapsed wall-clock time for that run
@@ -88,7 +89,7 @@ Rescored convergence data used by the convergence PDF.
 
 Columns:
 - `Method` - `PBT` or `BO`
-- `Seed` - Positional seed index assigned from the input order
+- `Seed` - Tuning seed read from `tuning_session.seed`; blank for legacy files that do not record seed metadata.
 - `Evaluations` - Cumulative evaluation count within the run
 - `WallTimeSeconds` - Elapsed wall-clock time inferred from generation timestamps
 - `GlobalScore` - Best-so-far globally rescored score
@@ -137,4 +138,3 @@ Box/strip plot of memory utilization for final best configurations, grouped by m
 2. Run BO with `--pbt-session` so its benchmark, workload, knob set, and evaluation budget match the selected PBT session.
 3. Pass the generated PBT and BO JSON files to `pbt_vs_bo_comarison.py`.
 4. Use `comparison_summary.csv` for aggregate numbers, `comparison_runs.csv` for per-run checks, and the PDFs for figures.
-

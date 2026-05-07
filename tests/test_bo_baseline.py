@@ -69,6 +69,7 @@ class TestPBTSessionParity:
             output_dir="results",
             verbose="INFO",
             range_update_interval=5,
+            bo_surrogate="rf",
             pbt_session=str(pbt_session),
         )
 
@@ -132,6 +133,7 @@ class TestPBTSessionParity:
             output_dir="results",
             verbose="INFO",
             range_update_interval=5,
+            bo_surrogate="rf",
             pbt_session=str(pbt_session),
         )
 
@@ -260,6 +262,7 @@ class TestResultFormat:
 
         config = BOConfig(
             n_iterations=3,
+            random_seed=123,
             knob_tier="minimal",
             benchmark="sysbench",
             workload_type="oltp",
@@ -323,6 +326,7 @@ class TestResultFormat:
         assert results["tuning_session"]["optimizer"] == "bayesian_optimization"
         assert results["tuning_session"]["bo_library"] == "smac3"
         assert results["tuning_session"]["bo_surrogate"] == "gp"
+        assert results["tuning_session"]["seed"] == 123
         assert results["best_configuration"]["score"] == 0.6
 
         # Find the written file
@@ -335,6 +339,8 @@ class TestResultFormat:
 
         assert loaded is not None
         assert loaded.best_score == 0.6
+        written = json.loads(result_file.read_text(encoding="utf-8"))
+        assert written["tuning_session"]["seed"] == 123
 
     def test_result_generation_history(self, tmp_path):
         """Test that generation history is properly formatted."""
