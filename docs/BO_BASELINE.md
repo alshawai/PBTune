@@ -51,15 +51,26 @@ python -m src.scripts.bo_baseline \
 
 ### Facade Selection
 
-- **BlackBoxFacade (GP)**: Used for ≤13 knobs (minimal, core tiers)
-  - Gaussian Process surrogate with Matérn 5/2 kernel
-  - Expected Improvement acquisition function
-  - Better for low-dimensional spaces
+The SMAC3 facade controls the underlying surrogate model used for Bayesian Optimization. You can specify this using the `--bo-surrogate` argument:
 
-- **HyperparameterOptimizationFacade (RF)**: Used for 30+ knobs (standard, extensive tiers)
-  - Random Forest surrogate
-  - Handles high-dimensional mixed spaces better
-  - More robust to flat penalty regions
+- **Random Forest (`--bo-surrogate rf`)**: Uses `HyperparameterOptimizationFacade`. Handles high-dimensional, mixed spaces better and is robust to flat penalty regions. Includes 20% random interleaving (`ProbabilityRandomDesign`) to prevent surrogate over-exploitation. Default behavior.
+- **Gaussian Process (`--bo-surrogate gp`)**: Uses `BlackBoxFacade`. Employs a Gaussian Process surrogate with Matérn 5/2 kernel and Expected Improvement acquisition function. Better for low-dimensional, continuous spaces.
+
+Both facades use:
+- `deterministic=False` — database benchmarks have inherent measurement variance; this forces SMAC to re-evaluate incumbents and prevents overconfidence.
+- `SobolInitialDesign` — quasi-random initial points for uniform pilot-phase coverage of the search space.
+
+### Pilot + Freeze Normalization
+
+The scoring function (`feature_driven_v2`) requires normalization ranges (e.g., max TPS, min latency). Dynamically updating these ranges mid-run corrupts the surrogate model's training signal because historical cost values become stale.
+
+The BO runner uses a **Pilot + Freeze** strategy:
+
+1. **Pilot Phase** (first N iterations, controlled by `--range-update-interval`): SMAC's Sobol initial design evaluates diverse configurations using default fallback ranges. Raw metrics are recorded.
+2. **Freeze Event** (exactly once, at the end of the pilot): `metric_config.expand_ranges_for_metrics()` calibrates normalization bounds from all pilot observations.
+3. **Frozen Phase** (remaining iterations): Normalization bounds are locked. The surrogate model trains on a stable cost surface.
+
+Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `PerformanceMetrics` to recompute scores with globally calibrated ranges, so the frozen in-run scores do not affect final comparison validity.
 
 ## Configuration Options
 
@@ -99,7 +110,8 @@ python -m src.scripts.bo_baseline \
 
 ### BO Configuration
 - `--iterations N` - Number of BO iterations. Defaults to `50`, or to `population_size * total_generations` when `--pbt-session` is used.
-- `--seed INT` - Random seed for reproducibility (default: 42)
+- `--seed INT` - Random seed for reproducibility (default: `42`)
+- `--bo-surrogate {rf|gp}` - SMAC Surrogate model: Random Forest (`rf`) or Gaussian Process (`gp`). Default is `rf`.
 
 ### Benchmark Options
 - `--benchmark {sysbench|tpch}` - Benchmark type (default: sysbench)
@@ -126,7 +138,7 @@ python -m src.scripts.bo_baseline \
 ### Output Options
 - `--output-dir PATH` - Output directory (default: results)
 - `--verbose {DEBUG|INFO|WARNING|ERROR}` - Logging level (default: INFO)
-- `--range-update-interval INT` - Adaptive range update interval (default: 5)
+- `--range-update-interval INT` - Pilot phase size (default: 10)
 
 ## Parameter Reference
 
@@ -152,7 +164,7 @@ python -m src.scripts.bo_baseline \
 | `--tuning-mode` | Controls restart/application behavior. | `offline`, or PBT `tuning_mode` |
 | `--output-dir` | Root directory for BO result files. | `results` |
 | `--verbose` | Logging verbosity. | `INFO` |
-| `--range-update-interval` | Iteration interval for adaptive metric-range updates. | `5` |
+| `--range-update-interval` | Pilot phase size: initial-design iterations before freezing normalization ranges. | `10` |
 
 ## Output Format
 
@@ -167,6 +179,10 @@ The JSON format is compatible with the evaluation pipeline:
 - `worker_resources` - Hardware constraints
 - `generation_history` - Per-iteration convergence data
 - `system_info` - System snapshot
+
+The BO CLI `--seed` value is recorded as `tuning_session.seed` in the result
+JSON so downstream comparison tools can report the actual tuning seed rather
+than inferring one from file order.
 
 When `--pbt-session` is used, `tuning_session` also records:
 - `reference_pbt_session` - Path to the PBT session used as the reference
@@ -191,11 +207,13 @@ python -m src.evaluation \
   --session results/oltp/bo_runs/core/tuning_sessions/bo_results_*.json
 ```
 
-## Adaptive Normalization
+## Normalization Strategy
 
-During tuning, both BO and PBT use the same `MetricConfig` factory with identical initial fallback ranges. BO calls `metric_config.expand_ranges_for_metrics()` every `--range-update-interval` iterations, matching PBT's adaptive behavior.
+During tuning, BO uses a **Pilot + Freeze** approach: the first N iterations (Sobol initial design) run with default fallback ranges, then `metric_config.expand_ranges_for_metrics()` is called exactly once to calibrate bounds from pilot observations. Ranges are frozen for the remainder of the run to preserve surrogate model integrity.
 
-For cross-method comparison, use `rescore_metrics_globally()` from `src/utils/rescoring.py` to pool metrics from both runs and rescore with a single globally calibrated `MetricConfig`.
+PBT uses rolling adaptive normalization (expanding ranges every generation). This difference is intentional — BO requires a stable cost surface for its surrogate, while PBT's population-based approach is robust to shifting targets.
+
+For cross-method comparison, use `rescore_metrics_globally()` from `src/utils/rescoring.py` to pool raw metrics from both runs and rescore with a single globally calibrated `MetricConfig`.
 
 ## Testing
 
@@ -229,7 +247,7 @@ python -m pytest tests/test_bo_baseline.py::TestSearchSpaceTranslation::test_bui
   - Dead instance: cost = 99.5
   - Unexpected error: cost = 100.0
 - Restart detection: checks if any restart-required knobs changed
-- Adaptive range updates: every N iterations, expands metric ranges based on observed values
+- Pilot+Freeze normalization: ranges calibrated once after initial design, then locked
 
 ### Result Serialization
 

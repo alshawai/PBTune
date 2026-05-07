@@ -125,6 +125,7 @@ def write_bo_results(
             "workload_type": config.workload_type,
             "benchmark_name": config.benchmark,
             "n_iterations": config.n_iterations,
+            "seed": config.random_seed,
             "population_size": 1,
             "total_generations": len(iteration_log),
             "total_time_seconds": total_time,
