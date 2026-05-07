@@ -167,8 +167,8 @@ class Population:
             The search space for knob configurations
         config : Optional[PopulationConfig]
             Configuration parameters. Uses defaults if None.
-        evaluator : Optional[Evaluator]
-            Evaluator instance (for accessing metric config). If None, adaptive
+        evaluator : Optional[WorkloadOrchestrator]
+            WorkloadOrchestrator instance (for accessing metric config). If None, adaptive
             normalization will use global config objects (less clean but works).
         """
         self.knob_space = knob_space

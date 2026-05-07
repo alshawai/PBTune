@@ -60,12 +60,12 @@ from src.tuner.config import (
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.evaluator import (
-    Evaluator,
-    EvaluatorConfig,
+from src.tuner.benchmark.orchestrator import (
+    WorkloadOrchestrator,
+    WorkloadOrchestratorConfig,
     WorkloadExecutor,
 )
-from src.tuner.evaluator.workload import (
+from src.tuner.benchmark.workload import (
     WorkloadFileLoader,
     extract_workload_template_metadata,
 )
@@ -95,7 +95,7 @@ from src.utils.hardware_info import (
     log_system_info,
     detect_worker_resources,
 )
-from src.tuner.evaluator.restart_policy import TuningMode
+from src.tuner.benchmark.restart_policy import TuningMode
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -237,7 +237,7 @@ class PBTTuner:
         self.workload_features: Dict[str, float] = {}
         self.feature_extractor = WorkloadFeatureExtractor()
 
-        self.evaluator_config = EvaluatorConfig(
+        self.evaluator_config = WorkloadOrchestratorConfig(
             workload_type=workload_type,
             metric_config=self.metric_config,
             db_config=self.db_config,
@@ -353,7 +353,7 @@ class PBTTuner:
 
         self.metric_config.workload_features = dict(self.workload_features)
 
-        self.evaluator = Evaluator(self.evaluator_config, workload_executor, self.env)
+        self.orchestrator = WorkloadOrchestrator(self.evaluator_config, workload_executor, self.env)
 
         pop_config = PopulationConfig(
             population_size=self.pbt_config.population_size,
@@ -367,7 +367,7 @@ class PBTTuner:
         )
 
         self.population = Population(
-            self.knob_space, pop_config, evaluator=self.evaluator
+            self.knob_space, pop_config, evaluator=self.orchestrator
         )
 
         self.system_info = get_system_info()
@@ -537,9 +537,9 @@ class PBTTuner:
         worker_logger = get_logger(__name__, worker_id=worker.worker_id)
 
         try:
-            self.evaluator.worker_id = f"Worker-{worker.worker_id}"
+            self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
-            metrics, score, restart_occurred = self.evaluator.evaluate_worker(
+            metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
                 worker, apply_config=True, generation=self.current_generation
             )
 
