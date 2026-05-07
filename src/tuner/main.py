@@ -89,6 +89,7 @@ from src.utils.logger import (
     print_startup_banner,
     ColorCode,
     ColorPalette,
+    set_colors_enabled,
 )
 from src.utils.hardware_info import (
     get_system_info,
@@ -1461,6 +1462,7 @@ def main():
     args = parse_args()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     enable_colors = not args.no_color
+    set_colors_enabled(enable_colors)
 
     # Compute structured log directory.
     if args.benchmark == "sysbench":
@@ -1481,7 +1483,6 @@ def main():
 
     setup_logging(
         verbosity=args.verbose,
-        enable_colors=enable_colors,
         show_module=True,
         output_file=output_file,
     )

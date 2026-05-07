@@ -244,6 +244,11 @@ def format_logger_level(level: str, width: int = LOGGER_LEVEL_WIDTH) -> str:
     return level.strip().upper().center(width)
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def log_section_header(
     logger: logging.Logger, title: str, width: Optional[int] = None
 ) -> None:

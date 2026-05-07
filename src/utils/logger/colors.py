@@ -21,6 +21,48 @@ import hashlib
 import colorsys
 
 
+_COLORS_ENABLED = True
+
+
+def set_colors_enabled(enabled: bool) -> None:
+    """Enable or disable ANSI/HTML color generation at runtime."""
+    global _COLORS_ENABLED
+    _COLORS_ENABLED = enabled
+
+
+def colors_enabled() -> bool:
+    """Return whether runtime color generation is enabled."""
+    return _COLORS_ENABLED
+
+
+class ColorCodeMeta(type):
+    _COLOR_ATTRS = {
+        "RESET",
+        "BOLD",
+        "ITALIC",
+        "UNDERLINE",
+        "GRAY",
+        "VIOLET",
+        "MAGENTA",
+        "PURPLE",
+        "BLUE",
+        "SKY_BLUE",
+        "CYAN",
+        "TEAL",
+        "GREEN",
+        "LIME",
+        "YELLOW",
+        "ORANGE",
+        "RED",
+        "PALE_RED",
+    }
+
+    def __getattribute__(cls, name: str):  # type: ignore[override]
+        if name in type.__getattribute__(cls, "_COLOR_ATTRS") and not colors_enabled():
+            return ""
+        return type.__getattribute__(cls, name)
+
+
 class ColorPalette:
     """
     Unified color palette for consistent colors across ANSI (terminal) and HTML.
@@ -74,6 +116,8 @@ class ColorPalette:
     @classmethod
     def get_level_color(cls, level: str, format_type: str = "ansi") -> str:
         """Get color for log level."""
+        if not colors_enabled():
+            return ""
         rgb = cls._LEVEL_COLORS_RGB.get(level, (236, 240, 241))  # Default white
         if format_type == "ansi":
             return cls._rgb_to_ansi(*rgb)
@@ -82,6 +126,8 @@ class ColorPalette:
     @classmethod
     def get_module_color(cls, module_name: str, format_type: str = "ansi") -> str:
         """Get a color for a logger module name."""
+        if not colors_enabled():
+            return ""
         module_lower = module_name.strip().lower()
         if module_lower.startswith("src."):
             module_lower = module_lower.removeprefix("src.")
@@ -115,6 +161,8 @@ class ColorPalette:
         str
             ANSI color code or hex color
         """
+        if not colors_enabled():
+            return ""
         rgb = cls._hsl_to_rgb(worker_id)
 
         if format_type == "ansi":
@@ -122,7 +170,7 @@ class ColorPalette:
         return cls._rgb_to_hex(*rgb)
 
 
-class ColorCode:
+class ColorCode(metaclass=ColorCodeMeta):
     """ANSI control codes for terminal formatting."""
 
     RESET = "\033[0m"

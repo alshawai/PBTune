@@ -37,6 +37,8 @@ def add_html_file_logging(
     If an HTML handler already exists for a different file, it is replaced so each
     process writes to a single active HTML log destination.
 
+    Color application is controlled globally via the colors_enabled() policy.
+
     Parameters
     ----------
     output_file : Path
@@ -72,26 +74,25 @@ def add_html_file_logging(
 
 def setup_logging(
     verbosity: str = "INFO",
-    enable_colors: bool = True,
     output_file: Optional[Path] = None,
     show_module: bool = True,
 ) -> None:
     """
     Setup global logging configuration.
 
-    Called once at application startup.
+    Called once at application startup. Color policy should be set via
+    set_colors_enabled() before calling this function.
 
     Parameters
     ----------
     verbosity : str
         Logging level: 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'TRACE'
-    enable_colors : bool
-        Enable colored output (disable for file output)
     output_file : Optional[Path]
         Optional file path to write HTML logs
     show_module : bool
         Show module name in output
     """
+
     level_map = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
@@ -102,9 +103,7 @@ def setup_logging(
 
     log_level = level_map.get(verbosity.upper())
 
-    console_formatter = ColoredFormatter(
-        enable_colors=enable_colors, show_module=show_module
-    )
+    console_formatter = ColoredFormatter(show_module=show_module)
 
     # A console handler that sends log records to stdout (terminal/console)
     console_handler = logging.StreamHandler(sys.stdout)
@@ -120,7 +119,8 @@ def setup_logging(
 
     if output_file:
         file_path = add_html_file_logging(
-            output_file=output_file, show_module=show_module
+            output_file=output_file,
+            show_module=show_module,
         )
         for handler in root_logger.handlers:
             if isinstance(handler, HTMLFileHandler):
