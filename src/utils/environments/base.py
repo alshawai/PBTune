@@ -22,7 +22,7 @@ from src.utils.logger import get_logger, ColorCode
 from src.benchmarks.executor import BenchmarkExecutor
 
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger("BaseEnvironment")
 
 
 @dataclass
@@ -105,7 +105,7 @@ class DatabaseEnvironment(ABC):
         if self.schema_provider.validate(config):
             LOGGER.debug(
                 "%s    ➤ Schema already exists and valid for worker %d%s",
-                ColorCode.OKGREEN,
+                ColorCode.GREEN,
                 worker_id,
                 ColorCode.RESET,
             )
@@ -113,7 +113,7 @@ class DatabaseEnvironment(ABC):
 
         LOGGER.debug(
             "%s    Invalid schema detected. Attempting to restore from snapshot for worker %d...%s",
-            ColorCode.WARNING,
+            ColorCode.YELLOW,
             worker_id,
             ColorCode.RESET,
         )
@@ -122,7 +122,7 @@ class DatabaseEnvironment(ABC):
                 self._reset_persisted_configuration(worker_id, config)
                 LOGGER.debug(
                     "%s    ➤ Schema restored from snapshot for worker %d%s",
-                    ColorCode.OKGREEN,
+                    ColorCode.GREEN,
                     worker_id,
                     ColorCode.RESET,
                 )
@@ -131,14 +131,14 @@ class DatabaseEnvironment(ABC):
         LOGGER.debug(
             "%s    Snapshot restoration failed or schema still invalid."
             " Preparing schema for worker %d...%s",
-            ColorCode.WARNING,
+            ColorCode.YELLOW,
             worker_id,
             ColorCode.RESET,
         )
         self.schema_provider.prepare(config)
         LOGGER.debug(
             "%s    ➤ Schema prepared for worker %d%s",
-            ColorCode.OKGREEN,
+            ColorCode.GREEN,
             worker_id,
             ColorCode.RESET,
         )

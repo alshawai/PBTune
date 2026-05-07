@@ -76,7 +76,6 @@ class BenchmarkExecutor(ABC):
     def _drop_existing_public_tables(
         self,
         cursor,
-        logger,
         log_prefix: str = "",
     ) -> None:
         """Drop all existing tables in PostgreSQL public schema.
@@ -92,12 +91,12 @@ class BenchmarkExecutor(ABC):
             return
 
         if log_prefix:
-            logger.debug(
+            self.logger.debug(
                 f"{log_prefix} Dropping existing public tables (%d)...",
                 len(existing_tables),
             )
         else:
-            logger.debug(
+            self.logger.debug(
                 "Dropping existing public tables (%d)...",
                 len(existing_tables),
             )

@@ -41,7 +41,7 @@ from src.evaluation.types import (
     StatSummary,
 )
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger("Statistics")
 
 _PRIMARY_ENDPOINT = "score"
 _SECONDARY_ENDPOINT_BASE = (

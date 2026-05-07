@@ -21,7 +21,13 @@ import datetime
 import logging
 
 from src.utils.logger.colors import ColorCode, ColorPalette
-from src.utils.logger.helpers import ansi_to_html
+from src.utils.logger.helpers import (
+    LOGGER_MODULE_WIDTH,
+    LOGGER_LEVEL_WIDTH,
+    ansi_to_html,
+    format_logger_level,
+    format_logger_name,
+)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -31,7 +37,13 @@ class ColoredFormatter(logging.Formatter):
     Format: [TIME] [LEVEL] [MODULE] [WORKER-ID] MESSAGE
     """
 
-    def __init__(self, enable_colors: bool = True, show_module: bool = True):
+    def __init__(
+        self,
+        enable_colors: bool = True,
+        show_module: bool = True,
+        module_width: int = LOGGER_MODULE_WIDTH,
+        level_width: int = LOGGER_LEVEL_WIDTH,
+    ):
         """
         Initialize colored formatter.
 
@@ -44,11 +56,13 @@ class ColoredFormatter(logging.Formatter):
         """
         self.enable_colors = enable_colors
         self.show_module = show_module
+        self.module_width = module_width
+        self.level_width = level_width
 
         if show_module:
-            fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(name)s - %(message)s"
         else:
-            fmt = "%(asctime)s - %(levelname)-8s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(message)s"
 
         super().__init__(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -64,10 +78,10 @@ class ColoredFormatter(logging.Formatter):
 
         level_color = ColorPalette.get_level_color(record.levelname, "ansi")
         timestamp = parts[0]
-        levelname = parts[1].strip()
+        levelname = format_logger_level(record.levelname, self.level_width)
 
         if self.show_module and len(parts) == 4:
-            module = parts[2]
+            module = format_logger_name(record.name, self.module_width)
             msg = parts[3]
 
             module_color = ColorPalette.get_module_color(record.name, "ansi")
@@ -115,13 +129,21 @@ class ColoredFormatter(logging.Formatter):
 class HTMLFormatter(logging.Formatter):
     """Format log records as HTML with proper color styling."""
 
-    def __init__(self, show_module: bool = True):
+    def __init__(
+        self,
+        show_module: bool = True,
+        module_width: int = LOGGER_MODULE_WIDTH,
+        level_width: int = LOGGER_LEVEL_WIDTH,
+    ):
         """Initialize HTMLFormatter with optional module name display."""
         self.show_module = show_module
+        self.module_width = module_width
+        self.level_width = level_width
+
         if show_module:
-            fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(name)s - %(message)s"
         else:
-            fmt = "%(asctime)s - %(levelname)-8s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(message)s"
         super().__init__(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
@@ -133,7 +155,7 @@ class HTMLFormatter(logging.Formatter):
             return self._escape_html(message)
 
         timestamp = self._escape_html(parts[0])
-        levelname = parts[1].strip()
+        levelname = format_logger_level(record.levelname, self.level_width)
 
         level_color = ColorPalette.get_level_color(levelname, "html")
 
@@ -144,7 +166,7 @@ class HTMLFormatter(logging.Formatter):
         )
 
         if self.show_module and len(parts) == 4:
-            module = self._escape_html(parts[2])
+            module = self._escape_html(format_logger_name(record.name, self.module_width))
             # Convert any raw ANSI in the message to HTML-safe spans
             msg = ansi_to_html(parts[3])
 

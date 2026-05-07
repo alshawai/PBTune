@@ -1486,7 +1486,7 @@ def main():
         output_file=output_file,
     )
     logger = get_logger(
-        __name__
+        "PBTune"
     )  # inherits from the root logger (defined in setup_logging)
 
     info_color = ColorPalette.get_level_color("INFO", "ansi") if enable_colors else ""

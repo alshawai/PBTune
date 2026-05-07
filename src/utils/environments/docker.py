@@ -40,7 +40,7 @@ except ImportError as exc:
         "Install it with: pip install docker>=7.0.0"
     ) from exc
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger("DockerEnvironment")
 
 
 class DockerEnvironment(DatabaseEnvironment):
@@ -423,7 +423,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
                 LOGGER.debug(
                     "%s    ➤ Container '%s' removed successfully%s",
-                    ColorCode.OKGREEN,
+                    ColorCode.GREEN,
                     container_name,
                     ColorCode.RESET,
                 )
@@ -446,7 +446,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
                 LOGGER.debug(
                     "%s  ➤ Container '%s' already exists, reusing it.%s",
-                    ColorCode.OKGREEN,
+                    ColorCode.GREEN,
                     container_name,
                     ColorCode.RESET,
                 )
@@ -467,7 +467,7 @@ class DockerEnvironment(DatabaseEnvironment):
                 running = True
                 LOGGER.debug(
                     "%s  ➤ Container '%s' created successfully.%s",
-                    ColorCode.OKGREEN,
+                    ColorCode.GREEN,
                     container_name,
                     ColorCode.RESET,
                 )
@@ -519,7 +519,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
             LOGGER.debug(
                 "%s  ➤ Container '%s' set up successfully.%s",
-                ColorCode.OKGREEN,
+                ColorCode.GREEN,
                 container_name,
                 ColorCode.RESET,
             )
@@ -527,7 +527,7 @@ class DockerEnvironment(DatabaseEnvironment):
         LOGGER.info(
             "%s%s➤ All %d containers set up successfully.%s",
             ColorCode.BOLD,
-            ColorCode.OKGREEN,
+            ColorCode.GREEN,
             num_workers,
             ColorCode.RESET,
         )
@@ -1122,7 +1122,7 @@ class DockerEnvironment(DatabaseEnvironment):
                 conn.close()
                 LOGGER.debug(
                     "%s  ➤ Container '%s' is ready after %.2f seconds.%s",
-                    ColorCode.OKGREEN,
+                    ColorCode.GREEN,
                     container_name,
                     time.time() - start_time,
                     ColorCode.RESET,

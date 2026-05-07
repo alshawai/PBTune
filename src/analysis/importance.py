@@ -33,7 +33,7 @@ def _ensure_fanova_numpy_aliases() -> None:
 
 _ensure_fanova_numpy_aliases()
 
-logger = get_logger(__name__)
+LOGGER = get_logger("Importance")
 
 CORRELATION_THRESHOLD = 0.7
 RETRY_MIN_ESTIMATORS = 512
@@ -113,7 +113,7 @@ def _drop_zero_variance_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Drop constant columns that cannot contribute to importance analysis."""
     zero_var_cols = df.nunique()[lambda s: s <= 1].index.tolist()
     if zero_var_cols:
-        logger.warning(
+        LOGGER.warning(
             "Dropping zero-variance knobs before importance analysis: %s",
             zero_var_cols,
         )
@@ -296,7 +296,7 @@ def analyze_knob_importance(
         )
 
         if retry_n_estimators != n_estimators or retry_max_depth != max_depth:
-            logger.info(
+            LOGGER.info(
                 "Low fANOVA-SHAP correlation detected (ρ=%.3f). "
                 "Retrying with n_estimators=%d, max_depth=%s.",
                 primary_pass.fanova_shap_correlation,
@@ -317,13 +317,13 @@ def analyze_knob_importance(
                 > primary_pass.fanova_shap_correlation
             ):
                 selected_pass = retry_pass
-                logger.info(
+                LOGGER.info(
                     "Improved fANOVA-SHAP correlation from ρ=%.3f to ρ=%.3f.",
                     primary_pass.fanova_shap_correlation,
                     retry_pass.fanova_shap_correlation,
                 )
             else:
-                logger.info(
+                LOGGER.info(
                     "Retry did not improve fANOVA-SHAP correlation (ρ=%.3f -> ρ=%.3f). "
                     "Keeping primary pass.",
                     primary_pass.fanova_shap_correlation,
@@ -331,14 +331,14 @@ def analyze_knob_importance(
                 )
 
     if selected_pass.model_r2 < 0.5:
-        logger.warning(
+        LOGGER.warning(
             "model may not be capturing the response surface well - "
             "importance results should be interpreted with caution. R² = %.3f",
             selected_pass.model_r2,
         )
 
     if selected_pass.fanova_shap_correlation < CORRELATION_THRESHOLD:
-        logger.warning(
+        LOGGER.warning(
             "Low correlation between fANOVA and SHAP importance rankings: ρ = %.3f",
             selected_pass.fanova_shap_correlation,
         )

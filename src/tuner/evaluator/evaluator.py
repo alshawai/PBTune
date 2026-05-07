@@ -51,7 +51,7 @@ from src.tuner.evaluator.restart_policy import TuningMode, should_restart
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+LOGGER = get_logger("BenchmarkExecutor")
 
 # Register numpy type adapters for psycopg2
 register_adapter(np.int64, lambda x: AsIs(int(x)))
@@ -170,7 +170,7 @@ class Evaluator:
         self.workload_executor = workload_executor
         self.env = env
 
-        logger.debug(
+        LOGGER.debug(
             "✓ Created Evaluator: workload=%s, mode=%s, duration=%ss",
             config.workload_type.value.upper(),
             config.tuning_mode.value,
@@ -212,7 +212,7 @@ class Evaluator:
                 connection = get_connection(config=db_config or self.config.db_config)
                 connection.autocommit = False
                 if attempt > 1:
-                    logger.info("Connection established after %d attempts", attempt)
+                    LOGGER.info("Connection established after %d attempts", attempt)
                 return connection
             except psycopg2.Error as e:
                 last_error = e
@@ -229,7 +229,7 @@ class Evaluator:
                     )
                 ):
                     if attempt < max_retries:
-                        logger.warning(
+                        LOGGER.warning(
                             "Database recovering, retry %d/%d in %.1fs...",
                             attempt,
                             max_retries,
@@ -239,10 +239,10 @@ class Evaluator:
                         continue
 
                 # Non-recoverable error or last attempt
-                logger.error("Failed to connect to PostgreSQL: %s", e)
+                LOGGER.error("Failed to connect to PostgreSQL: %s", e)
                 raise
 
-        logger.error("Failed to connect after %d attempts: %s", max_retries, last_error)
+        LOGGER.error("Failed to connect after %d attempts: %s", max_retries, last_error)
         raise last_error  # type: ignore
 
     def disconnect(
@@ -262,16 +262,16 @@ class Evaluator:
             try:
                 connection.close()
                 if worker_id is not None:
-                    worker_logger = get_logger(__name__, worker_id=worker_id)
+                    worker_logger = get_logger("BenchmarkWorker", worker_id=worker_id)
                     worker_logger.debug("Disconnected from PostgreSQL")
                 else:
-                    logger.debug("Disconnected from PostgreSQL")
+                    LOGGER.debug("Disconnected from PostgreSQL")
             except Exception as e:
                 if worker_id is not None:
-                    worker_logger = get_logger(__name__, worker_id=worker_id)
+                    worker_logger = get_logger("BenchmarkWorker", worker_id=worker_id)
                     worker_logger.warning("Error closing connection: %s", e)
                 else:
-                    logger.warning("Error closing connection: %s", e)
+                    LOGGER.warning("Error closing connection: %s", e)
 
     def apply_configuration(
         self,
@@ -309,9 +309,9 @@ class Evaluator:
             True if restart occurred during this application
         """
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("BenchmarkWorker", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         try:
@@ -389,9 +389,9 @@ class Evaluator:
             True if restart succeeded
         """
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("BenchmarkWorker", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         worker_logger.info("Restarting PostgreSQL instance...")
@@ -463,9 +463,9 @@ class Evaluator:
             return
 
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("BenchmarkWorker", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
@@ -554,7 +554,7 @@ class Evaluator:
         if not isinstance(self.workload_executor, BenchmarkExecutor):
             return
 
-        worker_logger = worker_logger or logger
+        worker_logger = worker_logger or LOGGER
 
         try:
             benchmark_ready = self.workload_executor.validate(db_config)
@@ -620,7 +620,7 @@ class Evaluator:
                 "Initialize workers with PostgresInstanceManager first."
             )
 
-        worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+        worker_logger = get_logger("BenchmarkWorker", worker_id=worker.worker_id)
         worker_logger.info(
             "Evaluating configuration on instance port %d...", worker.port or 0
         )
@@ -924,7 +924,7 @@ class Evaluator:
         - High buffer_miss_rate -> increase working_set_millions proxy
         - Low scan_efficiency -> increase join_intensity (inefficient scans suggest complex joins)
         """
-        logger = get_logger(__name__)
+        logger = get_logger("BenchmarkExecutor")
 
         if not self.config.metric_config.workload_features:
             logger.debug("No workload features to refine")
@@ -1016,7 +1016,7 @@ class Evaluator:
         workers : List[Worker]
             List of all workers in the current generation
         """
-        logger = get_logger(__name__)
+        logger = get_logger("BenchmarkExecutor")
 
         if not workers:
             logger.debug("No workers to aggregate for feature refinement")

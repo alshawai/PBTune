@@ -62,7 +62,7 @@ from src.evaluation.types import (
     WorkerResources,
 )
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger("Runner")
 
 
 class ComparisonRunner:

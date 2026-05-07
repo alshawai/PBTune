@@ -38,22 +38,10 @@ class ColorPalette:
     }
 
     _PRIMARY_MODULE_COLORS_RGB = {
-        "pbtuner": (40, 149, 255),
+        "pbtune": (40, 149, 255),
         "evaluator": (255, 145, 60),
         "analyzer": (123, 97, 255),
         "visualizer": (0, 204, 170),
-    }
-
-    _PRIMARY_MODULE_ALIASES = {
-        "pbtuner": {"pbtuner", "src.tuner.main", "__main__"},
-        "evaluator": {
-            "evaluator",
-            "src.tuner.evaluator.evaluator",
-            "src.evaluation",
-            "evaluate_tuning",
-        },
-        "analyzer": {"analyzer", "src.analysis.importance", "src.analysis.data_loader"},
-        "visualizer": {"visualizer"},
     }
 
     @staticmethod
@@ -83,10 +71,6 @@ class ColorPalette:
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         return int(digest[:8], 16)
 
-    # ansi_to_html is implemented in src.utils.logger.helpers and re-exported
-    # here for backward compatibility.
-    from src.utils.logger.helpers import ansi_to_html  # re-export
-
     @classmethod
     def get_level_color(cls, level: str, format_type: str = "ansi") -> str:
         """Get color for log level."""
@@ -99,6 +83,8 @@ class ColorPalette:
     def get_module_color(cls, module_name: str, format_type: str = "ansi") -> str:
         """Get a color for a logger module name."""
         module_lower = module_name.strip().lower()
+        if module_lower.startswith("src."):
+            module_lower = module_lower.removeprefix("src.")
 
         for primary_name, rgb in cls._PRIMARY_MODULE_COLORS_RGB.items():
             if module_lower == primary_name:
