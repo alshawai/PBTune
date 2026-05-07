@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.hardware_info import WorkerResources
@@ -92,7 +92,9 @@ def write_bo_results(
             "best_worker_id": 0,
             "converged": False,
             "restart_count": 1 if iteration.get("restarted", False) else 0,
-            "timestamp": datetime.fromtimestamp(iteration.get("timestamp", 0.0)).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                iteration.get("timestamp", 0.0)
+            ).isoformat(),
             "iteration_wall_time_seconds": iteration.get("wall_time_seconds", 0.0),
             "bo_overhead_seconds": bo_overhead,
             "worker_scores": [
