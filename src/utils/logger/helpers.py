@@ -13,6 +13,9 @@ import logging
 from typing import Optional
 
 
+LOGGER_LEVEL_WIDTH = 7
+LOGGER_MODULE_WIDTH = 17
+
 # Basic xterm 16-color palette (normal + bright)
 BASIC_COLORS = {
     0: "#000000",
@@ -216,6 +219,29 @@ def ansi_to_html(text: str) -> str:
     # Close any open span at end
     _close_span()
     return "".join(out)
+
+
+def normalize_logger_name(name: str, strip_src_prefix: bool = True) -> str:
+    """Normalize a logger name for display.
+
+    The logger is primarily used for code under `src/`, so the leading
+    `src.` package prefix is removed by default.
+    """
+    normalized = name.strip()
+    if strip_src_prefix and normalized.startswith("src."):
+        return normalized.removeprefix("src.")
+    return normalized
+
+
+def format_logger_name(name: str, width: int = LOGGER_MODULE_WIDTH) -> str:
+    """Return a left-padded logger label for aligned log output."""
+    normalized = normalize_logger_name(name)
+    return normalized.ljust(width)
+
+
+def format_logger_level(level: str, width: int = LOGGER_LEVEL_WIDTH) -> str:
+    """Return a centered logger level label for aligned log output."""
+    return level.strip().upper().center(width)
 
 
 def log_section_header(

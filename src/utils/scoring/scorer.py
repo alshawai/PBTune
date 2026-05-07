@@ -51,6 +51,7 @@ class CompositeScorer:
         weight_overrides : Optional[Dict[str, float]]
             Overrides for static weights (used for backward compatibility).
         """
+        self.logger = get_logger("Scorer")
         self.policy = policy
         self.normalizer = normalizer
         self.workload_type = workload_type
@@ -63,21 +64,19 @@ class CompositeScorer:
 
     def _compute_active_weights(self) -> Dict[str, float]:
         """Resolve metric weights based on policy rules."""
-        logger = get_logger(__name__)
-
         if not self.policy.is_dynamic:
             if not self.policy.fixed_weights:
                 weights = {
                     m: 1.0 / len(self.policy.metrics) for m in self.policy.metrics
                 }
-                logger.debug(
+                self.logger.debug(
                     "Using uniform weights (policy=%s): %s",
                     self.policy.policy_id,
                     {k: f"{v:.4f}" for k, v in weights.items()},
                 )
             else:
                 weights = self.policy.fixed_weights.get(self.workload_type, {}).copy()
-                logger.debug(
+                self.logger.debug(
                     "Using fixed weights (policy=%s, workload=%s): %s",
                     self.policy.policy_id,
                     self.workload_type,
@@ -86,7 +85,7 @@ class CompositeScorer:
 
             # Apply legacy overrides
             if self.weight_overrides:
-                logger.debug(
+                self.logger.debug(
                     "Applying weight overrides: %s",
                     {k: f"{v:.4f}" for k, v in self.weight_overrides.items()},
                 )
@@ -97,7 +96,7 @@ class CompositeScorer:
 
         if self.policy.weight_model:
             weights = self.policy.weight_model.compute_weights(self.features)
-            logger.debug(
+            self.logger.debug(
                 "Using dynamic weights (policy=%s, model=%s): %s",
                 self.policy.policy_id,
                 self.policy.weight_model.__class__.__name__,
@@ -105,7 +104,7 @@ class CompositeScorer:
             )
             return weights
 
-        logger.warning(
+        self.logger.warning(
             "No weight model available for dynamic policy %s", self.policy.policy_id
         )
         return {}
@@ -117,16 +116,14 @@ class CompositeScorer:
         If evaluation failed entirely, G = 0.
         If error rate is too high, G decays to 0.
         """
-        logger = get_logger(__name__)
-
         if metrics.failure_type is not None:
-            logger.warning(
+            self.logger.warning(
                 "Reliability gate = 0.0 (failure_type=%s)", metrics.failure_type
             )
             return 0.0
 
         if metrics.error_rate >= self.fatal_error_threshold:
-            logger.warning(
+            self.logger.warning(
                 "Reliability gate = 0.0 (error_rate=%.4f >= threshold=%.4f)",
                 metrics.error_rate,
                 self.fatal_error_threshold,
@@ -135,14 +132,14 @@ class CompositeScorer:
 
         if metrics.error_rate > 0:
             gate = 1.0 - (metrics.error_rate / self.fatal_error_threshold)
-            logger.debug(
+            self.logger.debug(
                 "Reliability gate = %.4f (error_rate=%.4f, linear decay)",
                 gate,
                 metrics.error_rate,
             )
             return gate
 
-        logger.debug("Reliability gate = 1.0 (no errors)")
+        self.logger.debug("Reliability gate = 1.0 (no errors)")
         return 1.0
 
     def compute_score(
@@ -172,31 +169,29 @@ class CompositeScorer:
         Tuple[Dict[str, float], float]
             (component_scores, total_score)
         """
-        logger = get_logger(__name__)
-
         gate = self._compute_reliability_gate(metrics)
         if gate == 0.0:
-            logger.warning("Score computation aborted: reliability gate = 0.0")
+            self.logger.warning("Score computation aborted: reliability gate = 0.0")
             return {}, 0.0
 
         # Score utilities
         if self.normalizer is not None and self.normalizer.is_calibrated:
             utilities = self.normalizer.score_vector(metrics)
-            logger.debug(
+            self.logger.debug(
                 "Utilities from normalizer: %s",
                 {k: f"{v:.4f}" for k, v in utilities.items()},
             )
         else:
             utilities = fallback_utilities or {}
             if self.normalizer is None:
-                logger.debug("Normalizer not available, using fallback utilities")
+                self.logger.debug("Normalizer not available, using fallback utilities")
             else:
-                logger.debug(
+                self.logger.debug(
                     "Normalizer uncalibrated (samples=%d), using fallback utilities",
                     self.normalizer.total_samples_since_calibration,
                 )
             if utilities:
-                logger.debug(
+                self.logger.debug(
                     "Fallback utilities: %s",
                     {k: f"{v:.4f}" for k, v in utilities.items()},
                 )
@@ -227,13 +222,13 @@ class CompositeScorer:
                 self.normalizer is not None and self.normalizer.is_calibrated
             )
             if is_calibrated:
-                logger.debug(
+                self.logger.debug(
                     "Missing utilities for %d metrics (using default 0.5): %s",
                     len(missing_metrics),
                     missing_metrics,
                 )
 
-        logger.debug(
+        self.logger.debug(
             "Score computation complete: total=%.4f (gate=%.4f, %d components)",
             total_score,
             gate,

@@ -36,7 +36,7 @@ import numpy as np
 
 from src.tuner.core.worker import Worker
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger("Evolution")
 
 
 def truncation_selection(
@@ -111,13 +111,13 @@ def truncation_selection(
             w for w in workers if w.performance_score >= dead_config_threshold
         ]
         if require_ready and elite_candidates:
-            logger.warning(
+            LOGGER.warning(
                 "No ready non-dead workers available for elites; "
                 "falling back to non-dead workers regardless of readiness"
             )
 
     if not elite_candidates:
-        logger.warning("No non-dead workers available; skipping exploit-explore rescue")
+        LOGGER.warning("No non-dead workers available; skipping exploit-explore rescue")
         return []
 
     sorted_elites = sorted(
@@ -161,7 +161,7 @@ def truncation_selection(
         return []
 
     if dead_workers:
-        logger.info(
+        LOGGER.info(
             "Dead-config rescue candidates this generation: %d workers (threshold=%.2f)",
             len(dead_workers),
             dead_config_threshold,
@@ -259,14 +259,14 @@ def execute_exploit_explore(
     )
 
     if not pairs:
-        logger.debug("No workers exploited (not enough ready workers)")
+        LOGGER.debug("No workers exploited (not enough ready workers)")
         return 0
 
     for poor_idx, elite_idx in pairs:
         poor_worker = workers[poor_idx]
         elite_worker = workers[elite_idx]
 
-        logger.info(
+        LOGGER.info(
             "Worker-%d (score=%.4f) ← exploits Worker-%d (score=%.4f)",
             poor_worker.worker_id,
             poor_worker.performance_score,
@@ -284,7 +284,7 @@ def execute_exploit_explore(
             exclude_knobs=exclude_knobs,
         )
 
-        logger.debug("  → Copied config and applied perturbation")
+        LOGGER.debug("  → Copied config and applied perturbation")
 
     return len(pairs)
 
@@ -435,7 +435,7 @@ def check_convergence(
     ]
 
     if len(valid_workers) < min_valid_workers:
-        logger.debug(
+        LOGGER.debug(
             "Skipping convergence check: %d valid workers (minimum=%d)",
             len(valid_workers),
             min_valid_workers,

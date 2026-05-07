@@ -29,7 +29,7 @@ from src.utils.scoring.constants import (
     DEFAULT_SCORING_POLICY_VERSION,
 )
 
-logger = get_logger(__name__)
+LOGGER = get_logger("Loader")
 
 # Fields that MUST be present in the results JSON
 _REQUIRED_TOP_LEVEL = {"best_configuration", "worker_resources", "tuning_session"}
@@ -62,9 +62,9 @@ def load_tuning_session(path: Path) -> TuningSessionData:
             JSON, or is missing any required field.
     """
     path = Path(path)
-    logger.info("Loading tuning session from: %s", path)
+    LOGGER.info("Loading tuning session from: %s", path)
 
-    logger.debug("  Checking if correct tuning session file exists...")
+    LOGGER.debug("  Checking if correct tuning session file exists...")
     if not path.exists():
         raise TuningSessionLoadError(
             f"Tuning session file not found: {path}\n"
@@ -86,9 +86,9 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         raise TuningSessionLoadError(
             f"Expected a JSON object at root, got {type(data).__name__}"
         )
-    logger.debug("  ➤ Correct session file exist.")
+    LOGGER.debug("  ➤ Correct session file exist.")
 
-    logger.debug("  Checking if required fields are present...")
+    LOGGER.debug("  Checking if required fields are present...")
     _assert_fields(data, _REQUIRED_TOP_LEVEL, context="root")
 
     best_config = data["best_configuration"]
@@ -104,9 +104,9 @@ def load_tuning_session(path: Path) -> TuningSessionData:
 
     wr_raw = data["worker_resources"]
     _assert_fields(wr_raw, _REQUIRED_WORKER_RES, context="worker_resources")
-    logger.debug("  ➤ Required fields are present.")
+    LOGGER.debug("  ➤ Required fields are present.")
 
-    logger.debug("  Checking if worker resources are valid...")
+    LOGGER.debug("  Checking if worker resources are valid...")
     worker_resources = WorkerResources(
         ram_bytes=int(wr_raw["ram_bytes"]),
         cpu_cores=int(wr_raw["cpu_cores"]),
@@ -121,9 +121,9 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         raise TuningSessionLoadError(
             f"worker_resources.cpu_cores must be positive, got {worker_resources.cpu_cores}"
         )
-    logger.debug("  ➤ Worker resources are valid.")
+    LOGGER.debug("  ➤ Worker resources are valid.")
 
-    logger.debug("  Inferring tuning session metadata...")
+    LOGGER.debug("  Inferring tuning session metadata...")
     ts_meta: dict[str, Any] = data["tuning_session"]
     timestamp = ts_meta.get("timestamp")
     session_id = str(timestamp) if timestamp is not None else path.stem
@@ -134,7 +134,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         raise TuningSessionLoadError(
             f"Failed to infer benchmark and workload type: {exc}"
         ) from exc
-    logger.debug("  ➤ Benchmark and workload type inferred successfully.")
+    LOGGER.debug("  ➤ Benchmark and workload type inferred successfully.")
 
     sysbench_workload: Optional[str] = None
     if benchmark == "sysbench":
@@ -142,7 +142,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         try:
             sysbench_workload = validate_sysbench_workload(str(raw_mode))
         except ValueError:
-            logger.warning(
+            LOGGER.warning(
                 "  ➤ Invalid sysbench_workload=%r in session metadata; "
                 "falling back to %s",
                 raw_mode,
@@ -150,10 +150,10 @@ def load_tuning_session(path: Path) -> TuningSessionData:
             )
             sysbench_workload = DEFAULT_SYSBENCH_WORKLOAD
 
-    logger.debug("  Processing system info and tuning config...")
+    LOGGER.debug("  Processing system info and tuning config...")
     system_info: dict[str, Any] = data.get("system_info", {})
     if not system_info:
-        logger.warning(
+        LOGGER.warning(
             "  ➤ system_info missing from %s — hardware provenance will be incomplete",
             path.name,
         )
@@ -168,9 +168,9 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         path,
     )
 
-    logger.debug("  ➤ System info and tuning config processed successfully.")
+    LOGGER.debug("  ➤ System info and tuning config processed successfully.")
 
-    logger.info(
+    LOGGER.info(
         "➤ Loaded tuning session: timestamp=%s benchmark=%s workload=%s "
         "best_score=%.2f knobs=%d resources=(cpu=%d ram=%.1fGB)",
         timestamp,
@@ -226,7 +226,7 @@ def _infer_benchmark_and_workload(
         workload_type = str(workload_type).lower()
 
     if not workload_type:
-        logger.warning(
+        LOGGER.warning(
             "  ➤ workload type not found in session metadata, falling back to "
             "path to infer workload type"
         )
@@ -250,7 +250,7 @@ def _infer_benchmark_and_workload(
         else:
             raise TuningSessionLoadError(f"Unknown workload type: {workload_type}")
 
-        logger.warning(
+        LOGGER.warning(
             "  ➤ benchmark name not found in session metadata, used workload"
             " type to infer benchmark: %s",
             benchmark,
@@ -332,7 +332,7 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
                 str(sysbench_workload)
             )
         except ValueError:
-            logger.warning(
+            LOGGER.warning(
                 "Ignoring invalid sysbench_workload value in tuning metadata: %r",
                 sysbench_workload,
             )
@@ -445,7 +445,7 @@ def _check_version_compatibility(
     """
     # Check if versions differ from defaults
     if scoring_policy_version != DEFAULT_SCORING_POLICY_VERSION:
-        logger.warning(
+        LOGGER.warning(
             "  ➤ Tuning session %s used scoring_policy_version=%s "
             "(current default: %s) — results may not be directly comparable",
             path.name,
@@ -454,7 +454,7 @@ def _check_version_compatibility(
         )
 
     if metric_reference_version != DEFAULT_METRIC_REFERENCE_VERSION:
-        logger.warning(
+        LOGGER.warning(
             "  ➤ Tuning session %s used metric_reference_version=%s "
             "(current default: %s) — metric interpretations may differ",
             path.name,
@@ -477,7 +477,7 @@ def _check_version_compatibility(
     - Allows loading but alerts user to potential incompatibilities
     """
     if scoring_policy_version != DEFAULT_SCORING_POLICY_VERSION:
-        logger.warning(
+        LOGGER.warning(
             "  ➤ Scoring policy version mismatch in %s: "
             "session uses v%s but current default is v%s. "
             "Results may not be directly comparable.",
@@ -487,7 +487,7 @@ def _check_version_compatibility(
         )
 
     if metric_reference_version != DEFAULT_METRIC_REFERENCE_VERSION:
-        logger.warning(
+        LOGGER.warning(
             "  ➤ Metric reference version mismatch in %s: "
             "session uses v%s but current default is v%s. "
             "Metric interpretations may differ.",

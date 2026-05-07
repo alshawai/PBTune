@@ -35,16 +35,13 @@ def print_startup_banner(enable_colors: bool = True) -> None:
 /_/   /_____/ /_/    /_/    \____/____/\__/\____/_/   \___/ /____/\___\_\/_____/  /_/  \__,_/_/ /_/\___/_/     
 """
 
-    # Use the INFO color (Green) for the banner and standard bold text for the subtitle.
-    # Allow disabling ANSI colors for plain-text terminal output.
-    color = ColorPalette.get_level_color("INFO", "ansi") if enable_colors else ""
     reset = ColorCode.RESET if enable_colors else ""
     bold = ColorCode.BOLD if enable_colors else ""
+    italic = ColorCode.ITALIC if enable_colors else ""
+    sky_blue = ColorCode.SKY_BLUE if enable_colors else ""
+    purple = ColorCode.PURPLE if enable_colors else ""
 
-    # Get terminal width
     term_width = shutil.get_terminal_size().columns
-
-    # Ensure a reasonable minimum width (e.g., 100) if terminal is very narrow
     term_width = max(term_width, 100)
 
     # Calculate banner width based on the longest line
@@ -55,12 +52,12 @@ def print_startup_banner(enable_colors: bool = True) -> None:
     # If we wanted to center the banner block itself, we could left-pad each line:
     padding = " " * max(0, (term_width - banner_width) // 2)
     for line in banner_lines:
-        print(f"{padding}{color}{bold}{line}{reset}")
+        print(f"{padding}{sky_blue}{bold}{line}{reset}")
 
     subtitle = "Population-Based Training for Automatic Database Parameter Tuning"
     # Center the subtitle text relative to the terminal
-    print(f"\n{bold}{subtitle.center(term_width)}{reset}")
-    print("\n" + "=" * term_width + "\n")
+    print(f"\n{bold}{italic}{sky_blue}{subtitle.center(term_width)}{reset}")
+    print("\n" + f"{bold}{purple}={reset}" * term_width + "\n")
 
 
 def get_evaluation_banner(

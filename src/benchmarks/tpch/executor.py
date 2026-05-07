@@ -87,6 +87,8 @@ class TPCHExecutor(BenchmarkExecutor):
             TPC-H scale factor. SF=1 produces ~1GB of raw data.
             Common values: 0.01 (tiny), 0.1 (dev), 1.0 (standard), 10.0 (large).
         """
+        self.logger = get_logger("TPCHExecutor")
+
         self.scale_factor = scale_factor
         self._queries: Optional[List[str]] = None
         self._dbgen_path: Optional[Path] = None
@@ -117,10 +119,8 @@ class TPCHExecutor(BenchmarkExecutor):
         6. Build indexes and foreign keys
         7. Run VACUUM ANALYZE
         """
-        logger = get_logger(__name__)
-
         # Step 1-2: Get dbgen binary and generate data
-        logger.info("[TPC-H] Preparing data (SF=%.1f)...", self.scale_factor)
+        self.logger.info("[TPC-H] Preparing data (SF=%.1f)...", self.scale_factor)
         self._dbgen_path = find_or_build_dbgen()
         self._data_dir = generate_data(self._dbgen_path, self.scale_factor)
 
@@ -130,10 +130,10 @@ class TPCHExecutor(BenchmarkExecutor):
         try:
             cursor = conn.cursor()
 
-            logger.debug("[TPC-H] Dropping old schema if exists...")
-            self._drop_existing_public_tables(cursor, logger)
+            self.logger.debug("[TPC-H] Dropping old schema if exists...")
+            self._drop_existing_public_tables(cursor)
 
-            logger.debug("[TPC-H] Creating schema (8 tables)...")
+            self.logger.debug("[TPC-H] Creating schema (8 tables)...")
             schema_sql = SCHEMA_SQL.read_text()
             cursor.execute(schema_sql)
 
@@ -143,7 +143,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 if not tbl_file.exists():
                     raise FileNotFoundError(f"Data file missing: {tbl_file}")
 
-                logger.debug("[TPC-H] Loading %s...", table_name)
+                self.logger.debug("[TPC-H] Loading %s...", table_name)
                 with open(tbl_file, "r") as f:
                     conn.cursor().copy_expert(
                         f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, DELIMITER '|')",
@@ -151,12 +151,12 @@ class TPCHExecutor(BenchmarkExecutor):
                     )
 
             # Step 6: Build indexes and FKs
-            logger.debug("[TPC-H] Building indexes and foreign keys...")
+            self.logger.debug("[TPC-H] Building indexes and foreign keys...")
             indexes_sql = INDEXES_SQL.read_text()
             cursor.execute(indexes_sql)
 
             # Step 7: VACUUM ANALYZE
-            logger.debug("[TPC-H] Running VACUUM ANALYZE...")
+            self.logger.debug("[TPC-H] Running VACUUM ANALYZE...")
             for table_name in self.TABLES_LOAD_ORDER:
                 cursor.execute(f"VACUUM ANALYZE {table_name}")
 
@@ -171,7 +171,7 @@ class TPCHExecutor(BenchmarkExecutor):
             )
 
             cursor.close()
-            logger.info(
+            self.logger.info(
                 "\u2713 TPC-H preparation complete (SF=%.1f)", self.scale_factor
             )
 
@@ -181,13 +181,11 @@ class TPCHExecutor(BenchmarkExecutor):
     def _drop_existing_public_tables(
         self,
         cursor,
-        logger: logging.Logger,
         log_prefix: str = "[TPC-H]",
     ) -> None:
         """Drop all public tables before loading TPC-H data."""
         super()._drop_existing_public_tables(
             cursor,
-            logger,
             log_prefix=log_prefix,
         )
 
@@ -205,8 +203,6 @@ class TPCHExecutor(BenchmarkExecutor):
 
     def validate(self, db_config: DatabaseConfig) -> bool:
         """Check if TPC-H schema exists and matches the current scale factor."""
-        logger = get_logger(__name__)
-
         try:
             conn = get_connection(db_config)
             cursor = conn.cursor()
@@ -217,7 +213,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 "WHERE table_name = '_tpch_metadata')"
             )
             if not cursor.fetchone()[0]:  # type: ignore
-                logger.debug("TPC-H validation failed: metadata table missing")
+                self.logger.debug("TPC-H validation failed: metadata table missing")
                 cursor.close()
                 conn.close()
                 return False
@@ -228,7 +224,7 @@ class TPCHExecutor(BenchmarkExecutor):
             row = cursor.fetchone()
             if row is None or float(row[0]) != self.scale_factor:
                 loaded_sf = row[0] if row else "unknown"
-                logger.debug(
+                self.logger.debug(
                     "TPC-H validation failed: loaded SF=%s, expected SF=%.1f",
                     loaded_sf,
                     self.scale_factor,
@@ -245,25 +241,25 @@ class TPCHExecutor(BenchmarkExecutor):
                     (table_name,),
                 )
                 if not cursor.fetchone()[0]:  # type: ignore
-                    logger.debug("TPC-H table missing: %s", table_name)
+                    self.logger.debug("TPC-H table missing: %s", table_name)
                     cursor.close()
                     conn.close()
                     return False
 
             cursor.close()
             conn.close()
-            logger.debug("TPC-H schema validated (SF=%.1f)", self.scale_factor)
+            self.logger.debug("TPC-H schema validated (SF=%.1f)", self.scale_factor)
             return True
 
         except Exception as e:
-            logger.debug("TPC-H validation failed: %s", e)
+            self.logger.debug("TPC-H validation failed: %s", e)
             return False
 
     def execute(
         self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
     ) -> PerformanceMetrics:
         """Execute TPC-H benchmark and return performance metrics."""
-        logger = get_logger(__name__, worker_id=worker_id)
+        logger = get_logger("TPCHExecutor", worker_id=worker_id)
 
         warmup_passes = kwargs.get("warmup_passes", 0)
 
