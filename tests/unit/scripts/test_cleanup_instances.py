@@ -20,7 +20,9 @@ def test_cleanup_constructs_manager_and_stops_instances(tmp_path: Path) -> None:
 
     fake_manager = SimpleNamespace(instances={}, stop_all=MagicMock())
 
-    args = Namespace(remove_data=False, base_dir=str(base_dir), force=False)
+    args = Namespace(
+        remove_data=False, remove_snapshots=False, base_dir=str(base_dir), force=False
+    )
 
     with (
         patch(
@@ -54,7 +56,12 @@ def test_cleanup_constructs_manager_and_stops_instances(tmp_path: Path) -> None:
 def test_cleanup_dry_run_returns_zero_when_base_dir_missing(tmp_path: Path) -> None:
     """Cleanup should exit cleanly when no instance directory exists."""
     missing_dir = tmp_path / "does_not_exist"
-    args = Namespace(remove_data=False, base_dir=str(missing_dir), force=False)
+    args = Namespace(
+        remove_data=False,
+        remove_snapshots=False,
+        base_dir=str(missing_dir),
+        force=False,
+    )
 
     with patch(
         "src.scripts.cleanup_instances.argparse.ArgumentParser.parse_args",

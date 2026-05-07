@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.utils.logger import get_logger
 from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
 
 
@@ -36,6 +37,10 @@ def rescore_metrics_globally(
     benchmark: str | None = None,
     workload: str | None = None,
     padding_factor: float = 0.0,
+    scoring_policy: str | None = None,
+    scoring_policy_version: str | None = None,
+    metric_reference_version: str | None = None,
+    workload_features: dict[str, float] | None = None,
 ) -> tuple[MetricConfig, list[float], dict[str, Any]]:
     """
     Recompute scores using one globally calibrated normalization range.
@@ -52,22 +57,71 @@ def rescore_metrics_globally(
     Raises:
         ValueError: If neither workload nor benchmark is provided.
     """
+    logger = get_logger(__name__)
+
     if workload is None:
         if benchmark is None:
             raise ValueError("Either 'workload' or 'benchmark' must be provided.")
         workload = workload_for_benchmark(benchmark)
 
-    metric_config = create_metric_config(workload)
+    logger.info(
+        "Rescoring %d metrics globally (workload=%s, benchmark=%s, policy=%s)",
+        len(metrics),
+        workload,
+        benchmark,
+        scoring_policy or "default",
+    )
+
+    metric_config = create_metric_config(
+        workload,
+        scoring_policy=scoring_policy,
+        scoring_policy_version=scoring_policy_version,
+        metric_reference_version=metric_reference_version,
+        workload_features=workload_features,
+    )
     latency_metric_name = metric_config.latency_metric
     latency_attr = f"latency_{latency_metric_name}"
 
     valid_latency, valid_throughput = _count_valid_observations(metrics, latency_attr)
     ranges_calibrated = valid_latency >= 3 and valid_throughput >= 3
 
+    logger.debug(
+        "Observation counts: latency=%d, throughput=%d (calibration_threshold=3)",
+        valid_latency,
+        valid_throughput,
+    )
+
     if ranges_calibrated:
+        logger.info(
+            "Calibrating normalization ranges from %d observations (padding=%.2f)",
+            len(metrics),
+            padding_factor,
+        )
         metric_config.update_ranges(metrics, padding_factor=padding_factor)
+        logger.debug(
+            "Calibrated ranges: latency=[%.2f, %.2f], throughput=[%.2f, %.2f]",
+            metric_config.latency_min,
+            metric_config.latency_max,
+            metric_config.throughput_min,
+            metric_config.throughput_max,
+        )
+    else:
+        logger.warning(
+            "Insufficient observations for calibration (latency=%d, throughput=%d). "
+            "Using default ranges.",
+            valid_latency,
+            valid_throughput,
+        )
 
     scores = [metric_config.compute_score(m) for m in metrics]
+    logger.info(
+        "Rescoring complete: %d scores computed (mean=%.4f, min=%.4f, max=%.4f)",
+        len(scores),
+        sum(scores) / len(scores) if scores else 0.0,
+        min(scores) if scores else 0.0,
+        max(scores) if scores else 0.0,
+    )
+
     metadata = {
         "mode": "global_posthoc",
         "workload": workload,
@@ -78,10 +132,19 @@ def rescore_metrics_globally(
         "n_observations": len(metrics),
         "n_valid_latency": valid_latency,
         "n_valid_throughput": valid_throughput,
+        "calibration_sample_counts": {
+            "latency": valid_latency,
+            "throughput": valid_throughput,
+        },
         "latency_min": metric_config.latency_min,
         "latency_max": metric_config.latency_max,
         "throughput_min": metric_config.throughput_min,
         "throughput_max": metric_config.throughput_max,
+        "normalizer_type": "QuantileUtilityNormalizer",
+        "metric_reference_version": metric_config.metric_reference_version,
+        "scoring_policy": metric_config.scoring_policy,
+        "scoring_policy_version": metric_config.scoring_policy_version,
+        "workload_features": metric_config.workload_features,
     }
 
     return metric_config, scores, metadata

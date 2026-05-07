@@ -21,6 +21,15 @@ class TuningSessionLoadError(EvaluationError):
     """
 
 
+class ScoringMetadataSchemaError(TuningSessionLoadError):
+    """
+    Raised when scoring metadata in a tuning session has an invalid schema.
+
+    Covers malformed payloads such as non-object workload features,
+    non-object normalization metadata, or unsupported score breakdown types.
+    """
+
+
 class DockerEnvironmentError(EvaluationError):
     """
     Raised when the Docker evaluation environment cannot be set up.

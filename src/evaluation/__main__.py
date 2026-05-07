@@ -46,6 +46,7 @@ from src.utils.logger import setup_logging, get_logger
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the argument parser for the evaluation CLI."""
     parser = argparse.ArgumentParser(
         prog="python -m src.evaluation",
         description=(
@@ -179,6 +180,29 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    scoring_grp = parser.add_argument_group("scoring options")
+    scoring_grp.add_argument(
+        "--scoring-policy",
+        metavar="POLICY",
+        type=str,
+        default=None,
+        help="Override scoring policy (e.g., 'feature_driven_v2'). Default: from session.",
+    )
+    scoring_grp.add_argument(
+        "--scoring-policy-version",
+        metavar="VER",
+        type=str,
+        default=None,
+        help="Override scoring policy version. Default: from session.",
+    )
+    scoring_grp.add_argument(
+        "--metric-reference-version",
+        metavar="VER",
+        type=str,
+        default=None,
+        help="Override metric reference version. Default: from session.",
+    )
+
     env_grp = parser.add_argument_group("environment options")
     env_grp.add_argument(
         "--no-docker",
@@ -268,6 +292,9 @@ def main(argv: list[str] | None = None) -> int:
         use_docker=not args.no_docker,
         docker_image=args.docker_image,
         output_dir=args.output_dir,
+        scoring_policy=args.scoring_policy,
+        scoring_policy_version=args.scoring_policy_version,
+        metric_reference_version=args.metric_reference_version,
     )
 
     try:

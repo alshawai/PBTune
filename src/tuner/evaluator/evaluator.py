@@ -14,7 +14,7 @@ Key Responsibilities:
 
 Architecture:
 ------------
-    Population → Evaluator → PostgreSQL
+    Population -> Evaluator -> PostgreSQL
                     ↓
                 Metrics
                     ↓
@@ -28,7 +28,7 @@ Design Patterns:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 import logging
 import time
 import numpy as np
@@ -722,40 +722,95 @@ class Evaluator:
                     )
 
                 stats_after = None
-                if connection and not connection.closed and stats_before:
+                if stats_before:
                     try:
-                        cursor = connection.cursor()
-                        cursor.execute("""
-                            SELECT 
-                                blks_read,
-                                blks_hit,
-                                tup_returned,
-                                tup_fetched,
-                                tup_inserted,
-                                tup_updated,
-                                tup_deleted
-                            FROM pg_stat_database
-                            WHERE datname = current_database()
-                        """)
-                        stats_after = cursor.fetchone()
-                        cursor.close()
-
-                        # Calculate I/O from database statistics (8KB blocks)
-                        if stats_after:
-                            blocks_read_delta = stats_after[0] - stats_before[0]
-
-                            # Convert to MB (8KB blocks)
-                            io_read_mb = (blocks_read_delta * 8) / 1024.0
-
-                            # Store in metrics
-                            metrics.io_read_mb = max(0, io_read_mb)
-
+                        fresh_conn = self.connect(
+                            worker.db_config, max_retries=2, retry_delay=1.0
+                        )
+                        if fresh_conn:
+                            cursor = fresh_conn.cursor()
+                            cursor.execute("""
+                                SELECT 
+                                    blks_read,
+                                    blks_hit,
+                                    tup_returned,
+                                    tup_fetched,
+                                    tup_inserted,
+                                    tup_updated,
+                                    tup_deleted
+                                FROM pg_stat_database
+                                WHERE datname = current_database()
+                            """)
+                            stats_after = cursor.fetchone()
+                            cursor.close()
+                            self.disconnect(fresh_conn, worker_id=worker.worker_id)
                     except Exception as e:
                         worker_logger.debug("Failed to capture final stats: %s", e)
 
+                # Calculate I/O from database statistics (8KB blocks)
+                if stats_after:
+                    try:
+                        # Unpack stats arrays
+                        (
+                            blks_read_after,
+                            blks_hit_after,
+                            tup_returned_after,
+                            tup_fetched_after,
+                            tup_inserted_after,
+                            tup_updated_after,
+                            tup_deleted_after,
+                        ) = stats_after
+
+                        (
+                            blks_read_before,
+                            blks_hit_before,
+                            tup_returned_before,
+                            tup_fetched_before,
+                            tup_inserted_before,
+                            tup_updated_before,
+                            tup_deleted_before,
+                        ) = stats_before
+
+                        blocks_read_delta = blks_read_after - blks_read_before
+                        blocks_hit_delta = blks_hit_after - blks_hit_before
+                        tup_returned_delta = tup_returned_after - tup_returned_before
+                        tup_fetched_delta = tup_fetched_after - tup_fetched_before
+
+                        # Convert to MB (8KB blocks)
+                        io_read_mb = (blocks_read_delta * 8) / 1024.0
+                        metrics.io_read_mb = max(0, io_read_mb)
+
+                        # Populate DB counters
+                        metrics.rows_returned = max(0, tup_returned_delta)
+                        metrics.rows_examined = max(0, tup_fetched_delta)
+
+                        # Compute buffer miss rate
+                        total_blocks = blocks_read_delta + blocks_hit_delta
+                        if total_blocks > 0:
+                            metrics.buffer_miss_rate = max(
+                                0.0, min(1.0, blocks_read_delta / total_blocks)
+                            )
+                        else:
+                            metrics.buffer_miss_rate = 0.0
+
+                        # Compute scan efficiency
+                        if tup_fetched_delta > 0:
+                            metrics.scan_efficiency = max(
+                                0.0,
+                                min(1.0, tup_returned_delta / tup_fetched_delta),
+                            )
+                        else:
+                            metrics.scan_efficiency = 1.0
+
+                    except Exception as e:
+                        worker_logger.debug("Failed to calculate IO stats: %s", e)
+
             except Exception as e:
                 worker_logger.error("Workload execution failed: %s", e)
-                raise RuntimeError(f"Workload execution failed: {e}") from e
+                # Instead of crashing the entire PBT generation, treat as a dead worker
+                metrics = PerformanceMetrics(failure_type="EXECUTION_CRASH")
+                score = self.config.metric_config.compute_score(metrics)
+                return metrics, score, restart_occurred
 
             system_metrics = self.collect_system_metrics(worker_id=worker.worker_id)
 
@@ -763,6 +818,19 @@ class Evaluator:
                 metrics.cache_hit_ratio = system_metrics["cache_hit_ratio"]
             if "memory_utilization" in system_metrics:
                 metrics.memory_utilization = system_metrics["memory_utilization"]
+
+            # Compute memory pressure
+            # Based on memory utilization and cache hit ratio.
+            # High utilization + low cache hits = high pressure
+            metrics.memory_pressure = metrics.memory_utilization * (
+                1.0 - metrics.cache_hit_ratio
+            )
+
+            # Reliability gate: classify degraded evaluations before scoring
+            self._apply_reliability_gate(metrics, worker_logger)
+
+            # Note: Workload features are refined at generation level after all workers evaluated
+            # to avoid race conditions from parallel workers mutating shared state
 
             # Clean up dead tuples from DML operations to prevent bloat between generations
             self._vacuum_after_dml(worker.db_config, worker_id=worker.worker_id)
@@ -776,6 +844,223 @@ class Evaluator:
                 connection,
                 worker_id=worker.worker_id if hasattr(worker, "worker_id") else None,
             )
+
+    # ------------------------------------------------------------------
+    # Reliability gate
+    # ------------------------------------------------------------------
+
+    # Thresholds for failure classification.  Kept as class-level constants
+    # so they are easy to override in tests or subclasses.
+    _HIGH_ERROR_RATE_THRESHOLD: float = 0.50
+    _NEAR_ZERO_THROUGHPUT_THRESHOLD: float = 0.1
+    _DEGRADED_ERROR_RATE_THRESHOLD: float = 0.10
+
+    def _apply_reliability_gate(
+        self,
+        metrics: PerformanceMetrics,
+        worker_logger: logging.Logger,
+    ) -> None:
+        """Classify the evaluation result and set ``failure_type`` if degraded.
+
+        The gate runs *after* workload execution succeeds (no exception) but
+        *before* scoring.  It inspects the raw metrics and assigns one of:
+
+        * ``HIGH_ERROR_RATE`` — more than 50 % of queries failed.
+        * ``NEAR_ZERO_THROUGHPUT`` — throughput is effectively zero, meaning
+          the workload produced no useful work despite not crashing.
+        * ``DEGRADED`` — error rate above 10 % but below the crash threshold,
+          indicating partial failure that still produced some useful data.
+
+        If the evaluation is healthy, ``failure_type`` remains ``None``.
+        Only the first matching classification is applied (most severe first).
+        """
+        if metrics.failure_type is not None:
+            # Already classified (e.g. EXECUTION_CRASH from the outer handler)
+            return
+
+        if metrics.error_rate >= self._HIGH_ERROR_RATE_THRESHOLD:
+            metrics.failure_type = "HIGH_ERROR_RATE"
+            worker_logger.warning(
+                "Reliability gate: error_rate=%.2f exceeds threshold %.2f — "
+                "marking as HIGH_ERROR_RATE",
+                metrics.error_rate,
+                self._HIGH_ERROR_RATE_THRESHOLD,
+            )
+            return
+
+        if metrics.throughput <= self._NEAR_ZERO_THROUGHPUT_THRESHOLD:
+            metrics.failure_type = "NEAR_ZERO_THROUGHPUT"
+            worker_logger.warning(
+                "Reliability gate: throughput=%.4f at or below threshold %.4f — "
+                "marking as NEAR_ZERO_THROUGHPUT",
+                metrics.throughput,
+                self._NEAR_ZERO_THROUGHPUT_THRESHOLD,
+            )
+            return
+
+        if metrics.error_rate >= self._DEGRADED_ERROR_RATE_THRESHOLD:
+            metrics.failure_type = "DEGRADED"
+            worker_logger.warning(
+                "Reliability gate: error_rate=%.2f exceeds degraded threshold "
+                "%.2f — marking as DEGRADED",
+                metrics.error_rate,
+                self._DEGRADED_ERROR_RATE_THRESHOLD,
+            )
+            return
+
+    def _refine_workload_features(
+        self,
+        metrics: PerformanceMetrics,
+    ) -> None:
+        """Refine static workload features with runtime observations using EMA blending.
+
+        Blends observed runtime metrics into the static feature vector to capture
+        dynamic workload characteristics. Uses exponential moving average with
+        alpha=0.7 to keep static features dominant while allowing runtime correction.
+
+        Refinement rules (bounded to [0, 1]):
+        - High throughput_variance -> increase concurrency_pressure (runtime contention)
+        - High latency_variance -> increase tail_latency_sensitivity
+        - High buffer_miss_rate -> increase working_set_millions proxy
+        - Low scan_efficiency -> increase join_intensity (inefficient scans suggest complex joins)
+        """
+        logger = get_logger(__name__)
+
+        if not self.config.metric_config.workload_features:
+            logger.debug("No workload features to refine")
+            return
+
+        alpha = 0.7  # EMA blending factor: keep static features dominant
+        features = self.config.metric_config.workload_features
+        refinements = {}
+
+        # Throughput variance -> concurrency pressure
+        if (
+            hasattr(metrics, "throughput_variance")
+            and metrics.throughput_variance is not None
+        ):
+            throughput_variance_signal = min(1.0, metrics.throughput_variance)
+            if "concurrency_pressure" in features:
+                old_val = features["concurrency_pressure"]
+                features["concurrency_pressure"] = (
+                    alpha * features["concurrency_pressure"]
+                    + (1 - alpha) * throughput_variance_signal
+                )
+                refinements["concurrency_pressure"] = (
+                    old_val,
+                    features["concurrency_pressure"],
+                )
+
+        # Latency variance -> tail latency sensitivity
+        if (
+            hasattr(metrics, "latency_variance")
+            and metrics.latency_variance is not None
+        ):
+            latency_variance_signal = min(1.0, metrics.latency_variance)
+            if "tail_latency_sensitivity" in features:
+                old_val = features["tail_latency_sensitivity"]
+                features["tail_latency_sensitivity"] = (
+                    alpha * features["tail_latency_sensitivity"]
+                    + (1 - alpha) * latency_variance_signal
+                )
+                refinements["tail_latency_sensitivity"] = (
+                    old_val,
+                    features["tail_latency_sensitivity"],
+                )
+
+        # Buffer miss rate -> working set millions proxy
+        if (
+            hasattr(metrics, "buffer_miss_rate")
+            and metrics.buffer_miss_rate is not None
+        ):
+            buffer_miss_signal = min(1.0, metrics.buffer_miss_rate)
+            if "working_set_millions" in features:
+                old_val = features["working_set_millions"]
+                features["working_set_millions"] = (
+                    alpha * features["working_set_millions"]
+                    + (1 - alpha) * buffer_miss_signal
+                )
+                refinements["working_set_millions"] = (
+                    old_val,
+                    features["working_set_millions"],
+                )
+
+        # Scan efficiency (inverse) -> join intensity
+        if hasattr(metrics, "scan_efficiency") and metrics.scan_efficiency is not None:
+            # Low scan efficiency (inefficient scans) suggests complex joins
+            scan_inefficiency_signal = 1.0 - metrics.scan_efficiency
+            if "join_intensity" in features:
+                old_val = features["join_intensity"]
+                features["join_intensity"] = (
+                    alpha * features["join_intensity"]
+                    + (1 - alpha) * scan_inefficiency_signal
+                )
+                refinements["join_intensity"] = (old_val, features["join_intensity"])
+
+        if refinements:
+            logger.debug(
+                "Refined workload features: %s",
+                {k: f"{old:.4f} -> {new:.4f}" for k, (old, new) in refinements.items()},
+            )
+
+    def refine_workload_features_from_generation(self, workers: List[Any]) -> None:
+        """Refine workload features using aggregated metrics from all workers in a generation.
+
+        This generation-level refinement aggregates metrics from all workers before
+        refining features once, ensuring that all workers in a generation use the same
+        features and thus the same weights. This prevents race conditions that occur
+        when feature refinement is performed per-worker during parallel evaluation.
+
+        Parameters
+        ----------
+        workers : List[Worker]
+            List of all workers in the current generation
+        """
+        logger = get_logger(__name__)
+
+        if not workers:
+            logger.debug("No workers to aggregate for feature refinement")
+            return
+
+        # Aggregate metrics from all healthy workers
+        health_metrics = [w.metrics for w in workers if w.metrics is not None]
+        if not health_metrics:
+            logger.debug("No valid metrics to aggregate for feature refinement")
+            return
+
+        # Compute average metrics across workers
+        aggregated_metrics = PerformanceMetrics()
+
+        # Average numeric metrics
+        aggregated_metrics.latency_p50 = sum(
+            m.latency_p50 for m in health_metrics
+        ) / len(health_metrics)
+        aggregated_metrics.latency_p95 = sum(
+            m.latency_p95 for m in health_metrics
+        ) / len(health_metrics)
+        aggregated_metrics.latency_p99 = sum(
+            m.latency_p99 for m in health_metrics
+        ) / len(health_metrics)
+        aggregated_metrics.latency_variance = sum(
+            m.latency_variance for m in health_metrics
+        ) / len(health_metrics)
+        aggregated_metrics.throughput_variance = sum(
+            m.throughput_variance for m in health_metrics
+        ) / len(health_metrics)
+        aggregated_metrics.buffer_miss_rate = sum(
+            m.buffer_miss_rate for m in health_metrics
+        ) / len(health_metrics)
+        aggregated_metrics.scan_efficiency = sum(
+            m.scan_efficiency for m in health_metrics
+        ) / len(health_metrics)
+
+        logger.debug(
+            "Aggregated metrics from %d workers for generation-level feature refinement",
+            len(health_metrics),
+        )
+
+        # Refine features using aggregated metrics
+        self._refine_workload_features(aggregated_metrics)
 
     def __repr__(self) -> str:
         """String representation."""

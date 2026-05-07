@@ -411,6 +411,11 @@ class Population:
 
         logger.info("Generation %s evaluation complete", self.current_generation)
 
+        # Refine workload features at generation level using aggregated metrics from all workers
+        # This ensures all workers in a generation use the same features and weights for scoring
+        if self.evaluator is not None:
+            self.evaluator.refine_workload_features_from_generation(self.workers)
+
     @staticmethod
     def _config_change_ratio(
         old_config: Dict[str, Any], new_config: Dict[str, Any]
@@ -626,8 +631,8 @@ class Population:
                     excluded_failure_metrics += 1
 
         # Need samples from multiple generations to capture variability
-        # Minimum: 2 generations worth of data (2 * population_size)
-        min_samples_needed = max(8, 2 * len(self.workers))
+        # Minimum: 5 generations worth of data (5 * population_size), or 20, whichever is larger
+        min_samples_needed = max(20, 5 * len(self.workers))
 
         if len(all_metrics) < min_samples_needed:
             logger.debug(
@@ -667,16 +672,8 @@ class Population:
                         len(all_metrics),
                     )
 
-                    # Rescore current generation and best overall score with new adaptive ranges
-                    logger.info(
-                        "♻️  Rescoring current generation with adaptive ranges..."
-                    )
-                    for worker in self.workers:
-                        if worker.metrics is not None:
-                            worker.performance_score = metric_config.compute_score(
-                                worker.metrics
-                            )
-
+                    # Historical scores from generation 0 are on a different scale.
+                    # We reset the historical best, but leave worker rescoring to _finalize_scores()
                     logger.info(
                         "♻️  Resetting historical best score to align with new adaptive bounds"
                     )
@@ -904,15 +901,17 @@ class Population:
 
         self.update_metric_ranges_if_needed()
 
-        # Check for score saturation and expand ranges if needed
-        self._check_and_handle_saturation(evaluate_fn)
+        # Finalize scores (detect saturation, rescore workers/best_overall)
+        self._finalize_scores()
+
+        # Record generation with finalized scores
+        result = self.record_generation()
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,
             exclude_knobs=None,  # No restrictions in multi-instance mode
         )
 
-        result = self.record_generation()
         result.num_exploited = num_exploited
 
         self.current_generation += 1
@@ -960,86 +959,24 @@ class Population:
 
         return False
 
-    def _check_and_handle_saturation(
-        self, evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]]
-    ) -> None:
+    def _finalize_scores(self) -> None:
         """
-        Check if any workers' raw metrics exceed normalization bounds and expand if needed.
+        Finalize scoring for the current generation.
 
-        Clamping (np.clip) in compute_score() destroys rank ordering between workers
-        whose raw metrics fall outside [min, max]. This method detects when ANY worker's
-        raw latency or throughput exceeds the current bounds, then expands the ranges
-        and rescores all workers to restore correct relative ordering.
-
-        When bounds exceedance is detected:
-        1. Identify which worker(s) have raw metrics outside current bounds
-        2. Record their PRE-expansion scores
-        3. Expand ranges to accommodate the exceeded values (with headroom)
-        4. Rescore all workers with new ranges
-        5. Update historical best score on new ranges
-
-        Parameters
-        ----------
-        evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
-            Evaluation function (only used to get metric config for rescoring)
+        1. Expand ranges if saturation or drift is detected
+        2. Rescore all workers with final weights and ranges
+        3. Rescore historical best
+        4. Update historical best config if a current worker is genuinely better
         """
-        # Only check after ranges are initialized
         if not self._ranges_updated or self.evaluator is None:
+            logger.debug(
+                "Score finalization skipped: ranges_updated=%s, evaluator=%s",
+                self._ranges_updated,
+                self.evaluator is not None,
+            )
             return
 
         metric_config = self.evaluator.config.metric_config
-
-        # Check each worker for out-of-bounds metrics (would be clamped by np.clip)
-        # Trigger on raw metric bound exceedance, not normalized score threshold,
-        # because clamping destroys rank ordering between workers long before
-        # the normalized component hits the saturation ceiling.
-        clamped_workers = []
-        pre_clamp_scores = {}
-
-        for worker in self.workers:
-            if worker.metrics is not None:
-                pre_clamp_scores[worker.worker_id] = worker.performance_score
-                latency = getattr(
-                    worker.metrics, f"latency_{metric_config.latency_metric}"
-                )
-                throughput = worker.metrics.throughput
-
-                latency_below_min = latency > 0 and latency < metric_config.latency_min
-                latency_above_max = latency > 0 and latency > metric_config.latency_max
-                throughput_below_min = (
-                    throughput > 0 and throughput < metric_config.throughput_min
-                )
-                throughput_above_max = (
-                    throughput > 0 and throughput > metric_config.throughput_max
-                )
-                exceeds_bounds = (
-                    latency_below_min
-                    or latency_above_max
-                    or throughput_below_min
-                    or throughput_above_max
-                )
-                if exceeds_bounds:
-                    clamped_workers.append(worker)
-
-        # If no workers exceed bounds, nothing to do
-        if not clamped_workers:
-            return
-
-        # Find the best clamped worker (highest PRE-expansion score)
-        best_clamped_worker = max(clamped_workers, key=lambda w: w.performance_score)
-        best_clamped_pre_score = best_clamped_worker.performance_score
-
-        logger.info(
-            "⚠️  Metric bounds exceeded in %d/%d workers (generation %d)",
-            len(clamped_workers),
-            len(self.workers),
-            self.current_generation,
-        )
-        logger.info(
-            "    Best clamped: Worker-%d with PRE-expansion score %.4f",
-            best_clamped_worker.worker_id,
-            best_clamped_pre_score,
-        )
 
         # Expand ranges based on current generation's metrics
         dead_threshold = self.config.dead_config_threshold if self.config else 6.0
@@ -1048,48 +985,63 @@ class Population:
             for w in self.workers
             if w.metrics is not None and w.performance_score > dead_threshold
         ]
-        if not current_metrics:
-            return
 
-        ranges_expanded = metric_config.expand_ranges_for_metrics(
-            current_metrics,
-            expansion_factor=0.25,  # 25% headroom for continued improvement
-        )
+        if current_metrics:
+            ranges_expanded = metric_config.expand_ranges_for_metrics(
+                current_metrics,
+                expansion_factor=0.25,  # 25% headroom for continued improvement
+            )
+            if ranges_expanded:
+                logger.info("Saturation/drift detected: expanded normalizer ranges")
+        else:
+            logger.debug(
+                "No viable metrics for saturation check (all workers below dead threshold)"
+            )
 
-        if not ranges_expanded:
-            logger.debug("Ranges not expanded, no rescoring needed")
-            return
+        # Single rescore pass for ALL workers
+        rescored_count = 0
+        significant_changes = 0
 
-        # Rescore all workers in current generation with new ranges
-        logger.info("♻️  Rescoring current generation with expanded ranges...")
         for worker in self.workers:
             if worker.metrics is not None:
                 old_score = worker.performance_score
                 new_score = metric_config.compute_score(worker.metrics)
                 worker.performance_score = new_score
+                rescored_count += 1
 
                 if abs(new_score - old_score) > 0.5:  # Log significant changes
-                    logger.debug(
-                        "  Worker-%d: %.4f → %.4f (Δ%.4f)",
-                        worker.worker_id,
-                        old_score,
-                        new_score,
-                        new_score - old_score,
-                    )
+                    significant_changes += 1
 
-        old_unscaled_best = self.best_overall_score
+        # Single rescore pass for historical best
+        best_current = max(
+            (w for w in self.workers if w.metrics is not None),
+            key=lambda w: w.performance_score,
+        )
+
         if self.best_overall_metrics is not None:
-            self.best_overall_score = metric_config.compute_score(
-                self.best_overall_metrics
-            )
-            logger.info(
-                "♻️  Rescored historical best score on expanded bounds: %.4f → %.4f",
-                old_unscaled_best,
-                self.best_overall_score,
-            )
+            rescored_historical = metric_config.compute_score(self.best_overall_metrics)
+        else:
+            rescored_historical = 0.0
 
-        # record_generation() will natively handle comparing the current workers
-        # (now rescored) against the historical best (also rescored).
+        # Grounding: compare current gen's best vs rescored historical best
+        if best_current.performance_score >= rescored_historical:
+            self.best_overall_score = best_current.performance_score
+            self.best_overall_config = best_current.knob_config.copy()
+            self.best_overall_metrics = best_current.metrics
+            winner = "current"
+        else:
+            self.best_overall_score = rescored_historical
+            winner = "historical"
+
+        logger.info(
+            "Finalized scores: %d workers rescored (%d significant), "
+            "best_current=%.4f, historical_rescored=%.4f (winner=%s)",
+            rescored_count,
+            significant_changes,
+            best_current.performance_score,
+            rescored_historical,
+            winner,
+        )
 
     def get_best_configuration(self) -> tuple[Dict[str, Any], float]:
         """

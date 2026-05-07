@@ -14,11 +14,19 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.utils.logger import get_logger
-from src.evaluation.exceptions import TuningSessionLoadError
+from src.evaluation.exceptions import (
+    ScoringMetadataSchemaError,
+    TuningSessionLoadError,
+)
 from src.evaluation.types import TuningSessionData, WorkerResources
 from src.benchmarks.sysbench.executor import (
     DEFAULT_SYSBENCH_WORKLOAD,
     validate_sysbench_workload,
+)
+from src.utils.scoring.constants import (
+    DEFAULT_METRIC_REFERENCE_VERSION,
+    DEFAULT_SCORING_POLICY,
+    DEFAULT_SCORING_POLICY_VERSION,
 )
 
 logger = get_logger(__name__)
@@ -151,6 +159,14 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         )
 
     tuning_config = _normalize_tuning_config(ts_meta)
+    scoring_metadata = _extract_scoring_metadata(data, ts_meta, path)
+
+    # Check for version compatibility and warn on mismatches
+    _check_version_compatibility(
+        scoring_metadata["scoring_policy_version"],
+        scoring_metadata["metric_reference_version"],
+        path,
+    )
 
     logger.debug("  ➤ System info and tuning config processed successfully.")
 
@@ -176,6 +192,12 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         workload_type=workload_type,
         sysbench_workload=sysbench_workload,
         session_id=session_id,
+        scoring_policy=scoring_metadata["scoring_policy"],
+        scoring_policy_version=scoring_metadata["scoring_policy_version"],
+        metric_reference_version=scoring_metadata["metric_reference_version"],
+        workload_features=scoring_metadata["workload_features"],
+        normalization_metadata=scoring_metadata["normalization_metadata"],
+        score_breakdown=scoring_metadata["score_breakdown"],
     )
 
 
@@ -252,6 +274,7 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
     }
 
     def _as_int(value: Any) -> Optional[int]:
+        """Convert value to int, returning None if conversion fails."""
         if value is None:
             return None
         try:
@@ -260,6 +283,7 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
             return None
 
     def _as_float(value: Any) -> Optional[float]:
+        """Convert value to float, returning None if conversion fails."""
         if value is None:
             return None
         try:
@@ -314,3 +338,160 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
             )
 
     return config
+
+
+def _extract_scoring_metadata(
+    raw_root: dict[str, Any],
+    ts_meta: dict[str, Any],
+    path: Path,
+) -> dict[str, Any]:
+    """Extract persisted scoring metadata with strict schema checks."""
+
+    scoring_policy_raw = ts_meta.get("scoring_policy", raw_root.get("scoring_policy"))
+    scoring_policy = (
+        str(scoring_policy_raw).strip()
+        if scoring_policy_raw is not None and str(scoring_policy_raw).strip()
+        else DEFAULT_SCORING_POLICY
+    )
+
+    scoring_policy_version_raw = ts_meta.get(
+        "scoring_policy_version", raw_root.get("scoring_policy_version")
+    )
+    scoring_policy_version = (
+        str(scoring_policy_version_raw).strip()
+        if scoring_policy_version_raw is not None
+        and str(scoring_policy_version_raw).strip()
+        else DEFAULT_SCORING_POLICY_VERSION
+    )
+
+    metric_reference_version_raw = ts_meta.get(
+        "metric_reference_version", raw_root.get("metric_reference_version")
+    )
+    metric_reference_version = (
+        str(metric_reference_version_raw).strip()
+        if metric_reference_version_raw is not None
+        and str(metric_reference_version_raw).strip()
+        else DEFAULT_METRIC_REFERENCE_VERSION
+    )
+
+    workload_features = _expect_object_or_empty(
+        field_name="workload_features",
+        value=raw_root.get("workload_features", ts_meta.get("workload_features")),
+        path=path,
+    )
+    normalization_metadata = _expect_object_or_empty(
+        field_name="normalization_metadata",
+        value=raw_root.get(
+            "normalization_metadata",
+            ts_meta.get("normalization_metadata"),
+        ),
+        path=path,
+    )
+    score_breakdown = _expect_object_or_empty(
+        field_name="score_breakdown",
+        value=raw_root.get("score_breakdown", ts_meta.get("score_breakdown")),
+        path=path,
+    )
+
+    return {
+        "scoring_policy": scoring_policy,
+        "scoring_policy_version": scoring_policy_version,
+        "metric_reference_version": metric_reference_version,
+        "workload_features": workload_features,
+        "normalization_metadata": normalization_metadata,
+        "score_breakdown": score_breakdown,
+    }
+
+
+def _expect_object_or_empty(
+    *,
+    field_name: str,
+    value: Any,
+    path: Path,
+) -> dict[str, Any]:
+    """Validate persisted metadata object shape and return normalized dictionary."""
+    if value is None:
+        return {}
+
+    if not isinstance(value, dict):
+        raise ScoringMetadataSchemaError(
+            f"Invalid scoring metadata in {path}: '{field_name}' must be a JSON "
+            f"object, got {type(value).__name__}"
+        )
+
+    return dict(value)
+
+
+def _check_version_compatibility(
+    scoring_policy_version: str,
+    metric_reference_version: str,
+    path: Path,
+) -> None:
+    """
+    Check for version mismatches and emit warnings for mixed-version data.
+
+    This policy ensures that when loading tuning session data with different
+    versions of scoring policies or metric references, appropriate warnings
+    are emitted to alert users about potential compatibility issues.
+
+    Parameters
+    ----------
+    scoring_policy_version : str
+        Version of the scoring policy used during tuning
+    metric_reference_version : str
+        Version of the metric reference used during tuning
+    path : Path
+        Path to the tuning session file for logging context
+    """
+    # Check if versions differ from defaults
+    if scoring_policy_version != DEFAULT_SCORING_POLICY_VERSION:
+        logger.warning(
+            "  ➤ Tuning session %s used scoring_policy_version=%s "
+            "(current default: %s) — results may not be directly comparable",
+            path.name,
+            scoring_policy_version,
+            DEFAULT_SCORING_POLICY_VERSION,
+        )
+
+    if metric_reference_version != DEFAULT_METRIC_REFERENCE_VERSION:
+        logger.warning(
+            "  ➤ Tuning session %s used metric_reference_version=%s "
+            "(current default: %s) — metric interpretations may differ",
+            path.name,
+            metric_reference_version,
+            DEFAULT_METRIC_REFERENCE_VERSION,
+        )
+
+
+def _check_version_compatibility(
+    scoring_policy_version: str,
+    metric_reference_version: str,
+    path: Path,
+) -> None:
+    """
+    Check for version compatibility and warn on mismatches.
+
+    Implements mixed-version warning policy:
+    - Warns if scoring_policy_version differs from current default
+    - Warns if metric_reference_version differs from current default
+    - Allows loading but alerts user to potential incompatibilities
+    """
+    if scoring_policy_version != DEFAULT_SCORING_POLICY_VERSION:
+        logger.warning(
+            "  ➤ Scoring policy version mismatch in %s: "
+            "session uses v%s but current default is v%s. "
+            "Results may not be directly comparable.",
+            path.name,
+            scoring_policy_version,
+            DEFAULT_SCORING_POLICY_VERSION,
+        )
+
+    if metric_reference_version != DEFAULT_METRIC_REFERENCE_VERSION:
+        logger.warning(
+            "  ➤ Metric reference version mismatch in %s: "
+            "session uses v%s but current default is v%s. "
+            "Metric interpretations may differ.",
+            path.name,
+            metric_reference_version,
+            DEFAULT_METRIC_REFERENCE_VERSION,
+        )

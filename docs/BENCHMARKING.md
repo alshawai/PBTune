@@ -147,4 +147,63 @@ The tuner connects to your `DB_HOST`, uses `pg_basebackup` to pull a binary snap
 
 ## Note on PBT Relative Scoring
 
-When configuring the population-based training, the internal PBT algorithm does not cross-compare raw numbers across these two methods. It simply records the relative percentage improvement (e.g., "Configuration X improved throughput by 43% against configuration Y"). Thus, both approaches are completely valid and scientifically sound so long as the developer does not switch from internal tests to external tests mid-run.
+When configuring the population-based training, the internal PBT algorithm does not cross-compare raw benchmark numbers across these two methods. It records benchmark metrics, then converts them through the shared scoring-v2 pipeline documented in [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md).
+
+The practical implication is that the benchmark driver can differ, but the scorer remains the same. That keeps Sysbench, TPC-H, and template workloads comparable within a single policy version while preserving compatibility with historical `fixed_v1` sessions.
+
+## Benchmark Executor Interface
+
+All benchmark executors implement a common interface for schema management and execution:
+
+### SchemaProvider Protocol
+
+- `prepare(db_config)`: Initialize benchmark schema (create tables, load data)
+- `validate(db_config)`: Verify schema matches expected configuration
+- `execute(db_config, duration)`: Run benchmark and return metrics
+
+### Executor Implementations
+
+#### SysbenchExecutor
+
+- **Workloads**: oltp_read_only, oltp_read_write, oltp_write_only
+- **Configuration**: Threads, tables, table size
+- **Metrics**: TPS, p95/p99 latency
+- **Implementation**: Delegates to external `sysbench` binary
+
+#### TPCHExecutor
+
+- **Workloads**: 22 standard TPC-H queries
+- **Configuration**: Scale factor, warmup passes
+- **Metrics**: QphH, p50/p95 query latency
+- **Implementation**: Uses `dbgen` for data generation, `psycopg2` for execution
+
+#### WorkloadExecutor
+
+- **Workloads**: Custom JSON/YAML templates
+- **Configuration**: Query list with weights, schema metadata
+- **Metrics**: Custom metrics from query execution
+- **Implementation**: Pure Python SQL execution
+
+## Benchmark Validation and Reproducibility
+
+Each executor validates schema state before execution:
+
+1. **Table Count**: Verify expected number of tables exist
+2. **Row Count**: Check table cardinality matches configuration
+3. **Schema Consistency**: Ensure no leftover tables from previous benchmarks
+4. **Data Integrity**: Validate data hasn't been corrupted
+
+Validation failures trigger automatic schema preparation to ensure consistent starting state.
+
+## Performance Metrics Collection
+
+Benchmark executors collect standardized metrics:
+
+- **Throughput**: Transactions per second (OLTP) or queries per hour (OLAP)
+- **Latency**: P50, P95, P99 percentiles in milliseconds
+- **Resource Utilization**: CPU, memory, I/O statistics
+- **Error Rates**: Failed transactions or queries
+- **Stability**: Variance across measurement intervals
+
+These metrics are normalized through the scoring-v2 pipeline for cross-benchmark comparison.
+
