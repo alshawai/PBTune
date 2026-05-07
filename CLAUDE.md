@@ -92,7 +92,7 @@ The system follows a layered architecture:
 - **Parallel Evaluation**: Each worker runs on a dedicated PostgreSQL instance (ports 5440+)
 - **Dual-Benchmarking**: Supports both internal JSON workloads and external C-binaries (sysbench/tpch)
 - **Snapshot Management**: Intelligent baseline snapshots for fast restarts
-- **Adaptive Scoring**: Workload-specific metric weighting and normalization
+- **Feature-Driven Scoring**: Workload-feature-conditioned weighting with compatibility policy and robust normalization
 
 ### Directory Structure
 
@@ -176,6 +176,7 @@ python -m src.tuner.main --tier core --config standard --verbose DEBUG
 - `src/tuner/evaluator/evaluator.py` - Performance measurement
 - `src/tuner/config/knob_space.py` - Knob space management
 - `src/utils/environments/factory.py` - Environment backend selection and lifecycle
+- `docs/FEATURE_DRIVEN_SCORING.md` - Canonical reference for the scoring-v2 architecture and migration path
 
 ## Research Context
 

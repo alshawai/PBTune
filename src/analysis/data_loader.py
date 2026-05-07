@@ -220,13 +220,28 @@ def _build_session_metadata(
     default_workload_type: str,
 ) -> dict[str, Any]:
     """Build normalized metadata payload for one tuning session file."""
-    return {
+    metadata = {
         "file_name": file_path.name,
         "workload_type": session_meta.get("workload_type", default_workload_type),
         "benchmark_name": session_meta.get("benchmark_name", "unknown"),
         "system_info": data.get("system_info", {}),
         "worker_resources": data.get("worker_resources", {}),
     }
+    # Preserve all additional session_meta fields (e.g., sysbench_workload, scale_factor)
+    for key, value in session_meta.items():
+        if key not in {"workload_type", "benchmark_name"}:
+            metadata[key] = value
+
+    # Also grab scoring overrides from the root data object if present
+    for scoring_key in [
+        "scoring_policy",
+        "scoring_policy_version",
+        "metric_reference_version",
+    ]:
+        if scoring_key not in metadata and scoring_key in data:
+            metadata[scoring_key] = data[scoring_key]
+
+    return metadata
 
 
 def load_pbt_results(
@@ -356,16 +371,35 @@ def load_pbt_results(
 
     # 2. Global Rescoring
     workload = str(metadata_list[0].get("workload_type", default_workload_type))
+    scoring_policy = (
+        metadata_list[0].get("scoring_policy", None) if metadata_list else None
+    )
+    scoring_policy_version = (
+        metadata_list[0].get("scoring_policy_version", None) if metadata_list else None
+    )
+    metric_ref_version = (
+        metadata_list[0].get("metric_reference_version", None)
+        if metadata_list
+        else None
+    )
+
     global_metric_config, global_scores, rescoring_metadata = rescore_metrics_globally(
         valid_metrics,
         workload=workload,
         padding_factor=0.0,
+        scoring_policy=scoring_policy,
+        scoring_policy_version=scoring_policy_version,
+        metric_reference_version=metric_ref_version,
     )
     logger.info(
         "Computed global ranges via shared rescoring utility: latency=%s calibrated=%s",
         rescoring_metadata["latency_metric"],
         rescoring_metadata["ranges_calibrated"],
     )
+
+    global_metric_config.normalization_metadata = rescoring_metadata
+    for md in metadata_list:
+        md["rescoring_metadata"] = rescoring_metadata
 
     # 3. DataFrame Post-Processing
     df = pd.DataFrame(raw_configs)
@@ -375,7 +409,9 @@ def load_pbt_results(
     worker_resources = (
         metadata_list[0].get("worker_resources", {}) if metadata_list else {}
     )
-    knob_tier = metadata_list[0].get("knob_tier", "extensive") if metadata_list else "extensive"
+    knob_tier = (
+        metadata_list[0].get("knob_tier", "extensive") if metadata_list else "extensive"
+    )
 
     knob_bounds = _extract_knob_bounds(df_encoded, worker_resources, knob_tier)
 

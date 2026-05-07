@@ -33,6 +33,7 @@ import numpy as np
 import scipy.stats as stats
 
 from src.utils.logger import get_logger
+from src.utils.scoring.constants import METRIC_DIRECTIONALITY
 from src.evaluation.types import (
     ComparisonStatistics,
     MetricComparison,
@@ -43,7 +44,15 @@ from src.evaluation.types import (
 LOGGER = get_logger(__name__)
 
 _PRIMARY_ENDPOINT = "score"
-_SECONDARY_ENDPOINT_BASE = ("throughput",)
+_SECONDARY_ENDPOINT_BASE = (
+    "throughput",
+    "memory_utilization",
+    "memory_pressure",
+    "buffer_miss_rate",
+    "tail_amplification",
+    "scan_efficiency",
+    "latency_variance",
+)
 
 # Number of bootstrap resamples for CI estimation
 _N_BOOTSTRAP = 10_000
@@ -122,9 +131,10 @@ def compute_comparison_statistics(
     metric_comparisons.append(primary_metric)
 
     secondary_metrics: list[MetricComparison] = []
-    lower_is_better_metrics = {latency_endpoint}
     for metric_name in secondary_endpoints:
-        higher_is_better = metric_name not in lower_is_better_metrics
+        # Determine directionality from METRIC_DIRECTIONALITY, default to lower_is_better
+        directionality = METRIC_DIRECTIONALITY.get(metric_name, "lower_is_better")
+        higher_is_better = directionality == "higher_is_better"
         extractor = _build_extractor(metric_name)
         default_vals = [extractor(r) for r in default_sorted]
         tuned_vals = [extractor(r) for r in tuned_sorted]
@@ -343,6 +353,12 @@ def _build_extractor(metric_name: str) -> Callable[[RunResult], float]:
         "latency_p95": lambda r: r.metrics.latency_p95,
         "latency_p99": lambda r: r.metrics.latency_p99,
         "throughput": lambda r: r.metrics.throughput,
+        "memory_utilization": lambda r: r.metrics.memory_utilization,
+        "memory_pressure": lambda r: getattr(r.metrics, "memory_pressure", 0.0),
+        "buffer_miss_rate": lambda r: getattr(r.metrics, "buffer_miss_rate", 0.0),
+        "tail_amplification": lambda r: getattr(r.metrics, "tail_amplification", 0.0),
+        "scan_efficiency": lambda r: getattr(r.metrics, "scan_efficiency", 0.0),
+        "latency_variance": lambda r: getattr(r.metrics, "latency_variance", 0.0),
     }
     if metric_name not in extractors:
         raise ValueError(

@@ -87,6 +87,7 @@ class ComparisonRunner:
     """
 
     def __init__(self, config: ComparisonConfig) -> None:
+        """Initialize ComparisonRunner with configuration."""
         self.config = config
         self.base_db_config: DatabaseConfig | None = None
         self.timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -171,6 +172,14 @@ class ComparisonRunner:
 
         executor = self._create_executor()
 
+        eval_policy = self.config.scoring_policy or session.scoring_policy
+        eval_policy_version = (
+            self.config.scoring_policy_version or session.scoring_policy_version
+        )
+        eval_ref_version = (
+            self.config.metric_reference_version or session.metric_reference_version
+        )
+
         LOGGER.info(
             "Running paired default/tuned comparisons for %d repetitions...",
             self.config.repetitions,
@@ -179,16 +188,41 @@ class ComparisonRunner:
             tuned_knobs=tuned_knobs,
             session=session,
             executor=executor,
+            scoring_policy=eval_policy,
+            scoring_policy_version=eval_policy_version,
+            metric_reference_version=eval_ref_version,
         )
 
         all_runs = sorted(
             [*default_runs, *tuned_runs],
             key=lambda r: (r.run_number, r.order_in_pair, r.config_type),
         )
+
+        if (
+            eval_policy != session.scoring_policy
+            or eval_policy_version != session.scoring_policy_version
+            or eval_ref_version != session.metric_reference_version
+        ):
+            LOGGER.warning(
+                "Mixed-version scoring detected! The tuning session was run with "
+                "[%s v%s, ref %s], but evaluation is using "
+                "[%s v%s, ref %s]. Results may not align with original tuning incentives.",
+                session.scoring_policy,
+                session.scoring_policy_version,
+                session.metric_reference_version,
+                eval_policy,
+                eval_policy_version,
+                eval_ref_version,
+            )
+
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
             padding_factor=0.0,
+            scoring_policy=eval_policy,
+            scoring_policy_version=eval_policy_version,
+            metric_reference_version=eval_ref_version,
+            workload_features=session.workload_features,
         )
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
@@ -210,6 +244,14 @@ class ComparisonRunner:
             self.timestamp,
             log_path=self._session_log_path,
             scoring_metadata=scoring_metadata,
+            session_scoring_metadata={
+                "scoring_policy": session.scoring_policy,
+                "scoring_policy_version": session.scoring_policy_version,
+                "metric_reference_version": session.metric_reference_version,
+                "workload_features": session.workload_features,
+                "normalization_metadata": session.normalization_metadata,
+                "score_breakdown": session.score_breakdown,
+            },
         )
 
         output_path = self._save_result(result)
@@ -317,6 +359,7 @@ class ComparisonRunner:
         def _pick_int(
             cli_value: Any, session_keys: list[str], default_value: int
         ) -> int:
+            """Pick an int from CLI value, session config, or default."""
             if cli_value is not None:
                 return int(cli_value)
             for key in session_keys:
@@ -335,6 +378,7 @@ class ComparisonRunner:
         def _pick_float(
             cli_value: Any, session_keys: list[str], default_value: float
         ) -> float:
+            """Pick a float from CLI value, session config, or default."""
             if cli_value is not None:
                 return float(cli_value)
             for key in session_keys:
@@ -495,6 +539,9 @@ class ComparisonRunner:
         tuned_knobs: dict[str, Any],
         session: TuningSessionData,
         executor: BenchmarkExecutor,
+        scoring_policy: str,
+        scoring_policy_version: str,
+        metric_reference_version: str,
     ) -> tuple[list[RunResult], list[RunResult]]:
         """
         Execute strict paired runs where each pair shares one deterministic seed.
@@ -523,6 +570,9 @@ class ComparisonRunner:
                     order_in_pair=1,
                     session=session,
                     executor=executor,
+                    scoring_policy=scoring_policy,
+                    scoring_policy_version=scoring_policy_version,
+                    metric_reference_version=metric_reference_version,
                 )
                 tuned_run = self._run_single(
                     config_type="tuned",
@@ -532,6 +582,9 @@ class ComparisonRunner:
                     order_in_pair=2,
                     session=session,
                     executor=executor,
+                    scoring_policy=scoring_policy,
+                    scoring_policy_version=scoring_policy_version,
+                    metric_reference_version=metric_reference_version,
                 )
             except Exception as exc:
                 failed_pairs += 1
@@ -583,6 +636,9 @@ class ComparisonRunner:
         order_in_pair: int,
         session: TuningSessionData,
         executor: BenchmarkExecutor,
+        scoring_policy: str,
+        scoring_policy_version: str,
+        metric_reference_version: str,
     ) -> RunResult:
         """
         Execute one benchmark repetition in a fresh environment.
@@ -654,7 +710,14 @@ class ComparisonRunner:
 
             metrics.memory_utilization = env.collect_memory_utilization(worker_id=0)
 
-            score = _metrics_to_score(metrics, benchmark_name)
+            score = _metrics_to_score(
+                metrics,
+                benchmark_name,
+                scoring_policy=scoring_policy,
+                scoring_policy_version=scoring_policy_version,
+                metric_reference_version=metric_reference_version,
+                workload_features=session.workload_features,
+            )
 
             return RunResult(
                 config_type=config_type,
@@ -853,23 +916,38 @@ class ComparisonRunner:
         print("═" * 68 + "\n")
 
 
-def _metrics_to_score(metrics: PerformanceMetrics, benchmark: str) -> float:
+def _metrics_to_score(
+    metrics: PerformanceMetrics,
+    benchmark: str,
+    scoring_policy: str = "fixed_v1",
+    scoring_policy_version: str = "1.0",
+    metric_reference_version: str = "1.0",
+    workload_features: dict[str, float] | None = None,
+) -> float:
     """
     Compute a composite score using the same workload-specific metric model
     used by the tuning loop.
 
-    This keeps evaluation score interpretation aligned with PBT optimization
-    semantics (weights and normalization behavior per workload type).
+    This ensures that intermediate logging uses the correct scoring policy,
+    even though global rescoring is applied at the end.
     """
     if metrics.throughput <= 0.0 or metrics.error_rate >= 1.0:
         return 0.0
 
     if benchmark == "tpch":
-        metric_config = create_metric_config("olap")
+        workload = "olap"
     elif benchmark == "sysbench":
-        metric_config = create_metric_config("oltp")
+        workload = "oltp"
     else:
-        metric_config = create_metric_config("mixed")
+        workload = "mixed"
+
+    metric_config = create_metric_config(
+        workload,
+        scoring_policy=scoring_policy,
+        scoring_policy_version=scoring_policy_version,
+        metric_reference_version=metric_reference_version,
+        workload_features=workload_features,
+    )
 
     return metric_config.compute_score(metrics)
 
@@ -909,12 +987,14 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
     """Convert ComparisonResult to a plain JSON-serialisable dict."""
 
     def _pkg_version(package_name: str) -> str:
+        """Get the version of an installed package, or 'not-installed' if not found."""
         try:
             return importlib_metadata.version(package_name)
         except importlib_metadata.PackageNotFoundError:
             return "not-installed"
 
     def _snap(s: PerformanceMetrics) -> dict[str, Any]:
+        """Convert PerformanceMetrics to a dict for JSON serialization."""
         return {
             "latency_p50": s.latency_p50,
             "latency_p95": s.latency_p95,
@@ -927,6 +1007,7 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
         }
 
     def _run(r: RunResult) -> dict[str, Any]:
+        """Convert RunResult to a dict for JSON serialization."""
         return {
             "config_type": r.config_type,
             "run_number": r.run_number,
@@ -939,6 +1020,7 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
         }
 
     def _stat_sum(s) -> dict[str, Any]:
+        """Convert StatSummary to a dict for JSON serialization."""
         return {
             "mean": s.mean,
             "std": s.std,
@@ -949,6 +1031,7 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
         }
 
     def _metric_cmp(mc) -> dict[str, Any]:
+        """Convert MetricComparison to a dict for JSON serialization."""
         return {
             "metric_name": mc.metric_name,
             "default": _stat_sum(mc.default),
@@ -1031,6 +1114,10 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
             "session_id": result.session_data.session_id,
             "workload_type": result.session_data.workload_type,
             "best_score_during_tuning": result.session_data.best_score,
+            "scoring_policy": result.session_data.scoring_policy,
+            "scoring_policy_version": result.session_data.scoring_policy_version,
+            "metric_reference_version": result.session_data.metric_reference_version,
         },
+        "session_scoring_metadata": result.session_scoring_metadata,
         "system_info": result.session_data.system_info,
     }

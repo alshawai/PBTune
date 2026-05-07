@@ -70,7 +70,7 @@ class EnvironmentFactory:
     def create(
         schema_provider: BenchmarkExecutor,
         use_docker: bool = True,
-        base_dir: Path = Path("./pg_instances"),
+        base_dir: Path = Path("./.instances"),
         base_port: int = 5440,
         db_config: Optional[DatabaseConfig] = None,
         worker_resources: Optional[Any] = None,
