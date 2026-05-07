@@ -54,8 +54,9 @@ This work proposes a **novel alternative**: applying Population-Based Training�
 
 1. First application of PBT to database configuration optimization
 2. Adaptive metric normalization for heterogeneous workload types
-3. Intelligent restart management balancing exploration vs. overhead
-4. Multi-instance PostgreSQL orchestration for true parallel evaluation
+3. Feature-driven composite scoring with compatibility mode for historical sessions
+4. Intelligent restart management balancing exploration vs. overhead
+5. Multi-instance PostgreSQL orchestration for true parallel evaluation
 
 ---
 
@@ -82,8 +83,10 @@ Our implementation extends vanilla PBT with database-specific adaptations:
 
 - **Proportional Perturbation**: Categorical knobs perturbed based on value space size (30% for booleans, adaptive for enums)
 - **Metric Normalization**: OtterTune-inspired percentile-based normalization adapts to observed ranges
+- **Feature-Driven Scoring**: Workload features drive composite metric weighting through scoring-v2, with `fixed_v1` retained for compatibility
 - **Intelligent Restarts**: CDBTune-inspired batched restarts (every 10 generations) balance configuration changes vs. overhead
-- **Workload-Specific Scoring**: Composite metrics weighted by workload type (OLTP prioritizes latency, OLAP prioritizes throughput)
+
+See [`docs/FEATURE_DRIVEN_SCORING.md`](./docs/FEATURE_DRIVEN_SCORING.md) for the scoring model, policy metadata, and migration notes.
 
 See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed algorithm description.
 
@@ -365,6 +368,9 @@ python -m src.tuner.main --help
 | `--workload`    | `oltp`, `olap`, `mixed`                    | `oltp`     | Workload type                          |
 | `--duration`    | seconds                                    | 30         | Evaluation duration per worker         |
 | `--sysbench-workload` | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | `oltp_read_write` | Sysbench OLTP mode when `--benchmark sysbench` |
+| `--scoring-policy` | `fixed_v1`, `feature_driven_v2`          | `fixed_v1` | Scoring policy for metric weighting    |
+| `--scoring-policy-version` | version string                    | `1.0`      | Scoring policy version                 |
+| `--scoring-calibration-evals` | integer                         | 50         | Number of evals for normalization calibration |
 | `--verbose`     | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG`      | `NORMAL`   | Logging level                          |
 
 ### Sysbench Benchmark Modes
@@ -387,6 +393,24 @@ Sysbench outputs are partitioned by mode:
 - PBT sessions: `results/oltp/{sysbench_workload}/pbt_runs/{tier}/...`
 - BO sessions: `results/oltp/{sysbench_workload}/bo_runs/{tier}/...`
 - Evaluation comparisons: `results/oltp/{sysbench_workload}/comparisons/{tier}/...`
+
+### Scoring Policy Configuration
+
+Use feature-driven scoring during tuning for workload-aware metric weighting:
+
+```bash
+# Use feature-driven scoring during tuning
+python -m src.tuner.main --tier core --config standard --scoring-policy feature_driven_v2
+
+# Re-evaluate a session with a different scoring policy
+python -m src.evaluation \
+    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --scoring-policy feature_driven_v2
+```
+
+Available policies:
+- `fixed_v1` — legacy static weights (default)
+- `feature_driven_v2` — dynamic workload-feature-conditioned weights
 
 ### Dual-Evaluation Strategy
 
@@ -439,6 +463,7 @@ Comprehensive documentation available in [`docs/`](./docs/):
 ### Core System Components
 
 - **[PBT Core Components](./docs/PBT_CORE_COMPONENTS.md)** - Worker, Evolution, Population classes implementing the PBT algorithm
+- **[Feature-Driven Scoring](./docs/FEATURE_DRIVEN_SCORING.md)** - Scoring-v2 policies, workload features, normalization, and reliability gate
 - **[Performance Evaluation](./docs/PERFORMANCE_EVALUATION.md)** - Evaluator, PerformanceMetrics, scoring system
 - **[Configuration Management](./docs/CONFIGURATION_MANAGEMENT.md)** - KnobSpace, KnobDefinition, sampling & perturbation
 

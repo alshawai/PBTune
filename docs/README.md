@@ -1,6 +1,6 @@
 # Documentation Index
 
-> Last reviewed: 2026-04-17
+> Last reviewed: 2026-05-07
 
 This index provides a quick navigation map for the project documentation set.
 
@@ -13,6 +13,7 @@ This index provides a quick navigation map for the project documentation set.
 
 ## Evaluation and Benchmarking
 
+- [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md)
 - [Performance Evaluation](./PERFORMANCE_EVALUATION.md)
 - [Evaluation Reproducibility Runbook](./EVALUATION_RUNBOOK.md)
 - [Bayesian Optimization Baseline](./BO_BASELINE.md)

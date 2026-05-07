@@ -47,7 +47,7 @@ Plans must consist of discrete, atomic phases containing executable tasks. Each 
 
 When creating plan files:
 
-- Save implementation plan files in `/plan/` directory
+- Save implementation plan files in `/.prompts/plans/` directory
 - Use naming convention: `[purpose]-[component]-[version].md`
 - Purpose prefixes: `upgrade|refactor|feature|data|infrastructure|process|architecture|design`
 - Example: `upgrade-system-command-4.md`, `feature-auth-module-1.md`

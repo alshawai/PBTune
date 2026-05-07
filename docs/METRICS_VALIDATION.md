@@ -6,7 +6,7 @@ See also: [Documentation Index](./README.md)
 
 ## 1. Abstract
 
-This document outlines the theoretical foundation and academic validity of the multi-objective weighted performance metric used within the **Population-Based Training (PBT)** auto-tuner. Specifically, it analyzes the mathematical combination of Latency (P50/P95/P99), Throughput (TPS/QphH), Memory Efficiency, and an Error Penalty. We establish that our approach not only conforms to the highest standards of contemporary academic research (e.g., OtterTune, CDBTune) but advances "safe" tuning paradigms required for production database environments.
+This document outlines the theoretical foundation and academic validity of the scoring-v2 performance metric used within the **Population-Based Training (PBT)** auto-tuner. Specifically, it analyzes the mathematical combination of Latency (P50/P95/P99), Throughput (TPS/QphH), Memory Efficiency, Error Penalty, and policy-driven workload features. The implementation preserves a compatibility policy for historical sessions while introducing feature-driven weighting for workload-aware scoring.
 
 ## 2. The Core Metrics: Latency and Throughput
 
@@ -44,12 +44,70 @@ In stochastic optimization spaces, an ML model will inevitably propose fatal con
 
 Finding the absolute Pareto-optimal frontier across four conflicting metrics is computationally infeasible in real-time.
 
-- **Methodology**: Our system utilizes the **Weighted Sum Approach**—a well-established operations research and Multi-Objective Optimization (MOO) technique. By statically defining domain-specific weights:
-  - **OLTP**: `[Latency(p95): 50%, Throughput: 40%, Memory: 5%, Error: 5%]`
-  - **OLAP**: `[Latency(p99): 58%, Throughput: 22%, Memory: 15%, Error: 5%]`
+- **Methodology**: Our system still uses a **Weighted Sum Approach**, but the active weights are now policy-driven rather than benchmark-name-only. The compatibility policy preserves the historical static profiles, while `feature_driven_v2` derives a bounded weight distribution from workload features and enforces minimum floors so no metric disappears entirely.
 
-The PBT Tuner collapses a complex multi-dimensional constraint problem into a single, highly effective scalar reward, directing the evolutionary algorithm perfectly according to standard database engineering priorities.
+The PBT Tuner still collapses a complex multi-dimensional constraint problem into a single scalar reward, but the score is now explicitly parameterized by scoring policy version and workload feature metadata so tuning, rescoring, and evaluation remain aligned.
 
 ## 5. Conclusion
 
 The weighted evaluation metric designed for this auto-tuner is strictly academically sound. Its core reliance on Throughput and P99 Latency mirrors state-of-the-art systems like OtterTune. Its deliberate inclusion of Memory Efficiency and Error Penalties introduces vital safety constraints missing in early research, creating a novel but profoundly necessary framework for robust, production-grade automated database tuning.
+
+## 6. Scoring Policy Versioning
+
+The system maintains backward compatibility through explicit scoring policy versioning:
+
+### Policy Versions
+
+- **fixed_v1**: Static workload-specific weights (legacy compatibility)
+- **feature_driven_v2**: Dynamic weights derived from workload features
+
+### Metric Reference Versions
+
+Metric reference versions track changes to metric definitions and normalization approaches:
+
+- **v1**: Initial metric definitions with percentile-based normalization
+- **v2**: Enhanced metrics with calibration sample counts and drift detection
+
+### Version Propagation
+
+When loading mixed-version sessions:
+
+1. The first file's scoring policy version is used for global rescoring
+2. Individual file metadata preserves original versions for audit trails
+3. Rescoring metadata is propagated to all loaded observations
+4. Version mismatches trigger warnings but do not block loading
+
+## 7. Calibration and Normalization Stability
+
+The normalization pipeline ensures stable score computation across versions:
+
+### Percentile-Based Anchors
+
+- Low anchor: 5th percentile of observed metric values
+- High anchor: 95th percentile of observed metric values
+- Prevents single outliers from collapsing score variance
+
+### Drift Detection
+
+- Monitors out-of-support rate (observations outside calibration bounds)
+- Triggers recalibration when drift exceeds configured threshold
+- Maintains historical calibration dataset for stability
+
+### Calibration Sample Counts
+
+- Tracks number of samples used to compute normalization bounds
+- Enables confidence assessment for rescoring operations
+- Supports weighted averaging when combining multiple calibration datasets
+
+## 8. Validation Checklist
+
+The scoring-v2 implementation is validated through:
+
+- ✓ Deterministic feature extraction across benchmark types
+- ✓ Weight computation respecting floor constraints and sum-to-one property
+- ✓ Stable normalization export/import with drift detection
+- ✓ Backward compatibility for legacy sessions
+- ✓ Comprehensive unit test coverage
+- ✓ Cross-workload transfer validation
+- ✓ Mixed-version session handling
+

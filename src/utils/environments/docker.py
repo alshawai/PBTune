@@ -60,10 +60,11 @@ class DockerEnvironment(DatabaseEnvironment):
         ram_bytes: int = 0,
         image_name: str = "postgres:18",
         base_port: int = 5440,
-        base_dir: Path = Path("./pg_instances"),
+        base_dir: Path = Path("./.instances"),
         container_prefix: str = "pbt-worker",
         force_recreate_baseline: bool = False,
     ):
+        """Initialize Docker environment with configuration."""
         super().__init__(
             run_id,
             db_config,
@@ -474,8 +475,27 @@ class DockerEnvironment(DatabaseEnvironment):
             self.instances[worker_id] = InstanceConfig(
                 worker_id=worker_id,
                 port=port,
-                data_dir=self.base_dir / f"worker_{worker_id}",
+                data_dir=self.base_dir
+                / self._get_instance_subpath()
+                / f"worker_{worker_id}",
                 running=running,
+            )
+
+            # Write a manifest file to the empty host data directory so the user
+            # knows which Docker container and volume manages this partition.
+            host_data_dir = self.instances[worker_id].data_dir
+            host_data_dir.mkdir(parents=True, exist_ok=True)
+            manifest_file = host_data_dir / "docker_manifest.json"
+            manifest_payload = {
+                "managed_by": "DockerEnvironment",
+                "container_name": container_name,
+                "volume_name": self._pgdata_volume_name(worker_id),
+                "image": self.image_name,
+                "host_port": port,
+                "created_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+            }
+            manifest_file.write_text(
+                json.dumps(manifest_payload, indent=2), encoding="utf-8"
             )
             self._wait_for_ready(container_name, port)
 
@@ -863,15 +883,14 @@ class DockerEnvironment(DatabaseEnvironment):
         return hashlib.sha1(profile_payload.encode("utf-8")).hexdigest()[:12]
 
     def _default_snapshot_id(self) -> str:
-        """Build a Docker-safe snapshot repository name for this run + profile."""
-        run_slug = re.sub(r"[^a-z0-9_.-]+", "-", self.run_id.lower()).strip("-")
-        if not run_slug:
-            run_slug = "default"
-        return f"pbt-snapshot-{run_slug}-{self._snapshot_profile_signature()}"
+        """Build a Docker-safe snapshot repository name for this profile."""
+        return f"pg-snapshot-baseline-{self._snapshot_profile_signature()}"
 
     def _snapshot_manifest_path(self) -> Path:
         """Path to snapshot metadata persisted in the project tree."""
-        return self.base_dir / "pg_snapshots" / f"{self._default_snapshot_id()}.json"
+        # Walk up from this file's location to find the project root
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        return project_root / ".snapshots" / f"{self._default_snapshot_id()}.json"
 
     def _write_snapshot_manifest(self, snapshot_id: str, image_id: str) -> None:
         """Persist snapshot metadata for traceability within the project workspace."""
@@ -881,7 +900,6 @@ class DockerEnvironment(DatabaseEnvironment):
         payload = {
             "snapshot_id": snapshot_id,
             "image_id": image_id,
-            "run_id": self.run_id,
             "base_image": self.image_name,
             "profile_signature": self._snapshot_profile_signature(),
             "profile_context": self._snapshot_profile_context(),

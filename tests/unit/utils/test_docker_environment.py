@@ -215,7 +215,7 @@ def test_default_snapshot_id_is_profile_scoped() -> None:
     env = _make_environment()
 
     snapshot_id = env._default_snapshot_id()
-    assert snapshot_id.startswith("pbt-snapshot-test-run-001-")
+    assert snapshot_id.startswith("pg-snapshot-baseline-")
     assert snapshot_id.endswith(env._snapshot_profile_signature())
 
 
@@ -239,7 +239,8 @@ def test_snapshot_exists_requires_matching_manifest_signature(tmp_path: Path) ->
     env.client.images.get.return_value = MagicMock()
 
     snapshot_id = env._default_snapshot_id()
-    manifest_path = tmp_path / "pg_snapshots" / f"{snapshot_id}.json"
+    manifest_path = tmp_path / ".snapshots" / f"{snapshot_id}.json"
+    env._snapshot_manifest_path = MagicMock(return_value=manifest_path)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(
@@ -264,6 +265,8 @@ def test_snapshot_exists_returns_true_with_matching_manifest_signature(
     env.client.images.get.return_value = MagicMock()
 
     snapshot_id = env._default_snapshot_id()
+    manifest_path = tmp_path / ".snapshots" / f"{snapshot_id}.json"
+    env._snapshot_manifest_path = MagicMock(return_value=manifest_path)
     env._write_snapshot_manifest(snapshot_id=snapshot_id, image_id="sha256:current")
 
     assert env.snapshot_exists(worker_id=0) is True
@@ -460,12 +463,14 @@ def test_create_snapshot_writes_metadata_manifest(tmp_path: Path) -> None:
     container.commit.return_value = snapshot_image
     env.client.containers.get.return_value = container
 
+    expected_snapshot_id = env._default_snapshot_id()
+    manifest_path = tmp_path / ".snapshots" / f"{expected_snapshot_id}.json"
+    env._snapshot_manifest_path = MagicMock(return_value=manifest_path)
+
     snapshot_id = env.create_snapshot(worker_id=0)
 
-    expected_snapshot_id = env._default_snapshot_id()
     assert snapshot_id == expected_snapshot_id
 
-    manifest_path = tmp_path / "pg_snapshots" / f"{expected_snapshot_id}.json"
     assert manifest_path.exists()
 
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
