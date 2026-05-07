@@ -3,7 +3,6 @@
 import pytest
 import json
 import argparse
-from pathlib import Path
 
 from src.tuner.config import get_knob_space
 from src.scripts.bo_baseline.search_space import build_configspace, configspace_to_knobs
@@ -213,7 +212,7 @@ class TestSearchSpaceTranslation:
         assert len(knob_dict) > 0
 
         # Verify all values are valid Python types
-        for key, value in knob_dict.items():
+        for _key, value in knob_dict.items():
             assert not isinstance(value, type(None)) or value is None
             assert isinstance(value, (int, float, str, bool, type(None)))
 
@@ -353,12 +352,6 @@ class TestResultFormat:
             knob_tier="minimal",
             benchmark="sysbench",
             workload_type="oltp",
-        )
-
-        worker_resources = WorkerResources(
-            ram_bytes=16 * 1024 * 1024 * 1024,
-            cpu_cores=8,
-            disk_type="SSD",
         )
 
         iteration_log = [

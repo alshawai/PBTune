@@ -51,7 +51,9 @@ def create_objective(
     Callable[[Configuration, int], float]
         Objective function for SMAC3 (minimizes cost)
     """
-    state = {
+    from typing import Dict, Any
+
+    state: Dict[str, Any] = {
         "previous_config": None,
         "iteration_count": 0,
         "ranges_frozen": False,
