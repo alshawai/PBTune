@@ -461,37 +461,3 @@ def _check_version_compatibility(
             metric_reference_version,
             DEFAULT_METRIC_REFERENCE_VERSION,
         )
-
-
-def _check_version_compatibility(
-    scoring_policy_version: str,
-    metric_reference_version: str,
-    path: Path,
-) -> None:
-    """
-    Check for version compatibility and warn on mismatches.
-
-    Implements mixed-version warning policy:
-    - Warns if scoring_policy_version differs from current default
-    - Warns if metric_reference_version differs from current default
-    - Allows loading but alerts user to potential incompatibilities
-    """
-    if scoring_policy_version != DEFAULT_SCORING_POLICY_VERSION:
-        logger.warning(
-            "  ➤ Scoring policy version mismatch in %s: "
-            "session uses v%s but current default is v%s. "
-            "Results may not be directly comparable.",
-            path.name,
-            scoring_policy_version,
-            DEFAULT_SCORING_POLICY_VERSION,
-        )
-
-    if metric_reference_version != DEFAULT_METRIC_REFERENCE_VERSION:
-        logger.warning(
-            "  ➤ Metric reference version mismatch in %s: "
-            "session uses v%s but current default is v%s. "
-            "Metric interpretations may differ.",
-            path.name,
-            metric_reference_version,
-            DEFAULT_METRIC_REFERENCE_VERSION,
-        )

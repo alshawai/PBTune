@@ -514,7 +514,11 @@ class DockerEnvironment(DatabaseEnvironment):
                         LOGGER.debug(
                             "    Caching worker 0 baseline snapshot for fast-path initialization...",
                         )
-                        self.create_snapshot(worker_id=0)
+                        snapshot_id = self.create_snapshot(worker_id=0)
+                        if not snapshot_id:
+                            raise RuntimeError(
+                                "Failed to create baseline Docker snapshot for worker 0"
+                            )
                         baseline_snapshot_available = True
 
             LOGGER.debug(
