@@ -36,8 +36,6 @@ _ensure_fanova_numpy_aliases()
 logger = get_logger(__name__)
 
 CORRELATION_THRESHOLD = 0.7
-RETRY_MIN_ESTIMATORS = 512
-RETRY_MIN_DEPTH = 10
 FANOVA_FALLBACK_MAX_DEPTH = 64
 
 
@@ -51,33 +49,6 @@ class InsufficientDataError(Exception):
 class ImportanceResult:
     """
     Container for fANOVA importance variance decomposition results.
-
-    Attributes
-    ----------
-    marginal_importances : dict[str, float]
-        Marginal importance scores for each knob (0-1 normalized)
-    pairwise_interactions : dict[tuple[str, str], float]
-        Pairwise interaction importance scores between knob pairs
-    model_r2 : float
-        R² score of the underlying Random Forest model
-    n_samples : int
-        Number of tuning samples used for analysis
-    n_features : int
-        Number of knobs analyzed
-    workload_type : str
-        Type of workload (OLTP, OLAP, MIXED)
-    shap_importances : dict[str, float]
-        SHAP-based importance scores for each knob
-    shap_values : np.ndarray
-        Raw SHAP values for all samples and features
-    fanova_shap_correlation : float
-        Correlation between fANOVA and SHAP importance rankings
-    scoring_policy : str
-        Scoring policy used during tuning (default: "fixed_v1")
-    scoring_policy_version : str
-        Version of the scoring policy (default: "1.0")
-    metric_reference_version : str
-        Version of metric reference used (default: "v1")
     """
 
     marginal_importances: dict[str, float]
@@ -89,9 +60,6 @@ class ImportanceResult:
     shap_importances: dict[str, float]
     shap_values: np.ndarray
     fanova_shap_correlation: float
-    scoring_policy: str = "fixed_v1"
-    scoring_policy_version: str = "1.0"
-    metric_reference_version: str = "v1"
 
 
 @dataclass
@@ -230,30 +198,30 @@ def _run_importance_pass(
 
 def analyze_knob_importance(
     loaded_data: LoadedData,
-    n_estimators: int = 100,
-    max_depth: Optional[int] = 5,
+    n_estimators: int = 1024,
+    max_depth: Optional[int] = 32,
     random_state: int = 42,
     top_k: int = 20,
-    interaction_order: int = 2,
+    interaction_order: int = 2
 ) -> ImportanceResult:
     """
     Train a Random Forest and perform fANOVA decomposition to measure knob importance.
-
+    
     Parameters
     ----------
     loaded_data : LoadedData
         Data loaded from PBT session containing scores and configuration constraints.
     n_estimators : int, optional
-        Number of trees in the Random Forest, by default 100.
+        Number of trees in the Random Forest, by default 1024.
     max_depth : int, optional
-        Maximum tree depth, by default 5.
+        Maximum tree depth, by default 32.
     random_state : int, optional
         Random seed for reproducibility, by default 42.
     top_k : int, optional
         Number of top features strictly evaluated for pairwise interactions, by default 20.
     interaction_order : int, optional
         Maximum order of fANOVA interaction calculated, by default 2. Note: Order 3+ is computationally expensive.
-
+        
     Returns
     -------
     ImportanceResult
@@ -261,7 +229,7 @@ def analyze_knob_importance(
     """
     df = _drop_zero_variance_columns(loaded_data.config_df.copy())
     scores = loaded_data.scores
-
+    
     n_samples = len(df)
     if n_samples < 30:
         raise InsufficientDataError(
@@ -288,47 +256,6 @@ def analyze_knob_importance(
         random_state=random_state,
     )
     selected_pass = primary_pass
-
-    if primary_pass.fanova_shap_correlation < CORRELATION_THRESHOLD:
-        retry_n_estimators = max(RETRY_MIN_ESTIMATORS, n_estimators * 2)
-        retry_max_depth = (
-            RETRY_MIN_DEPTH if max_depth is None else max(RETRY_MIN_DEPTH, max_depth)
-        )
-
-        if retry_n_estimators != n_estimators or retry_max_depth != max_depth:
-            logger.info(
-                "Low fANOVA-SHAP correlation detected (ρ=%.3f). "
-                "Retrying with n_estimators=%d, max_depth=%s.",
-                primary_pass.fanova_shap_correlation,
-                retry_n_estimators,
-                str(retry_max_depth),
-            )
-            retry_pass = _run_importance_pass(
-                X=X,
-                y=y,
-                col_names=col_names,
-                config_space=config_space,
-                n_estimators=retry_n_estimators,
-                max_depth=retry_max_depth,
-                random_state=random_state,
-            )
-            if (
-                retry_pass.fanova_shap_correlation
-                > primary_pass.fanova_shap_correlation
-            ):
-                selected_pass = retry_pass
-                logger.info(
-                    "Improved fANOVA-SHAP correlation from ρ=%.3f to ρ=%.3f.",
-                    primary_pass.fanova_shap_correlation,
-                    retry_pass.fanova_shap_correlation,
-                )
-            else:
-                logger.info(
-                    "Retry did not improve fANOVA-SHAP correlation (ρ=%.3f -> ρ=%.3f). "
-                    "Keeping primary pass.",
-                    primary_pass.fanova_shap_correlation,
-                    retry_pass.fanova_shap_correlation,
-                )
 
     if selected_pass.model_r2 < 0.5:
         logger.warning(
@@ -366,30 +293,13 @@ def analyze_knob_importance(
 
         # Sort descending
         pairwise_interactions = dict(
-            sorted(
-                pairwise_interactions.items(), key=lambda item: item[1], reverse=True
-            )
+            sorted(pairwise_interactions.items(), key=lambda item: item[1], reverse=True)
         )
 
     workload_type = (
         loaded_data.metadata[0].get("workload_type", "unknown")
         if loaded_data.metadata
         else "unknown"
-    )
-    scoring_policy = (
-        loaded_data.metadata[0].get("scoring_policy", "fixed_v1")
-        if loaded_data.metadata
-        else "fixed_v1"
-    )
-    scoring_policy_version = (
-        loaded_data.metadata[0].get("scoring_policy_version", "1.0")
-        if loaded_data.metadata
-        else "1.0"
-    )
-    metric_reference_version = (
-        loaded_data.metadata[0].get("metric_reference_version", "v1")
-        if loaded_data.metadata
-        else "v1"
     )
 
     return ImportanceResult(
@@ -402,7 +312,4 @@ def analyze_knob_importance(
         shap_importances=selected_pass.shap_importances,
         shap_values=selected_pass.shap_values,
         fanova_shap_correlation=selected_pass.fanova_shap_correlation,
-        scoring_policy=scoring_policy,
-        scoring_policy_version=scoring_policy_version,
-        metric_reference_version=metric_reference_version,
     )
