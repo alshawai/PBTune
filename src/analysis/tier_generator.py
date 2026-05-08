@@ -331,7 +331,7 @@ def generate_tiers(
     tier_names = get_tier_names(optimal_k)
 
     tier_assignments: dict[str, str] = {}
-    for knob, label in zip(knobs, labels):
+    for knob, label in zip(knobs, labels, strict=True):
         tier_index = (optimal_k - 1) - label
         tier_assignments[knob] = tier_names[tier_index]
 
