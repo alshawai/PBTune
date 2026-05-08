@@ -1,6 +1,6 @@
 """
-Workload Evaluation and Performance Metrics
-===========================================
+Workload Orchestration and Performance Metrics
+==============================================
 
 This package handles:
 - Workload definition and execution
@@ -17,7 +17,7 @@ from src.utils.metrics import (
     OLAP_METRIC_CONFIG,
 )
 
-from src.tuner.evaluator.restart_policy import TuningMode, should_restart
+from src.tuner.benchmark.restart_policy import TuningMode, should_restart
 
 __all__ = [
     "PerformanceMetrics",

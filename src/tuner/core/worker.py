@@ -30,7 +30,7 @@ Example:
 >>> worker.is_ready()  # False initially
 >>>
 >>> # Simulate evaluation
->>> from src.tuner.evaluator import PerformanceMetrics
+>>> from src.tuner.benchmark import PerformanceMetrics
 >>> metrics = PerformanceMetrics(latency_p95=50.0, throughput=100.0)
 >>> worker.update_metrics(metrics, score=0.85)
 >>>

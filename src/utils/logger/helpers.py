@@ -14,7 +14,7 @@ from typing import Optional
 
 
 LOGGER_LEVEL_WIDTH = 7
-LOGGER_MODULE_WIDTH = 17
+LOGGER_MODULE_WIDTH = 20
 
 # Basic xterm 16-color palette (normal + bright)
 BASIC_COLORS = {
