@@ -124,3 +124,6 @@ results/**/fanova_importance.json
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
+pg_instances/pg_snapshots/pbt-snapshot-eval_20260427_224237-9f5edcf191bc.json
+pg_instances/pg_snapshots/pbt-snapshot-eval_20260427_231516-9f5edcf191bc.json
+.gitignore
