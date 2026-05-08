@@ -8,7 +8,7 @@ import pytest
 
 from src.config.database import DatabaseConfig
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
+from src.tuner.benchmark.orchestrator import WorkloadOrchestrator, WorkloadOrchestratorConfig
 from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.metrics import MetricConfig, PerformanceMetrics, WorkloadType
 
@@ -61,7 +61,7 @@ class _InvalidBenchmarkExecutor(BenchmarkExecutor):
         return PerformanceMetrics()
 
 
-def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
+def _make_evaluator(executor: BenchmarkExecutor) -> WorkloadOrchestrator:
     mock_env = MagicMock()
 
     db_config = DatabaseConfig(
@@ -71,12 +71,12 @@ def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
         port=5440,
         dbname="test_dataset",
     )
-    config = EvaluatorConfig(
+    config = WorkloadOrchestratorConfig(
         workload_type=WorkloadType.OLTP,
         metric_config=MetricConfig.for_oltp(),
         db_config=db_config,
     )
-    return Evaluator(config=config, workload_executor=executor, env=mock_env)
+    return WorkloadOrchestrator(config=config, workload_executor=executor, env=mock_env)
 
 
 def _make_worker() -> Worker:
@@ -138,7 +138,7 @@ class TestReliabilityGate:
     """Direct tests for _apply_reliability_gate failure classification."""
 
     @pytest.fixture()
-    def evaluator(self) -> Evaluator:
+    def evaluator(self) -> WorkloadOrchestrator:
         return _make_evaluator(_FailingBenchmarkExecutor())
 
     @pytest.fixture()

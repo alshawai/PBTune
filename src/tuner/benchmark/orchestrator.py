@@ -1,8 +1,8 @@
 """
-Workload Evaluator for Database Tuning
-======================================
+Workload Orchestrator for Database Tuning
+==========================================
 
-The Evaluator class executes workloads and collects performance metrics.
+The WorkloadOrchestrator class orchestrates workload execution and collects performance metrics.
 It serves as the bridge between PBT's Population and the actual PostgreSQL database.
 
 Key Responsibilities:
@@ -14,11 +14,11 @@ Key Responsibilities:
 
 Architecture:
 ------------
-    Population -> Evaluator -> PostgreSQL
-                    ↓
-                Metrics
-                    ↓
-            Performance Score
+    Population -> WorkloadOrchestrator -> PostgreSQL
+                         ↓
+                     Metrics
+                         ↓
+                 Performance Score
 
 Design Patterns:
 - Strategy Pattern: Different workload executors (SYSBENCH, TPC-H)
@@ -45,13 +45,13 @@ from src.utils.metrics import (
     MetricConfig,
 )
 from src.benchmarks.executor import BenchmarkExecutor
-from src.tuner.evaluator.workload import WorkloadExecutor
+from src.tuner.benchmark.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.restart_policy import TuningMode, should_restart
+from src.tuner.benchmark.restart_policy import TuningMode, should_restart
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger
 
-LOGGER = get_logger("BenchmarkExecutor")
+LOGGER = get_logger("WorkloadOrchestrator")
 
 # Register numpy type adapters for psycopg2
 register_adapter(np.int64, lambda x: AsIs(int(x)))
@@ -61,9 +61,9 @@ register_adapter(np.float32, lambda x: AsIs(float(x)))
 
 
 @dataclass
-class EvaluatorConfig:
+class WorkloadOrchestratorConfig:
     """
-    Configuration for Evaluator behavior.
+    Configuration for WorkloadOrchestrator behavior.
 
     Parameters
     ----------
@@ -103,11 +103,11 @@ class EvaluatorConfig:
     worker_memory_budget_bytes: Optional[int] = None
 
 
-class Evaluator:
+class WorkloadOrchestrator:
     """
-    Main Evaluator class for workload execution and performance measurement.
+    Main WorkloadOrchestrator class for workload execution and performance measurement.
 
-    The Evaluator orchestrates the evaluation process:
+    The WorkloadOrchestrator orchestrates the evaluation process:
     1. Apply knob configuration to PostgreSQL
     2. Wait for cooldown period
     3. Execute workload (with warmup)
@@ -116,7 +116,7 @@ class Evaluator:
 
     Attributes
     ----------
-    config : EvaluatorConfig
+    config : WorkloadOrchestratorConfig
         Configuration parameters
     workload_executor : WorkloadExecutor
         Workload-specific execution logic
@@ -128,7 +128,7 @@ class Evaluator:
     >>> from src.utils.metrics import WorkloadType, MetricConfig
     >>> from src.config.database import DatabaseConfig
     >>>
-    >>> config = EvaluatorConfig(
+    >>> config = WorkloadOrchestratorConfig(
     ...     workload_type=WorkloadType.OLTP,
     ...     metric_config=MetricConfig.for_oltp(),
     ...     db_config=DatabaseConfig(
@@ -141,37 +141,37 @@ class Evaluator:
     ... )
     >>>
     >>> executor = SysbenchOLTPExecutor(table_size=10000)
-    >>> evaluator = Evaluator(config, executor)
+    >>> orchestrator = WorkloadOrchestrator(config, executor)
     >>>
     >>> # Evaluate a worker
-    >>> metrics, score = evaluator.evaluate_worker(worker)
+    >>> metrics, score = orchestrator.evaluate_worker(worker)
     >>> print(f"Score: {score:.4f}, Throughput: {metrics.throughput:.2f} TPS")
     """
 
     def __init__(
         self,
-        config: EvaluatorConfig,
+        config: WorkloadOrchestratorConfig,
         workload_executor: Union[WorkloadExecutor, BenchmarkExecutor],
         env: DatabaseEnvironment,
     ):
         """
-        Initialize Evaluator.
+        Initialize WorkloadOrchestrator.
 
         Parameters
         ----------
-        config : EvaluatorConfig
-            Evaluation configuration
+        config : WorkloadOrchestratorConfig
+            Orchestration configuration
         workload_executor : Union[WorkloadExecutor, BenchmarkExecutor]
             Workload execution strategy
-        worker_id : Optional[str]
-            Worker identifier for logging
+        env : DatabaseEnvironment
+            Database environment for instance management
         """
         self.config = config
         self.workload_executor = workload_executor
         self.env = env
 
         LOGGER.debug(
-            "✓ Created Evaluator: workload=%s, mode=%s, duration=%ss",
+            "✓ Created WorkloadOrchestrator: workload=%s, mode=%s, duration=%ss",
             config.workload_type.value.upper(),
             config.tuning_mode.value,
             config.measurement_duration,
@@ -1065,6 +1065,6 @@ class Evaluator:
     def __repr__(self) -> str:
         """String representation."""
         return (
-            f"Evaluator(workload={self.config.workload_type.value}, "
+            f"WorkloadOrchestrator(workload={self.config.workload_type.value}, "
             f"duration={self.config.measurement_duration}s)"
         )
