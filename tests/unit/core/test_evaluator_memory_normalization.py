@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.config.database import DatabaseConfig
-from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
+from src.tuner.benchmark.orchestrator import WorkloadOrchestrator, WorkloadOrchestratorConfig
 from src.utils.metrics import MetricConfig, WorkloadType
 
 
@@ -21,13 +21,13 @@ def _make_evaluator(
         port=5440,
         dbname="test_dataset",
     )
-    config = EvaluatorConfig(
+    config = WorkloadOrchestratorConfig(
         workload_type=WorkloadType.OLTP,
         metric_config=MetricConfig.for_oltp(),
         db_config=db_config,
         worker_memory_budget_bytes=worker_memory_budget_bytes,
     )
-    return Evaluator(config=config, workload_executor=MagicMock(), env=mock_env)
+    return WorkloadOrchestrator(config=config, workload_executor=MagicMock(), env=mock_env)
 
 
 def test_collect_system_metrics_delegates_to_environment() -> None:

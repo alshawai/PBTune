@@ -32,7 +32,7 @@ from src.utils.scoring.constants import (
     DEFAULT_SCORING_POLICY_VERSION,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Metrics")
 
 
 class WorkloadType(Enum):

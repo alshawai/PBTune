@@ -21,6 +21,15 @@ import datetime
 import logging
 
 from src.utils.logger.colors import ColorCode, ColorPalette
+from src.utils.logger.helpers import (
+    LOGGER_MODULE_WIDTH,
+    LOGGER_LEVEL_WIDTH,
+    ansi_to_html,
+    format_logger_level,
+    format_logger_name,
+    strip_ansi,
+)
+from src.utils.logger.colors import colors_enabled
 
 
 class ColoredFormatter(logging.Formatter):
@@ -30,97 +39,136 @@ class ColoredFormatter(logging.Formatter):
     Format: [TIME] [LEVEL] [MODULE] [WORKER-ID] MESSAGE
     """
 
-    def __init__(self, enable_colors: bool = True, show_module: bool = True):
+    def __init__(
+        self,
+        show_module: bool = True,
+        module_width: int = LOGGER_MODULE_WIDTH,
+        level_width: int = LOGGER_LEVEL_WIDTH,
+    ):
         """
         Initialize colored formatter.
 
         Parameters
         ----------
-        enable_colors : bool
-            Enable ANSI color codes
         show_module : bool
             Show module name in log output
+        module_width : int
+            Width for module name padding (default 17 chars)
+        level_width : int
+            Width for level name padding (default 7 chars)
         """
-        self.enable_colors = enable_colors
         self.show_module = show_module
+        self.module_width = module_width
+        self.level_width = level_width
 
         if show_module:
-            fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(name)s - %(message)s"
         else:
-            fmt = "%(asctime)s - %(levelname)-8s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(message)s"
 
         super().__init__(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record with colors."""
-        if not self.enable_colors:
-            return super().format(record)
-
         message = super().format(record)
         parts = message.split(" - ", 3)
         if len(parts) < 3:
             return message  # Fallback if format doesn't match
 
-        level_color = ColorPalette.get_level_color(record.levelname, "ansi")
         timestamp = parts[0]
-        levelname = parts[1].strip()
+        levelname_display = format_logger_level(record.levelname, self.level_width)
+        use_colors = colors_enabled()
 
         if self.show_module and len(parts) == 4:
-            module = parts[2]
+            module = format_logger_name(record.name, self.module_width)
             msg = parts[3]
 
-            module_color = ColorPalette.get_module_color(record.name, "ansi")
+            if use_colors:
+                level_color = ColorPalette.get_level_color(record.levelname, "ansi")
+                module_color = ColorPalette.get_module_color(record.name, "ansi")
 
-            worker_color = ""  # Get worker color if applicable
-            if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
-                worker_color = ColorPalette.get_worker_color(
-                    record.worker_id,  # type: ignore
-                    "ansi",
+                worker_color = ""  # Get worker color if applicable
+                if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
+                    worker_color = ColorPalette.get_worker_color(
+                        record.worker_id,  # type: ignore
+                        "ansi",
+                    )
+
+                formatted_message = (
+                    f"{level_color}{timestamp}{ColorCode.RESET} - "
+                    f"{level_color}{ColorCode.BOLD}{levelname_display}{ColorCode.RESET} - "
+                    f"{module_color}{module}{ColorCode.RESET} - "
                 )
 
-            colored_message = (
-                f"{level_color}{timestamp}{ColorCode.RESET} - "
-                f"{level_color}{ColorCode.BOLD}{levelname}{ColorCode.RESET} - "
-                f"{module_color}{module}{ColorCode.RESET} - "
-            )
-
-            if worker_color:
-                colored_message += f"{worker_color}{msg}{ColorCode.RESET}"
+                if worker_color:
+                    formatted_message += f"{worker_color}{msg}{ColorCode.RESET}"
+                else:
+                    formatted_message += msg
             else:
-                colored_message += msg
+                # No colors, but preserve padding and strip ANSI from message
+                msg_no_ansi = strip_ansi(msg)
+                formatted_message = f"{timestamp} - {levelname_display} - {module} - {msg_no_ansi}"
         else:  # No module
             msg = parts[2] if len(parts) >= 3 else parts[-1]
 
-            worker_color = ""
-            if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
-                worker_color = ColorPalette.get_worker_color(
-                    record.worker_id,  # type: ignore
-                    "ansi",
+            if use_colors:
+                level_color = ColorPalette.get_level_color(record.levelname, "ansi")
+                worker_color = ""
+                if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
+                    worker_color = ColorPalette.get_worker_color(
+                        record.worker_id,  # type: ignore
+                        "ansi",
+                    )
+
+                formatted_message = (
+                    f"{level_color}{timestamp}{ColorCode.RESET} - "
+                    f"{level_color}{ColorCode.BOLD}{levelname_display}{ColorCode.RESET} - "
                 )
 
-            colored_message = (
-                f"{level_color}{timestamp}{ColorCode.RESET} - "
-                f"{level_color}{ColorCode.BOLD}{levelname}{ColorCode.RESET} - "
-            )
-
-            if worker_color:
-                colored_message += f"{worker_color}{msg}{ColorCode.RESET}"
+                if worker_color:
+                    formatted_message += f"{worker_color}{msg}{ColorCode.RESET}"
+                else:
+                    formatted_message += msg
             else:
-                colored_message += msg
+                # No colors, but preserve padding and strip ANSI from message
+                msg_no_ansi = strip_ansi(msg)
+                formatted_message = f"{timestamp} - {levelname_display} - {msg_no_ansi}"
 
-        return colored_message
+        return formatted_message
 
 
 class HTMLFormatter(logging.Formatter):
-    """Format log records as HTML with proper color styling."""
+    """Format log records as HTML with proper color styling.
+    
+    Color application is controlled globally via colors_enabled().
+    Always applies padding to module names and levels for consistent alignment.
+    """
 
-    def __init__(self, show_module: bool = True):
-        """Initialize HTMLFormatter with optional module name display."""
+    def __init__(
+        self,
+        show_module: bool = True,
+        module_width: int = LOGGER_MODULE_WIDTH,
+        level_width: int = LOGGER_LEVEL_WIDTH,
+    ):
+        """Initialize HTMLFormatter with optional module name display.
+        
+        Parameters
+        ----------
+        show_module : bool
+            Show module name in HTML log output
+        module_width : int
+            Width for module name padding (default 17 chars)
+        level_width : int
+            Width for level name padding (default 7 chars)
+        """
         self.show_module = show_module
+        self.module_width = module_width
+        self.level_width = level_width
+
         if show_module:
-            fmt = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(name)s - %(message)s"
         else:
-            fmt = "%(asctime)s - %(levelname)-8s - %(message)s"
+            fmt = "%(asctime)s - %(levelname)-7s - %(message)s"
         super().__init__(fmt=fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
@@ -132,26 +180,37 @@ class HTMLFormatter(logging.Formatter):
             return self._escape_html(message)
 
         timestamp = self._escape_html(parts[0])
-        levelname = parts[1].strip()
+        levelname_display = format_logger_level(record.levelname, self.level_width)
 
-        level_color = ColorPalette.get_level_color(levelname, "html")
+        # Determine if colors should be applied via global policy
+        use_colors = colors_enabled()
 
-        html = f'<span style="color: {level_color}">{timestamp}</span> - '
-        html += (
-            f'<span style="color: {level_color}; '
-            f'font-weight: bold">{self._escape_html(levelname)}</span> - '
-        )
+        if use_colors:
+            level_color = ColorPalette.get_level_color(record.levelname, "html")
+            html = f'<span style="color: {level_color}">{timestamp}</span> - '
+            html += (
+                f'<span style="color: {level_color}; '
+                f'font-weight: bold">{self._escape_html(levelname_display)}</span> - '
+            )
+        else:
+            # No colors, but preserve padding
+            html = f"{timestamp} - {self._escape_html(levelname_display)} - "
 
         if self.show_module and len(parts) == 4:
-            module = self._escape_html(parts[2])
-            msg = self._escape_html(parts[3])
+            module = self._escape_html(format_logger_name(record.name, self.module_width))
 
-            module_color = ColorPalette.get_module_color(record.name, "html")
-
-            html += (
-                f'<span style="color: {module_color}; '
-                f'font-weight: bold">{module}</span> - '
-            )
+            if use_colors:
+                # Convert any raw ANSI in the message to HTML-safe spans
+                msg = ansi_to_html(parts[3])
+                module_color = ColorPalette.get_module_color(record.name, "html")
+                html += (
+                    f'<span style="color: {module_color}; '
+                    f'font-weight: bold">{module}</span> - '
+                )
+            else:
+                # No colors, but preserve padding and strip ANSI from message
+                msg = self._escape_html(strip_ansi(parts[3]))
+                html += f"{module} - "
 
             # Use record.worker_id instead of regex parsing
             if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
@@ -159,18 +218,27 @@ class HTMLFormatter(logging.Formatter):
                     record.worker_id,  # type: ignore
                     "html",
                 )
-                html += f'<span style="color: {worker_color}">{msg}</span>'
+                if use_colors:
+                    html += f'<span style="color: {worker_color}">{msg}</span>'
+                else:
+                    html += msg
             else:
                 html += msg
         else:
-            msg = self._escape_html(parts[2] if len(parts) >= 3 else parts[-1])
+            if use_colors:
+                msg = ansi_to_html(parts[2] if len(parts) >= 3 else parts[-1])
+            else:
+                msg = self._escape_html(strip_ansi(parts[2] if len(parts) >= 3 else parts[-1]))
 
             if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(
                     record.worker_id,  # type: ignore
                     "html",
                 )
-                html += f'<span style="color: {worker_color}">{msg}</span>'
+                if use_colors:
+                    html += f'<span style="color: {worker_color}">{msg}</span>'
+                else:
+                    html += msg
             else:
                 html += msg
 

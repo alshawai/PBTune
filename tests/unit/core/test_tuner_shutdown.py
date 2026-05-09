@@ -123,8 +123,8 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     tuner.metric_config = SimpleNamespace(latency_metric="p95")
     tuner.pbt_config = SimpleNamespace(dead_config_score=0.0, crash_score=0.0)
 
-    tuner.evaluator = MagicMock()
-    tuner.evaluator.evaluate_worker.side_effect = ConnectionError(
+    tuner.orchestrator = MagicMock()
+    tuner.orchestrator.evaluate_worker.side_effect = ConnectionError(
         "postgres unreachable"
     )
 
