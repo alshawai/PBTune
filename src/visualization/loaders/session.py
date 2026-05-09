@@ -26,6 +26,9 @@ class SessionTrace:
     mean_scores: np.ndarray  # Population mean per generation
     std_scores: np.ndarray  # Population std per generation
     worker_scores: list[np.ndarray]  # Per-worker score arrays
+    worker_configs: list[list[dict]]  # Per-generation, per-worker config dicts
+    wall_clock_seconds: np.ndarray  # Cumulative time elapsed per generation
+    generation_elapsed_seconds: np.ndarray  # Time spent evaluating this generation
     exploit_events: list[dict]  # [{gen, source, target, ...}]
     metadata: dict  # system_info, workload, tier, etc.
     metric_config: MetricConfig  # The normalization config used for scoring
@@ -114,6 +117,9 @@ def load_session(
     best_scores = np.zeros(n_gens)
     mean_scores = np.zeros(n_gens)
     std_scores = np.zeros(n_gens)
+    wall_clock_seconds = np.zeros(n_gens)
+    generation_elapsed_seconds = np.zeros(n_gens)
+    worker_configs = [[] for _ in range(n_gens)]
 
     # Collect all unique worker IDs to track individual traces
     worker_ids = set()
@@ -145,6 +151,12 @@ def load_session(
             mean_scores[i] = np.mean(gen_scores)
             std_scores[i] = np.std(gen_scores)
 
+        wall_clock_seconds[i] = gen.get("wall_clock_seconds", 0.0)
+        generation_elapsed_seconds[i] = gen.get("generation_elapsed_seconds", 0.0)
+
+        for wc in gen.get("worker_configs", []):
+            worker_configs[i].append(wc)
+
         # Extract exploit events
         for op in gen.get("operations", []):
             if op.get("type") == "exploit":
@@ -168,6 +180,9 @@ def load_session(
         mean_scores=mean_scores,
         std_scores=std_scores,
         worker_scores=worker_scores,
+        worker_configs=worker_configs,
+        wall_clock_seconds=wall_clock_seconds,
+        generation_elapsed_seconds=generation_elapsed_seconds,
         exploit_events=exploit_events,
         metadata=metadata,
         metric_config=metric_config,
