@@ -204,6 +204,9 @@ class PBTTuner:
         self.warm_start_path = kwargs.get("warm_start_path", None)
         self.warm_start_provenance = {"enabled": False}
 
+        self.ablation_variable = kwargs.get("ablation_variable", None)
+        self.ablation_value = kwargs.get("ablation_value", None)
+
         self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
         self.logger = kwargs.get("logger", get_logger(__name__))
 
@@ -404,7 +407,15 @@ class PBTTuner:
         return normalized or "default"
 
     def _build_output_dir(self, base_output_dir: Path) -> Path:
-        """Build structured output directory, partitioning Sysbench runs by workload mode."""
+        """Build structured output directory, canonically separating ablation runs if specified."""
+        ablation_subpath = Path("")
+        if getattr(self, "ablation_variable", None) and getattr(self, "ablation_value", None) is not None:
+            ablation_subpath = (
+                Path("ablations")
+                / str(self.ablation_variable)
+                / str(self.ablation_value)
+            )
+
         if self.benchmark_name == "sysbench":
             return (
                 base_output_dir
@@ -412,8 +423,15 @@ class PBTTuner:
                 / self.pbt_config.sysbench_workload
                 / "pbt_runs"
                 / self.knob_tier
+                / ablation_subpath
             )
-        return base_output_dir / self.workload_type.value / "pbt_runs" / self.knob_tier
+        return (
+            base_output_dir
+            / self.workload_type.value
+            / "pbt_runs"
+            / self.knob_tier
+            / ablation_subpath
+        )
 
     def _get_runtime_supported_knobs(self, worker_id: int = 0) -> Tuple[set[str], str]:
         """Get runtime pg_settings knob names and server version from a worker instance."""
@@ -685,12 +703,14 @@ class PBTTuner:
 
         self._restart_logged_this_gen = False
 
+        gen_start_time = time.time()
         result = self.population.train_generation(
             self.evaluate_worker,
             parallel=True,
             require_ready=True,
             max_workers=self.pbt_config.num_parallel_workers,
         )
+        gen_elapsed_time = time.time() - gen_start_time
 
         if self._restart_logged_this_gen:
             self.logger.info(
@@ -714,6 +734,10 @@ class PBTTuner:
             "converged": result.converged,
             "restart_count": self.restart_count,
             "timestamp": datetime.now().isoformat(),
+            "wall_clock_seconds": time.time() - self.start_time
+            if self.start_time
+            else 0.0,
+            "generation_elapsed_seconds": gen_elapsed_time,
             "worker_scores": [
                 {
                     "worker_id": w.worker_id,
@@ -723,6 +747,11 @@ class PBTTuner:
                         else None
                     ),
                     "metrics": w.metrics.to_dict() if w.metrics else None,
+                    "score_breakdown": convert_numpy_types(
+                        self.metric_config.compute_detailed_scores(w.metrics)
+                    )
+                    if w.metrics
+                    else None,
                 }
                 for w in self.population.workers
             ],
@@ -968,6 +997,11 @@ class PBTTuner:
                 "sysbench_duration_seconds": self.pbt_config.evaluation_duration,
                 "sysbench_warmup_seconds": self.pbt_config.warmup_duration,
                 "population_size": self.pbt_config.population_size,
+                "exploit_quantile": self.pbt_config.exploit_quantile,
+                "perturbation_factors": self.pbt_config.perturbation_factors,
+                "ready_interval": self.pbt_config.ready_interval,
+                "dead_config_threshold": self.pbt_config.dead_config_threshold,
+                "seed": self.random_seed,
                 "total_generations": self.population.current_generation,
                 "total_time_seconds": total_time,
                 "timestamp": self.timestamp,
@@ -1449,6 +1483,20 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     output_group.add_argument(
+        "--ablation-variable",
+        type=str,
+        default=None,
+        help="Ablation study variable name (e.g., 'population_size')",
+    )
+
+    output_group.add_argument(
+        "--ablation-value",
+        type=str,
+        default=None,
+        help="Ablation study variable value (e.g., '4')",
+    )
+
+    output_group.add_argument(
         "--no-color",
         action="store_true",
         help="Disable ANSI colors in terminal logger output",
@@ -1572,6 +1620,8 @@ def main():
             no_docker=args.no_docker,
             docker_image=args.docker_image,
             enable_colors=enable_colors,
+            ablation_variable=args.ablation_variable,
+            ablation_value=args.ablation_value,
         )
 
         tuner.run()
