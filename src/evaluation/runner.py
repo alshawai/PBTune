@@ -436,8 +436,8 @@ class ComparisonRunner:
 
         if benchmark == "tpch":
             # Keep sysbench fields resolved for metadata completeness.
-            resolved["sysbench_duration"] = int(resolved["sysbench_duration"])
-        return resolved
+            resolved["sysbench_duration"] = int(str(resolved["sysbench_duration"]))  # type: ignore
+        return resolved  # type: ignore
 
     def _resolve_sysbench_workload(
         self,
