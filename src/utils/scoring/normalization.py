@@ -277,7 +277,7 @@ class QuantileUtilityNormalizer:
         )
 
         # Extract flat dictionary of values
-        series = {}
+        series: Dict[str, list[float]] = {}
         for metric in metrics_list:
             raw_dict = metric.to_dict()
             for key, val in raw_dict.items():
@@ -525,32 +525,3 @@ class QuantileUtilityNormalizer:
         self._total_samples_since_calibration = state.get("total_samples", 0)
         self._history = {}
         self._out_of_support_counts = {}
-
-    def get_drift_events(self) -> List[Dict[str, Any]]:
-        """
-        Return list of drift events detected since normalizer creation.
-
-        Each event contains:
-        - sample_count: Number of samples when drift was detected
-        - metrics_drifted: List of metric names that triggered drift
-        - out_of_support_rates: Dict of metric -> out-of-support rate
-        """
-        return list(self._drift_events)
-
-    def record_drift_event(self, drifted_metrics: List[str]) -> None:
-        """
-        Record a drift event for monitoring and analysis.
-
-        Parameters
-        ----------
-        drifted_metrics : List[str]
-            List of metric names that exceeded drift threshold
-        """
-        event = {
-            "sample_count": self._total_samples_since_calibration,
-            "metrics_drifted": drifted_metrics,
-            "out_of_support_rates": {
-                metric: self.out_of_support_rate(metric) for metric in drifted_metrics
-            },
-        }
-        self._drift_events.append(event)
