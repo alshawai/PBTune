@@ -53,6 +53,8 @@ class QuantileUtilityNormalizer:
         drift_threshold : float
             Fraction of out-of-support samples that triggers recalibration
         """
+        self.logger = get_logger("MetricNormalizer")
+
         self.lower_quantile = lower_quantile
         self.upper_quantile = upper_quantile
         self.calibration_window = calibration_window
@@ -186,7 +188,7 @@ class QuantileUtilityNormalizer:
         if metric_name not in self._history or metric_name not in self.anchors:
             return False
 
-        direction, old_low, old_high = self.anchors[metric_name]
+        direction, _, _ = self.anchors[metric_name]
 
         # We need the NEVER_ZERO_METRICS defined in fit() logic
         NEVER_ZERO_METRICS = {
@@ -205,8 +207,6 @@ class QuantileUtilityNormalizer:
 
         if len(values) < 2:
             return False
-
-        import numpy as np
 
         arr = np.array(values)
         new_low = float(np.percentile(arr, self.lower_quantile * 100))
@@ -268,13 +268,11 @@ class QuantileUtilityNormalizer:
         """
         from src.utils.scoring.outlier_filtering import iqr_filter
 
-        logger = get_logger(__name__)
-
         if not metrics_list:
-            logger.debug("fit() called with empty metrics list, skipping")
+            self.logger.debug("fit() called with empty metrics list, skipping")
             return
 
-        logger.info(
+        self.logger.info(
             "Calibrating normalizer anchors from %d observations", len(metrics_list)
         )
 
@@ -316,7 +314,7 @@ class QuantileUtilityNormalizer:
             if len(arr_filtered) >= 3:
                 arr = arr_filtered
                 if filter_meta["n_removed"] > 0:
-                    logger.debug(
+                    self.logger.debug(
                         "IQR filter for %s: removed %d/%d outliers (bounds: [%.4f, %.4f])",
                         key,
                         filter_meta["n_removed"],
@@ -340,7 +338,7 @@ class QuantileUtilityNormalizer:
             self._history[key] = list(values[-self.calibration_window :])
             self._out_of_support_counts[key] = 0
 
-            logger.debug(
+            self.logger.debug(
                 "Calibrated anchor for %s: direction=%d, low=%.4f, high=%.4f",
                 key,
                 direction,
@@ -350,7 +348,7 @@ class QuantileUtilityNormalizer:
 
         self._total_samples_since_calibration = 0
         self._is_calibrated = True
-        logger.info(
+        self.logger.info(
             "Normalizer calibration complete: %d metrics anchored", len(self.anchors)
         )
 
@@ -391,8 +389,6 @@ class QuantileUtilityNormalizer:
         """
         Detect drift by checking if the out-of-support rate exceeds the threshold.
         """
-        logger = get_logger(__name__)
-
         if (
             not self._is_calibrated
             or self._total_samples_since_calibration < self.min_samples_for_drift
@@ -404,7 +400,7 @@ class QuantileUtilityNormalizer:
             rate = count / float(self._total_samples_since_calibration)
             if rate > self.drift_threshold:
                 drifted_metrics.append(metric_name)
-                logger.warning(
+                self.logger.warning(
                     "Drift detected in %s: out_of_support_rate=%.4f (threshold=%.4f)",
                     metric_name,
                     rate,
@@ -412,7 +408,7 @@ class QuantileUtilityNormalizer:
                 )
 
         if drifted_metrics:
-            logger.info(
+            self.logger.info(
                 "Normalizer recalibration needed: %d metrics drifted after %d samples",
                 len(drifted_metrics),
                 self._total_samples_since_calibration,
@@ -483,7 +479,6 @@ class QuantileUtilityNormalizer:
         """
         Score only metrics that have calibrated anchors.
         """
-        logger = get_logger(__name__)
         raw_dict = metrics.to_dict()
         scores = {}
         for key, val in raw_dict.items():
@@ -499,7 +494,7 @@ class QuantileUtilityNormalizer:
                 elif key in self.anchors:  # Only score calibrated metrics
                     scores[key] = self.score_metric(key, float(val))
 
-        logger.debug(
+        self.logger.debug(
             "Scored metrics vector (%d calibrated): %s",
             len(scores),
             {k: f"{v:.4f}" for k, v in scores.items()},

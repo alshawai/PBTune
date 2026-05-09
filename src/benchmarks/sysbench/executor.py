@@ -65,6 +65,8 @@ class SysbenchExecutor(BenchmarkExecutor):
         script : str
             Sysbench Lua test script name. Default: oltp_read_write.
         """
+        self.logger = get_logger("SysbenchExecutor")
+
         self.threads = threads
         self.tables = tables
         self.table_size = table_size
@@ -72,8 +74,7 @@ class SysbenchExecutor(BenchmarkExecutor):
 
     def prepare(self, db_config: DatabaseConfig) -> None:
         """Run native `sysbench prepare` to create all sbtest tables."""
-        logger = get_logger(__name__)
-        logger.info(
+        self.logger.info(
             "Preparing %d sysbench tables (%d rows each) on %s:%s...",
             self.tables,
             self.table_size,
@@ -87,7 +88,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         cleanup_conn.autocommit = True
         cleanup_cursor = cleanup_conn.cursor()
         try:
-            self._drop_existing_public_tables(cleanup_cursor, logger)
+            self._drop_existing_public_tables(cleanup_cursor)
         finally:
             cleanup_cursor.close()
             cleanup_conn.close()
@@ -111,17 +112,16 @@ class SysbenchExecutor(BenchmarkExecutor):
                 cursor.execute(f"VACUUM ANALYZE sbtest{i}")
             cursor.close()
             conn.close()
-            logger.debug(
+            self.logger.debug(
                 "Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables."
             )
         except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
-            logger.warning("Failed to post-vacuum sysbench tables: %s", e)
+            self.logger.warning("Failed to post-vacuum sysbench tables: %s", e)
 
-        logger.info("Sysbench prepare complete.")
+        self.logger.info("Sysbench prepare complete.")
 
     def validate(self, db_config: DatabaseConfig) -> bool:
         """Return True only when schema shape matches the configured Sysbench profile."""
-        logger = get_logger(__name__)
         conn = None
         cursor = None
         try:
@@ -139,7 +139,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             if found_tables != expected_tables:
                 missing_tables = sorted(expected_tables - found_tables)
                 extra_tables = sorted(found_tables - expected_tables)
-                logger.debug(
+                self.logger.debug(
                     "Sysbench table layout mismatch "
                     "(missing=%s, extra=%s, expected_count=%d, found_count=%d)",
                     missing_tables,
@@ -161,7 +161,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             lower_bound = int(self.table_size * 0.9)
             upper_bound = int(self.table_size * 1.1)
             if row_count is None or row_count < lower_bound or row_count > upper_bound:
-                logger.debug(
+                self.logger.debug(
                     "Sysbench row cardinality mismatch "
                     "(row_count=%s, max_id=%s, expected~%d, bounds=[%d,%d])",
                     row_count,
@@ -175,7 +175,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             return True
 
         except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
-            logger.debug("Sysbench validation failed: %s", e)
+            self.logger.debug("Sysbench validation failed: %s", e)
             return False
         finally:
             if cursor is not None:
@@ -187,7 +187,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
     ) -> PerformanceMetrics:
         """Execute Sysbench benchmark and return performance metrics."""
-        logger = get_logger(__name__, worker_id=worker_id)
+        logger = get_logger("SysbenchExecutor", worker_id=worker_id)
 
         duration = kwargs.get("duration", 60.0)
         warmup = kwargs.get("warmup", 30.0)

@@ -60,12 +60,12 @@ from src.tuner.config import (
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.evaluator import (
-    Evaluator,
-    EvaluatorConfig,
+from src.tuner.benchmark.orchestrator import (
+    WorkloadOrchestrator,
+    WorkloadOrchestratorConfig,
     WorkloadExecutor,
 )
-from src.tuner.evaluator.workload import (
+from src.tuner.benchmark.workload import (
     WorkloadFileLoader,
     extract_workload_template_metadata,
 )
@@ -89,13 +89,14 @@ from src.utils.logger import (
     print_startup_banner,
     ColorCode,
     ColorPalette,
+    set_colors_enabled,
 )
 from src.utils.hardware_info import (
     get_system_info,
     log_system_info,
     detect_worker_resources,
 )
-from src.tuner.evaluator.restart_policy import TuningMode
+from src.tuner.benchmark.restart_policy import TuningMode
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -240,7 +241,7 @@ class PBTTuner:
         self.workload_features: Dict[str, float] = {}
         self.feature_extractor = WorkloadFeatureExtractor()
 
-        self.evaluator_config = EvaluatorConfig(
+        self.evaluator_config = WorkloadOrchestratorConfig(
             workload_type=workload_type,
             metric_config=self.metric_config,
             db_config=self.db_config,
@@ -356,7 +357,7 @@ class PBTTuner:
 
         self.metric_config.workload_features = dict(self.workload_features)
 
-        self.evaluator = Evaluator(self.evaluator_config, workload_executor, self.env)
+        self.orchestrator = WorkloadOrchestrator(self.evaluator_config, workload_executor, self.env)
 
         pop_config = PopulationConfig(
             population_size=self.pbt_config.population_size,
@@ -370,7 +371,7 @@ class PBTTuner:
         )
 
         self.population = Population(
-            self.knob_space, pop_config, evaluator=self.evaluator
+            self.knob_space, pop_config, evaluator=self.orchestrator
         )
 
         self.system_info = get_system_info()
@@ -555,9 +556,9 @@ class PBTTuner:
         worker_logger = get_logger(__name__, worker_id=worker.worker_id)
 
         try:
-            self.evaluator.worker_id = f"Worker-{worker.worker_id}"
+            self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
-            metrics, score, restart_occurred = self.evaluator.evaluate_worker(
+            metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
                 worker, apply_config=True, generation=self.current_generation
             )
 
@@ -1509,6 +1510,7 @@ def main():
     args = parse_args()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     enable_colors = not args.no_color
+    set_colors_enabled(enable_colors)
 
     # Compute structured log directory.
     if args.benchmark == "sysbench":
@@ -1529,12 +1531,11 @@ def main():
 
     setup_logging(
         verbosity=args.verbose,
-        enable_colors=enable_colors,
         show_module=True,
         output_file=output_file,
     )
     logger = get_logger(
-        __name__
+        "PBTune"
     )  # inherits from the root logger (defined in setup_logging)
 
     info_color = ColorPalette.get_level_color("INFO", "ansi") if enable_colors else ""

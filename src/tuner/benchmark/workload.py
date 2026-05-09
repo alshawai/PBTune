@@ -28,7 +28,7 @@ from src.utils.metrics import PerformanceMetrics
 from src.utils.logger import get_logger
 from src.utils.scoring.workload_features import TemplateWorkloadMetadata
 
-logger = get_logger(__name__)
+LOGGER = get_logger("WorkloadExecutor")
 
 
 class WorkloadExecutor:
@@ -110,7 +110,7 @@ class WorkloadExecutor:
 
     def prepare(self, db_config: DatabaseConfig) -> None:
         """Create required sbtest tables using native sysbench C-binary."""
-        logger.info(
+        LOGGER.info(
             "Preparing %d sbtest tables (%d rows each) on %s:%s...",
             self.num_tables,
             self.table_size,
@@ -147,13 +147,13 @@ class WorkloadExecutor:
                 cursor.execute(f"VACUUM ANALYZE sbtest{i}")
             cursor.close()
             conn.close()
-            logger.debug(
+            LOGGER.debug(
                 "Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables."
             )
         except Exception as e:
-            logger.warning("Failed to post-vacuum workload tables: %s", e)
+            LOGGER.warning("Failed to post-vacuum workload tables: %s", e)
 
-        logger.info("Schema preparation complete.")
+        LOGGER.info("Schema preparation complete.")
 
     def validate(self, db_config: DatabaseConfig) -> bool:
         """Check if all required sbtest tables exist."""
@@ -200,7 +200,7 @@ class WorkloadExecutor:
         work_logger = (
             get_logger(__name__, worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         # Use a dedicated random instance for reproducibility without affecting global RNG
@@ -540,13 +540,13 @@ class WorkloadFileLoader:
         table_size = schema.get("table_size", 100000)
 
         if not schema:
-            logger.warning(
+            LOGGER.warning(
                 "Workload '%s' has no 'schema' section — defaulting to 1 table "
                 "with 100K rows. Add a 'schema' section for multi-table support.",
                 name,
             )
 
-        logger.debug(
+        LOGGER.debug(
             "-> Loaded workload '%s': %s (%d queries, %d tables × %d rows)\n",
             name,
             description,

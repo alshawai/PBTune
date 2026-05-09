@@ -17,7 +17,7 @@ Key PBT Hyperparameters:
 from dataclasses import dataclass
 from typing import Tuple, Optional
 
-from src.tuner.evaluator.restart_policy import TuningMode
+from src.tuner.benchmark.restart_policy import TuningMode
 from src.benchmarks.sysbench.executor import (
     DEFAULT_SYSBENCH_WORKLOAD,
     validate_sysbench_workload,
