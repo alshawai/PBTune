@@ -35,10 +35,7 @@ docker>=7.0.0          # Docker SDK for Python — container lifecycle managemen
 fanova>=2.0.18
 ConfigSpace>=1.1.0
 shap>=0.49.0
-<<<<<<< feature/18-knob-importance-tier-generation
 jenkspy>=0.4.0
-=======
 
 # Bayesian Optimization
 smac>=2.2.0
->>>>>>> main
