@@ -85,7 +85,7 @@ class FeatureDrivenWeightModel:
 
         # Softmax with temperature (numerically stable)
         logits_arr = np.array(logits) / self.temperature
-        max_logit = np.max(logits_arr)
+        max_logit: float = float(np.max(logits_arr))
         exp_logits = np.exp(logits_arr - max_logit)
         softmax = exp_logits / np.sum(exp_logits)
 
