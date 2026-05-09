@@ -73,7 +73,7 @@ class TuningRun:
 
     def _parse_json(self) -> None:
         """Loads JSON and parses the sequence of evaluations."""
-        import dateutil.parser
+        import dateutil.parser  # type: ignore
 
         with open(self.filepath, "r") as f:
             data = json.load(f)
