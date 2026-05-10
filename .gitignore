@@ -62,6 +62,9 @@ ENV/
 .instances/**
 .snapshots/
 .snapshots/**
+# For backward compatibility
+pg_instances/
+pg_snapshots/
 *.db
 *.sqlite
 *.sqlite3
@@ -124,3 +127,4 @@ results/**/fanova_importance.json
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
+
