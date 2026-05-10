@@ -9,7 +9,7 @@ import pytest
 from src.config.database import DatabaseConfig
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
+from src.tuner.benchmark.orchestrator import WorkloadOrchestrator, WorkloadOrchestratorConfig
 from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.applicator import ApplicationResult
 from src.utils.metrics import MetricConfig, PerformanceMetrics, WorkloadType
@@ -47,7 +47,7 @@ class _HealthyBenchmarkExecutor(BenchmarkExecutor):
         )
 
 
-def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
+def _make_evaluator(executor: BenchmarkExecutor) -> WorkloadOrchestrator:
     mock_env = MagicMock()
 
     db_config = DatabaseConfig(
@@ -57,12 +57,12 @@ def _make_evaluator(executor: BenchmarkExecutor) -> Evaluator:
         port=5440,
         dbname="test_dataset",
     )
-    config = EvaluatorConfig(
+    config = WorkloadOrchestratorConfig(
         workload_type=WorkloadType.OLTP,
         metric_config=MetricConfig.for_oltp(),
         db_config=db_config,
     )
-    return Evaluator(config=config, workload_executor=executor, env=mock_env)
+    return WorkloadOrchestrator(config=config, workload_executor=executor, env=mock_env)
 
 
 def _make_worker() -> Worker:
@@ -153,7 +153,7 @@ def test_apply_configuration_force_restart_overrides_interval_deferral() -> None
 
 
 def test_evaluate_worker_consumes_force_restart_marker() -> None:
-    """Evaluator should forward and clear force-restart marker after successful restart."""
+    """WorkloadOrchestrator should forward and clear force-restart marker after successful restart."""
     evaluator = _make_evaluator(_HealthyBenchmarkExecutor())
     worker = _make_worker()
     worker.force_restart_next_eval = True

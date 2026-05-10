@@ -216,7 +216,7 @@ class KnobApplicator:
         self.connection: Optional[PostgresConnection] = None
         self.param_cache: Dict[str, ParameterInfo] = {}
         self._lock = threading.Lock()  # Thread safety for connection management
-        self.logger = get_logger(__name__, worker_id=worker_id)
+        self.logger = get_logger("KnobApplicator", worker_id=worker_id)
 
         self.logger.debug(
             "Initialized KnobApplicator: persist=%s, validate=%s, dry_run=%s",

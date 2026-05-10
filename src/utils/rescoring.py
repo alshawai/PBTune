@@ -57,7 +57,7 @@ def rescore_metrics_globally(
     Raises:
         ValueError: If neither workload nor benchmark is provided.
     """
-    logger = get_logger(__name__)
+    logger = get_logger("Rescoring")
 
     if workload is None:
         if benchmark is None:
