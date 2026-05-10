@@ -62,6 +62,9 @@ ENV/
 .instances/**
 .snapshots/
 .snapshots/**
+# For backward compatibility
+pg_instances/
+pg_snapshots/
 *.db
 *.sqlite
 *.sqlite3
