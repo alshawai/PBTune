@@ -31,7 +31,7 @@ import numpy as np
 from src.utils.hardware_info import WorkerResources
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger("KnobSpace")
 
 
 # Hardware-relative specifications for converting fractions to absolute values

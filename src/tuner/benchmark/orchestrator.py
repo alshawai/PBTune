@@ -1,8 +1,8 @@
 """
-Workload Evaluator for Database Tuning
-======================================
+Workload Orchestrator for Database Tuning
+==========================================
 
-The Evaluator class executes workloads and collects performance metrics.
+The WorkloadOrchestrator class orchestrates workload execution and collects performance metrics.
 It serves as the bridge between PBT's Population and the actual PostgreSQL database.
 
 Key Responsibilities:
@@ -14,11 +14,11 @@ Key Responsibilities:
 
 Architecture:
 ------------
-    Population -> Evaluator -> PostgreSQL
-                    ↓
-                Metrics
-                    ↓
-            Performance Score
+    Population -> WorkloadOrchestrator -> PostgreSQL
+                         ↓
+                     Metrics
+                         ↓
+                 Performance Score
 
 Design Patterns:
 - Strategy Pattern: Different workload executors (SYSBENCH, TPC-H)
@@ -45,13 +45,13 @@ from src.utils.metrics import (
     MetricConfig,
 )
 from src.benchmarks.executor import BenchmarkExecutor
-from src.tuner.evaluator.workload import WorkloadExecutor
+from src.tuner.benchmark.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.restart_policy import TuningMode, should_restart
+from src.tuner.benchmark.restart_policy import TuningMode, should_restart
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+LOGGER = get_logger("WorkloadOrchestrator")
 
 # Register numpy type adapters for psycopg2
 register_adapter(np.int64, lambda x: AsIs(int(x)))
@@ -61,9 +61,9 @@ register_adapter(np.float32, lambda x: AsIs(float(x)))
 
 
 @dataclass
-class EvaluatorConfig:
+class WorkloadOrchestratorConfig:
     """
-    Configuration for Evaluator behavior.
+    Configuration for WorkloadOrchestrator behavior.
 
     Parameters
     ----------
@@ -103,11 +103,11 @@ class EvaluatorConfig:
     worker_memory_budget_bytes: Optional[int] = None
 
 
-class Evaluator:
+class WorkloadOrchestrator:
     """
-    Main Evaluator class for workload execution and performance measurement.
+    Main WorkloadOrchestrator class for workload execution and performance measurement.
 
-    The Evaluator orchestrates the evaluation process:
+    The WorkloadOrchestrator orchestrates the evaluation process:
     1. Apply knob configuration to PostgreSQL
     2. Wait for cooldown period
     3. Execute workload (with warmup)
@@ -116,7 +116,7 @@ class Evaluator:
 
     Attributes
     ----------
-    config : EvaluatorConfig
+    config : WorkloadOrchestratorConfig
         Configuration parameters
     workload_executor : WorkloadExecutor
         Workload-specific execution logic
@@ -128,7 +128,7 @@ class Evaluator:
     >>> from src.utils.metrics import WorkloadType, MetricConfig
     >>> from src.config.database import DatabaseConfig
     >>>
-    >>> config = EvaluatorConfig(
+    >>> config = WorkloadOrchestratorConfig(
     ...     workload_type=WorkloadType.OLTP,
     ...     metric_config=MetricConfig.for_oltp(),
     ...     db_config=DatabaseConfig(
@@ -141,37 +141,37 @@ class Evaluator:
     ... )
     >>>
     >>> executor = SysbenchOLTPExecutor(table_size=10000)
-    >>> evaluator = Evaluator(config, executor)
+    >>> orchestrator = WorkloadOrchestrator(config, executor)
     >>>
     >>> # Evaluate a worker
-    >>> metrics, score = evaluator.evaluate_worker(worker)
+    >>> metrics, score = orchestrator.evaluate_worker(worker)
     >>> print(f"Score: {score:.4f}, Throughput: {metrics.throughput:.2f} TPS")
     """
 
     def __init__(
         self,
-        config: EvaluatorConfig,
+        config: WorkloadOrchestratorConfig,
         workload_executor: Union[WorkloadExecutor, BenchmarkExecutor],
         env: DatabaseEnvironment,
     ):
         """
-        Initialize Evaluator.
+        Initialize WorkloadOrchestrator.
 
         Parameters
         ----------
-        config : EvaluatorConfig
-            Evaluation configuration
+        config : WorkloadOrchestratorConfig
+            Orchestration configuration
         workload_executor : Union[WorkloadExecutor, BenchmarkExecutor]
             Workload execution strategy
-        worker_id : Optional[str]
-            Worker identifier for logging
+        env : DatabaseEnvironment
+            Database environment for instance management
         """
         self.config = config
         self.workload_executor = workload_executor
         self.env = env
 
-        logger.debug(
-            "✓ Created Evaluator: workload=%s, mode=%s, duration=%ss",
+        LOGGER.debug(
+            "✓ Created WorkloadOrchestrator: workload=%s, mode=%s, duration=%ss",
             config.workload_type.value.upper(),
             config.tuning_mode.value,
             config.measurement_duration,
@@ -212,7 +212,7 @@ class Evaluator:
                 connection = get_connection(config=db_config or self.config.db_config)
                 connection.autocommit = False
                 if attempt > 1:
-                    logger.info("Connection established after %d attempts", attempt)
+                    LOGGER.info("Connection established after %d attempts", attempt)
                 return connection
             except psycopg2.Error as e:
                 last_error = e
@@ -229,7 +229,7 @@ class Evaluator:
                     )
                 ):
                     if attempt < max_retries:
-                        logger.warning(
+                        LOGGER.warning(
                             "Database recovering, retry %d/%d in %.1fs...",
                             attempt,
                             max_retries,
@@ -239,10 +239,10 @@ class Evaluator:
                         continue
 
                 # Non-recoverable error or last attempt
-                logger.error("Failed to connect to PostgreSQL: %s", e)
+                LOGGER.error("Failed to connect to PostgreSQL: %s", e)
                 raise
 
-        logger.error("Failed to connect after %d attempts: %s", max_retries, last_error)
+        LOGGER.error("Failed to connect after %d attempts: %s", max_retries, last_error)
         raise last_error  # type: ignore
 
     def disconnect(
@@ -262,16 +262,16 @@ class Evaluator:
             try:
                 connection.close()
                 if worker_id is not None:
-                    worker_logger = get_logger(__name__, worker_id=worker_id)
+                    worker_logger = get_logger("BenchmarkWorker", worker_id=worker_id)
                     worker_logger.debug("Disconnected from PostgreSQL")
                 else:
-                    logger.debug("Disconnected from PostgreSQL")
+                    LOGGER.debug("Disconnected from PostgreSQL")
             except Exception as e:
                 if worker_id is not None:
-                    worker_logger = get_logger(__name__, worker_id=worker_id)
+                    worker_logger = get_logger("BenchmarkWorker", worker_id=worker_id)
                     worker_logger.warning("Error closing connection: %s", e)
                 else:
-                    logger.warning("Error closing connection: %s", e)
+                    LOGGER.warning("Error closing connection: %s", e)
 
     def apply_configuration(
         self,
@@ -309,9 +309,9 @@ class Evaluator:
             True if restart occurred during this application
         """
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("BenchmarkWorker", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         try:
@@ -389,9 +389,9 @@ class Evaluator:
             True if restart succeeded
         """
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("BenchmarkWorker", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         worker_logger.info("Restarting PostgreSQL instance...")
@@ -463,9 +463,9 @@ class Evaluator:
             return
 
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("BenchmarkWorker", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
 
         timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
@@ -554,7 +554,7 @@ class Evaluator:
         if not isinstance(self.workload_executor, BenchmarkExecutor):
             return
 
-        worker_logger = worker_logger or logger
+        worker_logger = worker_logger or LOGGER
 
         try:
             benchmark_ready = self.workload_executor.validate(db_config)
@@ -620,7 +620,7 @@ class Evaluator:
                 "Initialize workers with PostgresInstanceManager first."
             )
 
-        worker_logger = get_logger(__name__, worker_id=worker.worker_id)
+        worker_logger = get_logger("BenchmarkWorker", worker_id=worker.worker_id)
         worker_logger.info(
             "Evaluating configuration on instance port %d...", worker.port or 0
         )
@@ -924,7 +924,7 @@ class Evaluator:
         - High buffer_miss_rate -> increase working_set_millions proxy
         - Low scan_efficiency -> increase join_intensity (inefficient scans suggest complex joins)
         """
-        logger = get_logger(__name__)
+        logger = get_logger("BenchmarkExecutor")
 
         if not self.config.metric_config.workload_features:
             logger.debug("No workload features to refine")
@@ -1016,7 +1016,7 @@ class Evaluator:
         workers : List[Worker]
             List of all workers in the current generation
         """
-        logger = get_logger(__name__)
+        logger = get_logger("BenchmarkExecutor")
 
         if not workers:
             logger.debug("No workers to aggregate for feature refinement")
@@ -1065,6 +1065,6 @@ class Evaluator:
     def __repr__(self) -> str:
         """String representation."""
         return (
-            f"Evaluator(workload={self.config.workload_type.value}, "
+            f"WorkloadOrchestrator(workload={self.config.workload_type.value}, "
             f"duration={self.config.measurement_duration}s)"
         )

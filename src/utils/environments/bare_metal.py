@@ -24,7 +24,7 @@ from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger("BareMetalEnvironment")
 
 
 class BareMetalEnvironment(DatabaseEnvironment):

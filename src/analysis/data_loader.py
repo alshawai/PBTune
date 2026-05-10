@@ -22,7 +22,7 @@ from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
 from src.utils.hardware_info import WorkerResources
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+LOGGER = get_logger("Loader")
 
 
 @dataclass
@@ -133,7 +133,7 @@ def _coerce_worker_resources(
     required_fields = {"ram_bytes", "cpu_cores", "disk_type"}
     missing_fields = required_fields - set(worker_resources.keys())
     if missing_fields:
-        logger.warning(
+        LOGGER.warning(
             "worker_resources missing required fields (%s); "
             "skipping hardware-aware bound resolution.",
             ", ".join(sorted(missing_fields)),
@@ -147,7 +147,7 @@ def _coerce_worker_resources(
             disk_type=str(worker_resources["disk_type"]),
         )
     except (TypeError, ValueError) as exc:
-        logger.warning(
+        LOGGER.warning(
             "Invalid worker_resources values; "
             "skipping hardware-aware bound resolution: %s",
             exc,
@@ -155,7 +155,7 @@ def _coerce_worker_resources(
         return None
 
     if resources.ram_bytes <= 0 or resources.cpu_cores <= 0:
-        logger.warning(
+        LOGGER.warning(
             "worker_resources must be positive (ram_bytes=%s, cpu_cores=%s); "
             "skipping hardware-aware bound resolution.",
             resources.ram_bytes,
@@ -179,7 +179,7 @@ def _extract_knob_bounds(
         if parsed_resources is not None:
             space.resolve_hardware_ranges(parsed_resources)
     except Exception as e:
-        logger.warning(f"Knob space unavailable, using empirical fallback bounds: {e}")
+        LOGGER.warning(f"Knob space unavailable, using empirical fallback bounds: {e}")
         space = None
 
     for col in df.columns:
@@ -281,7 +281,7 @@ def load_pbt_results(
     if not json_files:
         raise FileNotFoundError(f"No PBT result files found in {directory_path}")
 
-    logger.info(f"Loading {len(json_files)} PBT result records from {directory_path}")
+    LOGGER.info(f"Loading {len(json_files)} PBT result records from {directory_path}")
 
     raw_configs: list[dict[str, Any]] = []
     valid_metrics: list[PerformanceMetrics] = []
@@ -294,7 +294,7 @@ def load_pbt_results(
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse {file_path.name}: {e}")
+            LOGGER.error(f"Failed to parse {file_path.name}: {e}")
             continue
 
         session_meta = data.get("tuning_session", {})
@@ -347,7 +347,7 @@ def load_pbt_results(
                     }
                     pm = PerformanceMetrics(**filtered_metrics)
                 except Exception as e:
-                    logger.debug(
+                    LOGGER.debug(
                         f"Failed to parse metric dictionary in {file_path.name}: {e}"
                     )
                     continue
@@ -357,7 +357,7 @@ def load_pbt_results(
 
     n_valid = len(raw_configs)
     if n_valid == 0:
-        logger.warning(
+        LOGGER.warning(
             f"No valid observations successfully loaded from {len(json_files)} files."
         )
         return LoadedData(
@@ -391,7 +391,7 @@ def load_pbt_results(
         scoring_policy_version=scoring_policy_version,
         metric_reference_version=metric_ref_version,
     )
-    logger.info(
+    LOGGER.info(
         "Computed global ranges via shared rescoring utility: latency=%s calibrated=%s",
         rescoring_metadata["latency_metric"],
         rescoring_metadata["ranges_calibrated"],
@@ -415,7 +415,7 @@ def load_pbt_results(
 
     knob_bounds = _extract_knob_bounds(df_encoded, worker_resources, knob_tier)
 
-    logger.info(
+    LOGGER.info(
         f"Loaded {n_valid} valid configurations with {len(df_encoded.columns)} variables."
     )
 

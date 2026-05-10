@@ -35,7 +35,7 @@ def _ensure_fanova_numpy_aliases() -> None:
 
 _ensure_fanova_numpy_aliases()
 
-logger = get_logger(__name__)
+LOGGER = get_logger("Importance")
 
 CORRELATION_THRESHOLD = 0.7
 DEFAULT_RF_N_ESTIMATORS = 400
@@ -120,7 +120,7 @@ def _drop_zero_variance_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Drop constant columns that cannot contribute to importance analysis."""
     zero_var_cols = df.nunique()[lambda s: s <= 1].index.tolist()
     if zero_var_cols:
-        logger.warning(
+        LOGGER.warning(
             "Dropping zero-variance knobs before importance analysis: %s",
             zero_var_cols,
         )
@@ -342,7 +342,7 @@ def analyze_knob_importance(
         )
 
     if result_pass.fanova_shap_correlation < CORRELATION_THRESHOLD:
-        logger.warning(
+        LOGGER.warning(
             "Low correlation between fANOVA and SHAP importance rankings: ρ = %.3f",
             result_pass.fanova_shap_correlation,
         )

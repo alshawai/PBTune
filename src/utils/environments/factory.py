@@ -23,7 +23,7 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
 from src.utils.hardware_info import detect_pg_version
 
-logger = get_logger(__name__)
+logger = get_logger("EnvironmentFactory")
 
 
 class EnvironmentFactory:
