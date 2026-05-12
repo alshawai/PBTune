@@ -25,6 +25,24 @@ def test_parse_args_no_color_enables_plain_output(monkeypatch) -> None:
     assert args.no_color is True
 
 
+def test_parse_args_disable_early_stopping_defaults_to_false(monkeypatch) -> None:
+    """CLI should keep the no-improvement early stop enabled by default."""
+    monkeypatch.setattr(sys, "argv", ["tuner"])
+
+    args = parse_args()
+
+    assert args.disable_early_stopping is False
+
+
+def test_parse_args_disable_early_stopping_enabled(monkeypatch) -> None:
+    """CLI should parse the no-improvement early stopping disable flag."""
+    monkeypatch.setattr(sys, "argv", ["tuner", "--disable-early-stopping"])
+
+    args = parse_args()
+
+    assert args.disable_early_stopping is True
+
+
 def test_parse_args_sysbench_workload_default_none(monkeypatch) -> None:
     """CLI keeps sysbench workload unset unless explicitly provided."""
     monkeypatch.setattr(sys, "argv", ["tuner"])

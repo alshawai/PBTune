@@ -65,6 +65,8 @@ class PopulationConfig:
         Maximum number of generations before stopping
     early_stopping_patience : int
         Generations to wait without improvement before early stopping
+    disable_early_stopping : bool
+        Disable the no-improvement early stop gate when True
     dead_config_threshold : float
         Score threshold below which workers are classified as dead configs
         for end-of-generation rescue handling.
@@ -80,6 +82,7 @@ class PopulationConfig:
     convergence_threshold: float = 0.5
     max_generations: int = 100
     early_stopping_patience: int = 10
+    disable_early_stopping: bool = False
     dead_config_threshold: float = 6.0
     resample_min_change_ratio: float = 0.6
 
@@ -946,7 +949,11 @@ class Population:
             LOGGER.info("Stopping: max_generations reached")
             return True
 
-        if self.generations_without_improvement >= self.config.early_stopping_patience:
+        if (
+            not self.config.disable_early_stopping
+            and self.generations_without_improvement
+            >= self.config.early_stopping_patience
+        ):
             LOGGER.info(
                 "Stopping: no improvement for %s generations",
                 self.config.early_stopping_patience,
