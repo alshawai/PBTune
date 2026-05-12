@@ -9,6 +9,7 @@ from src.scripts.bo_baseline.search_space import build_configspace, configspace_
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.result_writer import write_bo_results
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
+from src.utils.types import BenchmarkConfig, TuningMode
 from src.evaluation.loader import load_tuning_session
 
 
@@ -48,6 +49,8 @@ class TestPBTSessionParity:
         )
 
         args = argparse.Namespace(
+            config="standard",
+            benchmark_config=None,
             iterations=None,
             seed=123,
             tier=None,
@@ -73,20 +76,21 @@ class TestPBTSessionParity:
         )
 
         config = BOConfig.from_args(args)
+        benchmark_config = config.benchmark_config
 
         assert config.n_iterations == 40
         assert config.random_seed == 123
         assert config.knob_tier == "minimal"
-        assert config.benchmark == "sysbench"
-        assert config.workload_type == "oltp"
-        assert config.evaluation_duration == 15.0
-        assert config.warmup_duration == 10.0
-        assert config.tuning_mode == "online"
-        assert config.sysbench_tables == 2
-        assert config.sysbench_table_size == 10000
-        assert config.sysbench_workload == "oltp_read_write"
-        assert config.scale_factor == 0.01
-        assert config.tpch_warmup_passes == 0
+        assert benchmark_config.benchmark == "sysbench"
+        assert benchmark_config.workload_type == "oltp"
+        assert benchmark_config.evaluation_duration == 15.0
+        assert benchmark_config.warmup_duration == 10.0
+        assert benchmark_config.tuning_mode == TuningMode.ONLINE
+        assert benchmark_config.sysbench_tables == 2
+        assert benchmark_config.sysbench_table_size == 10000
+        assert benchmark_config.sysbench_workload == "oltp_read_write"
+        assert benchmark_config.scale_factor == 0.01
+        assert benchmark_config.warmup_passes == 0
         assert config.pbt_session_path == pbt_session
         assert config.pbt_knob_names == (
             "effective_cache_size",
@@ -112,6 +116,8 @@ class TestPBTSessionParity:
         )
 
         args = argparse.Namespace(
+            config="standard",
+            benchmark_config=None,
             iterations=7,
             seed=123,
             tier=None,
@@ -142,6 +148,8 @@ class TestPBTSessionParity:
 
     def test_bo_config_requires_tier_without_pbt_session(self):
         args = argparse.Namespace(
+            config="standard",
+            benchmark_config=None,
             iterations=None,
             seed=123,
             tier=None,
@@ -162,6 +170,7 @@ class TestPBTSessionParity:
             output_dir="results",
             verbose="INFO",
             range_update_interval=5,
+            bo_surrogate="rf",
             pbt_session=None,
         )
 
@@ -263,8 +272,10 @@ class TestResultFormat:
             n_iterations=3,
             random_seed=123,
             knob_tier="minimal",
-            benchmark="sysbench",
-            workload_type="oltp",
+            benchmark_config=BenchmarkConfig(
+                benchmark="sysbench",
+                workload_type="oltp",
+            ),
         )
 
         worker_resources = WorkerResources(
@@ -350,8 +361,10 @@ class TestResultFormat:
         config = BOConfig(
             n_iterations=2,
             knob_tier="minimal",
-            benchmark="sysbench",
-            workload_type="oltp",
+            benchmark_config=BenchmarkConfig(
+                benchmark="sysbench",
+                workload_type="oltp",
+            ),
         )
 
         iteration_log = [

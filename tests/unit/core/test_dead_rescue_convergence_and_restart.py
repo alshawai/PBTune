@@ -127,6 +127,22 @@ def test_record_generation_not_converged_after_all_dead_resample() -> None:
     assert population.should_stop() is False
 
 
+def test_should_stop_ignores_no_improvement_when_disabled() -> None:
+    """No-improvement patience should be ignored when explicitly disabled."""
+    population = Population(
+        knob_space=MagicMock(),
+        config=PopulationConfig(
+            population_size=2,
+            early_stopping_patience=10,
+            disable_early_stopping=True,
+        ),
+    )
+    population.current_generation = 3
+    population.generations_without_improvement = 10
+
+    assert population.should_stop() is False
+
+
 def test_apply_configuration_force_restart_overrides_interval_deferral() -> None:
     """Forced restart must execute even when restart interval would defer it."""
     evaluator = _make_evaluator(_HealthyBenchmarkExecutor())

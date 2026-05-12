@@ -124,6 +124,7 @@ results/**/intermediate_*.json
 results/**/*.html
 results/oltp/comparisons/
 results/**/fanova_importance.json
+results/**/bo_runs/**/smac_output/
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
