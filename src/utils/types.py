@@ -33,6 +33,8 @@ class TuningMode(str, Enum):
     ONLINE = "online"
     OFFLINE = "offline"
     ADAPTIVE = "adaptive"
+
+
 @dataclass
 class BenchmarkConfig:
     """Benchmark and workload configuration settings.

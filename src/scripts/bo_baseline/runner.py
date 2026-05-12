@@ -215,9 +215,7 @@ class BOBaselineRunner:
             self.env = EnvironmentFactory.create(
                 schema_provider=workload_executor,
                 use_docker=self.config.use_docker,
-                base_dir=Path(
-                    f".instances/{self.config.benchmark_config.benchmark}"
-                ),
+                base_dir=Path(f".instances/{self.config.benchmark_config.benchmark}"),
                 base_port=5440,
                 db_config=self.db_config,
                 worker_resources=self.worker_resources,

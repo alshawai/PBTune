@@ -380,12 +380,16 @@ class Population:
                 try:
                     metrics, score = evaluate_fn(worker)
                     worker.update_metrics(metrics, score)
-                    worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                    worker_logger = get_logger(
+                        "PopulationWorker", worker_id=worker.worker_id
+                    )
                     worker_logger.debug(
                         "score=%.4f, step_count=%s", score, worker.step_count
                     )
                 except Exception as e:
-                    worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                    worker_logger = get_logger(
+                        "PopulationWorker", worker_id=worker.worker_id
+                    )
                     worker_logger.error("Error evaluating: %s", e)
                     raise
         else:
@@ -403,12 +407,16 @@ class Population:
                     try:
                         metrics, score = future.result()
                         worker.update_metrics(metrics, score)
-                        worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                        worker_logger = get_logger(
+                            "PopulationWorker", worker_id=worker.worker_id
+                        )
                         worker_logger.debug(
                             "score=%.4f, step_count=%s", score, worker.step_count
                         )
                     except Exception as e:
-                        worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                        worker_logger = get_logger(
+                            "PopulationWorker", worker_id=worker.worker_id
+                        )
                         worker_logger.error("Error evaluating: %s", e)
                         raise
 
@@ -513,7 +521,9 @@ class Population:
 
             resampled = 0
             for dead_worker in dead_workers:
-                dead_logger = get_logger("PopulationWorker", worker_id=dead_worker.worker_id)
+                dead_logger = get_logger(
+                    "PopulationWorker", worker_id=dead_worker.worker_id
+                )
                 previous_config = dead_worker.get_config_copy()
                 selected_config, change_ratio = self._choose_diverse_resample_config(
                     previous_config,
@@ -569,7 +579,9 @@ class Population:
         rescued = 0
         for index, dead_worker in enumerate(dead_workers):
             donor = alive_workers[index % len(alive_workers)]
-            dead_logger = get_logger("PopulationWorker", worker_id=dead_worker.worker_id)
+            dead_logger = get_logger(
+                "PopulationWorker", worker_id=dead_worker.worker_id
+            )
 
             dead_logger.warning(
                 "[DEAD_CONFIG] Triggering immediate rescue: exploit Worker-%d (score=%.4f)",

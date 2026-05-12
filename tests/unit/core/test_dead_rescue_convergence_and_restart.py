@@ -9,7 +9,10 @@ import pytest
 from src.config.database import DatabaseConfig
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
-from src.tuner.benchmark.orchestrator import WorkloadOrchestrator, WorkloadOrchestratorConfig
+from src.tuner.benchmark.orchestrator import (
+    WorkloadOrchestrator,
+    WorkloadOrchestratorConfig,
+)
 from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.applicator import ApplicationResult
 from src.utils.metrics import MetricConfig, PerformanceMetrics, WorkloadType
