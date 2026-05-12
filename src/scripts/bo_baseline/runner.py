@@ -12,8 +12,10 @@ from smac.scenario import Scenario
 
 from src.tuner.config import get_knob_space
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.evaluator import Evaluator, EvaluatorConfig
-from src.tuner.evaluator.restart_policy import TuningMode
+from src.tuner.benchmark.orchestrator import (
+    WorkloadOrchestrator,
+    WorkloadOrchestratorConfig,
+)
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.utils.environments import EnvironmentFactory
@@ -26,9 +28,12 @@ from src.database.connection import get_connection
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.search_space import build_configspace
 from src.scripts.bo_baseline.objective import create_objective
-from src.scripts.bo_baseline.result_writer import write_bo_results
+from src.scripts.bo_baseline.result_writer import (
+    write_bo_results,
+    resolve_bo_output_root,
+)
 
-logger = get_logger(__name__)
+LOGGER = get_logger("Runner")
 
 
 class BOBaselineRunner:
@@ -44,8 +49,10 @@ class BOBaselineRunner:
             Configuration for BO tuning
         """
         self.config = config
-        setup_logging(verbosity=config.verbose)
-        self.logger = get_logger(__name__)
+        self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_output_file = self._build_log_output_file(self.run_timestamp)
+        setup_logging(verbosity=config.verbose, output_file=log_output_file)
+        self.logger = get_logger("Runner")
 
         # Collect system info
         self.system_info = get_system_info()
@@ -59,23 +66,25 @@ class BOBaselineRunner:
         self.db_config = get_db_config()
 
         # Metric config
-        workload_type = WorkloadType(config.workload_type)
+        workload_type = WorkloadType(config.benchmark_config.workload_type)
         self.metric_config = create_metric_config(workload_type.value)
 
         self.logger.info(f"BO Baseline Runner initialized for tier: {config.knob_tier}")
 
     def _create_workload_executor(self):
         """Create appropriate workload executor based on benchmark type."""
-        if self.config.benchmark == "sysbench":
+        if self.config.benchmark_config.benchmark == "sysbench":
             return SysbenchExecutor(
-                script=self.config.sysbench_workload,
-                tables=self.config.sysbench_tables,
-                table_size=self.config.sysbench_table_size,
+                script=self.config.benchmark_config.sysbench_workload,
+                tables=self.config.benchmark_config.sysbench_tables,
+                table_size=self.config.benchmark_config.sysbench_table_size,
             )
-        elif self.config.benchmark == "tpch":
-            return TPCHExecutor(scale_factor=self.config.scale_factor)
+        elif self.config.benchmark_config.benchmark == "tpch":
+            return TPCHExecutor(scale_factor=self.config.benchmark_config.scale_factor)
         else:
-            raise ValueError(f"Unknown benchmark: {self.config.benchmark}")
+            raise ValueError(
+                f"Unknown benchmark: {self.config.benchmark_config.benchmark}"
+            )
 
     def _get_runtime_supported_knobs(self, worker_id: int = 0) -> Tuple[set, str]:
         """Get runtime pg_settings knob names and server version."""
@@ -157,6 +166,28 @@ class BOBaselineRunner:
             len(self.knob_space.knobs),
         )
 
+    def _build_smac_output_root(self) -> Path:
+        """Build the SMAC output directory root under results."""
+        bo_root = resolve_bo_output_root(
+            output_dir=Path(self.config.output_dir),
+            benchmark_config=self.config.benchmark_config,
+            knob_tier=self.config.knob_tier,
+        )
+        smac_root = bo_root / "smac_output"
+        smac_root.mkdir(parents=True, exist_ok=True)
+        return smac_root
+
+    def _build_log_output_file(self, timestamp: str) -> Path:
+        """Create the HTML log output file under results."""
+        bo_root = resolve_bo_output_root(
+            output_dir=Path(self.config.output_dir),
+            benchmark_config=self.config.benchmark_config,
+            knob_tier=self.config.knob_tier,
+        )
+        log_dir = bo_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / f"bo_baseline_{timestamp}.html"
+
     def run(self) -> Dict[str, Any]:
         """
         Run Bayesian Optimization tuning.
@@ -177,11 +208,14 @@ class BOBaselineRunner:
 
             # Create environment
             self.logger.info("Setting up database environment...")
-            snapshot_id = f"{self.config.benchmark}_{self.config.workload_type}"
+            snapshot_id = (
+                f"{self.config.benchmark_config.benchmark}_"
+                f"{self.config.benchmark_config.workload_type}"
+            )
             self.env = EnvironmentFactory.create(
                 schema_provider=workload_executor,
                 use_docker=self.config.use_docker,
-                base_dir=Path(f"./pg_instances/{self.config.benchmark}"),
+                base_dir=Path(f".instances/{self.config.benchmark_config.benchmark}"),
                 base_port=5440,
                 db_config=self.db_config,
                 worker_resources=self.worker_resources,
@@ -198,17 +232,19 @@ class BOBaselineRunner:
             self._prune_unsupported_runtime_knobs()
             self._apply_pbt_knob_filter()
 
-            # Create evaluator
-            self.logger.info("Creating evaluator...")
-            evaluator_config = EvaluatorConfig(
-                workload_type=WorkloadType(self.config.workload_type),
+            # Create workload orchestrator
+            self.logger.info("Creating workload orchestrator...")
+            orchestrator_config = WorkloadOrchestratorConfig(
+                workload_type=WorkloadType(self.config.benchmark_config.workload_type),
                 metric_config=self.metric_config,
                 db_config=self.db_config,
-                warmup_duration=self.config.warmup_duration,
-                measurement_duration=self.config.evaluation_duration,
-                tuning_mode=TuningMode(self.config.tuning_mode),
+                warmup_duration=self.config.benchmark_config.warmup_duration,
+                measurement_duration=self.config.benchmark_config.evaluation_duration,
+                tuning_mode=self.config.benchmark_config.tuning_mode,
             )
-            evaluator = Evaluator(evaluator_config, workload_executor, self.env)
+            orchestrator = WorkloadOrchestrator(
+                orchestrator_config, workload_executor, self.env
+            )
 
             # Create worker
             worker = Worker(
@@ -235,7 +271,7 @@ class BOBaselineRunner:
 
             # Create objective function with freeze-after-pilot logic
             objective = create_objective(
-                evaluator=evaluator,
+                orchestrator=orchestrator,
                 worker=worker,
                 knob_space=self.knob_space,
                 metric_config=self.metric_config,
@@ -253,8 +289,9 @@ class BOBaselineRunner:
                 n_trials=self.config.n_iterations,
                 seed=self.config.random_seed,
                 deterministic=False,
-                output_directory=Path(
-                    f"./smac_output/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"
+                output_directory=(
+                    self._build_smac_output_root()
+                    / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"
                 ),
             )
 
@@ -343,6 +380,23 @@ def main():
         description="Bayesian Optimization baseline for PostgreSQL tuning"
     )
 
+    # Preset configuration
+    parser.add_argument(
+        "--config",
+        choices=["rapid", "standard", "thorough", "research", "extreme"],
+        default="standard",
+        help="BO preset configuration (default: standard)",
+    )
+    parser.add_argument(
+        "--benchmark-config",
+        choices=["rapid", "standard", "thorough", "research", "extreme"],
+        default=None,
+        help=(
+            "Benchmark/workload preset override. Defaults to the preset embedded "
+            "in --config when omitted."
+        ),
+    )
+
     # Required arguments
     parser.add_argument(
         "--tier",
@@ -372,68 +426,68 @@ def main():
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Random seed (default: 42)",
+        default=None,
+        help="Random seed (default: preset value)",
     )
 
     # Benchmark
     parser.add_argument(
         "--benchmark",
         choices=["sysbench", "tpch"],
-        default="sysbench",
-        help="Benchmark type (default: sysbench)",
+        default=None,
+        help="Benchmark type (default: preset value)",
     )
     parser.add_argument(
         "--workload",
         choices=["oltp", "olap", "mixed"],
-        default="oltp",
-        help="Workload type (default: oltp)",
+        default=None,
+        help="Workload type (default: preset value)",
     )
     parser.add_argument(
         "--duration",
         type=float,
-        default=30.0,
-        help="Evaluation duration in seconds (default: 30)",
+        default=None,
+        help="Evaluation duration in seconds (default: preset value)",
     )
     parser.add_argument(
         "--warmup",
         type=float,
-        default=10.0,
-        help="Warmup duration in seconds (default: 10)",
+        default=None,
+        help="Warmup duration in seconds (default: preset value)",
     )
 
     # Sysbench options
     parser.add_argument(
         "--sysbench-tables",
         type=int,
-        default=4,
-        help="Number of sysbench tables (default: 4)",
+        default=None,
+        help="Number of sysbench tables (default: preset value)",
     )
     parser.add_argument(
         "--sysbench-table-size",
         type=int,
-        default=100000,
-        help="Sysbench table size (default: 100000)",
+        default=None,
+        help="Sysbench table size (default: preset value)",
     )
     parser.add_argument(
         "--sysbench-workload",
         choices=["oltp_read_only", "oltp_read_write", "oltp_write_only"],
-        default="oltp_read_write",
-        help="Sysbench workload (default: oltp_read_write)",
+        default=None,
+        help="Sysbench workload (default: preset value)",
     )
 
     # TPC-H options
     parser.add_argument(
         "--scale-factor",
         type=float,
-        default=1.0,
-        help="TPC-H scale factor (default: 1.0)",
+        default=None,
+        help="TPC-H scale factor (default: preset value)",
     )
     parser.add_argument(
         "--tpch-warmup-passes",
         type=int,
-        default=1,
-        help="TPC-H warmup passes (default: 1)",
+        default=None,
+        help="TPC-H warmup passes (default: preset value)",
     )
 
     # Instance options
@@ -460,34 +514,40 @@ def main():
     parser.add_argument(
         "--tuning-mode",
         choices=["offline", "online", "adaptive"],
-        default="offline",
-        help="Tuning mode (default: offline)",
+        default=None,
+        help="Tuning mode (default: preset value)",
     )
 
     # Output options
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="results",
-        help="Output directory (default: results)",
+        default=None,
+        help="Output directory (default: preset value)",
     )
     parser.add_argument(
         "--bo-surrogate",
         choices=["rf", "gp"],
-        default="rf",
-        help="SMAC Surrogate model: Random Forest (rf) or Gaussian Process (gp). Default: rf",
+        default=None,
+        help=(
+            "SMAC Surrogate model: Random Forest (rf) or Gaussian Process (gp). "
+            "Default: preset value"
+        ),
     )
     parser.add_argument(
         "--verbose",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default="INFO",
-        help="Logging level (default: INFO)",
+        default=None,
+        help="Logging level (default: preset value)",
     )
     parser.add_argument(
         "--range-update-interval",
         type=int,
-        default=10,
-        help="Pilot phase size: number of Sobol initial-design iterations before freezing normalization ranges (default: 10)",
+        default=None,
+        help=(
+            "Pilot phase size: number of Sobol initial-design iterations before "
+            "freezing normalization ranges (default: preset value)"
+        ),
     )
 
     args = parser.parse_args()

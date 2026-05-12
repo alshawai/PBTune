@@ -107,7 +107,9 @@ class ColoredFormatter(logging.Formatter):
             else:
                 # No colors, but preserve padding and strip ANSI from message
                 msg_no_ansi = strip_ansi(msg)
-                formatted_message = f"{timestamp} - {levelname_display} - {module} - {msg_no_ansi}"
+                formatted_message = (
+                    f"{timestamp} - {levelname_display} - {module} - {msg_no_ansi}"
+                )
         else:  # No module
             msg = parts[2] if len(parts) >= 3 else parts[-1]
 
@@ -139,7 +141,7 @@ class ColoredFormatter(logging.Formatter):
 
 class HTMLFormatter(logging.Formatter):
     """Format log records as HTML with proper color styling.
-    
+
     Color application is controlled globally via colors_enabled().
     Always applies padding to module names and levels for consistent alignment.
     """
@@ -151,7 +153,7 @@ class HTMLFormatter(logging.Formatter):
         level_width: int = LOGGER_LEVEL_WIDTH,
     ):
         """Initialize HTMLFormatter with optional module name display.
-        
+
         Parameters
         ----------
         show_module : bool
@@ -197,7 +199,9 @@ class HTMLFormatter(logging.Formatter):
             html = f"{timestamp} - {self._escape_html(levelname_display)} - "
 
         if self.show_module and len(parts) == 4:
-            module = self._escape_html(format_logger_name(record.name, self.module_width))
+            module = self._escape_html(
+                format_logger_name(record.name, self.module_width)
+            )
 
             if use_colors:
                 # Convert any raw ANSI in the message to HTML-safe spans
@@ -228,7 +232,9 @@ class HTMLFormatter(logging.Formatter):
             if use_colors:
                 msg = ansi_to_html(parts[2] if len(parts) >= 3 else parts[-1])
             else:
-                msg = self._escape_html(strip_ansi(parts[2] if len(parts) >= 3 else parts[-1]))
+                msg = self._escape_html(
+                    strip_ansi(parts[2] if len(parts) >= 3 else parts[-1])
+                )
 
             if hasattr(record, "worker_id") and record.worker_id is not None:  # type: ignore
                 worker_color = ColorPalette.get_worker_color(

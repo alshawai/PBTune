@@ -40,6 +40,7 @@ import math
 import time
 import logging
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
@@ -80,6 +81,7 @@ from src.utils.metrics import (
     WorkloadType,
     create_metric_config,
 )
+from src.utils.types import clone_benchmark_config
 from src.utils.scoring.workload_features import WorkloadFeatureExtractor
 from src.utils.logger import (
     setup_logging,
@@ -96,7 +98,7 @@ from src.utils.hardware_info import (
     log_system_info,
     detect_worker_resources,
 )
-from src.tuner.benchmark.restart_policy import TuningMode
+from src.utils.types import TuningMode
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -188,6 +190,8 @@ class PBTTuner:
                     Custom logger instance. If None, a default logger is created.
                 - enable_colors: bool (default: True)
                     Enable ANSI colors in manually colorized startup log messages.
+                - disable_early_stopping: bool (default: False)
+                    Disable the no-improvement early stop gate.
         """
         self.knob_tier = knob_tier
         self.pbt_config = pbt_config or STANDARD_CONFIG
@@ -200,6 +204,7 @@ class PBTTuner:
         self.no_docker = kwargs.get("no_docker", False)
         self.docker_image = kwargs.get("docker_image", None)
         self.enable_colors = kwargs.get("enable_colors", True)
+        self.disable_early_stopping = kwargs.get("disable_early_stopping", False)
 
         self.warm_start_path = kwargs.get("warm_start_path", None)
         self.warm_start_provenance = {"enabled": False}
@@ -212,7 +217,7 @@ class PBTTuner:
 
         self.logger.debug("Loading knob space: %s", knob_tier.upper())
         self.knob_space = get_knob_space(knob_tier)
-        if self.pbt_config.tuning_mode == TuningMode.ONLINE:
+        if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
             create_online_view = getattr(self.knob_space, "create_online_view", None)
             if callable(create_online_view):
                 self.knob_space = create_online_view()
@@ -245,13 +250,13 @@ class PBTTuner:
             workload_type=workload_type,
             metric_config=self.metric_config,
             db_config=self.db_config,
-            warmup_duration=self.pbt_config.warmup_duration,
-            measurement_duration=self.pbt_config.evaluation_duration,
+            warmup_duration=self.pbt_config.benchmark_config.warmup_duration,
+            measurement_duration=self.pbt_config.benchmark_config.evaluation_duration,
             cooldown_duration=3.0,
-            tuning_mode=self.pbt_config.tuning_mode,
-            adaptive_restart_interval=self.pbt_config.adaptive_restart_interval,
+            tuning_mode=self.pbt_config.benchmark_config.tuning_mode,
+            adaptive_restart_interval=self.pbt_config.benchmark_config.adaptive_restart_interval,
             random_seed=random_seed,
-            warmup_passes=self.pbt_config.warmup_passes,
+            warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
             worker_memory_budget_bytes=self.worker_resources.ram_bytes,
         )
 
@@ -272,21 +277,21 @@ class PBTTuner:
                 reset,
             )
             workload_executor = SysbenchExecutor(
-                tables=self.pbt_config.sysbench_tables,
-                table_size=self.pbt_config.sysbench_table_size,
-                script=self.pbt_config.sysbench_workload,
+                tables=self.pbt_config.benchmark_config.sysbench_tables,
+                table_size=self.pbt_config.benchmark_config.sysbench_table_size,
+                script=self.pbt_config.benchmark_config.sysbench_workload,
             )
             self.workload_features = self.feature_extractor.extract_sysbench_features(
-                script=self.pbt_config.sysbench_workload,
+                script=self.pbt_config.benchmark_config.sysbench_workload,
                 threads=self.pbt_config.num_parallel_workers,
                 cpu_cores=int(self.worker_resources.cpu_cores or 1),
-                table_size=self.pbt_config.sysbench_table_size,
-                tables=self.pbt_config.sysbench_tables,
+                table_size=self.pbt_config.benchmark_config.sysbench_table_size,
+                tables=self.pbt_config.benchmark_config.sysbench_tables,
             )
             self.snapshot_identifier = (
-                f"sysbench_{self.pbt_config.sysbench_workload}_"
-                f"t{self.pbt_config.sysbench_tables}_"
-                f"s{self.pbt_config.sysbench_table_size}"
+                f"sysbench_{self.pbt_config.benchmark_config.sysbench_workload}_"
+                f"t{self.pbt_config.benchmark_config.sysbench_tables}_"
+                f"s{self.pbt_config.benchmark_config.sysbench_table_size}"
             )
 
         elif benchmark == "tpch":
@@ -299,12 +304,16 @@ class PBTTuner:
                 info_color,
                 reset,
             )
-            workload_executor = TPCHExecutor(scale_factor=self.pbt_config.scale_factor)
-            self.workload_features = self.feature_extractor.extract_tpch_features(
-                scale_factor=self.pbt_config.scale_factor,
-                warmup_passes=self.pbt_config.warmup_passes,
+            workload_executor = TPCHExecutor(
+                scale_factor=self.pbt_config.benchmark_config.scale_factor
             )
-            self.snapshot_identifier = f"tpch_sf{self.pbt_config.scale_factor}"
+            self.workload_features = self.feature_extractor.extract_tpch_features(
+                scale_factor=self.pbt_config.benchmark_config.scale_factor,
+                warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
+            )
+            self.snapshot_identifier = (
+                f"tpch_sf{self.pbt_config.benchmark_config.scale_factor}"
+            )
 
             self.logger.debug(
                 "💡 TPC-H is a read-only OLAP benchmark; no need for snapshot restorations."
@@ -329,9 +338,7 @@ class PBTTuner:
             self.workload_features = self.feature_extractor.extract_template_features(
                 metadata=template_metadata,
             )
-            self.snapshot_identifier = (
-                f"{self.benchmark_name}_sf{self.pbt_config.scale_factor}"
-            )
+            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
 
         self.snapshot_identifier = self._normalize_snapshot_identifier(
             self.snapshot_identifier
@@ -357,7 +364,9 @@ class PBTTuner:
 
         self.metric_config.workload_features = dict(self.workload_features)
 
-        self.orchestrator = WorkloadOrchestrator(self.evaluator_config, workload_executor, self.env)
+        self.orchestrator = WorkloadOrchestrator(
+            self.evaluator_config, workload_executor, self.env
+        )
 
         pop_config = PopulationConfig(
             population_size=self.pbt_config.population_size,
@@ -367,6 +376,7 @@ class PBTTuner:
             convergence_threshold=0.05,
             max_generations=self.pbt_config.num_generations,
             early_stopping_patience=10,
+            disable_early_stopping=self.disable_early_stopping,
             dead_config_threshold=self.pbt_config.dead_config_threshold,
         )
 
@@ -409,7 +419,10 @@ class PBTTuner:
     def _build_output_dir(self, base_output_dir: Path) -> Path:
         """Build structured output directory, canonically separating ablation runs if specified."""
         ablation_subpath = Path("")
-        if getattr(self, "ablation_variable", None) and getattr(self, "ablation_value", None) is not None:
+        if (
+            getattr(self, "ablation_variable", None)
+            and getattr(self, "ablation_value", None) is not None
+        ):
             ablation_subpath = (
                 Path("ablations")
                 / str(self.ablation_variable)
@@ -420,7 +433,7 @@ class PBTTuner:
             return (
                 base_output_dir
                 / self.workload_type.value
-                / self.pbt_config.sysbench_workload
+                / self.pbt_config.benchmark_config.sysbench_workload
                 / "pbt_runs"
                 / self.knob_tier
                 / ablation_subpath
@@ -910,7 +923,10 @@ class PBTTuner:
         if self.population.current_generation >= self.pbt_config.num_generations:
             return "Maximum generations reached"
 
-        if self.population.generations_without_improvement >= 10:
+        if (
+            not self.population.config.disable_early_stopping
+            and self.population.generations_without_improvement >= 10
+        ):
             return (
                 f"No improvement for "
                 f" {self.population.generations_without_improvement} generations"
@@ -989,13 +1005,13 @@ class PBTTuner:
                 "num_knobs": len(self.knob_space),
                 "workload_type": self.workload_type.value,
                 "benchmark_name": self.benchmark_name,
-                "tpch_scale_factor": self.pbt_config.scale_factor,
-                "tpch_warmup_passes": self.pbt_config.warmup_passes,
-                "sysbench_tables": self.pbt_config.sysbench_tables,
-                "sysbench_table_size": self.pbt_config.sysbench_table_size,
-                "sysbench_workload": self.pbt_config.sysbench_workload,
-                "sysbench_duration_seconds": self.pbt_config.evaluation_duration,
-                "sysbench_warmup_seconds": self.pbt_config.warmup_duration,
+                "tpch_scale_factor": self.pbt_config.benchmark_config.scale_factor,
+                "tpch_warmup_passes": self.pbt_config.benchmark_config.warmup_passes,
+                "sysbench_tables": self.pbt_config.benchmark_config.sysbench_tables,
+                "sysbench_table_size": self.pbt_config.benchmark_config.sysbench_table_size,
+                "sysbench_workload": self.pbt_config.benchmark_config.sysbench_workload,
+                "sysbench_duration_seconds": self.pbt_config.benchmark_config.evaluation_duration,
+                "sysbench_warmup_seconds": self.pbt_config.benchmark_config.warmup_duration,
                 "population_size": self.pbt_config.population_size,
                 "exploit_quantile": self.pbt_config.exploit_quantile,
                 "perturbation_factors": self.pbt_config.perturbation_factors,
@@ -1005,8 +1021,8 @@ class PBTTuner:
                 "total_generations": self.population.current_generation,
                 "total_time_seconds": total_time,
                 "timestamp": self.timestamp,
-                "tuning_mode": self.pbt_config.tuning_mode.value,
-                "adaptive_restart_interval": self.pbt_config.adaptive_restart_interval,
+                "tuning_mode": self.pbt_config.benchmark_config.tuning_mode.value,
+                "adaptive_restart_interval": self.pbt_config.benchmark_config.adaptive_restart_interval,
                 "scoring_policy": scoring_payload["scoring_policy"],
                 "scoring_policy_version": scoring_payload["scoring_policy_version"],
                 "metric_reference_version": scoring_payload["metric_reference_version"],
@@ -1316,6 +1332,15 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    config_group.add_argument(
+        "--disable-early-stopping",
+        action="store_true",
+        help=(
+            "Disable the no-improvement early stop gate "
+            "(low-variance convergence and max generations still apply)"
+        ),
+    )
+
     scoring_group = parser.add_argument_group("Scoring & Normalization")
     scoring_group.add_argument(
         "--scoring-policy",
@@ -1554,41 +1579,88 @@ def main():
         "research": RESEARCH_CONFIG,
         "extreme": EXTREME_CONFIG,
     }
-    pbt_config = config_map[args.config]
-    config_dict = pbt_config.to_dict()
-
-    cli_overrides = {
-        "population_size": args.population,
-        "num_generations": args.generations,
-        "num_parallel_workers": args.parallel_workers,
-        "evaluation_duration": args.duration,
-        "warmup_duration": args.warmup,
-        "scale_factor": args.scale_factor,
-        "sysbench_tables": args.sysbench_tables,
-        "sysbench_table_size": args.sysbench_table_size,
-        "sysbench_workload": args.sysbench_workload,
-    }
-    config_dict.update(
-        {key: value for key, value in cli_overrides.items() if value is not None}
+    base_config = config_map[args.config]
+    benchmark_config = replace(
+        clone_benchmark_config(base_config.benchmark_config),
+        benchmark=args.benchmark,
+        workload_type=args.workload,
+        workload_file=args.workload_file,
+        evaluation_duration=(
+            args.duration
+            if args.duration is not None
+            else base_config.benchmark_config.evaluation_duration
+        ),
+        warmup_duration=(
+            args.warmup
+            if args.warmup is not None
+            else base_config.benchmark_config.warmup_duration
+        ),
+        scale_factor=(
+            args.scale_factor
+            if args.scale_factor is not None
+            else base_config.benchmark_config.scale_factor
+        ),
+        sysbench_tables=(
+            args.sysbench_tables
+            if args.sysbench_tables is not None
+            else base_config.benchmark_config.sysbench_tables
+        ),
+        sysbench_table_size=(
+            args.sysbench_table_size
+            if args.sysbench_table_size is not None
+            else base_config.benchmark_config.sysbench_table_size
+        ),
+        sysbench_workload=(
+            args.sysbench_workload
+            if args.sysbench_workload is not None
+            else base_config.benchmark_config.sysbench_workload
+        ),
+        tuning_mode=(
+            args.tuning_mode
+            if args.tuning_mode is not None
+            else base_config.benchmark_config.tuning_mode
+        ),
     )
 
-    config_dict["random_seed"] = args.random_seed
-
-    if args.tuning_mode:
-        config_dict["tuning_mode"] = args.tuning_mode
-    if isinstance(config_dict.get("tuning_mode"), str):
-        config_dict["tuning_mode"] = TuningMode(config_dict["tuning_mode"])
-
-    if args.scoring_policy:
-        config_dict["scoring_policy"] = args.scoring_policy
-    if args.scoring_policy_version:
-        config_dict["scoring_policy_version"] = args.scoring_policy_version
-    if args.metric_reference_version:
-        config_dict["metric_reference_version"] = args.metric_reference_version
-    if args.scoring_calibration_evals is not None:
-        config_dict["scoring_calibration_evals"] = args.scoring_calibration_evals
-
-    pbt_config = PBTConfig(**config_dict)
+    pbt_config = replace(
+        base_config,
+        population_size=(
+            args.population
+            if args.population is not None
+            else base_config.population_size
+        ),
+        num_generations=(
+            args.generations
+            if args.generations is not None
+            else base_config.num_generations
+        ),
+        num_parallel_workers=(
+            args.parallel_workers
+            if args.parallel_workers is not None
+            else base_config.num_parallel_workers
+        ),
+        scoring_policy=(
+            args.scoring_policy
+            if args.scoring_policy is not None
+            else base_config.scoring_policy
+        ),
+        scoring_policy_version=(
+            args.scoring_policy_version
+            if args.scoring_policy_version is not None
+            else base_config.scoring_policy_version
+        ),
+        metric_reference_version=(
+            args.metric_reference_version
+            if args.metric_reference_version is not None
+            else base_config.metric_reference_version
+        ),
+        scoring_calibration_evals=(
+            args.scoring_calibration_evals
+            if args.scoring_calibration_evals is not None
+            else base_config.scoring_calibration_evals
+        ),
+        benchmark_config=benchmark_config,
+    )
 
     workload_type = {
         "oltp": WorkloadType.OLTP,
@@ -1620,6 +1692,7 @@ def main():
             no_docker=args.no_docker,
             docker_image=args.docker_image,
             enable_colors=enable_colors,
+            disable_early_stopping=args.disable_early_stopping,
             ablation_variable=args.ablation_variable,
             ablation_value=args.ablation_value,
         )

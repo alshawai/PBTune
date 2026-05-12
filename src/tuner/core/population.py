@@ -65,6 +65,8 @@ class PopulationConfig:
         Maximum number of generations before stopping
     early_stopping_patience : int
         Generations to wait without improvement before early stopping
+    disable_early_stopping : bool
+        Disable the no-improvement early stop gate when True
     dead_config_threshold : float
         Score threshold below which workers are classified as dead configs
         for end-of-generation rescue handling.
@@ -80,6 +82,7 @@ class PopulationConfig:
     convergence_threshold: float = 0.5
     max_generations: int = 100
     early_stopping_patience: int = 10
+    disable_early_stopping: bool = False
     dead_config_threshold: float = 6.0
     resample_min_change_ratio: float = 0.6
 
@@ -377,12 +380,16 @@ class Population:
                 try:
                     metrics, score = evaluate_fn(worker)
                     worker.update_metrics(metrics, score)
-                    worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                    worker_logger = get_logger(
+                        "PopulationWorker", worker_id=worker.worker_id
+                    )
                     worker_logger.debug(
                         "score=%.4f, step_count=%s", score, worker.step_count
                     )
                 except Exception as e:
-                    worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                    worker_logger = get_logger(
+                        "PopulationWorker", worker_id=worker.worker_id
+                    )
                     worker_logger.error("Error evaluating: %s", e)
                     raise
         else:
@@ -400,12 +407,16 @@ class Population:
                     try:
                         metrics, score = future.result()
                         worker.update_metrics(metrics, score)
-                        worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                        worker_logger = get_logger(
+                            "PopulationWorker", worker_id=worker.worker_id
+                        )
                         worker_logger.debug(
                             "score=%.4f, step_count=%s", score, worker.step_count
                         )
                     except Exception as e:
-                        worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
+                        worker_logger = get_logger(
+                            "PopulationWorker", worker_id=worker.worker_id
+                        )
                         worker_logger.error("Error evaluating: %s", e)
                         raise
 
@@ -510,7 +521,9 @@ class Population:
 
             resampled = 0
             for dead_worker in dead_workers:
-                dead_logger = get_logger("PopulationWorker", worker_id=dead_worker.worker_id)
+                dead_logger = get_logger(
+                    "PopulationWorker", worker_id=dead_worker.worker_id
+                )
                 previous_config = dead_worker.get_config_copy()
                 selected_config, change_ratio = self._choose_diverse_resample_config(
                     previous_config,
@@ -566,7 +579,9 @@ class Population:
         rescued = 0
         for index, dead_worker in enumerate(dead_workers):
             donor = alive_workers[index % len(alive_workers)]
-            dead_logger = get_logger("PopulationWorker", worker_id=dead_worker.worker_id)
+            dead_logger = get_logger(
+                "PopulationWorker", worker_id=dead_worker.worker_id
+            )
 
             dead_logger.warning(
                 "[DEAD_CONFIG] Triggering immediate rescue: exploit Worker-%d (score=%.4f)",
@@ -946,7 +961,11 @@ class Population:
             LOGGER.info("Stopping: max_generations reached")
             return True
 
-        if self.generations_without_improvement >= self.config.early_stopping_patience:
+        if (
+            not self.config.disable_early_stopping
+            and self.generations_without_improvement
+            >= self.config.early_stopping_patience
+        ):
             LOGGER.info(
                 "Stopping: no improvement for %s generations",
                 self.config.early_stopping_patience,

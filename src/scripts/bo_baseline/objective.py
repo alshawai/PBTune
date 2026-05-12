@@ -6,16 +6,16 @@ from ConfigSpace import Configuration
 
 from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
-from src.tuner.evaluator.evaluator import Evaluator
+from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import MetricConfig, PerformanceMetrics
 from src.scripts.bo_baseline.search_space import configspace_to_knobs
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+LOGGER = get_logger("Objective")
 
 
 def create_objective(
-    evaluator: Evaluator,
+    orchestrator: WorkloadOrchestrator,
     worker: Worker,
     knob_space: KnobSpace,
     metric_config: MetricConfig,
@@ -33,8 +33,8 @@ def create_objective(
 
     Parameters
     ----------
-    evaluator : Evaluator
-        The evaluator for computing performance metrics
+    orchestrator : WorkloadOrchestrator
+        The orchestrator for computing performance metrics
     worker : Worker
         The worker to evaluate
     knob_space : KnobSpace
@@ -95,7 +95,7 @@ def create_objective(
             worker.knob_config = knob_config
             worker.force_restart_next_eval = force_restart
 
-            metrics, score, restarted = evaluator.evaluate_worker(
+            metrics, score, restarted = orchestrator.evaluate_worker(
                 worker, apply_config=True
             )
 
@@ -130,7 +130,7 @@ def create_objective(
                 ]
                 if all_metrics:
                     metric_config.expand_ranges_for_metrics(all_metrics)
-                    logger.info(
+                    LOGGER.info(
                         "Normalization ranges frozen after %d pilot iterations",
                         state["iteration_count"] + 1,
                     )
@@ -139,7 +139,7 @@ def create_objective(
             state["previous_config"] = knob_config
             state["iteration_count"] += 1
 
-            logger.debug(
+            LOGGER.debug(
                 f"Iteration {state['iteration_count']}: score={score:.2f}, cost={cost:.2f}, "
                 f"wall_time={wall_time:.2f}s, frozen={state['ranges_frozen']}"
             )
@@ -147,7 +147,7 @@ def create_objective(
             return cost
 
         except Exception as e:
-            logger.error(f"Error evaluating configuration: {e}", exc_info=True)
+            LOGGER.error(f"Error evaluating configuration: {e}", exc_info=True)
             return 100.0
 
     return objective
