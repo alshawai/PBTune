@@ -9,30 +9,7 @@ isolated testing and clear separation between *policy* and *mechanism*.
 
 from __future__ import annotations
 
-from enum import Enum
-
-
-class TuningMode(str, Enum):
-    """Tuning mode controlling restart behavior and knob scope.
-
-    ONLINE
-        Runtime knobs only. No restarts during normal flow.
-        Equivalent to OtterTune's "dynamic-only" mode.
-
-    OFFLINE
-        All knobs including postmaster. Restart every generation when
-        restart-required knobs are present. Slower but maximally optimized.
-
-    ADAPTIVE
-        All knobs with batched restarts every N generations.
-        WARNING: May produce phantom configs where restart-required knob
-        values don't reflect what was actually running during measurement.
-        Preserved for backward compatibility and research comparison.
-    """
-
-    ONLINE = "online"
-    OFFLINE = "offline"
-    ADAPTIVE = "adaptive"
+from src.utils.types import TuningMode
 
 
 def should_restart(
