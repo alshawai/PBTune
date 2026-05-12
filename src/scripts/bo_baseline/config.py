@@ -1,10 +1,25 @@
 """Configuration dataclass for Bayesian Optimization baseline runner."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Optional
 import argparse
+
+from src.utils.types import (
+    BenchmarkConfig,
+    TuningMode,
+    RAPID_BENCHMARK_CONFIG,
+    STANDARD_BENCHMARK_CONFIG,
+    THOROUGH_BENCHMARK_CONFIG,
+    RESEARCH_BENCHMARK_CONFIG,
+    EXTREME_BENCHMARK_CONFIG,
+    clone_benchmark_config,
+)
+from src.utils.logger import get_logger
+
+
+LOGGER = get_logger("Config")
 
 
 @dataclass
@@ -18,23 +33,10 @@ class BOConfig:
     # Knob Space
     knob_tier: str = "core"  # minimal, core, standard, extensive
 
-    # Benchmark Configuration
-    benchmark: str = "sysbench"  # sysbench or tpch
-    workload_type: str = "oltp"  # oltp, olap, mixed
-    evaluation_duration: float = 30.0  # seconds
-    warmup_duration: float = 10.0  # seconds
-    tuning_mode: str = "offline"  # offline, online, adaptive
-
-    # Sysbench Configuration
-    sysbench_tables: int = 4
-    sysbench_table_size: int = 100000
-    sysbench_workload: str = (
-        "oltp_read_write"  # oltp_read_only, oltp_read_write, oltp_write_only
+    # Benchmark/workload configuration
+    benchmark_config: BenchmarkConfig = field(
+        default_factory=lambda: clone_benchmark_config(STANDARD_BENCHMARK_CONFIG)
     )
-
-    # TPC-H Configuration
-    scale_factor: float = 1.0
-    tpch_warmup_passes: int = 1
 
     # Instance Configuration
     use_docker: bool = True
@@ -86,24 +88,63 @@ class BOConfig:
 
         self.pbt_session_path = path
         self.knob_tier = str(session.get("knob_tier", self.knob_tier))
-        self.benchmark = str(session.get("benchmark_name", self.benchmark))
-        self.workload_type = str(session.get("workload_type", self.workload_type))
-        self.tuning_mode = str(session.get("tuning_mode", self.tuning_mode))
+        benchmark = str(session.get("benchmark_name", self.benchmark_config.benchmark))
+        workload_type = str(
+            session.get("workload_type", self.benchmark_config.workload_type)
+        )
+        tuning_mode = TuningMode(
+            session.get("tuning_mode", self.benchmark_config.tuning_mode)
+        )
 
-        if "sysbench_duration_seconds" in session:
-            self.evaluation_duration = float(session["sysbench_duration_seconds"])
-        if "sysbench_warmup_seconds" in session:
-            self.warmup_duration = float(session["sysbench_warmup_seconds"])
-        if "sysbench_tables" in session:
-            self.sysbench_tables = int(session["sysbench_tables"])
-        if "sysbench_table_size" in session:
-            self.sysbench_table_size = int(session["sysbench_table_size"])
-        if "sysbench_workload" in session:
-            self.sysbench_workload = str(session["sysbench_workload"])
-        if "tpch_scale_factor" in session:
-            self.scale_factor = float(session["tpch_scale_factor"])
-        if "tpch_warmup_passes" in session:
-            self.tpch_warmup_passes = int(session["tpch_warmup_passes"])
+        evaluation_duration = (
+            float(session["sysbench_duration_seconds"])
+            if "sysbench_duration_seconds" in session
+            else self.benchmark_config.evaluation_duration
+        )
+        warmup_duration = (
+            float(session["sysbench_warmup_seconds"])
+            if "sysbench_warmup_seconds" in session
+            else self.benchmark_config.warmup_duration
+        )
+        sysbench_tables = (
+            int(session["sysbench_tables"])
+            if "sysbench_tables" in session
+            else self.benchmark_config.sysbench_tables
+        )
+        sysbench_table_size = (
+            int(session["sysbench_table_size"])
+            if "sysbench_table_size" in session
+            else self.benchmark_config.sysbench_table_size
+        )
+        sysbench_workload = (
+            str(session["sysbench_workload"])
+            if "sysbench_workload" in session
+            else self.benchmark_config.sysbench_workload
+        )
+        scale_factor = (
+            float(session["tpch_scale_factor"])
+            if "tpch_scale_factor" in session
+            else self.benchmark_config.scale_factor
+        )
+        warmup_passes = (
+            int(session["tpch_warmup_passes"])
+            if "tpch_warmup_passes" in session
+            else self.benchmark_config.warmup_passes
+        )
+
+        self.benchmark_config = replace(
+            self.benchmark_config,
+            benchmark=benchmark,
+            workload_type=workload_type,
+            tuning_mode=tuning_mode,
+            evaluation_duration=evaluation_duration,
+            warmup_duration=warmup_duration,
+            sysbench_tables=sysbench_tables,
+            sysbench_table_size=sysbench_table_size,
+            sysbench_workload=sysbench_workload,
+            scale_factor=scale_factor,
+            warmup_passes=warmup_passes,
+        )
         if set_iteration_budget:
             population_size = int(session.get("population_size", 0) or 0)
             total_generations = int(session.get("total_generations", 0) or 0)
@@ -122,30 +163,70 @@ class BOConfig:
         if args.tier is None and not args.pbt_session:
             raise ValueError("Either --tier or --pbt-session must be provided")
 
-        config = cls(
+        config_name = args.config or "standard"
+        base_config = BO_CONFIG_PRESETS[config_name]
+
+        benchmark_preset = (
+            BENCHMARK_CONFIG_PRESETS[args.benchmark_config]
+            if args.benchmark_config
+            else base_config.benchmark_config
+        )
+        benchmark_config = replace(
+            clone_benchmark_config(benchmark_preset),
+            benchmark=args.benchmark
+            if args.benchmark is not None
+            else benchmark_preset.benchmark,
+            workload_type=args.workload
+            if args.workload is not None
+            else benchmark_preset.workload_type,
+            evaluation_duration=args.duration
+            if args.duration is not None
+            else benchmark_preset.evaluation_duration,
+            warmup_duration=args.warmup
+            if args.warmup is not None
+            else benchmark_preset.warmup_duration,
+            tuning_mode=args.tuning_mode
+            if args.tuning_mode is not None
+            else benchmark_preset.tuning_mode,
+            sysbench_tables=args.sysbench_tables
+            if args.sysbench_tables is not None
+            else benchmark_preset.sysbench_tables,
+            sysbench_table_size=args.sysbench_table_size
+            if args.sysbench_table_size is not None
+            else benchmark_preset.sysbench_table_size,
+            sysbench_workload=args.sysbench_workload
+            if args.sysbench_workload is not None
+            else benchmark_preset.sysbench_workload,
+            scale_factor=args.scale_factor
+            if args.scale_factor is not None
+            else benchmark_preset.scale_factor,
+            warmup_passes=args.tpch_warmup_passes
+            if args.tpch_warmup_passes is not None
+            else benchmark_preset.warmup_passes,
+        )
+
+        config = replace(
+            base_config,
             n_iterations=args.iterations
             if args.iterations is not None
-            else cls.n_iterations,
-            random_seed=args.seed,
-            knob_tier=args.tier or cls.knob_tier,
-            benchmark=args.benchmark,
-            workload_type=args.workload,
-            evaluation_duration=args.duration,
-            warmup_duration=args.warmup,
-            tuning_mode=args.tuning_mode,
-            sysbench_tables=args.sysbench_tables,
-            sysbench_table_size=args.sysbench_table_size,
-            sysbench_workload=args.sysbench_workload,
-            scale_factor=args.scale_factor,
-            tpch_warmup_passes=args.tpch_warmup_passes,
+            else base_config.n_iterations,
+            random_seed=args.seed if args.seed is not None else base_config.random_seed,
+            knob_tier=args.tier or base_config.knob_tier,
+            benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
             docker_image=args.docker_image,
             force_recreate_instances=args.force_recreate_instances,
             force_recreate_baseline=args.force_recreate_baseline,
-            output_dir=Path(args.output_dir),
-            verbose=args.verbose,
-            range_update_interval=args.range_update_interval,
-            bo_surrogate=args.bo_surrogate,
+            output_dir=Path(args.output_dir)
+            if args.output_dir is not None
+            else base_config.output_dir,
+            verbose=args.verbose if args.verbose is not None else base_config.verbose,
+            range_update_interval=args.range_update_interval
+            if args.range_update_interval is not None
+            else base_config.range_update_interval,
+            bo_surrogate=args.bo_surrogate
+            if args.bo_surrogate is not None
+            else base_config.bo_surrogate,
         )
 
         if args.pbt_session:
@@ -155,12 +236,52 @@ class BOConfig:
                     set_iteration_budget=args.iterations is None,
                 )
             except Exception as e:
-                from src.utils.logger import get_logger
-
-                logger = get_logger(__name__)
-                logger.warning(
+                LOGGER.warning(
                     f"Failed to load PBT session from {args.pbt_session}: {e}. "
                     f"Falling back to default or CLI-provided settings."
                 )
 
         return config
+
+
+RAPID_BO_CONFIG = BOConfig(
+    n_iterations=40,
+    range_update_interval=10,
+    benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
+)
+STANDARD_BO_CONFIG = BOConfig(
+    n_iterations=120,
+    range_update_interval=10,
+    benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
+)
+THOROUGH_BO_CONFIG = BOConfig(
+    n_iterations=400,
+    range_update_interval=15,
+    benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
+)
+RESEARCH_BO_CONFIG = BOConfig(
+    n_iterations=1600,
+    range_update_interval=20,
+    benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
+)
+EXTREME_BO_CONFIG = BOConfig(
+    n_iterations=3200,
+    range_update_interval=25,
+    benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
+)
+
+BO_CONFIG_PRESETS = {
+    "rapid": RAPID_BO_CONFIG,
+    "standard": STANDARD_BO_CONFIG,
+    "thorough": THOROUGH_BO_CONFIG,
+    "research": RESEARCH_BO_CONFIG,
+    "extreme": EXTREME_BO_CONFIG,
+}
+
+BENCHMARK_CONFIG_PRESETS = {
+    "rapid": RAPID_BENCHMARK_CONFIG,
+    "standard": STANDARD_BENCHMARK_CONFIG,
+    "thorough": THOROUGH_BENCHMARK_CONFIG,
+    "research": RESEARCH_BENCHMARK_CONFIG,
+    "extreme": EXTREME_BENCHMARK_CONFIG,
+}

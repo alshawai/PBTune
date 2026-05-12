@@ -7,13 +7,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.config.database import DatabaseConfig
-from src.tuner.benchmark.orchestrator import WorkloadOrchestrator, WorkloadOrchestratorConfig
+from src.tuner.benchmark.orchestrator import (
+    WorkloadOrchestrator,
+    WorkloadOrchestratorConfig,
+)
 from src.utils.metrics import MetricConfig, WorkloadType
 
 
-def _make_evaluator(
+def _make_workload_orchestrator(
     worker_memory_budget_bytes: int | None, mock_env: MagicMock | None = None
-) -> Evaluator:
+) -> WorkloadOrchestrator:
     db_config = DatabaseConfig(
         user="postgres",
         password="postgres",
@@ -27,7 +30,9 @@ def _make_evaluator(
         db_config=db_config,
         worker_memory_budget_bytes=worker_memory_budget_bytes,
     )
-    return WorkloadOrchestrator(config=config, workload_executor=MagicMock(), env=mock_env)
+    return WorkloadOrchestrator(
+        config=config, workload_executor=MagicMock(), env=mock_env
+    )
 
 
 def test_collect_system_metrics_delegates_to_environment() -> None:
@@ -36,7 +41,9 @@ def test_collect_system_metrics_delegates_to_environment() -> None:
     mock_env.collect_memory_utilization.return_value = 0.5
     mock_env.collect_cache_hit_ratio.return_value = 0.87
 
-    evaluator = _make_evaluator(worker_memory_budget_bytes=4 * 1024, mock_env=mock_env)
+    evaluator = _make_workload_orchestrator(
+        worker_memory_budget_bytes=4 * 1024, mock_env=mock_env
+    )
 
     metrics = evaluator.collect_system_metrics(worker_id=0)
 
@@ -52,7 +59,9 @@ def test_collect_system_metrics_needs_environment_delegation() -> None:
     mock_env.collect_memory_utilization.return_value = 0.0
     mock_env.collect_cache_hit_ratio.return_value = 0.92
 
-    evaluator = _make_evaluator(worker_memory_budget_bytes=None, mock_env=mock_env)
+    evaluator = _make_workload_orchestrator(
+        worker_memory_budget_bytes=None, mock_env=mock_env
+    )
 
     metrics = evaluator.collect_system_metrics(worker_id=0)
 

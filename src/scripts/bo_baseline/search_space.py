@@ -14,7 +14,7 @@ from ConfigSpace import (
 from src.tuner.config.knob_space import KnobSpace, KnobType, KnobScale
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+LOGGER = get_logger("SearchSpace")
 
 
 def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpace:
@@ -111,7 +111,7 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
 
         elif knob_def.knob_type == KnobType.ENUM:
             if knob_def.enum_values is None:
-                logger.warning(f"Enum knob {name} has no enum_values, skipping")
+                LOGGER.warning(f"Enum knob {name} has no enum_values, skipping")
                 continue
 
             default = None
