@@ -17,7 +17,8 @@ from src.utils.metrics import (
     OLAP_METRIC_CONFIG,
 )
 
-from src.tuner.benchmark.restart_policy import TuningMode, should_restart
+from src.utils.types import TuningMode
+from src.tuner.benchmark.restart_policy import should_restart
 
 __all__ = [
     "PerformanceMetrics",

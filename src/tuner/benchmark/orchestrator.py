@@ -47,7 +47,8 @@ from src.utils.metrics import (
 from src.benchmarks.executor import BenchmarkExecutor
 from src.tuner.benchmark.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
-from src.tuner.benchmark.restart_policy import TuningMode, should_restart
+from src.utils.types import TuningMode
+from src.tuner.benchmark.restart_policy import should_restart
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger
 
