@@ -7,10 +7,29 @@ from typing import Any, Dict, List
 
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.hardware_info import WorkerResources
+from src.utils.types import BenchmarkConfig
 from src.scripts.bo_baseline.config import BOConfig
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+LOGGER = get_logger("ResultWriter")
+
+
+def resolve_bo_output_root(
+    output_dir: Path, benchmark_config: BenchmarkConfig, knob_tier: str
+) -> Path:
+    """Resolve the base BO output directory under results."""
+    if benchmark_config.benchmark == "sysbench":
+        benchmark_key = benchmark_config.sysbench_workload
+    else:
+        benchmark_key = benchmark_config.benchmark
+
+    return (
+        output_dir
+        / benchmark_config.workload_type
+        / benchmark_key
+        / "bo_runs"
+        / knob_tier
+    )
 
 
 def write_bo_results(
@@ -61,7 +80,7 @@ def write_bo_results(
             best_iteration = iteration
 
     if best_iteration is None:
-        logger.warning("No valid iterations found in log")
+        LOGGER.warning("No valid iterations found in log")
         best_iteration = {
             "config": {},
             "metrics": {},
@@ -124,22 +143,22 @@ def write_bo_results(
             "bo_acquisition": "expected_improvement",
             "knob_tier": config.knob_tier,
             "num_knobs": len(knob_space.knobs),
-            "workload_type": config.workload_type,
-            "benchmark_name": config.benchmark,
+            "workload_type": config.benchmark_config.workload_type,
+            "benchmark_name": config.benchmark_config.benchmark,
             "n_iterations": config.n_iterations,
             "seed": config.random_seed,
             "population_size": 1,
             "total_generations": len(iteration_log),
             "total_time_seconds": total_time,
             "timestamp": timestamp,
-            "tuning_mode": config.tuning_mode,
-            "sysbench_duration_seconds": config.evaluation_duration,
-            "sysbench_warmup_seconds": config.warmup_duration,
-            "sysbench_tables": config.sysbench_tables,
-            "sysbench_table_size": config.sysbench_table_size,
-            "sysbench_workload": config.sysbench_workload,
-            "tpch_scale_factor": config.scale_factor,
-            "tpch_warmup_passes": config.tpch_warmup_passes,
+            "tuning_mode": config.benchmark_config.tuning_mode.value,
+            "sysbench_duration_seconds": config.benchmark_config.evaluation_duration,
+            "sysbench_warmup_seconds": config.benchmark_config.warmup_duration,
+            "sysbench_tables": config.benchmark_config.sysbench_tables,
+            "sysbench_table_size": config.benchmark_config.sysbench_table_size,
+            "sysbench_workload": config.benchmark_config.sysbench_workload,
+            "tpch_scale_factor": config.benchmark_config.scale_factor,
+            "tpch_warmup_passes": config.benchmark_config.warmup_passes,
             "reference_pbt_session": (
                 str(config.pbt_session_path) if config.pbt_session_path else None
             ),
@@ -164,8 +183,12 @@ def write_bo_results(
     }
 
     # Create output directory structure
-    workload_dir = output_dir / config.workload_type
-    bo_dir = workload_dir / "bo_runs" / config.knob_tier / "tuning_sessions"
+    bo_root = resolve_bo_output_root(
+        output_dir=output_dir,
+        benchmark_config=config.benchmark_config,
+        knob_tier=config.knob_tier,
+    )
+    bo_dir = bo_root / "baseline_sessions"
     bo_dir.mkdir(parents=True, exist_ok=True)
 
     # Write results to file
@@ -173,6 +196,6 @@ def write_bo_results(
     with open(output_file, "w") as f:
         json.dump(result, f, indent=2)
 
-    logger.info(f"BO results written to {output_file}")
+    LOGGER.info(f"BO results written to {output_file}")
 
     return result
