@@ -8,6 +8,7 @@ import argparse
 
 from src.utils.types import (
     BenchmarkConfig,
+    TuningMode,
     RAPID_BENCHMARK_CONFIG,
     STANDARD_BENCHMARK_CONFIG,
     THOROUGH_BENCHMARK_CONFIG,
@@ -91,7 +92,7 @@ class BOConfig:
         workload_type = str(
             session.get("workload_type", self.benchmark_config.workload_type)
         )
-        tuning_mode = str(
+        tuning_mode = TuningMode(
             session.get("tuning_mode", self.benchmark_config.tuning_mode)
         )
 
@@ -209,9 +210,7 @@ class BOConfig:
             n_iterations=args.iterations
             if args.iterations is not None
             else base_config.n_iterations,
-            random_seed=args.seed
-            if args.seed is not None
-            else base_config.random_seed,
+            random_seed=args.seed if args.seed is not None else base_config.random_seed,
             knob_tier=args.tier or base_config.knob_tier,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,

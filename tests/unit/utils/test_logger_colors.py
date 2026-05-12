@@ -46,7 +46,13 @@ def _load_logger_formatters_module():
 
     previous_modules = {
         name: sys.modules.get(name)
-        for name in ("src", "src.utils", "src.utils.logger", "src.utils.logger.colors", "src.utils.logger.helpers")
+        for name in (
+            "src",
+            "src.utils",
+            "src.utils.logger",
+            "src.utils.logger.colors",
+            "src.utils.logger.helpers",
+        )
     }
 
     try:
@@ -65,7 +71,9 @@ def _load_logger_formatters_module():
         )
         spec = spec_from_file_location("logger_formatters", module_path)
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"Unable to load logger formatters module from {module_path}")
+            raise RuntimeError(
+                f"Unable to load logger formatters module from {module_path}"
+            )
 
         module = module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -236,14 +244,12 @@ def test_formatter_preserves_column_alignment_in_no_color_mode():
         _logger_formatters = _load_logger_formatters_module()
 
     formatter = _logger_formatters.ColoredFormatter(
-        show_module=True,
-        module_width=17, level_width=7
+        show_module=True, module_width=17, level_width=7
     )
     html_formatter = _logger_formatters.HTMLFormatter(
-        show_module=True,
-        module_width=17, level_width=7
+        show_module=True, module_width=17, level_width=7
     )
-    
+
     # Create two records with different module name lengths
     record_short = logging.LogRecord(
         name="Population",
@@ -254,7 +260,7 @@ def test_formatter_preserves_column_alignment_in_no_color_mode():
         args=(),
         exc_info=None,
     )
-    
+
     record_long = logging.LogRecord(
         name="BenchmarkExecutor",
         level=logging.DEBUG,
@@ -271,7 +277,7 @@ def test_formatter_preserves_column_alignment_in_no_color_mode():
 
         console_short = formatter.format(record_short)
         console_long = formatter.format(record_long)
-        
+
         html_short = html_formatter.format(record_short)
         html_long = html_formatter.format(record_long)
 
@@ -279,7 +285,7 @@ def test_formatter_preserves_column_alignment_in_no_color_mode():
         # Format is: "timestamp - level - module - message"
         console_short_parts = console_short.split(" - ")
         console_long_parts = console_long.split(" - ")
-        
+
         html_short_parts = html_short.split(" - ")
         html_long_parts = html_long.split(" - ")
 
@@ -291,21 +297,29 @@ def test_formatter_preserves_column_alignment_in_no_color_mode():
 
         module_short = console_short_parts[2]
         module_long = console_long_parts[2]
-        
+
         # Both should be padded to the same length (17 chars)
-        assert len(module_short) == 17, f"Short module '{module_short}' should be padded to 17 chars, got {len(module_short)}"
-        assert len(module_long) == 17, f"Long module '{module_long}' should be padded to 17 chars, got {len(module_long)}"
-        
+        assert len(module_short) == 17, (
+            f"Short module '{module_short}' should be padded to 17 chars, got {len(module_short)}"
+        )
+        assert len(module_long) == 17, (
+            f"Long module '{module_long}' should be padded to 17 chars, got {len(module_long)}"
+        )
+
         # Verify the actual content is correct
         assert module_short.startswith("Population")
         assert module_long.startswith("BenchmarkExecutor")
-        
+
         # Verify the level is centered to 7 chars
         level_short = console_short_parts[1]
         level_long = console_long_parts[1]
-        
-        assert len(level_short) == 7, f"Level '{level_short}' should be 7 chars, got {len(level_short)}"
-        assert len(level_long) == 7, f"Level '{level_long}' should be 7 chars, got {len(level_long)}"
+
+        assert len(level_short) == 7, (
+            f"Level '{level_short}' should be 7 chars, got {len(level_short)}"
+        )
+        assert len(level_long) == 7, (
+            f"Level '{level_long}' should be 7 chars, got {len(level_long)}"
+        )
         assert "INFO" in level_short
         assert "DEBUG" in level_long
     finally:

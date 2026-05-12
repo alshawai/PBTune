@@ -335,7 +335,7 @@ def analyze_knob_importance(
     )
 
     if result_pass.model_r2 < 0.5:
-        logger.warning(
+        LOGGER.warning(
             "model may not be capturing the response surface well - "
             "importance results should be interpreted with caution. R² = %.3f",
             result_pass.model_r2,
@@ -379,11 +379,19 @@ def analyze_knob_importance(
         model_r2=result_pass.model_r2,
         n_samples=n_samples,
         n_features=n_features,
-        workload_type=_get_metadata_field(loaded_data.metadata, "workload_type", "unknown"),
+        workload_type=_get_metadata_field(
+            loaded_data.metadata, "workload_type", "unknown"
+        ),
         shap_importances=result_pass.shap_importances,
         shap_values=result_pass.shap_values,
         fanova_shap_correlation=result_pass.fanova_shap_correlation,
-        scoring_policy=_get_metadata_field(loaded_data.metadata, "scoring_policy", "fixed_v1"),
-        scoring_policy_version=_get_metadata_field(loaded_data.metadata, "scoring_policy_version", "1.0"),
-        metric_reference_version=_get_metadata_field(loaded_data.metadata, "metric_reference_version", "v1"),
+        scoring_policy=_get_metadata_field(
+            loaded_data.metadata, "scoring_policy", "fixed_v1"
+        ),
+        scoring_policy_version=_get_metadata_field(
+            loaded_data.metadata, "scoring_policy_version", "1.0"
+        ),
+        metric_reference_version=_get_metadata_field(
+            loaded_data.metadata, "metric_reference_version", "v1"
+        ),
     )

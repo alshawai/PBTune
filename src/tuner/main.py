@@ -338,9 +338,7 @@ class PBTTuner:
             self.workload_features = self.feature_extractor.extract_template_features(
                 metadata=template_metadata,
             )
-            self.snapshot_identifier = (
-                f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
-            )
+            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
 
         self.snapshot_identifier = self._normalize_snapshot_identifier(
             self.snapshot_identifier
@@ -366,7 +364,9 @@ class PBTTuner:
 
         self.metric_config.workload_features = dict(self.workload_features)
 
-        self.orchestrator = WorkloadOrchestrator(self.evaluator_config, workload_executor, self.env)
+        self.orchestrator = WorkloadOrchestrator(
+            self.evaluator_config, workload_executor, self.env
+        )
 
         pop_config = PopulationConfig(
             population_size=self.pbt_config.population_size,
@@ -419,7 +419,10 @@ class PBTTuner:
     def _build_output_dir(self, base_output_dir: Path) -> Path:
         """Build structured output directory, canonically separating ablation runs if specified."""
         ablation_subpath = Path("")
-        if getattr(self, "ablation_variable", None) and getattr(self, "ablation_value", None) is not None:
+        if (
+            getattr(self, "ablation_variable", None)
+            and getattr(self, "ablation_value", None) is not None
+        ):
             ablation_subpath = (
                 Path("ablations")
                 / str(self.ablation_variable)

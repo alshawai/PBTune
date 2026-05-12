@@ -196,7 +196,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
         for trace in traces:
             session_meta = trace.metadata.get("tuning_session", {})
             current_config = {k: session_meta.get(k) for k in invariant_keys}
-            
+
             if base_config is None:
                 base_config = current_config
                 base_file = trace.metadata.get("file_name", "unknown")

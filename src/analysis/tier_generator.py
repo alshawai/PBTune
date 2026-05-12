@@ -77,7 +77,8 @@ class TierResult:
         return {
             "optimal_k": self.optimal_k,
             "silhouette_scores": {
-                str(k): _clean_score(score) for k, score in self.silhouette_scores.items()
+                str(k): _clean_score(score)
+                for k, score in self.silhouette_scores.items()
             },
             "tier_assignments": self.tier_assignments,
             "jenks_breaks": self.jenks_breaks,
@@ -359,13 +360,10 @@ def load_importances_csv(csv_path: Path) -> dict[str, float]:
     """
     df = pd.read_csv(csv_path)
     if "knob" not in df.columns or "fanova_importance" not in df.columns:
-        raise ValueError(
-            "CSV must contain 'knob' and 'fanova_importance' columns."
-        )
+        raise ValueError("CSV must contain 'knob' and 'fanova_importance' columns.")
 
     return {
-        str(row["knob"]): float(row["fanova_importance"])
-        for _, row in df.iterrows()
+        str(row["knob"]): float(row["fanova_importance"]) for _, row in df.iterrows()
     }
 
 
