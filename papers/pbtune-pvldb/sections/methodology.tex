@@ -1,6 +1,504 @@
 \section{Methodology}
-\sysname maintains a population of workers that evaluate configurations in parallel.
-Each generation applies truncation selection, exploitation, and perturbation.
-The evaluation pipeline measures latency, throughput, and resource utilization.
-We describe configuration application, restart policy, and scoring normalization.
-This section will include the full algorithm and system architecture.
+\label{sec:methodology}
+
+We frame database configuration tuning as a black-box optimization problem
+over a high-dimensional, mixed-type search space.  The goal is to discover a
+PostgreSQL configuration---a vector of runtime parameters called
+\emph{knobs}---that maximizes a composite performance score under a given
+workload.  Because the relationship between knob settings and database
+performance is non-convex, noisy, and riddled with interactions that no
+closed-form model captures, we treat the database as an opaque function and
+optimize it through repeated evaluation.
+
+This section describes the design of \sysname from four perspectives.  We
+first define the configuration space and explain how we select, bound, and
+sample knobs (\S\ref{ssec:config-space}).  We then present the
+population-based optimization loop and argue why it fits this problem better
+than sequential Bayesian alternatives (\S\ref{ssec:pbt-algorithm}).  Next, we
+detail the evaluation pipeline---how each candidate configuration is applied,
+measured, and scored (\S\ref{ssec:evaluation}).  Finally, we describe the
+hardware-aware normalization layer that enables transfer of tuned
+configurations across machines with different resource capacities
+(\S\ref{ssec:hardware-transfer}).
+
+%% --------------------------------------------------------------------------
+\subsection{Configuration Space}
+\label{ssec:config-space}
+
+\paragraph{Knob policy and search space definition.}
+PostgreSQL~16 exposes roughly 350 runtime parameters.  Most of them---locale
+strings, file-system paths, security policies, replication topology---define
+\emph{what the database is} rather than \emph{how fast it runs}, and have no
+business in an automated tuning loop.  We enforce a formal knob policy that
+classifies every parameter into one of eighteen exclusion categories (e.g.,
+\texttt{data\_integrity}, \texttt{security\_transport},
+\texttt{domain\_scope\_non\_performance}) or marks it as eligible for
+optimization.  The policy is recorded in a machine-readable JSON file and
+applied at pipeline startup so that every downstream component---sampling,
+perturbation, application---operates on the same vetted subset.  Parameters
+whose PostgreSQL-native maximum exceeds $2 \times 10^{9}$ (the
+\texttt{INT\_MAX} sentinel class) are excluded automatically unless a curated
+metadata entry provides practical bounds.  This two-gate design---explicit
+exclusion list plus bounds safety gate---prevents the optimizer from
+accidentally exploring configurations that corrupt data, crash the server, or
+break the tuner's own control channel.
+
+\paragraph{Tiered knob sets.}
+Within the eligible parameters, we organize knobs into three nested tiers of
+increasing breadth:
+
+\begin{itemize}
+  \item \textbf{Minimal (5 knobs):} \texttt{shared\_buffers},
+    \texttt{effective\_cache\_size}, \texttt{work\_mem},
+    \texttt{random\_page\_cost}, and
+    \texttt{max\_parallel\_workers\_per\_gather}.  These are the
+    highest-impact parameters; they affect query planning and memory
+    allocation for virtually every workload.
+  \item \textbf{Core (13 knobs):} Adds checkpoint timing, WAL buffering,
+    I/O concurrency, planner statistics targets, and additional parallelism
+    controls.  This tier covers the standard production-tuning surface.
+  \item \textbf{Standard (${\sim}30$ knobs):} Extends Core with autovacuum
+    scheduling, background-writer pacing, WAL-level durability trade-offs,
+    and remaining planner cost parameters.  This tier targets comprehensive
+    research experiments.
+\end{itemize}
+
+The tier system lets practitioners trade search-space dimensionality for
+wall-clock budget: a minimal run finishes in minutes on a laptop; a standard
+run over thirty knobs may require hours but covers the full tunable surface.
+
+\paragraph{Knob types and sampling.}
+Each knob carries a typed definition: \textsc{integer}, \textsc{real},
+\textsc{boolean}, or \textsc{enum}, along with curated minimum and maximum
+bounds and a scale indicator (\textsc{linear} or \textsc{log}).  We sample
+initial configurations from this space using scale-aware random sampling.
+For memory and buffer parameters---where the performance impact of doubling a
+value from 128\,MB to 256\,MB far exceeds the impact of adding 1\,MB---we
+sample in log-space:
+\begin{equation}
+  v = \exp\!\bigl(\mathcal{U}(\ln v_{\min},\; \ln v_{\max})\bigr),
+  \label{eq:log-sample}
+\end{equation}
+where $\mathcal{U}$ denotes the continuous uniform distribution.  Linear-scale
+knobs (e.g., planner cost estimates) are sampled uniformly over their native
+range, booleans are sampled with equal probability, and enum knobs are drawn
+uniformly from their valid value set.
+
+\paragraph{Two-layer validation.}
+We validate configurations at two levels.  The \emph{design-time} layer
+checks values against the curated tuning bounds stored in knob metadata---for
+example, \texttt{work\_mem} is bounded between 4\,MB and 256\,MB, a range
+that reflects practical operating experience.  The \emph{runtime} layer
+queries the live PostgreSQL catalog (\texttt{pg\_settings}) for the server's
+hard minimum and maximum and rejects any value outside that range.  A
+perturbation that overshoots the tuning bound is clamped back; a value that
+somehow violates the server's hard bound is caught before the
+\texttt{ALTER~SYSTEM} call reaches the database.  This defense-in-depth
+pattern keeps the optimizer exploring a productive region while guaranteeing
+that no applied configuration can trigger a PostgreSQL rejection.
+
+%% --------------------------------------------------------------------------
+\subsection{Population-Based Training}
+\label{ssec:pbt-algorithm}
+
+\paragraph{Why PBT over Bayesian optimization?}
+The dominant paradigm in recent database auto-tuning work is sequential
+Bayesian optimization (BO): fit a surrogate model to observed evaluations,
+select the next configuration by maximizing an acquisition function, evaluate,
+and repeat~\cite{vanaken2017ottertune}.  BO is highly sample-efficient---it
+can reach good configurations in fewer evaluations than random search---but it
+is \emph{inherently sequential}.  Each iteration requires fitting the
+surrogate, solving the acquisition problem, evaluating one configuration, and
+updating the model before the next iteration can begin.
+
+We make a different bet.  Modern infrastructure makes it straightforward to
+run $N$ isolated PostgreSQL instances in parallel, each on a separate port.
+In this regime, the bottleneck is not the number of evaluations but the
+\emph{wall-clock time per generation}: $N$ configurations evaluated
+simultaneously cost roughly the same wall time as one.  Population-Based
+Training~\cite{jaderberg2017pbt} is designed for exactly this setting.  It
+maintains a population of candidate solutions, evaluates them in parallel,
+replaces poor performers with perturbed copies of strong performers, and
+repeats.  It does not build a surrogate model and therefore avoids the cubic
+scaling of Gaussian process fitting.  It also avoids the instability and
+sample inefficiency that plague deep reinforcement learning
+approaches~\cite{zhang2019cdbtune}, because the worst a worker can do is
+score poorly---at which point the exploit step overwrites its broken
+configuration with a proven one.
+
+\paragraph{System architecture.}
+\sysname organizes the PBT loop around three components.  A
+\textbf{Worker}\footnote{Not to be confused with PostgreSQL background
+workers.} represents a single population member: it holds the current knob
+configuration, the most recent performance score, a step counter, and lineage
+metadata recording which elite it last copied from and in which generation.
+The \textbf{Evolution} module provides stateless algorithms for exploit and
+explore.  The \textbf{Population} orchestrator manages the worker pool,
+coordinates parallel evaluation, triggers exploit-explore at the right time,
+and detects convergence.
+
+\paragraph{Initialization.}
+We create $N$ workers, each holding an independently sampled random
+configuration drawn from the knob space described in
+\S\ref{ssec:config-space}.  This random initialization seeds the population
+with diverse starting points scattered across the search space.  When
+warm-starting from a prior session (\S\ref{ssec:hardware-transfer}), we seed
+half the population from the archived configuration (with graduated
+perturbation at $\pm 20\%$, $\pm 35\%$, and $\pm 50\%$) and fill the
+remaining slots with Latin Hypercube Sampling (LHS) to preserve exploration
+coverage.
+
+\paragraph{Evaluation.}
+At each generation, every worker is evaluated: its configuration is applied to
+a dedicated PostgreSQL instance, the target workload is executed, and a
+composite score is computed (detailed in \S\ref{ssec:evaluation}).  We run
+evaluations in parallel using a thread pool, one thread per worker.  Because
+each worker operates on its own database instance (ports 5440, 5441, \ldots),
+there is no shared state during evaluation, and thread-level concurrency is
+sufficient for the I/O-bound workload execution.
+
+\paragraph{Exploit: truncation selection.}
+After all workers in a generation have been scored, we rank them by
+performance.  We partition the ranked list into three bands using a quantile
+threshold~$\alpha$ (default $\alpha = 0.25$):
+
+\begin{itemize}
+  \item \textbf{Elite} (top $\alpha N$ workers): The best-performing
+    configurations in this generation.
+  \item \textbf{Middle} ($N - 2\alpha N$ workers): Configurations that
+    performed adequately and are left unchanged.
+  \item \textbf{Poor} (bottom $\alpha N$ workers): Configurations that
+    under-performed.
+\end{itemize}
+
+Each poor worker copies the full knob vector from a randomly chosen elite
+worker.  We pair poor workers with elites uniformly at random rather than
+always copying the single best, because deterministic pairing would collapse
+population diversity onto one configuration within a few generations.  After
+exploitation, the copied worker's step counter resets to zero so that the new
+configuration must prove itself through several evaluations before it can be
+exploited again.
+
+\paragraph{Explore: perturbation.}
+Immediately after exploitation, each copied worker undergoes perturbation.
+For every numeric knob~$k$ in the copied configuration, we draw a
+multiplicative factor~$\phi_k$ uniformly from $[\phi_{\min}, \phi_{\max}]$
+(default $[0.8, 1.2]$) and set
+\begin{equation}
+  v'_k = \operatorname{clamp}\!\bigl(v_k \cdot \phi_k,\; v_k^{\min},\; v_k^{\max}\bigr),
+  \label{eq:perturb}
+\end{equation}
+where $v_k^{\min}$ and $v_k^{\max}$ are the curated tuning bounds from the
+knob space.  Boolean and enum knobs are left unchanged, because toggling them
+randomly injects noise without directional signal.  Perturbation ensures that
+even when multiple poor workers copy the same elite, their resulting
+configurations differ, maintaining the population's diversity around
+high-performing regions.
+
+\paragraph{Ready interval.}
+A na\"ive implementation that runs exploit-explore after every single
+evaluation risks premature convergence: a worker that received a bad score due
+to measurement noise could be immediately overwritten.  We adopt the PBT
+paper's \emph{ready interval}~$\tau$: a worker must accumulate at
+least~$\tau$ evaluations (default $\tau = 3$) before it is eligible for
+exploitation.  During those $\tau$ steps, its performance is observed but it
+cannot be displaced.  Freshly exploited workers have their step counter reset
+to zero, so they too must survive $\tau$ rounds before the next cull.  This
+mechanism dampens noisy oscillations and gives newly injected configurations
+time to reach steady-state performance.
+
+\paragraph{Stopping conditions.}
+Training terminates when any of three conditions is met:
+\begin{enumerate}
+  \item \textbf{Generation limit:} The population has completed
+    $G_{\max}$ generations (a hard safety bound).
+  \item \textbf{Early stopping:} The best score across the population has
+    not improved for $P$ consecutive generations (default $P = 10$).
+  \item \textbf{Convergence:} The standard deviation of worker scores
+    falls below a threshold~$\epsilon$ (default $\epsilon = 0.05$),
+    indicating that the population has collapsed onto a narrow region and
+    further exploration is unlikely to yield improvement.
+\end{enumerate}
+
+Algorithm~\ref{alg:pbt} summarizes the complete loop.
+
+\begin{figure}[t]
+\begin{minipage}{\columnwidth}
+\small
+\begin{algorithmic}[1]
+  \Require{Knob space $\mathcal{K}$, population size $N$, quantile
+    $\alpha$, perturbation range $[\phi_{\min}, \phi_{\max}]$, ready
+    interval $\tau$, max generations $G_{\max}$, patience $P$,
+    convergence threshold $\epsilon$}
+  \State Initialize workers $\{w_1, \ldots, w_N\}$ with random configs
+    from $\mathcal{K}$
+  \For{$g = 1$ \textbf{to} $G_{\max}$}
+    \ForAll{$w_i \in \{w_1, \ldots, w_N\}$ \textbf{in parallel}}
+      \State Apply $w_i.\mathit{config}$ to PostgreSQL instance~$i$
+      \State Execute workload, collect metrics $m_i$
+      \State $w_i.\mathit{score} \gets \textsc{Score}(m_i)$
+      \State $w_i.\mathit{steps} \gets w_i.\mathit{steps} + 1$
+    \EndFor
+    \State Rank workers by score (descending)
+    \State $\mathit{elite} \gets \text{top } \lfloor \alpha N \rfloor$
+      workers
+    \State $\mathit{poor} \gets \text{bottom } \lfloor \alpha N \rfloor$
+      workers with $\mathit{steps} \geq \tau$
+    \ForAll{$w_p \in \mathit{poor}$}
+      \State $w_e \gets$ random selection from $\mathit{elite}$
+        \Comment{Exploit}
+      \State $w_p.\mathit{config} \gets \textsc{Copy}(w_e.\mathit{config})$
+      \State $w_p.\mathit{steps} \gets 0$
+      \ForAll{numeric knob $k$ in $w_p.\mathit{config}$}
+        \Comment{Explore}
+        \State $\phi_k \sim \mathcal{U}(\phi_{\min}, \phi_{\max})$
+        \State $w_p.\mathit{config}[k] \gets
+          \operatorname{clamp}(w_p.\mathit{config}[k] \cdot \phi_k)$
+      \EndFor
+    \EndFor
+    \If{stopping conditions met}
+      \State \textbf{break}
+    \EndIf
+  \EndFor
+  \State \Return best configuration across all generations
+\end{algorithmic}
+\end{minipage}
+\captionof{algorithm}{The \sysname population-based training loop.}
+\label{alg:pbt}
+\end{figure}
+
+%% --------------------------------------------------------------------------
+\subsection{Evaluation Pipeline}
+\label{ssec:evaluation}
+
+Each time a worker is evaluated, \sysname must apply the worker's knob
+configuration to a live PostgreSQL instance, execute the target workload,
+collect performance measurements, and compress those measurements into a
+single scalar score.  This subsection describes each stage.
+
+\subsubsection{Configuration Application}
+\label{sssec:config-apply}
+
+We apply configurations through a \emph{KnobApplicator} that wraps
+PostgreSQL's \texttt{ALTER SYSTEM} interface.  The applicator first queries
+\texttt{pg\_settings} to retrieve each parameter's type, valid range, and
+\emph{context}---the PostgreSQL term for the scope at which a parameter takes
+effect.  Parameters with context \texttt{sighup} take effect after a
+\texttt{pg\_reload\_conf()} call; parameters with context
+\texttt{postmaster} require a full server restart.
+
+For each knob in the candidate configuration, the applicator validates the
+proposed value against the server's hard constraints and then executes a
+parameterized \texttt{ALTER SYSTEM SET} statement.  If any parameter fails
+validation or application, the entire transaction is rolled back so that the
+database is never left in a partially configured state.  After all parameters
+are written, the applicator issues \texttt{pg\_reload\_conf()} for
+\texttt{sighup}-context parameters and, when necessary, triggers a controlled
+restart for \texttt{postmaster}-context parameters such as
+\texttt{shared\_buffers}.
+
+A mandatory cooldown period (default 5\,s) follows every configuration change
+to let PostgreSQL stabilize---connection pools adjust, background processes
+(autovacuum, checkpoint writer) settle, and the buffer pool begins filling
+under the new allocation.  Only after cooldown does workload execution begin.
+
+\subsubsection{Workload Execution}
+\label{sssec:workload-exec}
+
+\sysname supports three families of workload drivers, all implementing a
+common \textsc{SchemaProvider} interface (\texttt{prepare},
+\texttt{validate}, \texttt{execute}):
+
+\begin{enumerate}
+  \item \textbf{Sysbench (OLTP).}  We delegate workload generation to the
+    external \texttt{sysbench} C binary (version~1.1.0+) to eliminate Python
+    client overhead.  Supported modes include \texttt{oltp\_read\_only},
+    \texttt{oltp\_read\_write}, and \texttt{oltp\_write\_only}, with
+    configurable table count, table size, and thread concurrency.  The
+    evaluator collects transactions per second (TPS) and p95/p99 transaction
+    latency from Sysbench's structured output.
+  \item \textbf{TPC-H (OLAP).}  We generate data with the standard
+    \texttt{dbgen} binary at a configurable scale factor (default SF\,=\,1,
+    producing ${\sim}1$\,GB across eight tables) and bulk-load it via
+    PostgreSQL \texttt{COPY}.  We execute the 22~TPC-H decision-support
+    queries through \texttt{psycopg2}.  Python client overhead is negligible
+    here because individual query execution times range from seconds to
+    minutes, dwarfing the millisecond cost of query submission.
+  \item \textbf{Custom JSON templates.}  For application-specific tuning,
+    users supply a JSON file listing SQL statements with relative frequency
+    weights.  The evaluator resolves placeholder tokens
+    (\texttt{\{table\}}, \texttt{\{id\}}) against the declared schema and
+    executes queries at the specified mix ratio.
+\end{enumerate}
+
+Before every evaluation, the executor validates that the benchmark schema
+matches the expected configuration (table count, row count, data integrity).
+A mismatch triggers automatic schema re-initialization from the snapshot
+baseline, ensuring that each worker starts from an identical data state.
+
+A configurable warmup phase (default 100 queries or 10--30\,s) precedes the
+measurement window (default 60\,s) to fill the buffer pool and bring the
+database to steady state.
+
+\subsubsection{Metric Collection}
+\label{sssec:metrics}
+
+We collect three categories of metrics during the measurement window:
+
+\begin{itemize}
+  \item \textbf{Latency:} Percentile response times---p50, p95, and
+    p99---computed from the full distribution of individual query latencies.
+    Percentile metrics are preferable to the mean because a handful of slow
+    queries can inflate the average while leaving most users unaffected.
+  \item \textbf{Throughput:} Queries per second (QPS) for OLAP workloads;
+    transactions per second (TPS) for OLTP workloads.
+  \item \textbf{Resource utilization:} CPU utilization, memory utilization,
+    disk I/O volume, and buffer cache hit ratio.  We collect these through
+    \texttt{psutil}, which reads OS-level accounting directly rather than
+    relying on PostgreSQL's internal statistics views.  Accurate resource
+    metrics are necessary for the scoring function to distinguish
+    configurations that achieve the same throughput but differ in resource
+    cost.
+\end{itemize}
+
+All metrics are stored in a typed \texttt{PerformanceMetrics} dataclass
+that enforces field names, units, and value domains at construction time.
+
+\subsubsection{Scoring Function}
+\label{sssec:scoring}
+
+PBT requires a single scalar to rank workers.  We compress the
+multi-dimensional metric vector into a composite score through three stages:
+normalization, weighting, and gating.
+
+\paragraph{Normalization.}
+Raw metrics span incomparable scales (latency in milliseconds, throughput in
+thousands of queries per second, utilization as a fraction).  We map each
+metric to a utility value $u_i \in [0,\,1]$ using quantile-anchored
+normalization.  For metrics where lower is better (latency, error rate), we
+invert the mapping.  The normalizer uses the 5th and 95th percentiles of
+historically observed values as anchors instead of the raw minimum and
+maximum, which makes it resistant to outliers from one-off failures or system
+hiccups.  When the fraction of observations falling outside the calibration
+bounds exceeds a drift threshold, the normalizer recalibrates from its
+retained history and, if many observations saturate the bounds, expands the
+anchors to restore discrimination.
+
+\paragraph{Weighting.}
+\sysname supports two scoring policies.  The \emph{fixed} policy
+(\texttt{fixed\_v1}) assigns static, workload-type-specific weights---for
+instance, an OLTP profile that allocates 50\% weight to latency, 30\% to
+throughput, 10\% to memory efficiency, and 10\% to error
+penalty.  The \emph{feature-driven} policy
+(\texttt{feature\_driven\_v2}) computes weights dynamically from a workload
+feature vector extracted at runtime.
+
+Under the feature-driven policy, we extract a vector of workload
+characteristics---read/write ratio, OLAP complexity, join and aggregation
+intensity, concurrency pressure, working-set size, query-mix entropy, and
+tail-latency sensitivity---from the benchmark definition.  A linear model
+converts these features into per-metric logits:
+\begin{equation}
+  z_i = b_i + \sum_{j} M_{ij}\, f_j\,,
+  \label{eq:logits}
+\end{equation}
+where $b_i$ is a base bias for metric~$i$, $M_{ij}$ is the feature
+coefficient matrix, and $f_j$ is the $j$-th workload feature (with
+logarithmic compression applied to working-set size).  We then apply a
+floor-constrained softmax:
+\begin{equation}
+  w_i = \alpha_i + \Bigl(1 - \textstyle\sum_k \alpha_k\Bigr)\;
+    \mathrm{softmax}\!\Bigl(\frac{z_i}{T}\Bigr),
+  \label{eq:weights}
+\end{equation}
+where $\alpha_i$ is the minimum floor for metric~$i$ and $T$ is a softmax
+temperature.  The floor set satisfies $\sum_i \alpha_i < 1$, guaranteeing
+that every metric retains a nonzero contribution while allowing the remaining
+weight mass to shift toward the metrics most relevant to the current workload.
+
+\paragraph{Reliability gate.}
+Before aggregation, we apply a reliability gate~$G \in [0,\,1]$ that
+suppresses scores from unstable evaluations.  If the evaluation suffered a
+fatal failure, $G = 0$.  If the error rate exceeded a configurable fatal
+threshold, $G = 0$.  For non-zero error rates below the threshold, $G$ decays
+linearly toward zero.  Clean evaluations keep $G = 1$.  The gate prevents a
+worker that crashed mid-evaluation from receiving a nontrivial score on the
+strength of incidental utility values recorded before the crash.
+
+\paragraph{Composite score.}
+The final score combines these components:
+\begin{equation}
+  S = G \cdot \sum_{i=1}^{n} w_i \cdot u_i\,,
+  \label{eq:score}
+\end{equation}
+where the weights $w_i$ sum to one and utilities $u_i \in [0,\,1]$.  The
+score is therefore bounded in $[0,\,1]$, gated by reliability, and
+interpretable as a weighted average of normalized metric utilities.
+
+%% --------------------------------------------------------------------------
+\subsection{Hardware-Aware Normalization and Warm-Starting}
+\label{ssec:hardware-transfer}
+
+A configuration tuned on a 2\,GB container is not directly usable on a
+32\,GB bare-metal server: absolute byte counts for
+\texttt{shared\_buffers} or \texttt{work\_mem} make no sense on a machine
+with different physical resources.  To enable configuration transfer across
+heterogeneous hardware, we introduce a fractional normalization layer.
+
+\paragraph{Resource detection.}
+At startup, \sysname probes the host's available resources---CPU core count
+(accounting for \texttt{cgroups} limits in containers), total system memory
+(respecting Docker \texttt{--memory} caps), and disk type
+(SSD/NVMe~vs.~HDD, detected via rotational flags).  The tuner reserves a 20\%
+resource headroom for operating-system processes, setting the effective tuning
+budget to 80\% of the detected capacity.
+
+\paragraph{Fractional representation.}
+Thirteen knobs are tagged as \emph{hardware-relative}:
+
+\begin{itemize}
+  \item \textbf{RAM-dependent:} \texttt{shared\_buffers},
+    \texttt{effective\_cache\_size}, \texttt{work\_mem},
+    \texttt{maintenance\_work\_mem}, \texttt{temp\_buffers},
+    \texttt{wal\_buffers}.
+  \item \textbf{CPU-dependent:} \texttt{max\_worker\_processes},
+    \texttt{max\_parallel\_workers},
+    \texttt{max\_parallel\_maintenance\_workers}.
+  \item \textbf{Disk-dependent:} \texttt{random\_page\_cost},
+    \texttt{seq\_page\_cost}, \texttt{effective\_io\_concurrency}.
+\end{itemize}
+
+When a tuning session concludes, we serialize these knobs as fractions of the
+detected resource limits rather than as absolute values.  When warm-starting
+on a different machine, the fractions are resolved against the new host's
+resources, automatically scaling the configuration to the available hardware.
+
+\paragraph{Aggregate memory validation.}
+An optimizer that tunes memory knobs independently can produce configurations
+where the combined allocation exceeds physical memory---for instance, by
+simultaneously maximizing both \texttt{shared\_buffers} and
+\texttt{work\_mem}.  We guard against this with a budget repair pass that
+checks the aggregate:
+\begin{equation}
+  M_{\text{total}} = \texttt{shared\_buffers}
+    + \texttt{max\_connections} \times \texttt{work\_mem}
+    + \texttt{maintenance\_work\_mem}\,.
+  \label{eq:mem-budget}
+\end{equation}
+If $M_{\text{total}}$ exceeds the per-worker memory budget (80\% of the
+node's RAM divided by the number of workers), all memory knobs are scaled
+down by a uniform factor $M_{\text{budget}} / M_{\text{total}}$, preserving
+the dimensional ratios that the optimizer discovered while enforcing a hard
+memory ceiling.
+
+\paragraph{Warm-starting.}
+Given a previously saved \texttt{best\_config.json}, \sysname seeds the
+population as follows.  One worker receives the archived configuration
+verbatim (resolved to the new hardware).  Additional workers receive
+graduated perturbations at $\pm 20\%$, $\pm 35\%$, and $\pm 50\%$, up to
+$N/2$ workers total.  The remaining $N/2$ slots are filled by Latin Hypercube
+Sampling over the full knob space.  This split between exploitation of prior
+knowledge and fresh exploration prevents negative transfer: if the archived
+configuration is poorly suited to the current workload, the LHS-seeded
+workers provide a fallback, and the PBT exploit step will displace the
+warm-started workers within a few generations.
