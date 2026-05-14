@@ -129,3 +129,21 @@ results/**/bo_runs/**/smac_output/
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
 
+# Graphify knowledge graph (machine-specific intermediates)
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/.graphify_analysis.json
+graphify-out/.graphify_benchmark.json
+graphify-out/.graphify_extract.json
+graphify-out/.graphify_ast.json
+graphify-out/.graphify_semantic.json
+graphify-out/.graphify_semantic_new.json
+graphify-out/.graphify_cached.json
+graphify-out/.graphify_uncached.txt
+graphify-out/.graphify_detect.json
+graphify-out/.graphify_incremental.json
+graphify-out/.graphify_old.json
+graphify-out/.graphify_chunk_*.json
+graphify-out/.needs_update
+graphify-out/manifest.json
+graphify-out/cost.json
