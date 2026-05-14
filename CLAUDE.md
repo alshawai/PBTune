@@ -13,8 +13,14 @@ This is a research implementation of Population-Based Training (PBT) for Postgre
 ### Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Setup environment (Recommended for Linux/macOS)
+# (Handles system dependencies, Python version checks, and GCC quirks)
+./setup.sh
+source .venv/bin/activate
+
+# Alternative Setup: Conda (Best for avoiding C++ compilation)
+# conda env create -f environment.yml
+# conda activate pbt-tuning
 
 # Run basic tuning session (minimal knobs, 2-3 minutes)
 python -m src.tuner.main --tier minimal --config rapid
