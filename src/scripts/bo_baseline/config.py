@@ -58,6 +58,10 @@ class BOConfig:
     pbt_session_path: Optional[Path] = None
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
+    # Parallel BO configuration
+    max_workers: int = 1
+    pbt_worker_resources: Optional[Dict[str, Any]] = None
+
     @staticmethod
     def _load_pbt_session(path: Path) -> Dict[str, Any]:
         """Load a PBT tuning-session JSON file."""
@@ -81,7 +85,7 @@ class BOConfig:
 
         return payload
 
-    def apply_pbt_session(self, path: Path, set_iteration_budget: bool = True) -> None:
+    def apply_pbt_session(self, path: Path, set_iteration_budget: bool = True, set_max_workers: bool = True) -> None:
         """Apply comparable benchmark/search settings from a PBT tuning session."""
         payload = self._load_pbt_session(path)
         session = payload["tuning_session"]
@@ -157,6 +161,17 @@ class BOConfig:
             if isinstance(knobs, dict) and knobs:
                 self.pbt_knob_names = tuple(sorted(str(name) for name in knobs))
 
+        # Extract worker resources for resource equalization
+        worker_resources = payload.get("worker_resources")
+        if isinstance(worker_resources, dict):
+            self.pbt_worker_resources = worker_resources
+
+        # Extract population_size for parallel BO (only if set_max_workers=True)
+        if set_max_workers:
+            population_size = int(session.get("population_size", 0) or 0)
+            if population_size > 0:
+                self.max_workers = population_size
+
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "BOConfig":
         """Create BOConfig from argparse Namespace."""
@@ -227,6 +242,9 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
+            max_workers=args.max_workers
+            if args.max_workers is not None
+            else base_config.max_workers,
         )
 
         if args.pbt_session:
@@ -234,6 +252,7 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
+                    set_max_workers=args.max_workers is None,
                 )
             except Exception as e:
                 LOGGER.warning(

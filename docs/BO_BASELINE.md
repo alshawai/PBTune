@@ -72,6 +72,50 @@ The BO runner uses a **Pilot + Freeze** strategy:
 
 Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `PerformanceMetrics` to recompute scores with globally calibrated ranges, so the frozen in-run scores do not affect final comparison validity.
 
+### Parallel BO Evaluation and Resource Equalization
+
+The BO baseline now supports batched parallel evaluation so it can mirror the
+worker count used by a reference PBT session.
+
+- `--max-workers N` sets the number of PostgreSQL instances evaluated in
+  parallel.
+- When `--pbt-session` is provided, BO copies `population_size` from the
+  reference session unless `--max-workers` explicitly overrides it.
+- If the PBT session includes `worker_resources`, BO uses that per-worker
+  resource slice for knob-range resolution instead of dividing the local host
+  resources.
+- The result JSON records `population_size`, `n_workers`, and
+  `resource_equalization` so downstream comparison tools can confirm parity.
+
+In parallel mode, BO uses SMAC3 ask-tell evaluation with a local
+`ThreadPoolExecutor`, which keeps the database environment in the main process
+while evaluating multiple candidates concurrently.
+
+### Ask-Tell Execution Model
+
+The runner uses two execution paths:
+
+- **Sequential path (`--max-workers 1`)**: uses the standard
+  `facade.optimize()` loop with the objective closure.
+- **Parallel path (`--max-workers > 1`)**: uses explicit ask-tell control in
+  `runner.py`.
+
+In ask-tell mode, each batch follows this cycle:
+
+1. `ask()` requests one `TrialInfo` per worker for the current batch.
+2. Configurations are evaluated concurrently using `ThreadPoolExecutor`.
+3. Each completed trial is returned to SMAC via
+   `tell(trial_info, TrialValue(...))`.
+4. After each batch, the surrogate is updated before the next `ask()` calls.
+
+This design is intentional:
+
+- The SMAC `Scenario` keeps `n_workers=1` to avoid Dask process workers.
+- Parallelism is handled in-process via threads, which avoids pickling issues
+  with environment objects such as Docker clients.
+- Worker-local previous configuration state is tracked independently, so
+  restart detection is isolated per BO worker.
+
 ## Configuration Options
 
 ### PBT Session Parity
@@ -112,6 +156,9 @@ python -m src.scripts.bo_baseline \
 - `--iterations N` - Number of BO iterations. Defaults to `50`, or to `population_size * total_generations` when `--pbt-session` is used.
 - `--seed INT` - Random seed for reproducibility (default: `42`)
 - `--bo-surrogate {rf|gp}` - SMAC Surrogate model: Random Forest (`rf`) or Gaussian Process (`gp`). Default is `rf`.
+- `--max-workers INT` - Number of parallel BO workers / PostgreSQL
+  instances. Defaults to `1`, or to the PBT session's `population_size` when
+  `--pbt-session` is used.
 
 ### Benchmark Options
 - `--benchmark {sysbench|tpch}` - Benchmark type (default: sysbench)
@@ -187,6 +234,9 @@ than inferring one from file order.
 When `--pbt-session` is used, `tuning_session` also records:
 - `reference_pbt_session` - Path to the PBT session used as the reference
 - `reference_pbt_knobs` - Knob names copied from `best_configuration.knobs`
+- `population_size` / `n_workers` - Parallel BO worker count used for the run
+- `resource_equalization` - Whether BO used the reference PBT worker resource
+  slice
 
 ## Multi-Seed Evaluation
 
