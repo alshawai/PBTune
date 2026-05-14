@@ -1,0 +1,1 @@
+{"nodes": [{"id": "tpch_queries_q11", "label": "Q11: Important Stock Identification", "file_type": "code", "source_file": "src/benchmarks/tpch/queries/11.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
