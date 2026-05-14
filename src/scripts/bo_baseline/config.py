@@ -85,7 +85,12 @@ class BOConfig:
 
         return payload
 
-    def apply_pbt_session(self, path: Path, set_iteration_budget: bool = True, set_max_workers: bool = True) -> None:
+    def apply_pbt_session(
+        self,
+        path: Path,
+        set_iteration_budget: bool = True,
+        set_max_workers: bool = True,
+    ) -> None:
         """Apply comparable benchmark/search settings from a PBT tuning session."""
         payload = self._load_pbt_session(path)
         session = payload["tuning_session"]

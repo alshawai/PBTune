@@ -2,7 +2,7 @@
 
 import time
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List, Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -22,7 +22,11 @@ from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.utils.environments import EnvironmentFactory
 from src.utils.metrics import WorkloadType, create_metric_config
-from src.utils.hardware_info import get_system_info, detect_worker_resources, WorkerResources
+from src.utils.hardware_info import (
+    get_system_info,
+    detect_worker_resources,
+    WorkerResources,
+)
 from src.utils.logger import setup_logging, get_logger, log_section_header
 from src.config.database import get_db_config
 from src.database.connection import get_connection
@@ -248,7 +252,9 @@ class BOBaselineRunner:
             )
 
             # Setup N instances
-            self.logger.info(f"Setting up {self.config.max_workers} PostgreSQL instance(s)...")
+            self.logger.info(
+                f"Setting up {self.config.max_workers} PostgreSQL instance(s)..."
+            )
             self.env.setup_instances(num_workers=self.config.max_workers)
 
             # Prune unsupported knobs
@@ -430,7 +436,7 @@ class BOBaselineRunner:
         """
         n_workers = len(workers)
         iteration_count = 0
-        previous_configs = [None] * n_workers
+        previous_configs: List[Optional[Dict[str, Any]]] = [None] * n_workers
         ranges_frozen = False
 
         while iteration_count < self.config.n_iterations:
@@ -454,7 +460,15 @@ class BOBaselineRunner:
                     )
                     previous_configs[worker_idx] = knob_config
 
-                    return trial_info, cost, wall_time, knob_config, metrics, score, restarted
+                    return (
+                        trial_info,
+                        cost,
+                        wall_time,
+                        knob_config,
+                        metrics,
+                        score,
+                        restarted,
+                    )
                 except Exception as e:
                     self.logger.error(
                         f"Error evaluating config on worker {worker_idx}: {e}",
