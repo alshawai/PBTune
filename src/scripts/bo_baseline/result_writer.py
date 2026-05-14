@@ -147,7 +147,8 @@ def write_bo_results(
             "benchmark_name": config.benchmark_config.benchmark,
             "n_iterations": config.n_iterations,
             "seed": config.random_seed,
-            "population_size": 1,
+            "population_size": config.max_workers,
+            "n_workers": config.max_workers,
             "total_generations": len(iteration_log),
             "total_time_seconds": total_time,
             "timestamp": timestamp,
@@ -163,6 +164,7 @@ def write_bo_results(
                 str(config.pbt_session_path) if config.pbt_session_path else None
             ),
             "reference_pbt_knobs": list(config.pbt_knob_names or ()),
+            "resource_equalization": config.pbt_worker_resources is not None,
         },
         "best_configuration": {
             "score": best_score,

@@ -7,9 +7,12 @@ import argparse
 from src.tuner.config import get_knob_space
 from src.scripts.bo_baseline.search_space import build_configspace, configspace_to_knobs
 from src.scripts.bo_baseline.config import BOConfig
+from src.scripts.bo_baseline.objective import evaluate_config
 from src.scripts.bo_baseline.result_writer import write_bo_results
+from src.tuner.core.worker import Worker
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
 from src.utils.types import BenchmarkConfig, TuningMode
+from src.utils.metrics import PerformanceMetrics
 from src.evaluation.loader import load_tuning_session
 
 
@@ -72,6 +75,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
+            max_workers=None,
             pbt_session=str(pbt_session),
         )
 
@@ -139,6 +143,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
+            max_workers=None,
             pbt_session=str(pbt_session),
         )
 
@@ -259,6 +264,48 @@ class TestSearchSpaceTranslation:
             assert knob_space.validate_config(repaired)
 
 
+class TestObjectiveEvaluation:
+    """Test the reusable BO evaluation helper."""
+
+    def test_evaluate_config_returns_cost_and_metrics(self):
+        knob_space = get_knob_space("minimal")
+        resources = detect_worker_resources()
+        knob_space.resolve_hardware_ranges(resources)
+
+        configspace = build_configspace(knob_space, seed=42)
+        config = configspace.sample_configuration()
+        worker = Worker(worker_id=0, knob_space=knob_space)
+
+        expected_metrics = PerformanceMetrics(throughput=120.0, latency_p95=18.0)
+
+        class DummyOrchestrator:
+            def __init__(self):
+                self.received_worker = None
+
+            def evaluate_worker(self, worker, apply_config=True):
+                self.received_worker = worker
+                return expected_metrics, 87.5, False
+
+        orchestrator = DummyOrchestrator()
+
+        cost, knob_config, metrics, score, restarted, wall_time = evaluate_config(
+            config=config,
+            worker=worker,
+            orchestrator=orchestrator,
+            knob_space=knob_space,
+            previous_config=None,
+        )
+
+        assert cost == 12.5
+        assert score == 87.5
+        assert restarted is False
+        assert wall_time >= 0.0
+        assert metrics == expected_metrics
+        assert knob_config == worker.knob_config
+        assert orchestrator.received_worker is worker
+        assert worker.force_restart_next_eval is False
+
+
 class TestResultFormat:
     """Test result serialization format."""
 
@@ -276,6 +323,7 @@ class TestResultFormat:
                 benchmark="sysbench",
                 workload_type="oltp",
             ),
+            max_workers=2,
         )
 
         worker_resources = WorkerResources(
@@ -338,6 +386,11 @@ class TestResultFormat:
         assert results["tuning_session"]["bo_surrogate"] == "gp"
         assert results["tuning_session"]["seed"] == 123
         assert results["best_configuration"]["score"] == 0.6
+
+        # Verify parallel BO fields
+        assert results["tuning_session"]["population_size"] == 2
+        assert results["tuning_session"]["n_workers"] == 2
+        assert results["tuning_session"]["resource_equalization"] is False
 
         # Find the written file
         result_files = list(tmp_path.glob("**/bo_results_*.json"))
@@ -421,5 +474,149 @@ class TestResultFormat:
         assert gen_hist[1]["mean_score"] == 0.6
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class TestParallelBOConfiguration:
+    """Test parallel BO and resource equalization configuration."""
+
+    def test_bo_config_extracts_worker_resources_from_pbt_session(self, tmp_path):
+        """Test that worker_resources are extracted from PBT session."""
+        pbt_session = tmp_path / "pbt_results_test.json"
+        pbt_session.write_text(
+            json.dumps(
+                {
+                    "tuning_session": {
+                        "knob_tier": "minimal",
+                        "workload_type": "oltp",
+                        "benchmark_name": "sysbench",
+                        "population_size": 4,
+                        "total_generations": 10,
+                    },
+                    "worker_resources": {
+                        "ram_bytes": 8589934592,
+                        "cpu_cores": 4,
+                        "disk_type": "SSD",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        args = argparse.Namespace(
+            config="standard",
+            benchmark_config=None,
+            iterations=None,
+            seed=123,
+            tier=None,
+            benchmark="sysbench",
+            workload="oltp",
+            duration=15.0,
+            warmup=10.0,
+            tuning_mode="offline",
+            sysbench_tables=2,
+            sysbench_table_size=10000,
+            sysbench_workload="oltp_read_write",
+            scale_factor=0.01,
+            tpch_warmup_passes=0,
+            no_docker=True,
+            docker_image=None,
+            force_recreate_instances=False,
+            force_recreate_baseline=False,
+            output_dir="results",
+            verbose="INFO",
+            range_update_interval=5,
+            bo_surrogate="rf",
+            max_workers=None,
+            pbt_session=str(pbt_session),
+        )
+
+        config = BOConfig.from_args(args)
+
+        assert config.max_workers == 4
+        assert config.pbt_worker_resources is not None
+        assert config.pbt_worker_resources["ram_bytes"] == 8589934592
+        assert config.pbt_worker_resources["cpu_cores"] == 4
+        assert config.pbt_worker_resources["disk_type"] == "SSD"
+
+    def test_bo_config_max_workers_cli_override(self, tmp_path):
+        """Test that --max-workers CLI arg overrides PBT-derived value."""
+        pbt_session = tmp_path / "pbt_results_test.json"
+        pbt_session.write_text(
+            json.dumps(
+                {
+                    "tuning_session": {
+                        "knob_tier": "minimal",
+                        "workload_type": "oltp",
+                        "benchmark_name": "sysbench",
+                        "population_size": 4,
+                        "total_generations": 10,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        args = argparse.Namespace(
+            config="standard",
+            benchmark_config=None,
+            iterations=None,
+            seed=123,
+            tier=None,
+            benchmark="sysbench",
+            workload="oltp",
+            duration=15.0,
+            warmup=10.0,
+            tuning_mode="offline",
+            sysbench_tables=2,
+            sysbench_table_size=10000,
+            sysbench_workload="oltp_read_write",
+            scale_factor=0.01,
+            tpch_warmup_passes=0,
+            no_docker=True,
+            docker_image=None,
+            force_recreate_instances=False,
+            force_recreate_baseline=False,
+            output_dir="results",
+            verbose="INFO",
+            range_update_interval=5,
+            bo_surrogate="rf",
+            max_workers=2,
+            pbt_session=str(pbt_session),
+        )
+
+        config = BOConfig.from_args(args)
+
+        assert config.max_workers == 2
+
+    def test_bo_config_default_max_workers(self):
+        """Test that max_workers defaults to 1."""
+        args = argparse.Namespace(
+            config="standard",
+            benchmark_config=None,
+            iterations=None,
+            seed=123,
+            tier="minimal",
+            benchmark="sysbench",
+            workload="oltp",
+            duration=15.0,
+            warmup=10.0,
+            tuning_mode="offline",
+            sysbench_tables=2,
+            sysbench_table_size=10000,
+            sysbench_workload="oltp_read_write",
+            scale_factor=0.01,
+            tpch_warmup_passes=0,
+            no_docker=True,
+            docker_image=None,
+            force_recreate_instances=False,
+            force_recreate_baseline=False,
+            output_dir="results",
+            verbose="INFO",
+            range_update_interval=5,
+            bo_surrogate="rf",
+            max_workers=None,
+            pbt_session=None,
+        )
+
+        config = BOConfig.from_args(args)
+
+        assert config.max_workers == 1
+        assert config.pbt_worker_resources is None
