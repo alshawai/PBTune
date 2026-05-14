@@ -152,8 +152,10 @@ else
         info "rapidjson document.h already patched or different version"
     fi
 
-    # Build and install
-    pip install "$PYRFR_SRC" --quiet
+    # Build and install (using older SWIG to avoid SwigPyObject memory leak)
+    info "Installing swig<4.0 to fix pyrfr bindings..."
+    pip install "swig<4.0" wheel setuptools --quiet
+    pip install "$PYRFR_SRC" --no-cache-dir --no-build-isolation --quiet
     info "pyrfr installed successfully"
 fi
 
