@@ -214,6 +214,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     env_grp.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Base directory for PostgreSQL instances. Overrides PBT_DATA_ROOT. (default: ./.instances)",
+    )
+    env_grp.add_argument(
         "--docker-image",
         metavar="IMAGE",
         default="pbt-eval",
@@ -221,6 +227,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     out_grp = parser.add_argument_group("output options")
+    out_grp.add_argument(
+        "--colocate-output",
+        action="store_true",
+        help="Place results/logs under the data directory instead of the default ./results/ directory",
+    )
     out_grp.add_argument(
         "--output-dir",
         metavar="PATH",
@@ -295,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         scoring_policy=args.scoring_policy,
         scoring_policy_version=args.scoring_policy_version,
         metric_reference_version=args.metric_reference_version,
+        data_dir=args.data_dir,
+        colocate_output=args.colocate_output,
     )
 
     try:

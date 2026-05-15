@@ -23,6 +23,7 @@ from src.utils.metrics import WorkloadType, create_metric_config
 from src.utils.hardware_info import get_system_info, detect_worker_resources
 from src.utils.logger import setup_logging, get_logger, log_section_header
 from src.config.database import get_db_config
+from src.config.data_root import resolve_data_root
 from src.database.connection import get_connection
 
 from src.scripts.bo_baseline.config import BOConfig
@@ -54,9 +55,18 @@ class BOBaselineRunner:
         setup_logging(verbosity=config.verbose, output_file=log_output_file)
         self.logger = get_logger("Runner")
 
+        self.data_root = resolve_data_root(cli_override=config.data_dir)
+
+        # Determine effective output directory
+        self.effective_output_dir = (
+            self.data_root / "results"
+            if config.colocate_output
+            else Path(config.output_dir)
+        )
+
         # Collect system info
-        self.system_info = get_system_info()
-        self.worker_resources = detect_worker_resources()
+        self.system_info = get_system_info(data_path=self.data_root)
+        self.worker_resources = detect_worker_resources(data_path=self.data_root)
 
         # Load knob space
         self.knob_space = get_knob_space(config.knob_tier)
@@ -169,7 +179,7 @@ class BOBaselineRunner:
     def _build_smac_output_root(self) -> Path:
         """Build the SMAC output directory root under results."""
         bo_root = resolve_bo_output_root(
-            output_dir=Path(self.config.output_dir),
+            output_dir=self.effective_output_dir,
             benchmark_config=self.config.benchmark_config,
             knob_tier=self.config.knob_tier,
         )
@@ -179,8 +189,17 @@ class BOBaselineRunner:
 
     def _build_log_output_file(self, timestamp: str) -> Path:
         """Create the HTML log output file under results."""
+
+        # At this point, effective_output_dir is not set yet, so we have to resolve it manually
+        data_root = resolve_data_root(cli_override=self.config.data_dir)
+        eff_output_dir = (
+            data_root / "results"
+            if self.config.colocate_output
+            else Path(self.config.output_dir)
+        )
+
         bo_root = resolve_bo_output_root(
-            output_dir=Path(self.config.output_dir),
+            output_dir=eff_output_dir,
             benchmark_config=self.config.benchmark_config,
             knob_tier=self.config.knob_tier,
         )
@@ -215,7 +234,7 @@ class BOBaselineRunner:
             self.env = EnvironmentFactory.create(
                 schema_provider=workload_executor,
                 use_docker=self.config.use_docker,
-                base_dir=Path(f".instances/{self.config.benchmark_config.benchmark}"),
+                base_dir=self.data_root,
                 base_port=5440,
                 db_config=self.db_config,
                 worker_resources=self.worker_resources,
@@ -351,7 +370,7 @@ class BOBaselineRunner:
                 system_info=self.system_info,
                 iteration_log=iteration_log,
                 total_time=total_time,
-                output_dir=self.config.output_dir,
+                output_dir=self.effective_output_dir,
                 bo_surrogate=bo_surrogate,
             )
 
@@ -517,6 +536,15 @@ def main():
         default=None,
         help="Tuning mode (default: preset value)",
     )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help=(
+            "Base directory for PostgreSQL instances and snapshots. "
+            "Overrides PBT_DATA_ROOT env var. (default: ./.instances)"
+        ),
+    )
 
     # Output options
     parser.add_argument(
@@ -524,6 +552,11 @@ def main():
         type=str,
         default=None,
         help="Output directory (default: preset value)",
+    )
+    parser.add_argument(
+        "--colocate-output",
+        action="store_true",
+        help="Place results/logs under the data directory instead of the default ./results/ directory",
     )
     parser.add_argument(
         "--bo-surrogate",
