@@ -102,26 +102,26 @@ The system follows a layered architecture:
 
 ### Directory Structure
 
-```
+```text
 src/tuner/
-├── core/           # PBT algorithm implementation
-├── config/         # Configuration management
-├── evaluator/      # Performance evaluation
-└── main.py         # Entry point
+├── core/                # PBT algorithm implementation
+├── config/              # Configuration management
+├── evaluator/           # Performance evaluation
+└── main.py              # Entry point
 
 src/utils/
-├── environments/    # Docker/Bare-metal database environment backends
-├── logger/          # Logging setup and formatters
-├── metrics.py       # Performance metrics and scoring
-├── rescoring.py     # Shared post-hoc global score recalibration utilities
+├── environments/        # Docker/Bare-metal database environment backends
+├── logger/              # Logging setup and formatters
+├── metrics.py           # Performance metrics and scoring
+├── rescoring.py         # Shared post-hoc global score recalibration utilities
 └── restart_manager.py
 
 src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
-├── types.py         # Dataclasses: ComparisonConfig, RunResult, etc.
-├── loader.py        # load_tuning_session() — parse pbt_results JSON
-├── statistics.py    # Wilcoxon + bootstrap CI + Holm-corrected secondary endpoints + Cohen's d
-├── runner.py        # ComparisonRunner — main orchestrator
-└── __main__.py      # CLI: python -m src.evaluation
+├── types.py             # Dataclasses: ComparisonConfig, RunResult, etc.
+├── loader.py            # load_tuning_session() — parse pbt_results JSON
+├── statistics.py        # Wilcoxon + bootstrap CI + Holm-corrected secondary endpoints + Cohen's d
+├── runner.py            # ComparisonRunner — main orchestrator
+└── __main__.py          # CLI: python -m src.evaluation
 
 src/database/            # Database connection and management
 src/knobs/               # Knob metadata retrieval

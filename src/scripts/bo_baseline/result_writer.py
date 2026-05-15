@@ -23,6 +23,7 @@ def resolve_bo_output_root(
     else:
         benchmark_key = benchmark_config.benchmark
 
+    output_dir = Path(output_dir)
     return (
         output_dir
         / benchmark_config.workload_type
