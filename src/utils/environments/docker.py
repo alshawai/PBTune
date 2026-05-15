@@ -10,9 +10,11 @@ Responsibilities:
 - Applying resource constraints via cgroups.
 - Setup of multiple independent worker containers.
 - Mapping container ports to dynamic host ports.
-- Snapshot handling using docker commit.
+- Snapshot handling using host-directory copies via containers.
 """
 
+import os
+import shutil
 import time
 import hashlib
 import json
@@ -98,9 +100,19 @@ class DockerEnvironment(DatabaseEnvironment):
         """Build the Docker container name for a worker."""
         return f"{self.container_prefix}-{worker_id}"
 
-    def _pgdata_volume_name(self, worker_id: int) -> str:
-        """Build a deterministic Docker volume name for a worker's PGDATA."""
-        return f"{self._container_name(worker_id)}-pgdata"
+    def _worker_host_pgdata_dir(self, worker_id: int) -> Path:
+        """Resolve the host-side PGDATA directory for a worker's bind mount.
+
+        When ``base_dir`` points to an external drive, all database I/O
+        flows through that drive while Docker still provides process
+        isolation, cgroup resource limits, and network namespacing.
+        """
+        return (
+            self.base_dir
+            / self._get_instance_subpath()
+            / f"worker_{worker_id}"
+            / "pgdata"
+        )
 
     def _worker_port(self, worker_id: int) -> int:
         """Resolve a worker's host port."""
@@ -155,26 +167,55 @@ class DockerEnvironment(DatabaseEnvironment):
             return False
         return True
 
-    def _recreate_worker_pgdata_volume(self, worker_id: int) -> Optional[str]:
-        """Replace worker-specific PGDATA volume with a fresh volume."""
-        volume_name = self._pgdata_volume_name(worker_id)
-        try:
-            try:
-                existing_volume = self.client.volumes.get(volume_name)
-                existing_volume.remove(force=True)
-            except docker_errors.NotFound:
-                pass
+    def _prepare_worker_pgdata_dir(self, worker_id: int) -> Path:
+        """Prepare a clean host directory for a worker's PGDATA bind mount.
 
-            self.client.volumes.create(name=volume_name)
-            return volume_name
+        Removes any existing data and creates a fresh directory with
+        permissions that allow the container's ``postgres`` user
+        (typically UID 999) to write.
+        """
+        pgdata_dir = self._worker_host_pgdata_dir(worker_id)
+        self._force_remove_host_dir(pgdata_dir)
+        pgdata_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(pgdata_dir, 0o777)
+        return pgdata_dir
+
+    def _force_remove_host_dir(self, target_dir: Path) -> None:
+        """Remove a host directory that may contain Docker-owned files.
+
+        Files created by containerized PostgreSQL (UID 999) are not
+        deletable by the host user.  This method mounts the *parent*
+        directory into a disposable container and ``rm -rf``'s the
+        child, side-stepping the ownership mismatch.
+        """
+        if not target_dir.exists():
+            return
+
+        child_name = target_dir.name
+        parent_dir = str(target_dir.parent)
+
+        try:
+            container = self.client.containers.run(
+                self.image_name,
+                entrypoint=["rm", "-rf", f"/host/{child_name}"],
+                volumes={parent_dir: {"bind": "/host", "mode": "rw"}},
+                detach=True,
+            )
+            result = container.wait()
+            if result.get("StatusCode", 1) != 0:
+                raise docker_errors.DockerException(
+                    f"rm -rf failed with exit code {result.get('StatusCode')}: "
+                    f"{container.logs().decode('utf-8', errors='replace')}"
+                )
+            container.remove(force=True)
         except docker_errors.DockerException as exc:
-            LOGGER.error(
-                "Failed preparing fresh PGDATA volume '%s' for worker %d: %s",
-                volume_name,
-                worker_id,
+            LOGGER.debug(
+                "Container-based removal of '%s' failed: %s; "
+                "attempting host-side rmtree as fallback",
+                target_dir,
                 exc,
             )
-            return None
+            shutil.rmtree(target_dir, ignore_errors=True)
 
     def _ensure_container_running_after_timeout(
         self,
@@ -270,38 +311,53 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return False, exc
 
-    def _seed_pgdata_volume_from_snapshot(
+    def _seed_pgdata_dir_from_snapshot(
         self,
         worker_id: int,
-        snapshot_id: str,
-    ) -> Optional[str]:
-        """Create a fresh PGDATA volume and seed it from a snapshot image.
+    ) -> Optional[Path]:
+        """Prepare a clean host PGDATA directory and seed it from the baseline snapshot.
 
-        Restored workers should run on a Docker volume-backed PGDATA directory
-        instead of the snapshot image writable layer. This avoids overlayfs write
-        amplification and keeps runtime I/O paths consistent across restarts.
+        Copies the snapshot's PGDATA directory into the worker's bind-mount
+        directory using a container (to handle UID 999 ownership).
         """
-        volume_name = self._recreate_worker_pgdata_volume(worker_id)
-        if not volume_name:
+        snapshot_pgdata = self._snapshot_host_dir()
+        if not snapshot_pgdata.exists():
+            LOGGER.error(
+                "Snapshot PGDATA dir '%s' does not exist; cannot seed worker %d",
+                snapshot_pgdata,
+                worker_id,
+            )
             return None
+
+        pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
 
         try:
             with self._with_timeout(self._restore_api_timeout):
-                self.client.containers.run(
-                    snapshot_id,
+                container = self.client.containers.run(
+                    self.image_name,
+                    user="999:999",  # Copy as postgres user to avoid chown errors on exFAT/NTFS
                     entrypoint=["bash", "-lc"],
-                    command="set -euo pipefail; cp -a /pgdata/data/. /pgseed/",
-                    volumes={volume_name: {"bind": "/pgseed", "mode": "rw"}},
-                    remove=True,
-                    detach=False,
+                    command=["set -euo pipefail; cp -R /source/. /dest/"],
+                    volumes={
+                        str(snapshot_pgdata): {"bind": "/source", "mode": "ro"},
+                        str(pgdata_dir): {"bind": "/dest", "mode": "rw"},
+                    },
+                    detach=True,
                 )
+                result = container.wait()
+                if result.get("StatusCode", 1) != 0:
+                    raise docker_errors.DockerException(
+                        f"Copy failed with exit code {result.get('StatusCode')}: "
+                        f"{container.logs().decode('utf-8', errors='replace')}"
+                    )
+                container.remove(force=True)
 
-            return volume_name
+            return pgdata_dir
         except docker_errors.DockerException as exc:
             LOGGER.error(
-                "Failed to seed PGDATA volume '%s' from snapshot '%s': %s",
-                volume_name,
-                snapshot_id,
+                "Failed to seed PGDATA dir '%s' from snapshot '%s': %s",
+                pgdata_dir,
+                snapshot_pgdata,
                 exc,
             )
             return None
@@ -324,11 +380,9 @@ class DockerEnvironment(DatabaseEnvironment):
         if not self._remove_worker_container(worker_id=worker_id, purpose="rebuild"):
             return False
 
-        volume_name = self._recreate_worker_pgdata_volume(worker_id)
-        if not volume_name:
-            return False
+        pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
 
-        volumes = {volume_name: {"bind": "/pgdata/data", "mode": "rw"}}
+        volumes = {str(pgdata_dir): {"bind": "/pgdata/data", "mode": "rw"}}
         launched, _ = self._launch_worker_container(
             image_name=self.image_name,
             worker_id=worker_id,
@@ -452,11 +506,13 @@ class DockerEnvironment(DatabaseEnvironment):
                 )
             except docker_errors.NotFound:  # Create it
                 LOGGER.debug("    Creating container '%s'...", container_name)
+                pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
+                volumes = {str(pgdata_dir): {"bind": "/pgdata/data", "mode": "rw"}}
                 launched, launch_error = self._launch_worker_container(
                     image_name=self.image_name,
                     worker_id=worker_id,
                     action_label="creating worker container",
-                    volumes={},
+                    volumes=volumes,
                     timeout=self._ready_timeout,
                 )
                 if not launched:
@@ -475,27 +531,8 @@ class DockerEnvironment(DatabaseEnvironment):
             self.instances[worker_id] = InstanceConfig(
                 worker_id=worker_id,
                 port=port,
-                data_dir=self.base_dir
-                / self._get_instance_subpath()
-                / f"worker_{worker_id}",
+                data_dir=self._worker_host_pgdata_dir(worker_id).parent,
                 running=running,
-            )
-
-            # Write a manifest file to the empty host data directory so the user
-            # knows which Docker container and volume manages this partition.
-            host_data_dir = self.instances[worker_id].data_dir
-            host_data_dir.mkdir(parents=True, exist_ok=True)
-            manifest_file = host_data_dir / "docker_manifest.json"
-            manifest_payload = {
-                "managed_by": "DockerEnvironment",
-                "container_name": container_name,
-                "volume_name": self._pgdata_volume_name(worker_id),
-                "image": self.image_name,
-                "host_port": port,
-                "created_at_utc": datetime.now(tz=timezone.utc).isoformat(),
-            }
-            manifest_file.write_text(
-                json.dumps(manifest_payload, indent=2), encoding="utf-8"
             )
             self._wait_for_ready(container_name, port)
 
@@ -743,14 +780,14 @@ class DockerEnvironment(DatabaseEnvironment):
         return res
 
     def cleanup(self, remove_data: bool = False) -> None:
-        """Remove containers."""
+        """Remove containers and optionally their host PGDATA directories."""
         for worker_id in list(self.instances):
             container_name = self._container_name(worker_id)
             try:
                 container = self.client.containers.get(container_name)
                 container.remove(force=True)
             except docker_errors.NotFound:
-                continue
+                pass
             except (
                 docker_errors.DockerException,
                 requests.exceptions.RequestException,
@@ -762,6 +799,15 @@ class DockerEnvironment(DatabaseEnvironment):
                     container_name,
                     worker_id,
                     exc,
+                )
+
+            if remove_data:
+                pgdata_dir = self._worker_host_pgdata_dir(worker_id)
+                self._force_remove_host_dir(pgdata_dir)
+                LOGGER.debug(
+                    "Removed host PGDATA directory '%s' for worker %d",
+                    pgdata_dir,
+                    worker_id,
                 )
         self.instances.clear()
 
@@ -789,7 +835,7 @@ class DockerEnvironment(DatabaseEnvironment):
         Returns
         -------
         Optional[int]
-            Timeout in seconds for ``docker commit``. Returns ``None``
+            Timeout in seconds for snapshot copy. Returns ``None``
             (unlimited) for TPC-H, where the dataset size scales with
             ``scale_factor`` and PostgreSQL's own ``statement_timeout``
             safeguards execution. Returns 120s for Sysbench, whose
@@ -886,20 +932,27 @@ class DockerEnvironment(DatabaseEnvironment):
         """Build a Docker-safe snapshot repository name for this profile."""
         return f"pg-snapshot-baseline-{self._snapshot_profile_signature()}"
 
-    def _snapshot_manifest_path(self) -> Path:
-        """Path to snapshot metadata persisted in the project tree."""
-        # Walk up from this file's location to find the project root
-        project_root = Path(__file__).resolve().parent.parent.parent.parent
-        return project_root / ".snapshots" / f"{self._default_snapshot_id()}.json"
+    def _snapshot_host_dir(self) -> Path:
+        """Host directory for the baseline PGDATA snapshot.
 
-    def _write_snapshot_manifest(self, snapshot_id: str, image_id: str) -> None:
-        """Persist snapshot metadata for traceability within the project workspace."""
+        Stored alongside instance data under ``base_dir`` so that when
+        the data root points to an external drive, the snapshot lives
+        there too.
+        """
+        return self.base_dir / ".snapshots" / self._default_snapshot_id() / "pgdata"
+
+    def _snapshot_manifest_path(self) -> Path:
+        """Path to snapshot metadata manifest, stored next to the snapshot."""
+        return self._snapshot_host_dir().parent / "manifest.json"
+
+    def _write_snapshot_manifest(self, snapshot_id: str) -> None:
+        """Persist snapshot metadata for traceability."""
         manifest_path = self._snapshot_manifest_path()
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
             "snapshot_id": snapshot_id,
-            "image_id": image_id,
+            "snapshot_dir": str(self._snapshot_host_dir()),
             "base_image": self.image_name,
             "profile_signature": self._snapshot_profile_signature(),
             "profile_context": self._snapshot_profile_context(),
@@ -926,41 +979,68 @@ class DockerEnvironment(DatabaseEnvironment):
             manifest_path.unlink()
 
     def _remove_baseline_snapshot(self) -> None:
-        """Remove existing baseline snapshot image and metadata."""
-        snapshot_id = self._default_snapshot_id()
-        try:
-            snapshot_image = self.client.images.get(snapshot_id)
+        """Remove existing baseline snapshot directory and metadata."""
+        snapshot_dir = self._snapshot_host_dir()
+        if snapshot_dir.exists():
+            snapshot_id = self._default_snapshot_id()
             LOGGER.info(
-                "Removing baseline Docker snapshot '%s' (force_recreate_baseline=True)",
+                "Removing baseline snapshot '%s' at '%s' (force_recreate_baseline=True)",
                 snapshot_id,
+                snapshot_dir,
             )
-            self.client.images.remove(snapshot_image.id, force=True)
-        except docker_errors.ImageNotFound:
-            pass
-        except docker_errors.APIError as exc:
-            LOGGER.warning("Failed removing snapshot image '%s': %s", snapshot_id, exc)
+            self._force_remove_host_dir(snapshot_dir)
 
         self._remove_snapshot_manifest()
 
     def create_snapshot(self, worker_id: int = 0) -> str:
-        """Create a baseline snapshot from the specified worker instance using Docker Commit."""
+        """Create a baseline snapshot by copying the worker's host PGDATA directory.
+
+        Issues a CHECKPOINT, stops the container for a clean shutdown,
+        copies the PGDATA directory to the snapshot location via a
+        container (to preserve UID 999 ownership), then restarts.
+        """
         container_name = self._container_name(worker_id)
         snapshot_id = self._default_snapshot_id()
         port = self.base_port + worker_id
+        source_pgdata = self._worker_host_pgdata_dir(worker_id)
+        snapshot_pgdata = self._snapshot_host_dir()
+
         try:
             container = self.client.containers.get(container_name)
             self._checkpoint_instance(worker_id)
 
-            # Commit an exited container so the snapshot restores from a clean shutdown state
-            # and avoids unnecessary crash-recovery startup penalties.
+            # Stop for a clean shutdown — avoids crash-recovery on restore.
             container.reload()
             if container.status == "running":
                 container.stop(timeout=45)
 
-            container = self.client.containers.get(container_name)
-            with self._with_timeout(self._snapshot_timeout):
-                snapshot_image = container.commit(repository=snapshot_id, pause=False)
+            # Prepare the snapshot directory
+            self._force_remove_host_dir(snapshot_pgdata)
+            snapshot_pgdata.mkdir(parents=True, exist_ok=True)
+            os.chmod(snapshot_pgdata, 0o777)
 
+            # Copy worker PGDATA → snapshot dir via container
+            with self._with_timeout(self._snapshot_timeout):
+                copy_container = self.client.containers.run(
+                    self.image_name,
+                    user="999:999",  # Copy as postgres user to avoid chown errors on exFAT/NTFS
+                    entrypoint=["bash", "-lc"],
+                    command=["set -euo pipefail; cp -R /source/. /dest/"],
+                    volumes={
+                        str(source_pgdata): {"bind": "/source", "mode": "ro"},
+                        str(snapshot_pgdata): {"bind": "/dest", "mode": "rw"},
+                    },
+                    detach=True,
+                )
+                result = copy_container.wait()
+                if result.get("StatusCode", 1) != 0:
+                    raise docker_errors.DockerException(
+                        f"Copy failed with exit code {result.get('StatusCode')}: "
+                        f"{copy_container.logs().decode('utf-8', errors='replace')}"
+                    )
+                copy_container.remove(force=True)
+
+            # Restart the worker
             container.start()
             self._wait_for_ready(
                 container_name,
@@ -969,33 +1049,29 @@ class DockerEnvironment(DatabaseEnvironment):
                 context="snapshot-post-start",
             )
 
-            image_id = getattr(snapshot_image, "id", "")
-            self._write_snapshot_manifest(snapshot_id=snapshot_id, image_id=image_id)
+            self._write_snapshot_manifest(snapshot_id=snapshot_id)
             return snapshot_id
         except (docker_errors.DockerException, RuntimeError) as e:
             LOGGER.error("Failed to create snapshot from %s: %s", container_name, e)
             return ""
 
     def snapshot_exists(self, worker_id: int = 0) -> bool:
-        """Check whether the baseline snapshot image already exists."""
+        """Check whether the baseline snapshot directory exists and is valid."""
         del worker_id  # Snapshot identity is run-scoped, not worker-scoped.
-        snapshot_id = self._default_snapshot_id()
-        try:
-            self.client.images.get(snapshot_id)
-        except docker_errors.ImageNotFound:
-            return False
-        except docker_errors.APIError:
+        snapshot_pgdata = self._snapshot_host_dir()
+        if not snapshot_pgdata.exists() or not any(snapshot_pgdata.iterdir()):
             return False
 
         manifest = self._read_snapshot_manifest()
         if manifest is None:
             LOGGER.debug(
-                "Snapshot image '%s' exists but manifest is missing/invalid; treating as stale",
-                snapshot_id,
+                "Snapshot dir '%s' exists but manifest is missing/invalid; treating as stale",
+                snapshot_pgdata,
             )
             return False
 
         expected_signature = self._snapshot_profile_signature()
+        snapshot_id = self._default_snapshot_id()
         manifest_snapshot_id = str(manifest.get("snapshot_id", ""))
         manifest_signature = str(manifest.get("profile_signature", ""))
 
@@ -1016,17 +1092,16 @@ class DockerEnvironment(DatabaseEnvironment):
         return True
 
     def restore_snapshot(self, worker_id: int, snapshot_id: str = "") -> bool:
-        """Restore a targeted worker's data directory/volume from the baseline snapshot."""
-        if not snapshot_id:
-            snapshot_id = self._default_snapshot_id()
-
+        """Restore a worker's PGDATA from the baseline snapshot directory."""
         container_name = self._container_name(worker_id)
         port = self._worker_port(worker_id)
 
-        try:
-            with self._with_timeout(self._restore_api_timeout):
-                self.client.images.get(snapshot_id)
+        # Fail fast if the snapshot doesn't exist so we don't kill the running container
+        snapshot_pgdata = self._snapshot_host_dir()
+        if not snapshot_pgdata.exists():
+            return False
 
+        try:
             # Stop and remove current container
             if not self._remove_worker_container(
                 worker_id=worker_id,
@@ -1035,16 +1110,15 @@ class DockerEnvironment(DatabaseEnvironment):
             ):
                 return False
 
-            volume_name = self._seed_pgdata_volume_from_snapshot(
+            pgdata_dir = self._seed_pgdata_dir_from_snapshot(
                 worker_id=worker_id,
-                snapshot_id=snapshot_id,
             )
-            if not volume_name:
+            if not pgdata_dir:
                 return False
 
-            volumes = {volume_name: {"bind": "/pgdata/data", "mode": "rw"}}
+            volumes = {str(pgdata_dir): {"bind": "/pgdata/data", "mode": "rw"}}
             launched, _ = self._launch_worker_container(
-                image_name=snapshot_id,
+                image_name=self.image_name,
                 worker_id=worker_id,
                 action_label="creating snapshot-restored worker",
                 volumes=volumes,
