@@ -747,12 +747,19 @@ class Population:
 
         return num_exploited
 
-    def record_generation(self) -> GenerationResult:
+    def record_generation(self, previous_best_score: float = 0.0) -> GenerationResult:
         """
         Record statistics and results for the current generation.
 
-        Computes population statistics, identifies best worker, checks
-        convergence, and updates history.
+        Computes population statistics, identifies best worker, checks convergence,
+        and tracks improvements against the score from BEFORE finalization (to avoid
+        double-counting when _finalize_scores already updated best_overall_score).
+
+        Parameters
+        ----------
+        previous_best_score : float
+            The best_overall_score value BEFORE _finalize_scores() was called.
+            Defaults to 0.0 for backward compatibility.
 
         Returns
         -------
@@ -786,10 +793,10 @@ class Population:
         )
         self.history.append(result)
 
-        if result.best_score > self.best_overall_score:
-            self.best_overall_score = result.best_score
-            self.best_overall_metrics = best_worker.metrics
-            self.best_overall_config = best_worker.knob_config.copy()  # type: ignore
+        # Compare against the score from BEFORE finalization to correctly track improvements.
+        # The _finalize_scores() method has already updated best_overall_score, so we compare
+        # against what it was before that update to detect true new discoveries.
+        if result.best_score > previous_best_score:
             self.generations_without_improvement = 0
             LOGGER.info("New best score: %.4f", self.best_overall_score)
         else:
@@ -916,11 +923,15 @@ class Population:
 
         self.update_metric_ranges_if_needed()
 
+        # Save the previous best score before finalization to track true improvements
+        # (finalize_scores() will update best_overall_score, so we need the old value for comparison)
+        previous_best_overall = self.best_overall_score
+
         # Finalize scores (detect saturation, rescore workers/best_overall)
         self._finalize_scores()
 
         # Record generation with finalized scores
-        result = self.record_generation()
+        result = self.record_generation(previous_best_score=previous_best_overall)
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,

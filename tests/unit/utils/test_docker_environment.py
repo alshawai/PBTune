@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -275,6 +276,30 @@ def test_snapshot_exists_returns_true_with_matching_manifest_signature(
     env._write_snapshot_manifest(snapshot_id=snapshot_id, image_id="sha256:current")
 
     assert env.snapshot_exists(worker_id=0) is True
+
+
+def test_setup_instances_uses_absolute_bind_paths_for_relative_base_dir() -> None:
+    """Relative Docker data roots should still produce absolute bind mounts."""
+    env = _make_environment()
+    env.base_dir = Path(os.path.relpath(Path("/tmp/pbt-docker-root"), start=Path.cwd()))
+
+    env.client.containers.get.side_effect = docker.errors.NotFound("missing")
+    env.client.containers.run.return_value = MagicMock()
+
+    env._wait_for_ready = MagicMock()
+    env.initialize_schema = MagicMock()
+    env.snapshot_exists = MagicMock(return_value=True)
+    env.create_snapshot = MagicMock()
+
+    env.setup_instances(num_workers=1, force_recreate=False)
+
+    worker_run_call = next(
+        call
+        for call in env.client.containers.run.call_args_list
+        if call.kwargs.get("name") == "pbt-worker-0"
+    )
+    bind_source = next(iter(worker_run_call.kwargs["volumes"]))
+    assert Path(bind_source).is_absolute()
 
 
 def test_setup_instances_reuses_existing_snapshot_without_recommit() -> None:

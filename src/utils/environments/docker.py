@@ -100,6 +100,14 @@ class DockerEnvironment(DatabaseEnvironment):
         """Build the Docker container name for a worker."""
         return f"{self.container_prefix}-{worker_id}"
 
+    def _host_path(self, *parts: str) -> Path:
+        """Resolve a host path that can be safely used in a Docker bind mount."""
+        return self.base_dir.joinpath(*parts).expanduser().resolve()
+
+    def _docker_bind_path(self, path: Path) -> str:
+        """Convert a host path into the absolute path Docker expects for binds."""
+        return str(path.expanduser().resolve())
+
     def _worker_host_pgdata_dir(self, worker_id: int) -> Path:
         """Resolve the host-side PGDATA directory for a worker's bind mount.
 
@@ -107,11 +115,10 @@ class DockerEnvironment(DatabaseEnvironment):
         flows through that drive while Docker still provides process
         isolation, cgroup resource limits, and network namespacing.
         """
-        return (
-            self.base_dir
-            / self._get_instance_subpath()
-            / f"worker_{worker_id}"
-            / "pgdata"
+        return self._host_path(
+            self._get_instance_subpath(),
+            f"worker_{worker_id}",
+            "pgdata",
         )
 
     def _worker_port(self, worker_id: int) -> int:
@@ -198,7 +205,7 @@ class DockerEnvironment(DatabaseEnvironment):
             container = self.client.containers.run(
                 self.image_name,
                 entrypoint=["rm", "-rf", f"/host/{child_name}"],
-                volumes={parent_dir: {"bind": "/host", "mode": "rw"}},
+                volumes={self._docker_bind_path(Path(parent_dir)): {"bind": "/host", "mode": "rw"}},
                 detach=True,
             )
             result = container.wait()
@@ -339,8 +346,8 @@ class DockerEnvironment(DatabaseEnvironment):
                     entrypoint=["bash", "-lc"],
                     command=["set -euo pipefail; cp -R /source/. /dest/"],
                     volumes={
-                        str(snapshot_pgdata): {"bind": "/source", "mode": "ro"},
-                        str(pgdata_dir): {"bind": "/dest", "mode": "rw"},
+                        self._docker_bind_path(snapshot_pgdata): {"bind": "/source", "mode": "ro"},
+                        self._docker_bind_path(pgdata_dir): {"bind": "/dest", "mode": "rw"},
                     },
                     detach=True,
                 )
@@ -382,7 +389,12 @@ class DockerEnvironment(DatabaseEnvironment):
 
         pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
 
-        volumes = {str(pgdata_dir): {"bind": "/pgdata/data", "mode": "rw"}}
+        volumes = {
+            self._docker_bind_path(pgdata_dir): {
+                "bind": "/pgdata/data",
+                "mode": "rw",
+            }
+        }
         launched, _ = self._launch_worker_container(
             image_name=self.image_name,
             worker_id=worker_id,
@@ -507,7 +519,12 @@ class DockerEnvironment(DatabaseEnvironment):
             except docker_errors.NotFound:  # Create it
                 LOGGER.debug("    Creating container '%s'...", container_name)
                 pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
-                volumes = {str(pgdata_dir): {"bind": "/pgdata/data", "mode": "rw"}}
+                volumes = {
+                    self._docker_bind_path(pgdata_dir): {
+                        "bind": "/pgdata/data",
+                        "mode": "rw",
+                    }
+                }
                 launched, launch_error = self._launch_worker_container(
                     image_name=self.image_name,
                     worker_id=worker_id,
@@ -939,7 +956,7 @@ class DockerEnvironment(DatabaseEnvironment):
         the data root points to an external drive, the snapshot lives
         there too.
         """
-        return self.base_dir / ".snapshots" / self._default_snapshot_id() / "pgdata"
+        return self._host_path(".snapshots", self._default_snapshot_id(), "pgdata")
 
     def _snapshot_manifest_path(self) -> Path:
         """Path to snapshot metadata manifest, stored next to the snapshot."""
@@ -1027,8 +1044,14 @@ class DockerEnvironment(DatabaseEnvironment):
                     entrypoint=["bash", "-lc"],
                     command=["set -euo pipefail; cp -R /source/. /dest/"],
                     volumes={
-                        str(source_pgdata): {"bind": "/source", "mode": "ro"},
-                        str(snapshot_pgdata): {"bind": "/dest", "mode": "rw"},
+                        self._docker_bind_path(source_pgdata): {
+                            "bind": "/source",
+                            "mode": "ro",
+                        },
+                        self._docker_bind_path(snapshot_pgdata): {
+                            "bind": "/dest",
+                            "mode": "rw",
+                        },
                     },
                     detach=True,
                 )
@@ -1116,7 +1139,12 @@ class DockerEnvironment(DatabaseEnvironment):
             if not pgdata_dir:
                 return False
 
-            volumes = {str(pgdata_dir): {"bind": "/pgdata/data", "mode": "rw"}}
+            volumes = {
+                self._docker_bind_path(pgdata_dir): {
+                    "bind": "/pgdata/data",
+                    "mode": "rw",
+                }
+            }
             launched, _ = self._launch_worker_container(
                 image_name=self.image_name,
                 worker_id=worker_id,
