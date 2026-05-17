@@ -20,7 +20,7 @@ def evaluate_config(
     orchestrator: WorkloadOrchestrator,
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
-) -> Tuple[float, Dict, Optional[PerformanceMetrics], float, bool, float]:
+) -> Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float]:
     """
     Evaluate a single configuration on a specific worker instance.
 
@@ -39,8 +39,8 @@ def evaluate_config(
 
     Returns
     -------
-    Tuple[float, Dict, Optional[PerformanceMetrics], float, bool, float]
-        (cost, knob_config, metrics, score, restarted, wall_time)
+    Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float]
+        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time)
     """
     t_start = time.time()
 
@@ -68,10 +68,12 @@ def evaluate_config(
     if metrics is None or score is None:
         cost = 100.0
         score = 0.0
+        score_breakdown = None
     else:
         cost = max(0.0, min(100.0, 100.0 - score))
+        score_breakdown = orchestrator.config.metric_config.compute_detailed_scores(metrics)
 
-    return cost, knob_config, metrics, score, restarted, wall_time
+    return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
 
 
 def create_objective(
@@ -136,7 +138,7 @@ def create_objective(
             Cost value (100 - score), with penalties for failures
         """
         try:
-            cost, knob_config, metrics, score, restarted, wall_time = evaluate_config(
+            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = evaluate_config(
                 config, worker, orchestrator, knob_space, state["previous_config"]
             )
 
@@ -145,8 +147,9 @@ def create_objective(
                 "config": knob_config,
                 "metrics": metrics.to_dict() if metrics is not None else {},
                 "score": score if score is not None else 0.0,
+                "score_breakdown": score_breakdown,
                 "cost": cost,
-                "wall_time_seconds": wall_time,
+                "wall_clock_seconds": wall_time,
                 "restarted": restarted,
                 "timestamp": time.time(),
             }

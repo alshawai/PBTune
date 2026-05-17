@@ -1013,6 +1013,7 @@ class PBTTuner:
                 "sysbench_duration_seconds": self.pbt_config.benchmark_config.evaluation_duration,
                 "sysbench_warmup_seconds": self.pbt_config.benchmark_config.warmup_duration,
                 "population_size": self.pbt_config.population_size,
+                "num_parallel_workers": self.pbt_config.num_parallel_workers,
                 "exploit_quantile": self.pbt_config.exploit_quantile,
                 "perturbation_factors": self.pbt_config.perturbation_factors,
                 "ready_interval": self.pbt_config.ready_interval,
