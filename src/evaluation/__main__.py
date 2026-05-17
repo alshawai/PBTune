@@ -85,6 +85,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "or results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_20260402_1559.json"
         ),
     )
+    parser.add_argument(
+        "--bo-session",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help=(
+            "Path to BO baseline results JSON for 3-way comparison "
+            "(Default vs BO vs PBT). When provided, runs a multi-arm "
+            "evaluation instead of the standard 2-way comparison."
+        ),
+    )
 
     bench_grp = parser.add_argument_group("benchmark options")
     bench_grp.add_argument(
@@ -295,11 +306,16 @@ def main(argv: list[str] | None = None) -> int:
         scoring_policy=args.scoring_policy,
         scoring_policy_version=args.scoring_policy_version,
         metric_reference_version=args.metric_reference_version,
+        bo_session_path=args.bo_session,
     )
 
     try:
         runner = ComparisonRunner(config)
-        runner.run()  # Summary printed internally by runner._print_summary()
+        if config.bo_session_path:
+            logger.info("BO session provided — running multi-arm comparison.")
+            runner.run_multi_arm()
+        else:
+            runner.run()
         logger.info("Evaluation complete. Exit 0.")
         return 0
 
