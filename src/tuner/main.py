@@ -62,6 +62,7 @@ from src.tuner.config import (
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
+from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -555,7 +556,12 @@ class PBTTuner:
         # Fallback (should not be reached if Enum is exhaustive)
         raise ValueError(f"Unknown workload type: {workload_type}")
 
-    def evaluate_worker(self, worker: Worker) -> Tuple[PerformanceMetrics, float]:
+    def evaluate_worker(
+        self,
+        worker: Worker,
+        *,
+        barriers: Optional[GenerationBarrier] = None,
+    ) -> Tuple[PerformanceMetrics, float]:
         """
         Evaluate a single worker.
 
@@ -565,6 +571,8 @@ class PBTTuner:
         ----------
         worker : Worker
             Worker to evaluate
+        barriers : GenerationBarrier | None
+            Optional lockstep barriers for synchronized evaluation.
 
         Returns
         -------
@@ -577,7 +585,8 @@ class PBTTuner:
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
             metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
-                worker, apply_config=True, generation=self.current_generation
+                worker, apply_config=True, generation=self.current_generation,
+                barriers=barriers,
             )
 
             # Track restart occurrence (will be logged once per generation, not per worker)
@@ -608,6 +617,10 @@ class PBTTuner:
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as e:
+            # Safety: drain any remaining barriers not already drained by orchestrator
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
+
             recovered = False
             if self.env is None:
                 worker_logger.error(
@@ -641,6 +654,8 @@ class PBTTuner:
             )
 
         except TimeoutError as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             return self._build_failure_result(
                 worker_logger=worker_logger,
                 reason="timeout",
@@ -650,6 +665,8 @@ class PBTTuner:
             )
 
         except RuntimeError as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             return self._build_failure_result(
                 worker_logger=worker_logger,
                 reason="runtime",
@@ -659,6 +676,8 @@ class PBTTuner:
             )
 
         except Exception as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             worker_logger.error(
                 "Unexpected error evaluating worker %s: %s",
                 worker.worker_id,
@@ -727,6 +746,8 @@ class PBTTuner:
             parallel=True,
             require_ready=True,
             max_workers=self.pbt_config.num_parallel_workers,
+            synchronize_workers=self.pbt_config.synchronize_workers,
+            barrier_timeout=self.pbt_config.barrier_timeout_seconds,
         )
         gen_elapsed_time = time.time() - gen_start_time
 
@@ -1346,6 +1367,16 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    config_group.add_argument(
+        "--no-sync",
+        action="store_true",
+        help=(
+            "Disable lockstep barrier synchronization between workers. "
+            "By default, workers wait at each sub-step so they advance "
+            "in lockstep for fair resource sharing."
+        ),
+    )
+
     scoring_group = parser.add_argument_group("Scoring & Normalization")
     scoring_group.add_argument(
         "--scoring-policy",
@@ -1684,6 +1715,7 @@ def main():
             if args.scoring_calibration_evals is not None
             else base_config.scoring_calibration_evals
         ),
+        synchronize_workers=not args.no_sync,
         benchmark_config=benchmark_config,
     )
 
