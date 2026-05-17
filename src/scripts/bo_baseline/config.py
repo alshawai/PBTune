@@ -62,6 +62,12 @@ class BOConfig:
     max_workers: int = 1
     pbt_worker_resources: Optional[Dict[str, Any]] = None
 
+    # Scoring policy
+    # Available options:
+    # - "fixed_v1": Legacy static weights based on workload type (OLTP/OLAP/MIXED)
+    # - "feature_driven_v2": Dynamic weights based on workload features evaluating variance, tail amplification, and DB stats
+    scoring_policy: str = "default"
+
     @staticmethod
     def _load_pbt_session(path: Path) -> Dict[str, Any]:
         """Load a PBT tuning-session JSON file."""
@@ -159,6 +165,11 @@ class BOConfig:
             total_generations = int(session.get("total_generations", 0) or 0)
             if population_size > 0 and total_generations > 0:
                 self.n_iterations = population_size * total_generations
+            else:
+                LOGGER.warning(
+                    "PBT session is missing positive population_size or "
+                    "total_generations; keeping configured BO iteration budget"
+                )
 
         best_configuration = payload.get("best_configuration", {})
         if isinstance(best_configuration, dict):
@@ -171,11 +182,20 @@ class BOConfig:
         if isinstance(worker_resources, dict):
             self.pbt_worker_resources = worker_resources
 
-        # Extract population_size for parallel BO (only if set_max_workers=True)
+        # Extract num_parallel_workers for parallel BO (only if set_max_workers=True)
         if set_max_workers:
-            population_size = int(session.get("population_size", 0) or 0)
-            if population_size > 0:
-                self.max_workers = population_size
+            num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
+            if num_parallel_workers > 0:
+                self.max_workers = num_parallel_workers
+            else:
+                LOGGER.warning(
+                    "PBT session is missing positive num_parallel_workers; "
+                    "keeping configured BO parallel worker count"
+                )
+
+        # Extract scoring policy from PBT session if present
+        if "scoring_policy" in session:
+            self.scoring_policy = str(session["scoring_policy"])
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "BOConfig":
@@ -247,9 +267,12 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
-            max_workers=args.max_workers
-            if args.max_workers is not None
+            max_workers=args.parallel_workers
+            if args.parallel_workers is not None
             else base_config.max_workers,
+            scoring_policy=args.scoring_policy
+            if hasattr(args, "scoring_policy") and args.scoring_policy is not None
+            else base_config.scoring_policy,
         )
 
         if args.pbt_session:
@@ -257,7 +280,7 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
-                    set_max_workers=args.max_workers is None,
+                    set_max_workers=args.parallel_workers is None,
                 )
             except Exception as e:
                 LOGGER.warning(

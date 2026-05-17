@@ -94,7 +94,10 @@ class BOBaselineRunner:
 
         # Metric config
         workload_type = WorkloadType(config.benchmark_config.workload_type)
-        self.metric_config = create_metric_config(workload_type.value)
+        self.metric_config = create_metric_config(
+            workload_type.value,
+            scoring_policy=config.scoring_policy
+        )
 
         self.logger.info(f"BO Baseline Runner initialized for tier: {config.knob_tier}")
 
@@ -391,6 +394,7 @@ class BOBaselineRunner:
                 iteration_log=iteration_log,
                 total_time=total_time,
                 output_dir=self.config.output_dir,
+                metric_config=self.metric_config,
                 bo_surrogate=bo_surrogate,
             )
 
@@ -449,7 +453,7 @@ class BOBaselineRunner:
             def evaluate_trial(worker_idx: int, trial_info: TrialInfo):
                 worker = workers[worker_idx]
                 try:
-                    cost, knob_config, metrics, score, restarted, wall_time = (
+                    cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
                         evaluate_config(
                             trial_info.config,
                             worker,
@@ -467,6 +471,7 @@ class BOBaselineRunner:
                         knob_config,
                         metrics,
                         score,
+                        score_breakdown,
                         restarted,
                     )
                 except Exception as e:
@@ -474,7 +479,7 @@ class BOBaselineRunner:
                         f"Error evaluating config on worker {worker_idx}: {e}",
                         exc_info=True,
                     )
-                    return trial_info, 100.0, 0.0, {}, None, 0.0, False
+                    return trial_info, 100.0, 0.0, {}, None, 0.0, None, False
 
             with ThreadPoolExecutor(max_workers=batch_size) as executor:
                 futures = {
@@ -490,6 +495,7 @@ class BOBaselineRunner:
                         knob_config,
                         metrics,
                         score,
+                        score_breakdown,
                         restarted,
                     ) = future.result()
 
@@ -505,8 +511,9 @@ class BOBaselineRunner:
                         "config": knob_config,
                         "metrics": metrics.to_dict() if metrics is not None else {},
                         "score": score if score is not None else 0.0,
+                        "score_breakdown": score_breakdown,
                         "cost": cost,
-                        "wall_time_seconds": wall_time,
+                        "wall_clock_seconds": wall_time,
                         "restarted": restarted,
                         "timestamp": time.time(),
                     }
@@ -710,13 +717,19 @@ def main():
         ),
     )
     parser.add_argument(
-        "--max-workers",
+        "--parallel-workers",
         type=int,
         default=None,
         help=(
             "Number of parallel BO workers (PostgreSQL instances). "
-            "Defaults to 1, or to PBT population_size when --pbt-session is used."
+            "Defaults to 1, or to PBT num_parallel_workers when --pbt-session is used."
         ),
+    )
+    parser.add_argument(
+        "--scoring-policy",
+        type=str,
+        default=None,
+        help="Scoring policy to use. Options: 'fixed_v1', 'feature_driven_v2' (default: preset value per workload)",
     )
 
     args = parser.parse_args()
