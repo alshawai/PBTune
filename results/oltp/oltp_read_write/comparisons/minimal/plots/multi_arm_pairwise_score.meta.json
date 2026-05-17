@@ -1,0 +1,14 @@
+{
+  "fig_id": "multi_arm_pairwise_score",
+  "generated_at": "2026-05-17T20:30:45.887892+00:00",
+  "formats_exported": [
+    "png",
+    "pdf"
+  ],
+  "git_commit": "b5a0af9262186479438166f94ad1ba23814641c7",
+  "figure_size_inches": [
+    5.0,
+    3.25
+  ],
+  "source": "results/oltp/oltp_read_write/comparisons/minimal/multi_arm_comparison_20260517_195547.json"
+}
