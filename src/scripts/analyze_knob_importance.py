@@ -283,8 +283,8 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
 
     LOGGER.info("Found %d distinct hardware profile(s).", len(groups))
 
-    profile_results = []
-    combined_data_list = []
+    profile_results: list[tuple[ImportanceResult, dict[str, Any]]] = []
+    combined_data_list: list[tuple[LoadedData, dict[str, Any]]] = []
     
     # Keep track of the final resolved paths for the combined model output
     final_actual_workload = initial_workload
