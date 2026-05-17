@@ -26,6 +26,7 @@ References:
 
 from __future__ import annotations
 
+import itertools
 import math
 from typing import Callable
 
@@ -37,6 +38,7 @@ from src.utils.scoring.constants import METRIC_DIRECTIONALITY
 from src.evaluation.types import (
     ComparisonStatistics,
     MetricComparison,
+    PairwiseResult,
     RunResult,
     StatSummary,
 )
@@ -197,6 +199,60 @@ def compute_comparison_statistics(
         primary_significant=score_mc.significant,
         secondary_correction_method="holm",
     )
+
+
+def compute_pairwise_statistics(
+    runs_by_arm: dict[str, list[RunResult]],
+    benchmark: str,
+    alpha: float = _ALPHA,
+) -> list[PairwiseResult]:
+    """
+    Compute Wilcoxon signed-rank statistics for all pairwise arm combinations.
+
+    Uses ``itertools.combinations`` to generate C(k, 2) pairs from the arm
+    dictionary. The "default" arm is always placed as arm_a (baseline) when
+    present; otherwise pairs are ordered alphabetically so improvement
+    direction is consistent (positive = arm_b outperforms arm_a).
+
+    Args:
+        runs_by_arm: Mapping of arm name to its list of RunResults.
+            All arms must have the same number of runs with matching
+            (run_number, pair_seed) tuples.
+        benchmark: Benchmark type ("sysbench" or "tpch").
+        alpha: Family-wise significance level.
+
+    Returns:
+        List of PairwiseResult, one per arm pair.
+    """
+    arm_names = sorted(runs_by_arm.keys())
+    results: list[PairwiseResult] = []
+
+    for raw_a, raw_b in itertools.combinations(arm_names, 2):
+        if raw_b == "default":
+            arm_a, arm_b = raw_b, raw_a
+        elif raw_a == "default":
+            arm_a, arm_b = raw_a, raw_b
+        else:
+            arm_a, arm_b = raw_a, raw_b
+
+        stats_for_pair = compute_comparison_statistics(
+            default_runs=runs_by_arm[arm_a],
+            tuned_runs=runs_by_arm[arm_b],
+            benchmark=benchmark,
+            alpha=alpha,
+        )
+        results.append(PairwiseResult(
+            arm_a=arm_a,
+            arm_b=arm_b,
+            statistics=stats_for_pair,
+        ))
+
+    LOGGER.info(
+        "Computed pairwise statistics for %d pairs across %d arms.",
+        len(results),
+        len(arm_names),
+    )
+    return results
 
 
 def _compare_metric(
