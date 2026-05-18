@@ -60,6 +60,16 @@ class BOConfig:
     pbt_session_path: Optional[Path] = None
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
+    # Parallel BO configuration
+    max_workers: int = 1
+    pbt_worker_resources: Optional[Dict[str, Any]] = None
+
+    # Scoring policy
+    # Available options:
+    # - "fixed_v1": Legacy static weights based on workload type (OLTP/OLAP/MIXED)
+    # - "feature_driven_v2": Dynamic weights based on workload features evaluating variance, tail amplification, and DB stats
+    scoring_policy: str = "default"
+
     @staticmethod
     def _load_pbt_session(path: Path) -> Dict[str, Any]:
         """Load a PBT tuning-session JSON file."""
@@ -83,7 +93,12 @@ class BOConfig:
 
         return payload
 
-    def apply_pbt_session(self, path: Path, set_iteration_budget: bool = True) -> None:
+    def apply_pbt_session(
+        self,
+        path: Path,
+        set_iteration_budget: bool = True,
+        set_max_workers: bool = True,
+    ) -> None:
         """Apply comparable benchmark/search settings from a PBT tuning session."""
         payload = self._load_pbt_session(path)
         session = payload["tuning_session"]
@@ -152,12 +167,37 @@ class BOConfig:
             total_generations = int(session.get("total_generations", 0) or 0)
             if population_size > 0 and total_generations > 0:
                 self.n_iterations = population_size * total_generations
+            else:
+                LOGGER.warning(
+                    "PBT session is missing positive population_size or "
+                    "total_generations; keeping configured BO iteration budget"
+                )
 
         best_configuration = payload.get("best_configuration", {})
         if isinstance(best_configuration, dict):
             knobs = best_configuration.get("knobs", {})
             if isinstance(knobs, dict) and knobs:
                 self.pbt_knob_names = tuple(sorted(str(name) for name in knobs))
+
+        # Extract worker resources for resource equalization
+        worker_resources = payload.get("worker_resources")
+        if isinstance(worker_resources, dict):
+            self.pbt_worker_resources = worker_resources
+
+        # Extract num_parallel_workers for parallel BO (only if set_max_workers=True)
+        if set_max_workers:
+            num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
+            if num_parallel_workers > 0:
+                self.max_workers = num_parallel_workers
+            else:
+                LOGGER.warning(
+                    "PBT session is missing positive num_parallel_workers; "
+                    "keeping configured BO parallel worker count"
+                )
+
+        # Extract scoring policy from PBT session if present
+        if "scoring_policy" in session:
+            self.scoring_policy = str(session["scoring_policy"])
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "BOConfig":
@@ -233,6 +273,12 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
+            max_workers=args.parallel_workers
+            if args.parallel_workers is not None
+            else base_config.max_workers,
+            scoring_policy=args.scoring_policy
+            if hasattr(args, "scoring_policy") and args.scoring_policy is not None
+            else base_config.scoring_policy,
         )
 
         if args.pbt_session:
@@ -240,6 +286,7 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
+                    set_max_workers=args.parallel_workers is None,
                 )
             except Exception as e:
                 LOGGER.warning(
