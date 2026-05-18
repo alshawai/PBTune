@@ -11,7 +11,32 @@ from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
-from jenkspy import jenks_breaks
+
+try:
+    from jenkspy import jenks_breaks  # type: ignore
+except Exception:  # pragma: no cover - fallback for environments without jenkspy
+
+    def jenks_breaks(values: list[float], k: int) -> list[float]:
+        """Fallback Jenks-like breaks using equal-frequency quantiles.
+
+        This is a lightweight substitute for environments where `jenkspy`
+        isn't installed (e.g., some CI/test environments). It returns
+        k+1 breakpoints from min to max using empirical quantiles.
+        """
+        arr = np.array(values, dtype=float)
+        if arr.size == 0:
+            return []
+        if k < 1:
+            raise ValueError("k must be >= 1")
+        # include min and max, and k-1 internal quantiles
+        breaks: list[float] = [float(np.min(arr))]
+        for i in range(1, k):
+            q = float(np.quantile(arr, i / k))
+            breaks.append(q)
+        breaks.append(float(np.max(arr)))
+        return breaks
+
+
 from sklearn.metrics import silhouette_score
 
 from src.knobs.knob_metadata import KNOB_TUNING_METADATA
