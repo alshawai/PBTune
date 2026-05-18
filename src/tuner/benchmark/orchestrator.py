@@ -935,7 +935,7 @@ class WorkloadOrchestrator:
 
             return metrics, score, restart_occurred
 
-        except Exception as e:
+        except Exception:
             # Top-level safety net: drain all remaining barriers.
             if barriers is not None:
                 if last_completed_barrier is not None:

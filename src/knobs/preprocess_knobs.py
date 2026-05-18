@@ -32,7 +32,7 @@ from src.knobs.policy import (
     ensure_autotuning_policy_annotations,
 )
 from src.knobs.retrieval import PostgreSQLKnobRetriever
-from src.knobs.knob_metadata import KNOB_TUNING_METADATA, IMPACT_TIERS, get_knobs_by_tier
+from src.knobs.knob_metadata import KNOB_TUNING_METADATA, get_knobs_by_tier
 from src.utils.logger import setup_logging, get_logger
 
 setup_logging()
