@@ -1,16 +1,16 @@
 # Graph Report - ai-database-optimization  (2026-05-18)
 
 ## Corpus Check
-- 372 files · ~279,921 words
+- 372 files · ~279,972 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 5855 nodes · 8690 edges · 519 communities (423 shown, 96 thin omitted)
+- 5880 nodes · 8713 edges · 523 communities (421 shown, 102 thin omitted)
 - Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 1470 edges (avg confidence: 0.71)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `29930382`
+- Built from commit: `38733b87`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -497,6 +497,10 @@
 - [[_COMMUNITY_Community 516|Community 516]]
 - [[_COMMUNITY_Community 517|Community 517]]
 - [[_COMMUNITY_Community 518|Community 518]]
+- [[_COMMUNITY_Community 519|Community 519]]
+- [[_COMMUNITY_Community 520|Community 520]]
+- [[_COMMUNITY_Community 521|Community 521]]
+- [[_COMMUNITY_Community 522|Community 522]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `PerformanceMetrics` - 137 edges
@@ -547,27 +551,27 @@
 - **Queries using correlated subqueries (optimizer-challenging patterns)** — tpch_dbgen_q2, tpch_dbgen_q4, tpch_dbgen_q17, tpch_dbgen_q20, tpch_dbgen_q21, tpch_dbgen_q22 [INFERRED 0.85]
 - **Queries using EXISTS/NOT EXISTS semi-join patterns** — tpch_dbgen_q4, tpch_dbgen_q21, tpch_dbgen_q22 [INFERRED 0.95]
 
-## Communities (519 total, 96 thin omitted)
+## Communities (523 total, 102 thin omitted)
 
 ### Community 0 - "TPC-H Benchmark Executor"
 Cohesion: 0.13
 Nodes (15): _DummySchemaProvider, Minimal schema provider stand-in used for context payload generation., Minimal schema provider stand-in used for context payload generation., When a baseline snapshot already exists, setup should skip create_snapshot., Worker 0 should not reuse an existing container when baseline snapshot is missin, When a baseline snapshot already exists, setup should skip create_snapshot., Setup should fail immediately when the required baseline snapshot is missing., Worker 0 should not reuse an existing container when baseline snapshot is missin (+7 more)
 
 ### Community 1 - "Scoring & Weight Policies"
-Cohesion: 0.09
-Nodes (20): Establish connection to PostgreSQL with retry logic.          Parameters, ApplicatorConfig, KnobApplicator, KnobContext, ParameterInfo, Knob Applicator for PostgreSQL Configuration ===================================, Information about a PostgreSQL parameter from pg_settings., Applies PostgreSQL configuration changes safely with validation.      The applic (+12 more)
+Cohesion: 0.08
+Nodes (23): Establish connection to PostgreSQL with retry logic.          Parameters, Close PostgreSQL connection.          Parameters         ----------         conn, ApplicatorConfig, KnobApplicator, KnobContext, ParameterInfo, Knob Applicator for PostgreSQL Configuration ===================================, Information about a PostgreSQL parameter from pg_settings. (+15 more)
 
 ### Community 2 - "Docker Environment Management"
-Cohesion: 0.04
-Nodes (44): BenchmarkExecutionError, KnobApplicationError, Exceptions for the evaluate_tuning module. =====================================, Raised when a PBT tuning session results file cannot be loaded.      Covers miss, Raised when scoring metadata in a tuning session has an invalid schema.      Cov, Raised when a benchmark run fails inside an evaluation container.      Covers sy, Raised when a tuned knob configuration cannot be applied.      Covers ALTER SYST, ScoringMetadataSchemaError (+36 more)
+Cohesion: 0.05
+Nodes (42): BenchmarkExecutionError, KnobApplicationError, Exceptions for the evaluate_tuning module. =====================================, Raised when a PBT tuning session results file cannot be loaded.      Covers miss, Raised when scoring metadata in a tuning session has an invalid schema.      Cov, Raised when a benchmark run fails inside an evaluation container.      Covers sy, Raised when a tuned knob configuration cannot be applied.      Covers ALTER SYST, ScoringMetadataSchemaError (+34 more)
 
 ### Community 3 - "Visualization & Theming"
 Cohesion: 0.2
 Nodes (13): BOTrace, load_bo_trace(), Loader for BO baseline traces., Parsed BO baseline tuning history., Load a Bayesian Optimization baseline trace from JSON.     Optionally accepts a, DataLoadError, FigureRegistryError, InvalidSchemaError (+5 more)
 
 ### Community 4 - "PBT Tuner Main & Config"
-Cohesion: 0.14
-Nodes (19): FeatureDrivenWeightModel, Unit tests for the feature-driven weight model and policy registry., Test that invalid floor constraints raise ValueError., Test scoring policy registry contains expected policies., Test weight model initializes with proper constraints., Test weight model returns normalized weights when no features match., Test weight model shifts weights based on feature values., Test floor constraint prevents weights from going below minimum. (+11 more)
+Cohesion: 0.05
+Nodes (44): Database Adapter Pattern, FeatureDrivenWeightModel, Fractional Transfer System, Knob Exclusion Policy, Knob Importance Transfer, Aggregate Memory Budget Repair, Negative Transfer, Population Archive (+36 more)
 
 ### Community 5 - "Hardware Detection & Info"
 Cohesion: 0.08
@@ -575,23 +579,23 @@ Nodes (34): detect_core_count(), detect_cpu_model(), detect_disk_type(), detect_
 
 ### Community 6 - "Evaluation Statistics"
 Cohesion: 0.04
-Nodes (49): _apply_significance(), _bootstrap_ci_median(), _build_extractor(), _build_power_warning(), _compare_metric(), compute_comparison_statistics(), _holm_adjusted_pvalues(), _paired_cohens_d() (+41 more)
+Nodes (42): _apply_significance(), _bootstrap_ci_median(), _build_extractor(), _build_power_warning(), _compare_metric(), compute_comparison_statistics(), _holm_adjusted_pvalues(), _paired_cohens_d() (+34 more)
 
 ### Community 7 - "Quantile Utility Normalizer"
-Cohesion: 0.05
-Nodes (47): Pilot + Freeze Normalization, QuantileUtilityNormalizer, Bayesian Optimization Baseline Runner, PBT vs BO Comparison Script, is_calibrated(), MetricDirection, QuantileUtilityNormalizer, Robust Utility Normalization ============================  Implements the Quanti (+39 more)
+Cohesion: 0.1
+Nodes (18): QuantileUtilityNormalizer, QuantileUtilityNormalizer, Return out-of-support rate for one metric since last calibration., Build a history-aware dataset for robust recalibration.          Combines curren, Detect per-metric saturation across multiple workers.          Returns dict of m, Expand a single metric's anchor on the saturated bound.          Uses the histor, Heuristic for metric direction based on name., Calibrate normalizer anchors using a historical list of metrics.          Parame (+10 more)
 
 ### Community 8 - "Sysbench Executor Tests"
-Cohesion: 0.08
-Nodes (38): _FakeConnection, _FakeCursor, _make_db_config(), Unit tests for strict Sysbench schema-profile validation., Validation should pass only when schema matches configured profile shape., Rapid profile should reject leftover standard schema (10 tables instead of 2)., Validation should fail when row cardinality does not match table_size contract., TPC-H tables should be removed before sysbench prepare to avoid contamination. (+30 more)
+Cohesion: 0.09
+Nodes (36): _FakeConnection, _make_db_config(), Unit tests for strict Sysbench schema-profile validation., Validation should pass only when schema matches configured profile shape., Rapid profile should reject leftover standard schema (10 tables instead of 2)., Validation should fail when row cardinality does not match table_size contract., TPC-H tables should be removed before sysbench prepare to avoid contamination., Sysbench executor should default to canonical read-write mode. (+28 more)
 
 ### Community 9 - "BO Baseline & Workload"
-Cohesion: 0.15
-Nodes (11): BOBaselineRunner, main(), Get runtime pg_settings knob names and server version., Restrict BO search to the knob names present in the reference PBT run., Prune knobs unavailable on runtime PostgreSQL., Build the SMAC output directory root under results., Restrict BO search to the knob names present in the reference PBT run., Build the SMAC output directory root under results. (+3 more)
+Cohesion: 0.09
+Nodes (19): Workload Orchestrator for Database Tuning ======================================, Configuration for WorkloadOrchestrator behavior.      Parameters     ----------, WorkloadOrchestratorConfig, BOBaselineRunner, main(), Create appropriate workload executor based on benchmark type., Get runtime pg_settings knob names and server version., Restrict BO search to the knob names present in the reference PBT run. (+11 more)
 
 ### Community 10 - "Comparison Runner"
-Cohesion: 0.13
-Nodes (19): main(), CLI entry point for the evaluate_tuning module.      Args:         argv: Argumen, ComparisonRunner, Orchestrates the full default-vs-tuned benchmark comparison.      Args:, Orchestrates the full default-vs-tuned benchmark comparison.      Args:, Initialize ComparisonRunner with configuration., _build_result(), _fake_docker_module() (+11 more)
+Cohesion: 0.12
+Nodes (21): main(), CLI entry point for the evaluate_tuning module.      Args:         argv: Argumen, ComparisonRunner, Orchestrates the full default-vs-tuned benchmark comparison.      Args:, Orchestrates the full default-vs-tuned benchmark comparison.      Args:, Initialize ComparisonRunner with configuration., _build_result(), Tests for converting serialized tuned knob fractions to absolute values. (+13 more)
 
 ### Community 11 - "Metric Instrumentation"
 Cohesion: 0.04
@@ -607,47 +611,47 @@ Nodes (33): DatabaseConfig, Get SQLAlchemy database URL.          Returns       
 
 ### Community 14 - "Cross-Module Rationale"
 Cohesion: 0.06
-Nodes (23): Initialize WorkloadOrchestrator.          Parameters         ----------, Initialize BO baseline runner.          Parameters         ----------         co, Create appropriate workload executor based on benchmark type., Initialize knob space.          Parameters         ----------         knob_defin, Return a filtered KnobSpace containing only runtime-safe knobs.          Filters, Initialize a Population instance.          Parameters         ----------, Initialize bare metal environment with configuration., Initialize the environment manager.          Parameters         ---------- (+15 more)
+Nodes (20): Initialize WorkloadOrchestrator.          Parameters         ----------, Initialize BO baseline runner.          Parameters         ----------         co, Initialize knob space.          Parameters         ----------         knob_defin, Return a filtered KnobSpace containing only runtime-safe knobs.          Filters, Initialize a Population instance.          Parameters         ----------, Initialize bare metal environment with configuration., Initialize the environment manager.          Parameters         ----------, Initialize Docker environment with configuration. (+12 more)
 
 ### Community 15 - "Restart Policy"
 Cohesion: 0.08
 Nodes (17): Restart Policy ===============  Pure-function restart decision logic based on tu, Decide whether to restart the database after configuration application.      Par, should_restart(), Unit tests for the RestartPolicy module (TuningMode + should_restart)., Generation 0 is always a boundary (0 % N == 0)., ONLINE mode should never restart (runtime knobs only)., Edge cases that span modes., None generation should not trigger restart in ADAPTIVE. (+9 more)
 
 ### Community 16 - "PostgreSQL Knob Retrieval"
-Cohesion: 0.1
-Nodes (19): Get list of knob names in a specific category, PostgreSQLKnobRetriever, Retrieve all PostgreSQL configuration parameters.          Returns         -----, Retrieve commonly tuned parameters for ML-based optimization.          Parameter, Get only numeric knobs (integer and real) suitable for ML optimization., Get current values as a dictionary (useful for ML feature vectors).          Par, Get memory-related configuration parameters., Get query planner configuration parameters. (+11 more)
+Cohesion: 0.08
+Nodes (23): Get list of knob names in a specific category, get_engine(), Database Connection Utilities ==============================  Provides connectio, Create a SQLAlchemy engine for pandas and ORM operations.      Parameters     --, PostgreSQLKnobRetriever, Create or return SQLAlchemy engine for pandas operations., Retrieve all PostgreSQL configuration parameters.          Returns         -----, Retrieve commonly tuned parameters for ML-based optimization.          Parameter (+15 more)
 
 ### Community 17 - "Knob Space Configuration"
 Cohesion: 0.06
 Nodes (28): KnobDefinition, KnobScale, KnobSpace, KnobType, Knob Space Definition for PostgreSQL Configuration Tuning ======================, Get default configuration (PostgreSQL defaults).          Returns         ------, Get list of all knob names, Validate if a value is valid for this knob.          Parameters         -------- (+20 more)
 
 ### Community 18 - "Bare Metal Environment"
-Cohesion: 0.08
-Nodes (43): cleanup(), collect_memory_utilization(), create_snapshot(), InstanceConfig, Base Environment Interface ===========================  Provides the polymorphic, Create a baseline snapshot from the specified worker instance., Restore a targeted worker's data directory/volume from the baseline snapshot., Configuration for a single PostgreSQL instance. (+35 more)
+Cohesion: 0.06
+Nodes (61): BareMetalEnvironment, Verify the status of all worker instances., Resolve a snapshot identifier to an absolute snapshot directory path., Bare-metal PostgreSQL environment for multi-worker parallel operations.      Con, cleanup(), collect_memory_utilization(), create_snapshot(), InstanceConfig (+53 more)
 
 ### Community 19 - "Population Initialization"
 Cohesion: 0.05
-Nodes (61): GenerationResult, _invoke_optional_worker_callback(), Population, PopulationConfig, Population Class for Population Based Training (PBT) ===========================, Manages a population of Workers for Population Based Training.      The Populati, Manages a population of Workers for Population Based Training.      The Populati, String representation of the Population. (+53 more)
+Nodes (50): GenerationResult, _invoke_optional_worker_callback(), Population, PopulationConfig, Population Class for Population Based Training (PBT) ===========================, Manages a population of Workers for Population Based Training.      The Populati, Manages a population of Workers for Population Based Training.      The Populati, String representation of the Population. (+42 more)
 
 ### Community 20 - "BO Config & Worker"
-Cohesion: 0.05
-Nodes (36): BOConfig, from_args(), _load_pbt_session(), Configuration dataclass for Bayesian Optimization baseline runner., Apply comparable benchmark/search settings from a PBT tuning session., Configuration for Bayesian Optimization baseline tuning., Apply comparable benchmark/search settings from a PBT tuning session., Validate configuration after initialization (+28 more)
+Cohesion: 0.06
+Nodes (38): BOConfig, from_args(), _load_pbt_session(), Configuration dataclass for Bayesian Optimization baseline runner., Apply comparable benchmark/search settings from a PBT tuning session., Configuration for Bayesian Optimization baseline tuning., Apply comparable benchmark/search settings from a PBT tuning session., Validate configuration after initialization (+30 more)
 
 ### Community 21 - "Evaluator Fault Injection"
-Cohesion: 0.05
-Nodes (29): GenerationBarrier, Generation Barriers for Lockstep Worker Synchronization ========================, Block until all workers reach barrier *name*.          Parameters         ------, Release all barriers from *start_from* onward (inclusive).          Call this wh, Reset all barriers for reuse in the next generation.          Must be called fro, Return the barrier name after *current*, or ``None`` if last., Thread-safe barrier collection for lockstep worker synchronization.      Paramet, Unit tests for GenerationBarrier lockstep synchronization.  Tests cover: - Basic (+21 more)
+Cohesion: 0.13
+Nodes (11): Test edge cases and error handling., Test edge cases and error handling., Passing an unknown barrier name raises ValueError., Passing an unknown barrier name raises ValueError., next_barrier_name returns correct successor., next_barrier_name returns correct successor., repr shows meaningful status., repr shows meaningful status. (+3 more)
 
 ### Community 22 - "Benchmark Orchestrator"
-Cohesion: 0.05
-Nodes (37): Workload Orchestrator for Database Tuning ======================================, Refine workload features using aggregated metrics from all workers in a generati, Refine static workload features with runtime observations using EMA blending., Main WorkloadOrchestrator class for workload execution and performance measureme, Main WorkloadOrchestrator class for workload execution and performance measureme, Refine workload features using aggregated metrics from all workers in a generati, String representation., Initialize WorkloadOrchestrator.          Parameters         ---------- (+29 more)
+Cohesion: 0.06
+Nodes (32): Refine workload features using aggregated metrics from all workers in a generati, Refine static workload features with runtime observations using EMA blending., Main WorkloadOrchestrator class for workload execution and performance measureme, Main WorkloadOrchestrator class for workload execution and performance measureme, Refine workload features using aggregated metrics from all workers in a generati, String representation., Initialize WorkloadOrchestrator.          Parameters         ----------, Establish connection to PostgreSQL with retry logic.          Parameters (+24 more)
 
 ### Community 23 - "Hardware Normalization Tests"
 Cohesion: 0.13
 Nodes (27): Unit tests for hardware normalization logic in the KnobSpace class.  These tests, Test dynamic range resolution for CPU bounds., Test that config dependency repair respects total memory budget overrides., Test disk unknown resolution., Test unit conversions from fractions to absolute., Test that extreme memory budgets preserve relative ratios between knobs., Test Worker clone_from enforces bounds AND budget repair., Test that perturbations that exceed bounds are clamped properly. (+19 more)
 
 ### Community 24 - "Benchmark Executor Base"
-Cohesion: 0.08
-Nodes (34): ABC, Execute template queries with optional concurrent execution.          Parameters, BenchmarkExecutor, BenchmarkExecutor, execute(), prepare(), External Benchmark Executors =============================  Provides interfaces, Abstract interface for external benchmarking tools.      Subclasses wrap standar (+26 more)
+Cohesion: 0.05
+Nodes (48): ABC, Execute template queries with optional concurrent execution.          Parameters, BenchmarkExecutor, BenchmarkExecutor, execute(), prepare(), External Benchmark Executors =============================  Provides interfaces, Abstract interface for external benchmarking tools.      Subclasses wrap standar (+40 more)
 
 ### Community 25 - "PBT Worker Core"
 Cohesion: 0.08
@@ -662,24 +666,24 @@ Cohesion: 0.12
 Nodes (25): Enable or disable ANSI/HTML color generation at runtime., set_colors_enabled(), _load_logger_colors_module(), _load_logger_formatters_module(), _load_logger_helpers_module(), Unit tests for logger color generation and formatter behavior., Load the logger colors module without importing the full src package., Main orchestrator modules should use the dedicated palette; others should be dyn (+17 more)
 
 ### Community 28 - "TPC-H Query Executor"
-Cohesion: 0.08
-Nodes (21): Remove the baseline snapshot directory if it exists., Resolve a host path that can be safely used in a Docker bind mount., Check whether the baseline snapshot directory exists and is valid., Build a stable benchmark-profile payload used for snapshot identity., Compute a compact signature for the current benchmark schema profile., Build a Docker-safe snapshot repository name for this profile., Path to snapshot metadata persisted in the project tree., Persist snapshot metadata for traceability within the project workspace. (+13 more)
+Cohesion: 0.06
+Nodes (27): Create a baseline snapshot by copying the worker's host PGDATA directory., Resolve a host path that can be safely used in a Docker bind mount., Convert a host path into the absolute path Docker expects for binds., Check whether the baseline snapshot directory exists and is valid., Resolve the host-side PGDATA directory for a worker's bind mount.          When, Prepare a clean host directory for a worker's PGDATA bind mount.          Remove, Remove a host directory that may contain Docker-owned files.          Files crea, Prepare a clean host PGDATA directory and seed it from the baseline snapshot. (+19 more)
 
 ### Community 29 - "Scoring Policies"
-Cohesion: 0.08
-Nodes (21): Create a baseline snapshot by copying the worker's host PGDATA directory., Resolve a worker's host port., Convert a host path into the absolute path Docker expects for binds., Wait until PostgreSQL is accepting connections., Restore a worker's PGDATA from the baseline snapshot directory., Resolve the host-side PGDATA directory for a worker's bind mount.          When, Build runtime kwargs shared across worker container launches., Wait until PostgreSQL is accepting connections. (+13 more)
+Cohesion: 0.11
+Nodes (9): Unit tests for Bayesian Optimization baseline components., Test extracting comparable BO settings from a PBT tuning session., Test extracting comparable BO settings from a PBT tuning session., Test parallel BO and resource equalization configuration., Test that worker_resources are extracted from PBT session., Test that --parallel-workers CLI arg overrides PBT-derived value., Test that max_workers defaults to 1., TestParallelBOConfiguration (+1 more)
 
 ### Community 30 - "Docker Environment Tests"
 Cohesion: 0.11
 Nodes (22): default_runs(), make_run_result(), Shared fixtures for evaluate_tuning unit tests.  Uses in-memory fakes so no Dock, Five default-config runs with realistic variance., Five tuned-config runs showing clear improvement., Write a valid PBT results JSON to a temp directory and return the path., Return the WorkerResources matching the sample session., Factory fixture: create a RunResult with deterministic values.      Usage:: (+14 more)
 
 ### Community 31 - "Evolution Algorithms"
-Cohesion: 0.08
-Nodes (34): Utility to load workload definitions from files.      Supports JSON and YAML for, Utility to load workload definitions from files.      Supports JSON and YAML for, WorkloadFileLoader, PBTConfig, PBT Configuration Parameters ============================  This module defines t, Convert configuration to dictionary, String representation, Configuration for Population Based Training algorithm.      Attributes     ----- (+26 more)
+Cohesion: 0.07
+Nodes (36): Utility to load workload definitions from files.      Supports JSON and YAML for, Utility to load workload definitions from files.      Supports JSON and YAML for, WorkloadFileLoader, PBTConfig, PBT Configuration Parameters ============================  This module defines t, Convert configuration to dictionary, String representation, Configuration for Population Based Training algorithm.      Attributes     ----- (+28 more)
 
 ### Community 32 - "Metric Config & Composite"
-Cohesion: 0.12
-Nodes (17): Establish connection to PostgreSQL with retry logic.          Parameters, get_connection(), Create a psycopg2 database connection.      Parameters     ----------     config, DatabaseEnvironment, DatabaseEnvironment, get_db_config(), Create the application database if it doesn't exist.          After initdb, only, Wait for PostgreSQL to accept connections after restart operations. (+9 more)
+Cohesion: 0.11
+Nodes (17): get_connection(), Create a psycopg2 database connection.      Parameters     ----------     config, DatabaseEnvironment, Collect PostgreSQL RSS utilization ratio against worker memory budget., DatabaseEnvironment, get_db_config(), Create the application database if it doesn't exist.          After initdb, only, Wait for PostgreSQL to accept connections after restart operations. (+9 more)
 
 ### Community 33 - "Data Loader & Analysis"
 Cohesion: 0.12
@@ -695,23 +699,23 @@ Nodes (17): Test template-based SQL feature extraction., Test simple SELECT quer
 
 ### Community 36 - "TPC-H Schema & Tables"
 Cohesion: 0.06
-Nodes (17): Workload Orchestration and Performance Metrics =================================, Bayesian Optimization baseline runner for PostgreSQL configuration tuning., Configuration Package Initialization ====================================  Expor, PBT Core Module ===============  This module contains the core PBT algorithm imp, Environments Subpackage =======================  Provides polymorphic database e, WIP placeholder package for evaluation pipeline modules., Data loaders for the visualization framework.  This layer transforms raw JSON /, Enhanced Logging for PBT PostgreSQL Tuning ===================================== (+9 more)
+Nodes (18): Analysis Module ===============  Tools and data structures for analyzing Populat, Workload Orchestration and Performance Metrics =================================, Bayesian Optimization baseline runner for PostgreSQL configuration tuning., Configuration Package Initialization ====================================  Expor, PBT Core Module ===============  This module contains the core PBT algorithm imp, Environments Subpackage =======================  Provides polymorphic database e, WIP placeholder package for evaluation pipeline modules., Data loaders for the visualization framework.  This layer transforms raw JSON / (+10 more)
 
 ### Community 37 - "Bare Metal Tests"
-Cohesion: 0.12
-Nodes (14): _make_env(), Unit tests for bare-metal worker memory utilization normalization., When worker budget is unavailable, host-total fallback should still work., Cursor stub returning a fixed backend PID., Connection stub for backend PID lookup., Process stub with parent+children RSS accounting support., Backend process stub exposing parent() to postmaster., RSS should be normalized by worker RAM budget to avoid host-scale dilution. (+6 more)
+Cohesion: 0.17
+Nodes (12): _make_env(), Unit tests for bare-metal worker memory utilization normalization., When worker budget is unavailable, host-total fallback should still work., Connection stub for backend PID lookup., Process stub with parent+children RSS accounting support., Backend process stub exposing parent() to postmaster., RSS should be normalized by worker RAM budget to avoid host-scale dilution., _StubBackendProcess (+4 more)
 
 ### Community 38 - "Knob Validation"
 Cohesion: 0.36
 Nodes (12): julian(), gen_phone(), mk_cust(), mk_nation(), mk_order(), mk_part(), mk_region(), mk_sparse() (+4 more)
 
 ### Community 39 - "Session Management"
-Cohesion: 0.11
-Nodes (23): _build_config_space(), Create ConfigSpace definitions matching encoded dataframe columns., build_configspace(), configspace_to_knobs(), Search space translation between KnobSpace and ConfigSpace., Convert a ConfigSpace Configuration back to a knob config dict.      Parameters, Translate KnobSpace into a ConfigSpace ConfigurationSpace.      Parameters     -, Test ConfigSpace translation. (+15 more)
+Cohesion: 0.12
+Nodes (20): _build_config_space(), Create ConfigSpace definitions matching encoded dataframe columns., build_configspace(), Translate KnobSpace into a ConfigSpace ConfigurationSpace.      Parameters     -, Test ConfigSpace translation., Test building ConfigSpace for minimal tier., Test building ConfigSpace for core tier., Test converting ConfigSpace config back to knob dict. (+12 more)
 
 ### Community 40 - "TPC-H Loader & Data"
-Cohesion: 0.15
-Nodes (23): load_pbt_results(), Load, validate, and globally re-score PBT training results across multiple files, Load, validate, and globally re-score PBT training results across multiple files, mock_mismatched_pbt_directory(), mock_pbt_directory(), Creates JSON files with different configurations being tuned., Creates a temporary directory with mock PBT result JSON files., Test that mixed metric_reference_version across files is handled correctly. (+15 more)
+Cohesion: 0.14
+Nodes (25): _encode_dataframe_features(), load_pbt_results(), Load, validate, and globally re-score PBT training results across multiple files, Load, validate, and globally re-score PBT training results across multiple files, Encode DataFrame configuration parameters inplace for ML compatibility.      Con, mock_mismatched_pbt_directory(), mock_pbt_directory(), Creates JSON files with different configurations being tuned. (+17 more)
 
 ### Community 41 - "Snapshot & Persistence"
 Cohesion: 0.12
@@ -722,16 +726,16 @@ Cohesion: 0.19
 Nodes (22): close_direct(), hd_cust(), hd_line(), hd_nation(), hd_order(), hd_order_line(), hd_part(), hd_part_psupp() (+14 more)
 
 ### Community 43 - "TPC-H Indexes & References"
-Cohesion: 0.11
-Nodes (24): Analysis Data Loader, Knob Importance Calculator, create_objective(), evaluate_config(), Objective function wrapper for SMAC3 Bayesian Optimization., Evaluate a single configuration on a specific worker instance.      Parameters, Create an objective function for SMAC3 with Pilot+Freeze normalization.      The, Create an objective function for SMAC3 with Pilot+Freeze normalization.      The (+16 more)
+Cohesion: 0.23
+Nodes (13): latexmk Build Flow, Modular Section Layout, PBTune PVLDB Paper, PVLDB Contributor Environment Guide, PVLDB Paper Design, PVLDB Paper Requirements, PVLDB Paper Tasks, PVLDB LaTeX Template (acmart.cls) (+5 more)
 
 ### Community 44 - "Workload Orchestrator"
 Cohesion: 0.05
-Nodes (32): Run Bayesian Optimization tuning.          Returns         -------         Dict[, _missing_docker_image_help(), Fail fast when Docker evaluation prerequisites are unavailable., Fail fast when Docker evaluation prerequisites are unavailable., Create the appropriate BenchmarkExecutor for the configured benchmark., Create the appropriate BenchmarkExecutor for the configured benchmark., Resolve effective benchmark runtime parameters using strict precedence., Resolve effective benchmark runtime parameters using strict precedence. (+24 more)
+Nodes (34): Run Bayesian Optimization tuning.          Returns         -------         Dict[, _missing_docker_image_help(), Fail fast when Docker evaluation prerequisites are unavailable., Fail fast when Docker evaluation prerequisites are unavailable., Create the appropriate BenchmarkExecutor for the configured benchmark., Create the appropriate BenchmarkExecutor for the configured benchmark., Resolve effective benchmark runtime parameters using strict precedence., Resolve effective benchmark runtime parameters using strict precedence. (+26 more)
 
 ### Community 45 - "Instance Management"
-Cohesion: 0.11
-Nodes (22): _clean_score(), compare_tier_results(), load_importances_csv(), main(), parse_args(), _parse_k_values(), Tier generation for knob importance using Jenks Natural Breaks., Serialize result to a JSON-friendly dict. (+14 more)
+Cohesion: 0.05
+Nodes (66): _build_tier_rank_map(), Build tier rank mapping for a given tier count.      Args:         tier_count: N, _build_importances(), test_agreement_report_demotion(), test_agreement_report_promotion(), test_all_equal_importances_fallback(), test_bimodal_scores_split_into_two_tiers(), test_compare_tier_results_detects_shift() (+58 more)
 
 ### Community 46 - "Docker Manifest Tests"
 Cohesion: 0.57
@@ -746,8 +750,8 @@ Cohesion: 0.13
 Nodes (13): ColorCode, ANSI control codes for terminal formatting., _escape_html(), HTMLFileHandler, HTMLFormatter, Log Formatters for Console and HTML Output =====================================, Format log records as HTML with proper color styling.      Color application is, Initialize HTMLFormatter with optional module name display.          Parameters (+5 more)
 
 ### Community 49 - "Performance Metrics"
-Cohesion: 0.11
-Nodes (12): _metrics_to_score(), Create an evaluation environment via EnvironmentFactory.          Each call crea, Create an evaluation environment via EnvironmentFactory.          Each call crea, Execute strict paired runs where each pair shares one deterministic seed., Execute strict paired runs where each pair shares one deterministic seed., Execute one benchmark repetition in a fresh environment.          Lifecycle per, Execute one benchmark repetition in a fresh environment.          Lifecycle per, Compute a composite score using the same workload-specific metric model     used (+4 more)
+Cohesion: 0.08
+Nodes (18): Main Bayesian Optimization baseline runner orchestrator., _metrics_to_score(), Comparison Runner — Core Orchestrator ======================================  Dr, Create an evaluation environment via EnvironmentFactory.          Each call crea, Create an evaluation environment via EnvironmentFactory.          Each call crea, Execute one benchmark repetition in a fresh environment.          Lifecycle per, Execute one benchmark repetition in a fresh environment.          Lifecycle per, Compute a composite score using the same workload-specific metric model     used (+10 more)
 
 ### Community 50 - "Cleanup Scripts"
 Cohesion: 0.07
@@ -778,24 +782,24 @@ Cohesion: 0.18
 Nodes (19): csv_scale_to_knob_scale(), csv_type_to_knob_type(), get_knob_space(), _infer_integer_step(), load_knob_space_for_tier(), load_knob_space_from_csv(), parse_enumvals(), _parse_numeric_bound() (+11 more)
 
 ### Community 57 - "Population Tests"
-Cohesion: 0.31
-Nodes (8): convert_numpy_types(), Result serialization for Bayesian Optimization baseline runner., Recursively convert numpy types to Python native types for JSON serialization., Resolve the base BO output directory under results., Serialize Bayesian Optimization results in PBT-compatible JSON format.      Para, Serialize Bayesian Optimization results in PBT-compatible JSON format.      Para, resolve_bo_output_root(), write_bo_results()
+Cohesion: 0.16
+Nodes (14): Analysis Data Loader, Knob Importance Calculator, create_objective(), evaluate_config(), Objective function wrapper for SMAC3 Bayesian Optimization., Evaluate a single configuration on a specific worker instance.      Parameters, Create an objective function for SMAC3 with Pilot+Freeze normalization.      The, Create an objective function for SMAC3 with Pilot+Freeze normalization.      The (+6 more)
 
 ### Community 58 - "Bare Metal Memory Tests"
 Cohesion: 0.08
-Nodes (36): DockerEnvironmentError, EvaluationError, Base exception for all evaluation failures., Raised when the Docker evaluation environment cannot be set up.      Covers Dock, Unit tests for the evaluate_tuning module.  Coverage:     - loader.py:     load_, Tests for converting serialized tuned knob fractions to absolute values., Tests for the CLI argument parser (main() with mocked runner)., Calling without --session should exit with error via SystemExit. (+28 more)
+Nodes (34): DockerEnvironmentError, EvaluationError, Base exception for all evaluation failures., Raised when the Docker evaluation environment cannot be set up.      Covers Dock, _fake_docker_module(), Unit tests for the evaluate_tuning module.  Coverage:     - loader.py:     load_, Tests for the CLI argument parser (main() with mocked runner)., Calling without --session should exit with error via SystemExit. (+26 more)
 
 ### Community 59 - "DB Connection Reuse"
-Cohesion: 0.12
-Nodes (20): Configuration for WorkloadOrchestrator behavior.      Parameters     ----------, WorkloadOrchestratorConfig, _make_workload_orchestrator(), Tests for evaluator system metrics delegation to the environment., When env is set, evaluator should delegate memory + cache hit to it., Evaluator should not perform SQL fallback when env is present., test_collect_system_metrics_delegates_to_environment(), test_collect_system_metrics_needs_environment_delegation() (+12 more)
+Cohesion: 0.14
+Nodes (15): Validate configuration after initialization, Initialize worker with random configuration if none provided., create_metric_config(), for_mixed(), for_olap(), for_oltp(), MetricConfig, Performance Metrics Module ==========================  This module defines the c (+7 more)
 
 ### Community 60 - "Knob Validation Tests"
 Cohesion: 0.36
 Nodes (9): advanceStream(), fake_a_rnd(), NthElement(), sd_cust(), sd_line(), sd_order(), sd_part(), sd_psupp() (+1 more)
 
 ### Community 61 - "Drift Detection"
-Cohesion: 0.14
-Nodes (17): add_tuning_metadata(), _clean_enumvals(), create_tier_dataframes(), load_knobs_for_tier(), load_raw_knobs(), _log_source_policy_exclusions(), preprocess_and_save_knobs(), Knob Preprocessing for Tuner ============================  This module processes (+9 more)
+Cohesion: 0.13
+Nodes (19): add_tuning_metadata(), _clean_enumvals(), create_tier_dataframes(), load_knobs_for_tier(), load_raw_knobs(), _log_source_policy_exclusions(), preprocess_and_save_knobs(), Knob Preprocessing for Tuner ============================  This module processes (+11 more)
 
 ### Community 62 - "Sysbench Core"
 Cohesion: 0.2
@@ -826,8 +830,8 @@ Cohesion: 0.3
 Nodes (13): a_rnd(), agg_str(), dsscasecmp(), dssncasecmp(), e_str(), env_config(), getopt(), mk_ascdate() (+5 more)
 
 ### Community 69 - "Worker Scoring Tests"
-Cohesion: 0.18
-Nodes (15): load_csv_to_table(), load_leads_dataset(), load_products_dataset(), Load the leads dataset (convenience function).      Parameters     ----------, Load data from a CSV file into a PostgreSQL table.      Parameters     ---------, Load the products dataset (convenience function).      Parameters     ----------, main(), Database Setup Script =====================  Sets up the PostgreSQL database for (+7 more)
+Cohesion: 0.12
+Nodes (23): _build_session_metadata(), _coerce_worker_resources(), _extract_knob_bounds(), PBT Analysis Data Loader ========================  This module provides loaders, Normalize serialized worker resources into WorkerResources dataclass., Determine continuous/discrete bounds for fANOVA ConfigSpace using KnobSpecs., Build normalized metadata payload for one tuning session file., load_csv_to_table() (+15 more)
 
 ### Community 70 - "Evolution Strategies"
 Cohesion: 0.16
@@ -862,8 +866,8 @@ Cohesion: 0.19
 Nodes (13): Q1: Pricing Summary Report, Q11: Important Stock Identification, Q12: Shipping Modes and Order Priority, Q14: Promotion Effect, Q15: Top Supplier, Q16: Parts/Supplier Relationship, Q17: Small-Quantity-Order Revenue, Q19: Discounted Revenue (+5 more)
 
 ### Community 78 - "PostgreSQL Knob Tests"
-Cohesion: 0.24
-Nodes (10): _build_session_metadata(), _coerce_worker_resources(), _encode_dataframe_features(), _extract_knob_bounds(), PBT Analysis Data Loader ========================  This module provides loaders, Normalize serialized worker resources into WorkerResources dataclass., Determine continuous/discrete bounds for fANOVA ConfigSpace using KnobSpecs., Build normalized metadata payload for one tuning session file. (+2 more)
+Cohesion: 0.17
+Nodes (15): Unit tests for the QuantileUtilityNormalizer., Test exporting and importing state., Test default initialization., Test scoring an entire metrics object., Test fitting the normalizer with observations., Test utilities are clipped to [0, 1]., Test scoring an unknown metric returns neutral utility., Test update tracking and drift detection. (+7 more)
 
 ### Community 79 - "Score Normalization Tests"
 Cohesion: 0.23
@@ -886,24 +890,24 @@ Cohesion: 0.15
 Nodes (10): CompositeScorer, Composite Scorer ================  Orchestrates the computation of the final PBT, Compute reliability gate G in [0, 1].          If evaluation failed entirely, G, Compute scalar composite score., Compute score and return breakdown of components.          Returns         -----, Computes final bounded score by applying weights and reliability gating.      Sc, Parameters         ----------         policy : ScoringPolicySpec             The, Resolve metric weights based on policy rules. (+2 more)
 
 ### Community 84 - "Paper Design & Structure"
-Cohesion: 0.11
-Nodes (29): build_combined_loaded_data(), build_hardware_profile_key(), group_importances_by_hardware(), HardwareValidationResult, _kendall_tau(), _normalize_worker_resources(), Hardware-aware validation for knob importance rankings., Build a deterministic hardware profile key.      Args:         worker_resources: (+21 more)
+Cohesion: 0.12
+Nodes (28): build_combined_loaded_data(), build_hardware_profile_key(), group_importances_by_hardware(), HardwareValidationResult, _kendall_tau(), _normalize_worker_resources(), Hardware-aware validation for knob importance rankings., Build a deterministic hardware profile key.      Args:         worker_resources: (+20 more)
 
 ### Community 85 - "TPC-H DBGEN Tables"
-Cohesion: 0.16
-Nodes (12): _ConfigHolder, from_env(), get_db_config(), get_instance(), Database Configuration Utility ================================  Centralized uti, Holds the singleton database configuration instance., Get the database configuration singleton.      This ensures that configuration i, Get the runtime connection configuration for a defined worker. (+4 more)
+Cohesion: 0.23
+Nodes (10): _ConfigHolder, from_env(), get_db_config(), get_instance(), Database Configuration Utility ================================  Centralized uti, Holds the singleton database configuration instance., Get the database configuration singleton.      This ensures that configuration i, Get the runtime connection configuration for a defined worker. (+2 more)
 
 ### Community 86 - "Metric Validation Docs"
-Cohesion: 0.19
-Nodes (18): _build_importances(), test_agreement_report_demotion(), test_agreement_report_promotion(), test_all_equal_importances_fallback(), test_bimodal_scores_split_into_two_tiers(), test_compare_tier_results_detects_shift(), test_optimal_k_selected_for_three_clusters(), test_single_knob_single_tier() (+10 more)
+Cohesion: 0.17
+Nodes (11): _ClosedConnection, _HealthyBenchmarkExecutor, _make_evaluator(), _make_worker(), Regression tests for dead-worker rescue convergence and restart guards., Forced restart must execute even when restart interval would defer it., WorkloadOrchestrator should forward and clear force-restart marker after success, Connection stub that appears closed to skip stats sampling. (+3 more)
 
 ### Community 87 - "Benchmark Executor Tests"
 Cohesion: 0.18
 Nodes (7): Test working set size calculation., Test Sysbench workload feature extraction., Test read-only OLTP feature extraction., Test read-write OLTP feature extraction., Test write-only OLTP feature extraction., Test concurrency pressure calculation., TestSysbenchFeatureExtraction
 
 ### Community 88 - "Query Pattern Analysis"
-Cohesion: 0.4
-Nodes (4): AgreementReport, Comparison between expert tiers and data-driven tiers.      Attributes:, Comparison between expert tiers and data-driven tiers.      Attributes:, Serialize report to a JSON-friendly dict.
+Cohesion: 0.18
+Nodes (7): GenerationBarrier, Reset all barriers for reuse in the next generation.          Must be called fro, Reset all barriers for reuse in the next generation.          Must be called fro, Return the barrier name after *current*, or ``None`` if last., Return the barrier name after *current*, or ``None`` if last., Thread-safe barrier collection for lockstep worker synchronization.      Paramet, Thread-safe barrier collection for lockstep worker synchronization.      Paramet
 
 ### Community 89 - "Import Analysis"
 Cohesion: 0.2
@@ -934,8 +938,8 @@ Cohesion: 0.29
 Nodes (9): create(), EnvironmentFactory, _extract_pg_major(), Environment Factory ===================  Handles environment instantiation with, Factory for creating execution environments., _resolve_docker_image(), _extract_pg_major(), Extract the major PostgreSQL version number from version strings.      Examples: (+1 more)
 
 ### Community 96 - "Evaluation Types"
-Cohesion: 0.17
-Nodes (14): MetricComparison, Type definitions for the evaluate_tuning module. ===============================, Statistical comparison for a single performance metric.      Attributes:, Statistical comparison for a single performance metric.      Attributes:, Shared datatypes for benchmark and workload configuration., double_column(), ExportFormat, FigureSize (+6 more)
+Cohesion: 0.22
+Nodes (7): drain_remaining is a no-op when disabled., drain_remaining is a no-op when disabled., Test that disabled barriers are no-ops., Test that disabled barriers are no-ops., When enabled=False, wait() returns immediately even with 1 thread., When enabled=False, wait() returns immediately even with 1 thread., TestGenerationBarrierDisabled
 
 ### Community 97 - "Analysis Data Pipeline"
 Cohesion: 0.24
@@ -946,8 +950,8 @@ Cohesion: 0.27
 Nodes (8): Database utilities for connection, management, and data loading., create_database(), drop_database(), Database Management Utilities ==============================  Provides utilities, Drop and recreate the database.      This provides a clean slate by removing all, Create the database if it does not exist.      Parameters     ----------     con, Drop the database if it exists.      This will terminate all connections to the, reset_database()
 
 ### Community 99 - "TPC-H Schema Tests"
-Cohesion: 0.22
-Nodes (7): _CursorStub, Unit tests for TPC-H schema cleanup safeguards., Cursor stub for validating DROP behavior in schema cleanup., TPC-H cleanup should remove leftover Sysbench/public tables before load., Cleanup should be a no-op when public schema has no tables., test_drop_existing_public_tables_noop_when_schema_is_empty(), test_drop_existing_public_tables_removes_foreign_workload_tables()
+Cohesion: 0.13
+Nodes (9): _PrepareCursorStub, Cursor stub for deterministic prepare() schema-cleanup behavior., _CursorStub, Unit tests for TPC-H schema cleanup safeguards., Cursor stub for validating DROP behavior in schema cleanup., TPC-H cleanup should remove leftover Sysbench/public tables before load., Cleanup should be a no-op when public schema has no tables., test_drop_existing_public_tables_noop_when_schema_is_empty() (+1 more)
 
 ### Community 100 - "Logger Banners"
 Cohesion: 0.31
@@ -958,8 +962,8 @@ Cohesion: 0.13
 Nodes (13): align_timeseries_to_grid(), EvaluationPoint, _extract_seed(), Represents a single evaluation point during tuning., Parses and encapsulates the data of a single tuning run (one seed)., Returns all metric objects (including the final best) for global pooling., Loads JSON and parses the sequence of evaluations., Returns all metric objects (including the final best) for global pooling. (+5 more)
 
 ### Community 102 - "DBGEN Compilation"
-Cohesion: 0.33
-Nodes (7): _compile_dbgen(), find_or_build_dbgen(), generate_data(), TPC-H dbgen Setup =================  Automatically locates or compiles the TPC-H, Generate TPC-H .tbl data files using dbgen.      Parameters     ----------     d, Locate an existing dbgen binary or compile from source.      Search order:     1, Clone electrum/tpch-dbgen and compile with make.
+Cohesion: 0.22
+Nodes (7): Test graceful degradation when a barrier breaks., Test graceful degradation when a barrier breaks., When a barrier times out, all subsequent waits are no-ops., When a barrier times out, all subsequent waits are no-ops., When one worker drains, other workers waiting are unblocked., When one worker drains, other workers waiting are unblocked., TestGenerationBarrierBrokenRecovery
 
 ### Community 103 - "Metric Edge Cases"
 Cohesion: 0.07
@@ -994,8 +998,8 @@ Cohesion: 0.43
 Nodes (5): get_project_root(), Notebook Setup Utilities ========================  Helper functions for Jupyter, Get the project root directory.      Assumes notebooks are in project_root/noteb, Setup notebook environment for importing from src/.          This function:, setup_notebook()
 
 ### Community 111 - "Cleanup Instance Tests"
-Cohesion: 0.08
-Nodes (23): Simple string representation., BareMetalEnvironment, Bare-Metal Environment Implementation ======================================  Pr, Start a specific worker instance using pg_ctl., Stop a specific worker instance using pg_ctl., Stop all worker instances., Recover a worker instance by stopping and restarting it., Restart a specific worker's PostgreSQL instance via pg_ctl. (+15 more)
+Cohesion: 0.11
+Nodes (11): Start a specific worker instance using pg_ctl., Stop a specific worker instance using pg_ctl., Stop all worker instances., Recover a worker instance by stopping and restarting it., Restart a specific worker's PostgreSQL instance via pg_ctl., Remove the baseline snapshot directory if it exists., Create a baseline snapshot from the specified worker instance using Rsync., Restore a targeted worker's data directory/volume from the baseline snapshot. (+3 more)
 
 ### Community 112 - "Scoring Normalization Base"
 Cohesion: 0.1
@@ -1018,12 +1022,12 @@ Cohesion: 0.08
 Nodes (23): 1. Academic Validation: External C-Binary Benchmarks, 2. Real-World Prototyping: Internal JSON Templates, Architecture: SchemaProvider Protocol, Benchmark Executor Interface, Benchmark Validation and Reproducibility, code:block1 (┌─────────────────────────┐  ┌──────────────────────────┐  ┌), code:json ({), code:bash (export DB_HOST=my-production-replica.domain.com) (+15 more)
 
 ### Community 117 - "Knob Metadata"
-Cohesion: 0.2
-Nodes (9): get_knobs_by_tier(), load_data_driven_tiers(), Knob Tuning Metadata and Preprocessing =======================================, Return knob names for a tier, preserving the existing public API shape., Load data-driven tiers from JSON and populate DATA_DRIVEN_TIERS., Return knob names for a tier, preserving the existing public API shape., Tuning-specific metadata for a knob.      Attributes     ----------     tuning_m, Tuning-specific metadata for a knob.      Attributes     ----------     tuning_m (+1 more)
+Cohesion: 0.29
+Nodes (6): get_knobs_by_tier(), load_data_driven_tiers(), Knob Tuning Metadata and Preprocessing =======================================, Return knob names for a tier, preserving the existing public API shape., Load data-driven tiers from JSON and populate DATA_DRIVEN_TIERS., Return knob names for a tier, preserving the existing public API shape.
 
 ### Community 118 - "Sysbench Command Builder"
 Cohesion: 0.22
-Nodes (5): Return True only when schema shape matches the configured Sysbench profile., Execute Sysbench benchmark and return performance metrics., Build the common sysbench CLI prefix (shared by prepare/run)., Spawn the sysbench process and wait for completion., Run native `sysbench prepare` to create all sbtest tables.
+Nodes (7): Test basic barrier synchronization behavior., Test basic barrier synchronization behavior., All N threads pass through all 17 barriers without deadlock., All N threads pass through all 17 barriers without deadlock., Workers at barrier N+1 cannot proceed until all pass barrier N., Workers at barrier N+1 cannot proceed until all pass barrier N., TestGenerationBarrierBasic
 
 ### Community 119 - "Architecture Documentation"
 Cohesion: 0.67
@@ -1134,12 +1138,12 @@ Cohesion: 0.12
 Nodes (16): 14.1 Files to Create/Update, 14.2 MySQL Setup Guide Contents, 14. Phase R11 — Documentation, 15.1 The Full Reference Table, 15. Conceptual Differences: PostgreSQL vs MySQL, 19. Paper Framing (If Deferred as Future Work), 1. Executive Summary, 3. Phase-by-Phase Implementation Plan (+8 more)
 
 ### Community 218 - "Community 218"
-Cohesion: 0.12
-Nodes (16): 1. CSV Exports from Knobs Module, 2. Typical Parameter Counts, Architecture Overview, code:block1 (┌─────────────────────────────────────────────────────────┐), Data Files Generated, Design Principles, Future Enhancements, Overview (+8 more)
+Cohesion: 0.11
+Nodes (18): 1. CSV Exports from Knobs Module, 2. Typical Parameter Counts, Architecture Overview, code:block1 (┌─────────────────────────────────────────────────────────┐), Data Files Generated, Design Principles, Future Enhancements, Module: knobs (+10 more)
 
 ### Community 219 - "Community 219"
-Cohesion: 0.12
-Nodes (13): 1. `retrieval.py`, code:python (class KnobCategory(Enum):), code:python (@dataclass), code:python (def get_all_parameters(self) -> pd.DataFrame), code:python (def get_numeric_knobs(self) -> pd.DataFrame), code:python (def get_all_knobs_with_metadata(self) -> pd.DataFrame), code:python (def get_knobs_by_context(self, context: str) -> pd.DataFrame), code:python (def get_knobs_by_category(self, category: str) -> pd.DataFra) (+5 more)
+Cohesion: 0.09
+Nodes (17): 1. `retrieval.py`, 2. `__init__.py`, 3. `__main__.py`, code:python (class KnobCategory(Enum):), code:python (@dataclass), code:python (def get_all_parameters(self) -> pd.DataFrame), code:python (def get_numeric_knobs(self) -> pd.DataFrame), code:python (def get_all_knobs_with_metadata(self) -> pd.DataFrame) (+9 more)
 
 ### Community 220 - "Community 220"
 Cohesion: 0.12
@@ -1162,8 +1166,8 @@ Cohesion: 0.12
 Nodes (15): 1. Data Preparation, 2. Cross-Validation, 3. Feature Importance, 4. Model Evaluation, 5. Hyperparameter Tuning, 6. Serialization, Built-in Importance (Tree-Based Models), code:python (from sklearn.pipeline import Pipeline) (+7 more)
 
 ### Community 225 - "Community 225"
-Cohesion: 0.18
-Nodes (15): ensure_mounted(), _fix_mount_ownership(), get_loop_device_for_image(), get_mount_point_for_device(), _parse_udisksctl_loop_setup_output(), _parse_udisksctl_mount_output(), Loopback Ext4 Image Manager ============================  Provides transparent P, Return the mount point for a given block device, or `None`. (+7 more)
+Cohesion: 0.07
+Nodes (36): convert_numpy_types(), Result serialization for Bayesian Optimization baseline runner., Recursively convert numpy types to Python native types for JSON serialization., Resolve the base BO output directory under results., Serialize Bayesian Optimization results in PBT-compatible JSON format.      Para, Serialize Bayesian Optimization results in PBT-compatible JSON format.      Para, resolve_bo_output_root(), write_bo_results() (+28 more)
 
 ### Community 226 - "Community 226"
 Cohesion: 0.13
@@ -1186,16 +1190,16 @@ Cohesion: 0.14
 Nodes (14): code:bash (git clone https://github.com/Data-Vanta/ai-database-optimiza), code:bash (pip install -r requirements.txt), code:bash (pip install -r requirements-dev.txt), code:bash (cp .env.example .env), code:env (DB_USER=postgres), code:bash (python -m src.scripts.setup_database), code:bash (make lint), Installation (+6 more)
 
 ### Community 231 - "Community 231"
-Cohesion: 0.14
-Nodes (14): _assign_interval_index(), _assign_labels(), jenks_breaks(), Assign a value to a Jenks interval index (ascending order).      Args:         v, Assign Jenks cluster labels for each score.      Args:         scores: Array of, Assign a value to a Jenks interval index (ascending order).      Args:         v, Compute silhouette score or return NaN when undefined.      Args:         scores, Assign Jenks cluster labels for each score.      Args:         scores: Array of (+6 more)
+Cohesion: 0.31
+Nodes (7): Compute mean, std, median, and IQR for a list of values., _stat_summary(), _stat_summary computes correct mean, std, median, IQR., Single-element list produces std=0 without errors., Statistical summary for a collection of scalar measurements.      Attributes:, Statistical summary for a collection of scalar measurements.      Attributes:, StatSummary
 
 ### Community 233 - "Community 233"
 Cohesion: 0.15
 Nodes (12): AI-Optimized Implementation Standards, code:md (---), Core Requirements, Execution Context, Implementation Plan Generation Mode, Mandatory Template Structure, Output File Specifications, Phase Architecture (+4 more)
 
 ### Community 234 - "Community 234"
-Cohesion: 0.15
-Nodes (5): _PrepareConnectionStub, _PrepareCursorStub, Cursor stub for deterministic prepare() schema-cleanup behavior., Connection stub for deterministic prepare() flow., Close handler and write HTML footer.
+Cohesion: 0.11
+Nodes (7): _FakeCursor, _PrepareConnectionStub, Cursor stub for deterministic validate() query responses., Connection stub for deterministic prepare() flow., Close handler and write HTML footer., Cursor stub returning a fixed backend PID., _StubCursor
 
 ### Community 235 - "Community 235"
 Cohesion: 0.15
@@ -1206,8 +1210,8 @@ Cohesion: 0.28
 Nodes (11): aggregate_results(), calculate_stats(), generate_benchmark(), generate_markdown(), load_run_results(), main(), Aggregate run results into summary statistics.      Returns run_summary with sta, Generate complete benchmark.json from run results. (+3 more)
 
 ### Community 237 - "Community 237"
-Cohesion: 0.17
-Nodes (13): Database Adapter Pattern, Fractional Transfer System, Knob Exclusion Policy, Knob Importance Transfer, Aggregate Memory Budget Repair, Negative Transfer, Population Archive, Population-Level Workload Fingerprinting (+5 more)
+Cohesion: 0.25
+Nodes (6): Unit tests for GenerationBarrier lockstep synchronization.  Tests cover: - Basic, Test reset for multi-generation reuse., Test reset for multi-generation reuse., After reset, barriers can be used again for a new generation., After reset, barriers can be used again for a new generation., TestGenerationBarrierReset
 
 ### Community 238 - "Community 238"
 Cohesion: 0.15
@@ -1278,8 +1282,8 @@ Cohesion: 0.18
 Nodes (10): 1. Install OS Dependencies (C++ Compiler & SWIG), 2. Configure Python 3.9 Environment, 3. Install Python Dependencies, code:bash (sudo apt-get update), code:bash (brew check), code:bash (# Using Conda), code:bash (# Navigate to the repository root), ⚠️ fANOVA Setup & Strict Dependencies (+2 more)
 
 ### Community 255 - "Community 255"
-Cohesion: 0.2
-Nodes (9): Create the HTML log output file under results., Create the HTML log output file under results., _maybe_use_loopback(), Data Root Configuration =======================  Provides a single source of tru, If *path* is on a non-POSIX filesystem, find and mount a loopback image.      Re, Resolve the data root directory for instance storage.      Priority:     1. CLI, resolve_data_root(), find_image_file() (+1 more)
+Cohesion: 0.43
+Nodes (6): _make_workload_orchestrator(), Tests for evaluator system metrics delegation to the environment., When env is set, evaluator should delegate memory + cache hit to it., Evaluator should not perform SQL fallback when env is present., test_collect_system_metrics_delegates_to_environment(), test_collect_system_metrics_needs_environment_delegation()
 
 ### Community 256 - "Community 256"
 Cohesion: 0.18
@@ -1410,8 +1414,8 @@ Cohesion: 0.31
 Nodes (6): Initialize BO baseline runner.          Parameters         ----------         co, add_html_file_logging(), Logging Setup and Logger Factory ==================================  Configures, Attach an HTML log handler to the root logger without resetting other handlers., Setup global logging configuration.      Called once at application startup. Col, setup_logging()
 
 ### Community 288 - "Community 288"
-Cohesion: 0.22
-Nodes (8): Main Bayesian Optimization baseline runner orchestrator., Comparison Runner — Core Orchestrator ======================================  Dr, Normalize tier names into stable path-safe slugs., Normalize tier names into stable path-safe slugs., Convert ComparisonResult to a plain JSON-serialisable dict., Convert ComparisonResult to a plain JSON-serialisable dict., _sanitize_tier_name(), _serialize_result()
+Cohesion: 0.43
+Nodes (5): is_calibrated(), MetricDirection, Robust Utility Normalization ============================  Implements the Quanti, Constants defining the optimization direction of metrics., total_samples_since_calibration()
 
 ### Community 289 - "Community 289"
 Cohesion: 0.22
@@ -1442,8 +1446,8 @@ Cohesion: 0.36
 Nodes (7): find_project_root(), main(), Run the full eval set and return results., Find the project root by walking up from cwd looking for .claude/.      Mimics h, Run a single query and return whether the skill was triggered.      Creates a co, run_eval(), run_single_query()
 
 ### Community 296 - "Community 296"
-Cohesion: 0.22
-Nodes (9): Reliability Gate, SchemaProvider Protocol, ADR-001: Sysbench Multi-Workload Integration, ADR-002: Feature-Driven Scoring v2, Dual-Evaluation Benchmarking Strategy, Evaluation Reproducibility Runbook, Feature-Driven Scoring Documentation, Metrics Validation (+1 more)
+Cohesion: 0.33
+Nodes (4): iqr_filter(), IQR-based outlier filtering for normalization calibration., Filter outliers using Interquartile Range (IQR) method.      Removes values outs, Update normalization ranges based on observed performance data.          This im
 
 ### Community 297 - "Community 297"
 Cohesion: 0.22
@@ -1786,8 +1790,8 @@ Cohesion: 0.29
 Nodes (6): code:block1 (results/{experiment_name}_{timestamp}/), code:block2 (| Method   | Metric (mean ± std) | vs Baseline p-value | Eff), /experiment-cycle — Full Experiment Lifecycle, Phase A: Design & Setup, Phase B: Execution & Monitoring, Phase C: Analysis & Reporting
 
 ### Community 382 - "Community 382"
-Cohesion: 0.29
-Nodes (5): Create appropriate workload executor based on benchmark type., Get runtime pg_settings knob names and server version from a worker instance., Get runtime pg_settings knob names and server version from a worker instance., Prune knobs unavailable on runtime PostgreSQL to avoid apply/verify failures., Prune knobs unavailable on runtime PostgreSQL to avoid apply/verify failures.
+Cohesion: 0.33
+Nodes (4): Block until all workers reach barrier *name*.          Parameters         ------, Block until all workers reach barrier *name*.          Parameters         ------, Release all barriers from *start_from* onward (inclusive).          Call this wh, Release all barriers from *start_from* onward (inclusive).          Call this wh
 
 ### Community 383 - "Community 383"
 Cohesion: 0.48
@@ -1802,8 +1806,8 @@ Cohesion: 0.48
 Nodes (5): main(), Split eval set into train and test sets, stratified by should_trigger., Run the eval + improvement loop., run_loop(), split_eval_set()
 
 ### Community 386 - "Community 386"
-Cohesion: 0.38
-Nodes (4): get_engine(), Database Connection Utilities ==============================  Provides connectio, Create a SQLAlchemy engine for pandas and ORM operations.      Parameters     --, Create or return SQLAlchemy engine for pandas operations.
+Cohesion: 0.33
+Nodes (5): Unit tests for cleanup_instances utility runtime behavior., Cleanup should build manager, register worker dirs, and stop all instances., Cleanup should exit cleanly when no instance directory exists., test_cleanup_constructs_manager_and_stops_instances(), test_cleanup_dry_run_returns_zero_when_base_dir_missing()
 
 ### Community 387 - "Community 387"
 Cohesion: 0.29
@@ -1830,8 +1834,8 @@ Cohesion: 0.29
 Nodes (7): code:python (def update_metrics(self, metrics: PerformanceMetrics, score:), code:python (def exploit_from(self, other_worker: Worker, generation: int), code:python (def perturb_config(self, factors: tuple[float, float]):), Core Methods, `exploit_from(other_worker)`, `perturb_config(perturbation_factors)`, `update_metrics(metrics, score)`
 
 ### Community 393 - "Community 393"
-Cohesion: 0.29
-Nodes (6): 2. `__init__.py`, 3. `__main__.py`, code:bash (python -m src.knobs), Components, Module: knobs, Purpose
+Cohesion: 0.4
+Nodes (5): Pilot + Freeze Normalization, Bayesian Optimization Baseline Runner, PBT vs BO Comparison Script, Global Post-Hoc Rescoring, SMAC3 Bayesian Optimization
 
 ### Community 394 - "Community 394"
 Cohesion: 0.29
@@ -1946,8 +1950,8 @@ Cohesion: 0.4
 Nodes (5): code:json ({), Example Optimized Configuration, Experimental Results, Planned Comprehensive Evaluation, Preliminary Observations
 
 ### Community 423 - "Community 423"
-Cohesion: 0.4
-Nodes (5): _build_tier_rank_map(), Build tier rank mapping for a given tier count.      Args:         tier_count: N, get_tier_names(), Return tier labels for the requested tier count.      Args:         k: Number of, Return tier labels for the requested tier count.      Args:         k: Number of
+Cohesion: 0.5
+Nodes (3): Create appropriate workload executor based on benchmark type., Create appropriate workload executor based on workload type.          Parameters, Create appropriate workload executor based on workload type.          Parameters
 
 ### Community 424 - "Community 424"
 Cohesion: 0.6
@@ -1973,10 +1977,6 @@ Nodes (5): code:python (# From Population.evaluate_generation()), Integration, P
 Cohesion: 0.4
 Nodes (5): Database Connection Architecture, Knob Categories, PostgreSQL pg_settings View, Technical Details, Value Normalization
 
-### Community 430 - "Community 430"
-Cohesion: 0.5
-Nodes (3): Scoring Policies ================  Defines the weight models and frozen policy v, Specification for a scoring policy., ScoringPolicySpec
-
 ### Community 431 - "Community 431"
 Cohesion: 0.4
 Nodes (5): stop_all should stop running prefixed containers even when not tracked., stop_all should stop running prefixed containers even when not tracked., Timeout during stop should return False when container stays running., test_stop_all_stops_untracked_running_prefixed_containers(), test_stop_instance_fails_when_stop_timeout_and_container_still_running()
@@ -2000,10 +2000,6 @@ Nodes (3): 📐 Code Style Guidelines, Documentation, Python Code
 ### Community 436 - "Community 436"
 Cohesion: 0.5
 Nodes (4): Conditions, License, Permitted Use, Prohibited Use
-
-### Community 437 - "Community 437"
-Cohesion: 0.5
-Nodes (4): get_filesystem_type(), is_non_posix_filesystem(), Return the filesystem type of the mount point containing *path*.      Returns `N, Return `True` if *path* resides on a non-POSIX filesystem.
 
 ### Community 438 - "Community 438"
 Cohesion: 0.5
@@ -2094,19 +2090,19 @@ Cohesion: 0.67
 Nodes (3): Snapshot restore should use a longer, restore-specific readiness timeout., Snapshot restore should use a longer, restore-specific readiness timeout., test_restore_snapshot_uses_restore_specific_ready_timeout()
 
 ## Knowledge Gaps
-- **2983 isolated node(s):** `PBT_IN_DOCKER`, `Database configuration loaded from environment variables.      This class provid`, `Create DatabaseConfig from environment variables.          Returns         -----`, `Get PostgreSQL connection string.          Parameters         ----------`, `Get SQLAlchemy database URL.          Returns         -------         str` (+2978 more)
+- **3008 isolated node(s):** `PBT_IN_DOCKER`, `Database configuration loaded from environment variables.      This class provid`, `Create DatabaseConfig from environment variables.          Returns         -----`, `Get PostgreSQL connection string.          Parameters         ----------`, `Get SQLAlchemy database URL.          Returns         -------         str` (+3003 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **96 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **102 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `PerformanceMetrics` connect `Population Initialization` to `Visualization & Theming`, `Evaluation Statistics`, `Quantile Utility Normalizer`, `Sysbench Executor Tests`, `BO Baseline & Workload`, `Comparison Runner`, `Metric Instrumentation`, `Community 396`, `Database Config & Connection`, `Cross-Module Rationale`, `BO Config & Worker`, `Benchmark Orchestrator`, `Benchmark Executor Base`, `Evolution Algorithms`, `Session Management`, `TPC-H Loader & Data`, `Performance Metrics`, `Cleanup Scripts`, `Visualization Plotting`, `Bare Metal Memory Tests`, `DB Connection Reuse`, `TPC-H Star Schema Queries`, `Community 216`, `Feature Weight Tuning`, `Evaluation Types`, `Analysis Data Pipeline`, `PBT vs BO Comparison`, `Metric Recalibration Tests`, `Community 365`?**
-  _High betweenness centrality (0.057) - this node is a cross-community bridge._
-- **Why does `main()` connect `Cleanup Scripts` to `BO Baseline & Workload`, `Comparison Runner`, `Database Config & Connection`, `PostgreSQL Knob Retrieval`, `Bare Metal Environment`, `BO Config & Worker`, `Benchmark Orchestrator`, `Benchmark Executor Base`, `Composite Scorer Tests`, `Community 287`, `Community 288`, `Evolution Algorithms`, `Feature Scoring Docs`, `Knob Validation`, `Workload Orchestrator`, `Instance Management`, `Docker Manifest Tests`, `Knob Validation Tests`, `Convergence Tests`, `Evolution Tests`, `Worker Scoring Tests`, `Connection Reuse`, `Metric Validation Docs`, `Evaluation Types`, `Logger Banners`, `PBT vs BO Comparison`, `Community 363`, `Cleanup Instance Tests`, `Community 243`, `Community 379`, `Community 255`?**
-  _High betweenness centrality (0.034) - this node is a cross-community bridge._
-- **Why does `DatabaseConfig` connect `Database Config & Connection` to `TPC-H Benchmark Executor`, `Scoring & Weight Policies`, `Sysbench Executor Tests`, `Comparison Runner`, `PostgreSQL Knob Retrieval`, `Community 401`, `Bare Metal Environment`, `Population Initialization`, `Benchmark Orchestrator`, `Benchmark Executor Base`, `Scoring Policies`, `Evolution Algorithms`, `Metric Config & Composite`, `Bare Metal Tests`, `Cleanup Scripts`, `Visualization Plotting`, `DB Connection Reuse`, `Sysbench Core`, `Logger Colors`, `Instance Lifecycle`, `TPC-H DBGEN Tables`, `Community 216`, `Environment Factory`, `Community 232`, `Community 234`, `Cleanup Instance Tests`, `Community 367`, `Community 379`?**
-  _High betweenness centrality (0.032) - this node is a cross-community bridge._
+- **Why does `PerformanceMetrics` connect `Population Initialization` to `Visualization & Theming`, `Quantile Utility Normalizer`, `Sysbench Executor Tests`, `BO Baseline & Workload`, `Comparison Runner`, `Metric Instrumentation`, `Community 396`, `Database Config & Connection`, `Cross-Module Rationale`, `BO Config & Worker`, `Benchmark Orchestrator`, `Benchmark Executor Base`, `Scoring Policies`, `Evolution Algorithms`, `Community 288`, `Session Management`, `TPC-H Loader & Data`, `Performance Metrics`, `Cleanup Scripts`, `Visualization Plotting`, `Bare Metal Memory Tests`, `DB Connection Reuse`, `PostgreSQL Knob Tests`, `TPC-H Star Schema Queries`, `Metric Validation Docs`, `Community 216`, `Feature Weight Tuning`, `Analysis Data Pipeline`, `PBT vs BO Comparison`, `Community 231`, `Metric Recalibration Tests`, `Community 365`?**
+  _High betweenness centrality (0.060) - this node is a cross-community bridge._
+- **Why does `DatabaseConfig` connect `Database Config & Connection` to `TPC-H Benchmark Executor`, `Scoring & Weight Policies`, `Community 386`, `Sysbench Executor Tests`, `BO Baseline & Workload`, `Comparison Runner`, `PostgreSQL Knob Retrieval`, `Community 401`, `Bare Metal Environment`, `Population Initialization`, `Benchmark Orchestrator`, `Benchmark Executor Base`, `Evolution Algorithms`, `Metric Config & Composite`, `Bare Metal Tests`, `Cleanup Scripts`, `Visualization Plotting`, `Sysbench Core`, `Logger Colors`, `Instance Lifecycle`, `TPC-H DBGEN Tables`, `Metric Validation Docs`, `Community 216`, `Environment Factory`, `TPC-H Schema Tests`, `Community 232`, `Community 234`, `Community 367`, `Community 379`, `Community 255`?**
+  _High betweenness centrality (0.033) - this node is a cross-community bridge._
+- **Why does `main()` connect `Cleanup Scripts` to `BO Baseline & Workload`, `Comparison Runner`, `Database Config & Connection`, `PostgreSQL Knob Retrieval`, `Bare Metal Environment`, `BO Config & Worker`, `Benchmark Orchestrator`, `Benchmark Executor Base`, `Composite Scorer Tests`, `Community 287`, `Evolution Algorithms`, `Feature Scoring Docs`, `Knob Validation`, `Workload Orchestrator`, `Instance Management`, `Docker Manifest Tests`, `Performance Metrics`, `Knob Validation Tests`, `Convergence Tests`, `Evolution Tests`, `Worker Scoring Tests`, `Connection Reuse`, `Community 225`, `Logger Banners`, `PBT vs BO Comparison`, `Community 363`, `Community 243`, `Community 379`?**
+  _High betweenness centrality (0.031) - this node is a cross-community bridge._
 - **Are the 130 inferred relationships involving `PerformanceMetrics` (e.g. with `ComparisonConfig` and `TuningSessionData`) actually correct?**
   _`PerformanceMetrics` has 130 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 121 inferred relationships involving `str` (e.g. with `get_filesystem_type()` and `get_loop_device_for_image()`) actually correct?**
