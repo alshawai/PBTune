@@ -11,6 +11,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from src.config.data_root import resolve_data_root
 from src.config.database import DatabaseConfig
 from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.environments import EnvironmentFactory, InstanceConfig
@@ -43,6 +44,69 @@ class _NoopBenchmarkExecutor(BenchmarkExecutor):
         return PerformanceMetrics()
 
 
+def _docker_force_remove(path: Path) -> None:
+    """Uses a root Docker container to bypass permission boundaries and rm -rf a path."""
+    if not path.exists():
+        return
+    parent = str(path.parent)
+    child = path.name
+    try:
+        import docker
+
+        client = docker.from_env()
+        client.containers.run(
+            "alpine",
+            entrypoint=["rm", "-rf", f"/host/{child}"],
+            volumes={parent: {"bind": "/host", "mode": "rw"}},
+            remove=True,
+        )
+    except Exception as e:
+        logging.warning("Failed to force-remove %s via Docker: %s", path, e)
+        # Fallback to standard shutil
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _docker_cleanup_trash(base_dir: Path | None = None) -> None:
+    """Aggressively hunts down Docker-owned .instances folders that got stuck in KDE/Gnome trash."""
+    trash_locations = [
+        Path.home() / ".local" / "share" / "Trash" / "files",
+    ]
+
+    if base_dir:
+        import os
+
+        # Find the mount point of the active data directory to handle external HDDs
+        mount_point = base_dir
+        # Walk up the tree until we hit a mount point or the root
+        while not os.path.ismount(mount_point) and mount_point.parent != mount_point:
+            mount_point = mount_point.parent
+
+        # Add any .Trash-*/files directories found on that mount point
+        for trash_dir in mount_point.glob(".Trash-*/files"):
+            if trash_dir.is_dir() and trash_dir not in trash_locations:
+                trash_locations.append(trash_dir)
+
+    import docker
+
+    try:
+        client = docker.from_env()
+    except Exception:
+        return  # Docker not available
+
+    for trash_dir in trash_locations:
+        if trash_dir.exists():
+            try:
+                client.containers.run(
+                    "alpine",
+                    entrypoint=["sh", "-c"],
+                    command=["rm -rf /host/.instances*"],
+                    volumes={str(trash_dir): {"bind": "/host", "mode": "rw"}},
+                    remove=True,
+                )
+            except Exception as e:
+                logging.debug("Failed to clear Trash %s via Docker: %s", trash_dir, e)
+
+
 def main():
     """Main entry point for cleanup script."""
     parser = argparse.ArgumentParser(description="Cleanup PostgreSQL instances")
@@ -57,10 +121,10 @@ def main():
         help="Remove global baseline snapshots and Docker images",
     )
     parser.add_argument(
-        "--base-dir",
+        "--data-dir",
         type=str,
-        default="./.instances",
-        help="Base directory for instances (default: ./.instances)",
+        default=None,
+        help="Base directory for instances. Overrides PBT_DATA_ROOT (default: ./.instances)",
     )
     parser.add_argument(
         "--force", action="store_true", help="Force removal without confirmation"
@@ -68,11 +132,9 @@ def main():
 
     args = parser.parse_args()
 
-    base_dir = Path(args.base_dir)
+    base_dir = resolve_data_root(cli_override=args.data_dir)
 
-    if not base_dir.exists():
-        print(f"No instances found at {base_dir}")
-        return 0
+    base_dir_exists = base_dir.exists()
 
     # Confirm data removal
     if (args.remove_data or args.remove_snapshots) and not args.force:
@@ -120,7 +182,7 @@ def main():
             print("✓ Docker snapshots cleaned")
 
     # Detect running bare-metal instances by checking data directories
-    worker_dirs = sorted(base_dir.rglob("worker_*"))
+    worker_dirs = sorted(base_dir.rglob("worker_*")) if base_dir_exists else []
     if worker_dirs:
         print(
             f"\nFound {len(worker_dirs)} instance directories to stop via base environment"
@@ -163,10 +225,21 @@ def main():
 
     if args.remove_data:
         print("\nRemoving data directories...")
-        for worker_dir in worker_dirs:
-            if worker_dir.is_dir():
-                shutil.rmtree(worker_dir, ignore_errors=True)
-        print("✓ Data directories removed")
+        # First clear out stuck instance folders in the system Trash to free up space
+        if docker_available:
+            _docker_cleanup_trash(base_dir=base_dir)
+            print("✓ System Trash checked for stuck instance directories")
+
+        if base_dir_exists:
+            for worker_dir in worker_dirs:
+                if worker_dir.is_dir():
+                    if docker_available:
+                        _docker_force_remove(worker_dir)
+                    else:
+                        shutil.rmtree(worker_dir, ignore_errors=True)
+            print("✓ Data directories removed")
+        else:
+            print("✓ No local data directories found")
     else:
         print("\nData directories preserved (use --remove-data to delete)")
 
@@ -177,6 +250,17 @@ def main():
             print("\nRemoving global snapshot manifests...")
             shutil.rmtree(snapshots_dir, ignore_errors=True)
             print("✓ Global snapshot manifests removed")
+
+        base_snapshots_dir = base_dir / ".snapshots"
+        if base_snapshots_dir.exists():
+            print(
+                f"\nRemoving host-level database snapshots at {base_snapshots_dir}..."
+            )
+            if docker_available:
+                _docker_force_remove(base_snapshots_dir)
+            else:
+                shutil.rmtree(base_snapshots_dir, ignore_errors=True)
+            print("✓ Host-level database snapshots removed")
 
     print("\n✓ Cleanup complete!")
     return 0

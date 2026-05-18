@@ -47,6 +47,7 @@ from datetime import datetime
 import numpy as np
 import psycopg2
 
+from src.config.data_root import resolve_data_root
 from src.config.database import get_db_config
 from src.database.connection import get_connection
 
@@ -61,6 +62,7 @@ from src.tuner.config import (
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
+from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -206,6 +208,9 @@ class PBTTuner:
         self.enable_colors = kwargs.get("enable_colors", True)
         self.disable_early_stopping = kwargs.get("disable_early_stopping", False)
 
+        self.data_dir = kwargs.get("data_dir", None)
+        self.data_root = resolve_data_root(cli_override=self.data_dir)
+
         self.warm_start_path = kwargs.get("warm_start_path", None)
         self.warm_start_provenance = {"enabled": False}
 
@@ -228,7 +233,8 @@ class PBTTuner:
 
         self.logger.debug("  Detecting hardware resources...")
         self.worker_resources = detect_worker_resources(
-            self.pbt_config.num_parallel_workers
+            self.pbt_config.num_parallel_workers,
+            data_path=self.data_root,
         )
         self.knob_space.resolve_hardware_ranges(self.worker_resources)
 
@@ -348,7 +354,7 @@ class PBTTuner:
         self.env = EnvironmentFactory.create(
             schema_provider=workload_executor,
             use_docker=not no_docker,
-            base_dir=Path("./.instances"),
+            base_dir=self.data_root,
             base_port=5440,
             db_config=self.db_config,
             worker_resources=self.worker_resources,
@@ -384,7 +390,7 @@ class PBTTuner:
             self.knob_space, pop_config, evaluator=self.orchestrator
         )
 
-        self.system_info = get_system_info()
+        self.system_info = get_system_info(data_path=self.data_root)
         self.start_time: Optional[float] = None
         self.generation_history = []
 
@@ -550,7 +556,12 @@ class PBTTuner:
         # Fallback (should not be reached if Enum is exhaustive)
         raise ValueError(f"Unknown workload type: {workload_type}")
 
-    def evaluate_worker(self, worker: Worker) -> Tuple[PerformanceMetrics, float]:
+    def evaluate_worker(
+        self,
+        worker: Worker,
+        *,
+        barriers: Optional[GenerationBarrier] = None,
+    ) -> Tuple[PerformanceMetrics, float]:
         """
         Evaluate a single worker.
 
@@ -560,6 +571,8 @@ class PBTTuner:
         ----------
         worker : Worker
             Worker to evaluate
+        barriers : GenerationBarrier | None
+            Optional lockstep barriers for synchronized evaluation.
 
         Returns
         -------
@@ -572,7 +585,8 @@ class PBTTuner:
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
             metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
-                worker, apply_config=True, generation=self.current_generation
+                worker, apply_config=True, generation=self.current_generation,
+                barriers=barriers,
             )
 
             # Track restart occurrence (will be logged once per generation, not per worker)
@@ -603,6 +617,10 @@ class PBTTuner:
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as e:
+            # Safety: drain any remaining barriers not already drained by orchestrator
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
+
             recovered = False
             if self.env is None:
                 worker_logger.error(
@@ -636,6 +654,8 @@ class PBTTuner:
             )
 
         except TimeoutError as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             return self._build_failure_result(
                 worker_logger=worker_logger,
                 reason="timeout",
@@ -645,6 +665,8 @@ class PBTTuner:
             )
 
         except RuntimeError as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             return self._build_failure_result(
                 worker_logger=worker_logger,
                 reason="runtime",
@@ -654,6 +676,8 @@ class PBTTuner:
             )
 
         except Exception as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             worker_logger.error(
                 "Unexpected error evaluating worker %s: %s",
                 worker.worker_id,
@@ -722,6 +746,8 @@ class PBTTuner:
             parallel=True,
             require_ready=True,
             max_workers=self.pbt_config.num_parallel_workers,
+            synchronize_workers=self.pbt_config.synchronize_workers,
+            barrier_timeout=self.pbt_config.barrier_timeout_seconds,
         )
         gen_elapsed_time = time.time() - gen_start_time
 
@@ -1342,6 +1368,16 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    config_group.add_argument(
+        "--no-sync",
+        action="store_true",
+        help=(
+            "Disable lockstep barrier synchronization between workers. "
+            "By default, workers wait at each sub-step so they advance "
+            "in lockstep for fair resource sharing."
+        ),
+    )
+
     scoring_group = parser.add_argument_group("Scoring & Normalization")
     scoring_group.add_argument(
         "--scoring-policy",
@@ -1442,6 +1478,16 @@ on your hardware, configuration, and workload/benchmark.
 
     instance_group = parser.add_argument_group("Instance Management")
     instance_group.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help=(
+            "Base directory for PostgreSQL instances and snapshots. "
+            "Overrides PBT_DATA_ROOT env var. (default: ./.instances)"
+        ),
+    )
+
+    instance_group.add_argument(
         "--no-docker",
         action="store_true",
         help="Run natively on bare-metal PostgreSQL instead of using Docker",
@@ -1509,6 +1555,12 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     output_group.add_argument(
+        "--colocate-output",
+        action="store_true",
+        help="Place results/logs under the data directory instead of the default ./results/ directory",
+    )
+
+    output_group.add_argument(
         "--ablation-variable",
         type=str,
         default=None,
@@ -1538,17 +1590,21 @@ def main():
     enable_colors = not args.no_color
     set_colors_enabled(enable_colors)
 
+    # Resolve data root and potentially adjust output dir
+    data_root = resolve_data_root(cli_override=args.data_dir)
+    base_output_dir = (
+        data_root / "results" if args.colocate_output else Path(args.output_dir)
+    )
+
     # Compute structured log directory.
     if args.benchmark == "sysbench":
         sysbench_workload = args.sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD
         log_output_dir = (
-            Path(args.output_dir) / "oltp" / sysbench_workload / "pbt_runs" / args.tier
+            base_output_dir / "oltp" / sysbench_workload / "pbt_runs" / args.tier
         )
     else:
         workload_for_dir = "olap" if args.benchmark == "tpch" else args.workload
-        log_output_dir = (
-            Path(args.output_dir) / workload_for_dir / "pbt_runs" / args.tier
-        )
+        log_output_dir = base_output_dir / workload_for_dir / "pbt_runs" / args.tier
     log_output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = log_output_dir / f"pbt_tuning_{timestamp}.html"
@@ -1660,6 +1716,7 @@ def main():
             if args.scoring_calibration_evals is not None
             else base_config.scoring_calibration_evals
         ),
+        synchronize_workers=not args.no_sync,
         benchmark_config=benchmark_config,
     )
 
@@ -1687,7 +1744,7 @@ def main():
             cleanup_instances=args.cleanup_instances,
             warm_start_path=args.warm_start,
             skip_schema_init=args.skip_schema_init,
-            output_dir=args.output_dir,
+            output_dir=str(base_output_dir),
             logger=logger,
             timestamp=timestamp,
             no_docker=args.no_docker,
@@ -1696,6 +1753,7 @@ def main():
             disable_early_stopping=args.disable_early_stopping,
             ablation_variable=args.ablation_variable,
             ablation_value=args.ablation_value,
+            data_dir=args.data_dir,
         )
 
         tuner.run()

@@ -118,14 +118,73 @@ def detect_disk_type() -> str:
 
     Returns 'SSD', 'HDD', or 'unknown'.
     """
+    return detect_disk_type_for_path(Path("/"))
+
+
+def _find_mount_point(target_path: Path) -> tuple[str, str]:
+    """Find the mount point and device name for a given path."""
+    target_str = str(target_path.resolve())
+    best_match = ""
+    best_device = ""
+
+    try:
+        # Sort by length descending to match deepest mount point first
+        partitions = sorted(
+            psutil.disk_partitions(all=True),
+            key=lambda p: len(p.mountpoint),
+            reverse=True,
+        )
+
+        for part in partitions:
+            # Check if target path starts with the mount point
+            # Also handle the root mount '/' correctly
+            mount_str = part.mountpoint
+            if not mount_str.endswith(os.sep):
+                mount_str += os.sep
+
+            check_path = target_str
+            if not check_path.endswith(os.sep):
+                check_path += os.sep
+
+            if check_path.startswith(mount_str):
+                best_match = part.mountpoint
+                best_device = part.device
+                break
+
+        # Fallback to root if nothing found
+        if not best_match:
+            for part in partitions:
+                if part.mountpoint == "/" or part.mountpoint == "C:\\":
+                    best_match = part.mountpoint
+                    best_device = part.device
+                    break
+
+    except (OSError, PermissionError, AttributeError):
+        pass
+
+    return best_match, best_device
+
+
+def detect_disk_type_for_path(target_path: Path) -> str:
+    """Detect disk type (SSD/HDD/unknown) for the filesystem hosting target_path.
+
+    Cross-platform: Linux, macOS, Windows.
+    This is critical for external drives: the root filesystem may be SSD
+    while the data directory lives on an external HDD.
+    """
     system = platform.system()
+    mount_point, device = _find_mount_point(target_path)
+
+    if not mount_point:
+        # Fallback if mount resolution fails
+        mount_point = "/"
 
     if system == "Linux":
-        return _detect_disk_type_linux()
+        return _detect_disk_type_linux(device)
     if system == "Darwin":
-        return _detect_disk_type_macos()
+        return _detect_disk_type_macos(mount_point)
     if system == "Windows":
-        return _detect_disk_type_windows()
+        return _detect_disk_type_windows(mount_point)
 
     return "unknown"
 
@@ -143,15 +202,23 @@ def _is_containerized() -> bool:
     return False
 
 
-def detect_worker_resources(max_parallel_workers: int = 1) -> WorkerResources:
+def detect_worker_resources(
+    max_parallel_workers: int = 1,
+    data_path: Optional[Path] = None,
+) -> WorkerResources:
     """
     Detect per-worker hardware resources.
 
     If in a container, uses cgroups via psutil limits.
     If bare-metal, divides system resources by max_parallel_workers.
     Reserves 20% of resources for OS/tuning system.
+    If data_path is provided, detects disk type for that specific path.
     """
-    disk_type = detect_disk_type()
+    if data_path is not None:
+        disk_type = detect_disk_type_for_path(data_path)
+    else:
+        disk_type = detect_disk_type()
+
     mem = psutil.virtual_memory()
     ram_bytes = mem.total
 
@@ -177,20 +244,37 @@ def detect_worker_resources(max_parallel_workers: int = 1) -> WorkerResources:
     )
 
 
-def _detect_disk_type_linux() -> str:
+def _detect_disk_type_linux(device_path: Optional[str] = None) -> str:
     """Linux disk type detection via /sys/block rotational flag."""
     try:
-        partitions = psutil.disk_partitions()
-        root_device = None
-        for part in partitions:
-            if part.mountpoint == "/":
-                root_device = part.device
-                break
+        if not device_path:
+            partitions = psutil.disk_partitions()
+            for part in partitions:
+                if part.mountpoint == "/":
+                    device_path = part.device
+                    break
 
-        if not root_device:
+        if not device_path:
             return "unknown"
 
-        dev_name = os.path.basename(os.path.realpath(root_device))
+        dev_name = os.path.basename(os.path.realpath(device_path))
+
+        # Loop devices: resolve the backing file's physical device
+        if dev_name.startswith("loop"):
+            backing_file_path = Path(f"/sys/block/{dev_name}/loop/backing_file")
+            if backing_file_path.exists():
+                backing_file = backing_file_path.read_text(encoding="utf-8").strip()
+                # Find which physical device hosts the backing file
+                _, backing_device = _find_mount_point(Path(backing_file))
+                if backing_device:
+                    dev_name = os.path.basename(os.path.realpath(backing_device))
+                else:
+                    # Fallback: loop device itself reports rotational correctly
+                    rotational_path = Path(f"/sys/block/{dev_name}/queue/rotational")
+                    if rotational_path.exists():
+                        val = rotational_path.read_text(encoding="utf-8").strip()
+                        return "HDD" if val == "1" else "SSD"
+                    return "unknown"
 
         if dev_name.startswith("nvme"):
             base = dev_name.split("p")[0] if "p" in dev_name[4:] else dev_name
@@ -207,14 +291,14 @@ def _detect_disk_type_linux() -> str:
     return "unknown"
 
 
-def _detect_disk_type_macos() -> str:
+def _detect_disk_type_macos(mount_point: str = "/") -> str:
     """macOS disk type detection via diskutil."""
     diskutil = shutil.which("diskutil")
     if not diskutil:
         return "unknown"
     try:
         result = subprocess.run(
-            [diskutil, "info", "/"],
+            [diskutil, "info", mount_point],
             capture_output=True,
             text=True,
             timeout=10,
@@ -231,12 +315,13 @@ def _detect_disk_type_macos() -> str:
     return "unknown"
 
 
-def _detect_disk_type_windows() -> str:
+def _detect_disk_type_windows(mount_point: str = "C:\\") -> str:
     """Windows disk type detection via PowerShell Get-PhysicalDisk."""
     powershell = shutil.which("powershell")
     if not powershell:
         return "unknown"
     try:
+        # Simple detection first
         result = subprocess.run(
             [
                 powershell,
@@ -297,7 +382,7 @@ def detect_os_info() -> Dict[str, str]:
     }
 
 
-def get_system_info() -> Dict[str, Any]:
+def get_system_info(data_path: Optional[Path] = None) -> Dict[str, Any]:
     """
     Collect comprehensive system hardware and software information.
 
@@ -322,7 +407,14 @@ def get_system_info() -> Dict[str, Any]:
         info["ram"] = {"total_bytes": 0, "total_gb": 0.0}
 
     try:
-        info["disk_type"] = detect_disk_type()
+        system_disk = detect_disk_type()
+        info["disk_type"] = system_disk
+
+        # Add specific data_disk_type if data_path is provided and different
+        if data_path is not None:
+            data_disk = detect_disk_type_for_path(data_path)
+            if data_disk != system_disk:
+                info["data_disk_type"] = data_disk
     except (OSError, ValueError, TypeError):
         info["disk_type"] = "detection_failed"
 
@@ -379,6 +471,8 @@ def log_system_info(
     )
     logger.info("  RAM:            %.2f GB", ram.get("total_gb", 0.0))
     logger.info("  Disk Type:      %s", system_info.get("disk_type", "unknown"))
+    if "data_disk_type" in system_info:
+        logger.info("  Data Disk Type: %s", system_info["data_disk_type"])
     logger.info("  PostgreSQL:     %s", system_info.get("pg_version", "unknown"))
     logger.info(
         "  OS:             %s %s (%s)",
