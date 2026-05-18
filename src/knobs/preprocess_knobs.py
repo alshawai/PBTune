@@ -32,7 +32,7 @@ from src.knobs.policy import (
     ensure_autotuning_policy_annotations,
 )
 from src.knobs.retrieval import PostgreSQLKnobRetriever
-from src.knobs.knob_metadata import KNOB_TUNING_METADATA, IMPACT_TIERS
+from src.knobs.knob_metadata import KNOB_TUNING_METADATA, IMPACT_TIERS, get_knobs_by_tier
 from src.utils.logger import setup_logging, get_logger
 
 setup_logging()
@@ -233,7 +233,7 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     return tunable
 
 
-def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+def create_tier_dataframes(df: pd.DataFrame, tier_source: str = "expert") -> Dict[str, pd.DataFrame]:
     """
     Create separate dataframes for each impact tier.
 
@@ -241,6 +241,8 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     ----------
     df : pd.DataFrame
         Preprocessed knobs
+    tier_source : str
+        Source of tiers ('expert' or 'data_driven')
 
     Returns
     -------
@@ -249,13 +251,13 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """
     tiers = {}
 
-    minimal_knobs = IMPACT_TIERS["minimal"]
+    minimal_knobs = get_knobs_by_tier("minimal", source=tier_source)
     tiers["minimal"] = df[df["name"].isin(minimal_knobs)].copy()
 
-    core_knobs = IMPACT_TIERS["core"]
+    core_knobs = get_knobs_by_tier("core", source=tier_source)
     tiers["core"] = df[df["name"].isin(core_knobs)].copy()
 
-    standard_knobs = IMPACT_TIERS["standard"]
+    standard_knobs = get_knobs_by_tier("standard", source=tier_source)
     tiers["standard"] = df[df["name"].isin(standard_knobs)].copy()
 
     tiers["extensive"] = df.copy()
