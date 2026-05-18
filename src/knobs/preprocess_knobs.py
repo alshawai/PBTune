@@ -32,7 +32,7 @@ from src.knobs.policy import (
     ensure_autotuning_policy_annotations,
 )
 from src.knobs.retrieval import PostgreSQLKnobRetriever
-from src.knobs.knob_metadata import KNOB_TUNING_METADATA, IMPACT_TIERS
+from src.knobs.knob_metadata import KNOB_TUNING_METADATA, get_knobs_by_tier
 from src.utils.logger import setup_logging, get_logger
 
 setup_logging()
@@ -233,7 +233,7 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     return tunable
 
 
-def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+def create_tier_dataframes(df: pd.DataFrame, tier_source: str = "expert") -> Dict[str, pd.DataFrame]:
     """
     Create separate dataframes for each impact tier.
 
@@ -241,6 +241,8 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     ----------
     df : pd.DataFrame
         Preprocessed knobs
+    tier_source : str
+        Source of tiers ('expert' or 'data_driven')
 
     Returns
     -------
@@ -249,14 +251,27 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """
     tiers = {}
 
-    minimal_knobs = IMPACT_TIERS["minimal"]
-    tiers["minimal"] = df[df["name"].isin(minimal_knobs)].copy()
+    if tier_source == "data_driven":
+        from src.knobs.knob_metadata import DATA_DRIVEN_TIERS
+        if DATA_DRIVEN_TIERS is not None:
+            for tier_name in DATA_DRIVEN_TIERS.keys():
+                if tier_name == "extensive":
+                    continue
+                knob_names = get_knobs_by_tier(tier_name, source=tier_source)
+                tiers[tier_name] = df[df["name"].isin(knob_names)].copy()
+        else:
+            logger.warning("Data-driven tiers not loaded. Falling back to expert tiers.")
+            tier_source = "expert"
 
-    core_knobs = IMPACT_TIERS["core"]
-    tiers["core"] = df[df["name"].isin(core_knobs)].copy()
+    if tier_source == "expert":
+        minimal_knobs = get_knobs_by_tier("minimal", source=tier_source)
+        tiers["minimal"] = df[df["name"].isin(minimal_knobs)].copy()
 
-    standard_knobs = IMPACT_TIERS["standard"]
-    tiers["standard"] = df[df["name"].isin(standard_knobs)].copy()
+        core_knobs = get_knobs_by_tier("core", source=tier_source)
+        tiers["core"] = df[df["name"].isin(core_knobs)].copy()
+
+        standard_knobs = get_knobs_by_tier("standard", source=tier_source)
+        tiers["standard"] = df[df["name"].isin(standard_knobs)].copy()
 
     tiers["extensive"] = df.copy()
 
@@ -264,7 +279,7 @@ def create_tier_dataframes(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
 
 def preprocess_and_save_knobs(
-    raw_csv_path: Optional[str] = None, output_dir: str = "data/tuner_knobs"
+    raw_csv_path: Optional[str] = None, output_dir: str = "data/tuner_knobs", tier_source: str = "expert"
 ) -> Dict[str, str]:
     """
     Complete preprocessing pipeline.
@@ -280,6 +295,8 @@ def preprocess_and_save_knobs(
         Path to raw knobs CSV. If None, retrieves from database.
     output_dir : str
         Directory to save preprocessed CSVs
+    tier_source : str
+        Source of tiers ('expert' or 'data_driven')
 
     Returns
     -------
@@ -310,7 +327,7 @@ def preprocess_and_save_knobs(
     print(f"    - Runtime modifiable: {(~df_tunable['requires_restart']).sum()}")
 
     print("\n[4/4] Creating tier-specific datasets...")
-    tiers = create_tier_dataframes(df_tunable)
+    tiers = create_tier_dataframes(df_tunable, tier_source=tier_source)
 
     saved_paths = {}
     for tier_name, tier_df in tiers.items():
