@@ -21,7 +21,7 @@ def test_cleanup_constructs_manager_and_stops_instances(tmp_path: Path) -> None:
     fake_manager = SimpleNamespace(instances={}, stop_all=MagicMock())
 
     args = Namespace(
-        remove_data=False, remove_snapshots=False, base_dir=str(base_dir), force=False
+        remove_data=False, remove_snapshots=False, data_dir=str(base_dir), force=False
     )
 
     with (
@@ -59,7 +59,7 @@ def test_cleanup_dry_run_returns_zero_when_base_dir_missing(tmp_path: Path) -> N
     args = Namespace(
         remove_data=False,
         remove_snapshots=False,
-        base_dir=str(missing_dir),
+        data_dir=str(missing_dir),
         force=False,
     )
 

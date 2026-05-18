@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 import sys
+import importlib
 from unittest.mock import MagicMock
 
 # Mock ConfigSpace and fanova
@@ -58,10 +59,13 @@ sys.modules["shap"] = mock_shap
 
 from src.analysis.data_loader import LoadedData
 from src.utils.metrics import MetricConfig
-from src.analysis.importance import (
-    analyze_knob_importance,
-    InsufficientDataError,
-)
+
+import src.analysis.importance as importance
+
+importlib.reload(importance)
+
+analyze_knob_importance = importance.analyze_knob_importance
+InsufficientDataError = importance.InsufficientDataError
 
 
 def create_mock_loaded_data(

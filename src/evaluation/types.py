@@ -66,6 +66,8 @@ class ComparisonConfig:
     scoring_policy_version: Optional[str] = None
     metric_reference_version: Optional[str] = None
     bo_session_path: Optional[Path] = None
+    data_dir: Optional[str] = None
+    colocate_output: bool = False
 
 
 @dataclass

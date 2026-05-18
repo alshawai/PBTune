@@ -36,6 +36,7 @@ from src.tuner.core.evolution import (
     get_population_statistics,
     check_convergence,
 )
+from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.environments import DatabaseEnvironment
 from src.utils.metrics import PerformanceMetrics
@@ -336,6 +337,8 @@ class Population:
         evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         max_workers: Optional[int] = None,
+        synchronize_workers: bool = False,
+        barrier_timeout: float = 120.0,
     ) -> None:
         """
         Evaluate all workers in the current generation.
@@ -358,6 +361,11 @@ class Population:
             Whether to evaluate workers in parallel
         max_workers : Optional[int]
             Maximum number of parallel threads. Defaults to population_size.
+        synchronize_workers : bool, default=False
+            When True and parallel, insert threading.Barrier sync points
+            between every sub-step so workers advance in lockstep.
+        barrier_timeout : float, default=120.0
+            Timeout in seconds for each barrier wait.
 
         Example
         -------
@@ -370,15 +378,32 @@ class Population:
         >>> population.evaluate_generation(my_evaluate, parallel=True)
         """
         LOGGER.info(
-            "Evaluating generation %s - %s",
+            "Evaluating generation %s - %s%s",
             self.current_generation,
             "parallel" if parallel else "sequential",
+            " (lockstep sync)" if (parallel and synchronize_workers) else "",
         )
 
+        # Create barriers for lockstep synchronization.
+        # Disabled when running sequentially or when synchronize_workers=False.
+        use_barriers = parallel and synchronize_workers
+        barriers = GenerationBarrier(
+            num_workers=len(self.workers),
+            timeout=barrier_timeout,
+            enabled=use_barriers,
+        )
+        if use_barriers:
+            LOGGER.debug(
+                "Lockstep barriers enabled: %d workers, %.0fs timeout",
+                len(self.workers),
+                barrier_timeout,
+            )
+
         if not parallel:
+            # Sequential mode: barriers are disabled (no-op).
             for worker in self.workers:
                 try:
-                    metrics, score = evaluate_fn(worker)
+                    metrics, score = evaluate_fn(worker, barriers=barriers)
                     worker.update_metrics(metrics, score)
                     worker_logger = get_logger(
                         "PopulationWorker", worker_id=worker.worker_id
@@ -395,9 +420,9 @@ class Population:
         else:
             max_workers = max_workers or self.config.population_size
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all evaluation tasks
+                # Submit all evaluation tasks (barrier object shared across threads)
                 future_to_worker = {
-                    executor.submit(evaluate_fn, worker): worker
+                    executor.submit(evaluate_fn, worker, barriers=barriers): worker
                     for worker in self.workers
                 }
 
@@ -747,12 +772,19 @@ class Population:
 
         return num_exploited
 
-    def record_generation(self) -> GenerationResult:
+    def record_generation(self, previous_best_score: float = 0.0) -> GenerationResult:
         """
         Record statistics and results for the current generation.
 
-        Computes population statistics, identifies best worker, checks
-        convergence, and updates history.
+        Computes population statistics, identifies best worker, checks convergence,
+        and tracks improvements against the score from BEFORE finalization (to avoid
+        double-counting when _finalize_scores already updated best_overall_score).
+
+        Parameters
+        ----------
+        previous_best_score : float
+            The best_overall_score value BEFORE _finalize_scores() was called.
+            Defaults to 0.0 for backward compatibility.
 
         Returns
         -------
@@ -786,10 +818,10 @@ class Population:
         )
         self.history.append(result)
 
-        if result.best_score > self.best_overall_score:
-            self.best_overall_score = result.best_score
-            self.best_overall_metrics = best_worker.metrics
-            self.best_overall_config = best_worker.knob_config.copy()  # type: ignore
+        # Compare against the score from BEFORE finalization to correctly track improvements.
+        # The _finalize_scores() method has already updated best_overall_score, so we compare
+        # against what it was before that update to detect true new discoveries.
+        if result.best_score > previous_best_score:
             self.generations_without_improvement = 0
             LOGGER.info("New best score: %.4f", self.best_overall_score)
         else:
@@ -810,6 +842,8 @@ class Population:
         parallel: bool = True,
         require_ready: bool = True,
         max_workers: Optional[int] = None,
+        synchronize_workers: bool = False,
+        barrier_timeout: float = 120.0,
     ) -> GenerationResult:
         """
         Execute one complete PBT generation.
@@ -832,6 +866,11 @@ class Population:
             Maximum parallel workers for evaluation. When less than
             population_size, workers evaluate in batches. If None,
             defaults to population_size.
+        synchronize_workers : bool, default=False
+            When True and parallel, insert lockstep barriers between every
+            sub-step of worker evaluation for experimental fairness.
+        barrier_timeout : float, default=120.0
+            Timeout per barrier in seconds.
 
         Returns
         -------
@@ -907,7 +946,11 @@ class Population:
                 raise
 
         self.evaluate_generation(
-            evaluate_fn, parallel=parallel, max_workers=max_workers
+            evaluate_fn,
+            parallel=parallel,
+            max_workers=max_workers,
+            synchronize_workers=synchronize_workers,
+            barrier_timeout=barrier_timeout,
         )
 
         rescued = self.rescue_dead_workers(evaluate_fn)
@@ -916,11 +959,15 @@ class Population:
 
         self.update_metric_ranges_if_needed()
 
+        # Save the previous best score before finalization to track true improvements
+        # (finalize_scores() will update best_overall_score, so we need the old value for comparison)
+        previous_best_overall = self.best_overall_score
+
         # Finalize scores (detect saturation, rescore workers/best_overall)
         self._finalize_scores()
 
         # Record generation with finalized scores
-        result = self.record_generation()
+        result = self.record_generation(previous_best_score=previous_best_overall)
 
         num_exploited = self.exploit_and_explore(
             require_ready=require_ready,

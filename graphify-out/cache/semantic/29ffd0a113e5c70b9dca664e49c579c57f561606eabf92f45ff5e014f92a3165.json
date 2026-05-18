@@ -1,0 +1,1 @@
+{"nodes": [{"id": "config_platform_portability", "label": "Platform portability layer (DSS_HUGE typedef, RNG constants, process control)", "file_type": "code", "source_file": "src/benchmarks/tpch/tpch-dbgen/config.h", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}

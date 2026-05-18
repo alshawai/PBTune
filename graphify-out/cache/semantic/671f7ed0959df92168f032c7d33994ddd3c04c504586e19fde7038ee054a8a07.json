@@ -1,0 +1,1 @@
+{"nodes": [{"id": "tpch_dbgen_q21", "label": "TPC-H Q21: Suppliers Who Kept Orders Waiting (supplier-lineitem-orders-nation with EXISTS/NOT EXISTS)", "file_type": "code", "source_file": "src/benchmarks/tpch/tpch-dbgen/queries/21.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
