@@ -43,9 +43,11 @@ class BOConfig:
     docker_image: Optional[str] = None
     force_recreate_instances: bool = False
     force_recreate_baseline: bool = False
+    data_dir: Optional[str] = None
 
     # Output Configuration
     output_dir: Path = field(default_factory=lambda: Path("results"))
+    colocate_output: bool = False
     verbose: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     # Pilot+Freeze: number of initial design iterations before freezing ranges
@@ -257,9 +259,13 @@ class BOConfig:
             docker_image=args.docker_image,
             force_recreate_instances=args.force_recreate_instances,
             force_recreate_baseline=args.force_recreate_baseline,
+            data_dir=args.data_dir if hasattr(args, "data_dir") else None,
             output_dir=Path(args.output_dir)
             if args.output_dir is not None
             else base_config.output_dir,
+            colocate_output=args.colocate_output
+            if hasattr(args, "colocate_output")
+            else False,
             verbose=args.verbose if args.verbose is not None else base_config.verbose,
             range_update_interval=args.range_update_interval
             if args.range_update_interval is not None

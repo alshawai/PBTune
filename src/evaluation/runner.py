@@ -41,6 +41,7 @@ from src.utils.environments import EnvironmentFactory, DatabaseEnvironment
 from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
 from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
 from src.utils.metrics import PerformanceMetrics, create_metric_config
+from src.config.data_root import resolve_data_root
 from src.utils.rescoring import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import (
     SysbenchExecutor,
@@ -480,9 +481,12 @@ class ComparisonRunner:
         if self.base_db_config is None:
             self.base_db_config = get_db_config()
 
+        data_root = resolve_data_root(cli_override=self.config.data_dir)
+
         return EnvironmentFactory.create(
             schema_provider=executor,
             use_docker=self.config.use_docker,
+            base_dir=data_root,
             db_config=self.base_db_config,
             worker_resources=worker_resources,
             run_id=f"eval_{self.timestamp}",
@@ -784,14 +788,20 @@ class ComparisonRunner:
         tier = self._resolve_tier_slug_from_session(
             session_data, self.config.tuning_session_path
         )
+
+        data_root = resolve_data_root(cli_override=self.config.data_dir)
+        base_dir = (
+            data_root / "results" if self.config.colocate_output else Path("results")
+        )
+
         if (self.config.benchmark or session_data.benchmark) == "sysbench":
             sysbench_workload = str(
                 self.config.sysbench_workload
                 or session_data.sysbench_workload
                 or DEFAULT_SYSBENCH_WORKLOAD
             )
-            return Path("results") / workload / sysbench_workload / "comparisons" / tier
-        return Path("results") / workload / "comparisons" / tier
+            return base_dir / workload / sysbench_workload / "comparisons" / tier
+        return base_dir / workload / "comparisons" / tier
 
     def _resolve_log_output_path(
         self, output_dir: Path, timestamp: str | None = None
