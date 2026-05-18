@@ -55,7 +55,6 @@ would deadlock the remaining threads. Two safeguards prevent this:
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from typing import Dict, List, Optional
