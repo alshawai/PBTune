@@ -13,8 +13,14 @@ This is a research implementation of Population-Based Training (PBT) for Postgre
 ### Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Setup environment (Recommended for Linux/macOS)
+# (Handles system dependencies, Python version checks, and GCC quirks)
+./setup.sh
+source .venv/bin/activate
+
+# Alternative Setup: Conda (Best for avoiding C++ compilation)
+# conda env create -f environment.yml
+# conda activate pbt-tuning
 
 # Run basic tuning session (minimal knobs, 2-3 minutes)
 python -m src.tuner.main --tier minimal --config rapid
@@ -96,26 +102,26 @@ The system follows a layered architecture:
 
 ### Directory Structure
 
-```
+```text
 src/tuner/
-├── core/           # PBT algorithm implementation
-├── config/         # Configuration management
-├── evaluator/      # Performance evaluation
-└── main.py         # Entry point
+├── core/                # PBT algorithm implementation
+├── config/              # Configuration management
+├── evaluator/           # Performance evaluation
+└── main.py              # Entry point
 
 src/utils/
-├── environments/    # Docker/Bare-metal database environment backends
-├── logger/          # Logging setup and formatters
-├── metrics.py       # Performance metrics and scoring
-├── rescoring.py     # Shared post-hoc global score recalibration utilities
+├── environments/        # Docker/Bare-metal database environment backends
+├── logger/              # Logging setup and formatters
+├── metrics.py           # Performance metrics and scoring
+├── rescoring.py         # Shared post-hoc global score recalibration utilities
 └── restart_manager.py
 
 src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
-├── types.py         # Dataclasses: ComparisonConfig, RunResult, etc.
-├── loader.py        # load_tuning_session() — parse pbt_results JSON
-├── statistics.py    # Wilcoxon + bootstrap CI + Holm-corrected secondary endpoints + Cohen's d
-├── runner.py        # ComparisonRunner — main orchestrator
-└── __main__.py      # CLI: python -m src.evaluation
+├── types.py             # Dataclasses: ComparisonConfig, RunResult, etc.
+├── loader.py            # load_tuning_session() — parse pbt_results JSON
+├── statistics.py        # Wilcoxon + bootstrap CI + Holm-corrected secondary endpoints + Cohen's d
+├── runner.py            # ComparisonRunner — main orchestrator
+└── __main__.py          # CLI: python -m src.evaluation
 
 src/database/            # Database connection and management
 src/knobs/               # Knob metadata retrieval
@@ -204,3 +210,14 @@ This work builds on:
 ## Academic Research Context
 
 This is academic research software with non-commercial license. For commercial licensing inquiries, contact repository maintainers.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+
+- ALWAYS read graphify-out/GRAPH_REPORT.md before reading any source files, running grep/glob searches, or answering codebase questions. The graph is your primary map of the codebase.
+- IF graphify-out/wiki/index.md EXISTS, navigate it instead of reading raw files
+- For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
