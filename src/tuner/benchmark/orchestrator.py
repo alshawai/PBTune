@@ -645,6 +645,8 @@ class WorkloadOrchestrator:
         # drain all remaining barriers to prevent deadlocks.
         last_completed_barrier: Optional[str] = None
 
+        _barriers_drained = False
+
         connection = None
         restart_occurred = False
 
@@ -890,6 +892,7 @@ class WorkloadOrchestrator:
                         barriers.drain_remaining(
                             next_name, worker_id=worker.worker_id
                         )
+                _barriers_drained = True
                 return metrics, score, restart_occurred
 
             # ── B12: Collect system metrics ──────────────────────────
@@ -949,6 +952,7 @@ class WorkloadOrchestrator:
                     barriers.drain_remaining(
                         "connected", worker_id=worker.worker_id
                     )
+            _barriers_drained = True
             raise
 
         finally:
@@ -957,7 +961,12 @@ class WorkloadOrchestrator:
                 connection,
                 worker_id=worker.worker_id if hasattr(worker, "worker_id") else None,
             )
-            _barrier("disconnected")
+            # Only call the disconnected barrier on the NORMAL path.
+            # Exception handlers already drained all barriers (including
+            # "disconnected") — calling it again would start a new barrier
+            # cycle that can never complete (the other workers already left).
+            if not _barriers_drained:
+                _barrier("disconnected")
 
     # ------------------------------------------------------------------
     # Reliability gate

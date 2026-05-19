@@ -247,6 +247,29 @@ class GenerationBarrier:
                 )
                 return
 
+    def abort(self) -> None:
+        """
+        Immediately break all barriers, unblocking any waiting threads.
+
+        Call this when a worker is known to be dead and will never arrive
+        at its barriers. Unlike ``drain_remaining`` (which acts as a
+        participant), ``abort`` forces a ``BrokenBarrierError`` on all
+        waiters instantly without requiring the dead thread to cooperate.
+
+        After calling ``abort()``, the barrier set is marked broken and
+        all subsequent ``wait()`` calls are no-ops.
+        """
+        if not self._enabled or self._broken:
+            return
+
+        self._broken = True
+        LOGGER.warning("Barrier set aborted — all barriers broken instantly")
+        for barrier in self._barriers.values():
+            try:
+                barrier.abort()
+            except threading.BrokenBarrierError:
+                pass
+
     def reset(self) -> None:
         """
         Reset all barriers for reuse in the next generation.
