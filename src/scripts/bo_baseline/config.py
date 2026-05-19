@@ -63,6 +63,7 @@ class BOConfig:
     # Parallel BO configuration
     max_workers: int = 1
     pbt_worker_resources: Optional[Dict[str, Any]] = None
+    resource_division: int = 1
 
     # Scoring policy
     # Available options:
@@ -276,6 +277,9 @@ class BOConfig:
             max_workers=args.parallel_workers
             if args.parallel_workers is not None
             else base_config.max_workers,
+            resource_division=args.resource_division
+            if hasattr(args, "resource_division") and args.resource_division is not None
+            else base_config.resource_division,
             scoring_policy=args.scoring_policy
             if hasattr(args, "scoring_policy") and args.scoring_policy is not None
             else base_config.scoring_policy,
