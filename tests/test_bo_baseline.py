@@ -76,7 +76,8 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -146,7 +147,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -195,7 +196,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -232,7 +233,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -653,7 +654,7 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -666,7 +667,7 @@ class TestParallelBOConfiguration:
         assert config.pbt_worker_resources["disk_type"] == "SSD"
 
     def test_bo_config_max_workers_cli_override(self, tmp_path):
-        """Test that --parallel-workers CLI arg overrides PBT-derived value."""
+        """Test that --batched-bo CLI arg overrides PBT-derived value."""
         pbt_session = tmp_path / "pbt_results_test.json"
         pbt_session.write_text(
             json.dumps(
@@ -708,7 +709,7 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=2,
+            batched_bo=True, resource_division=2,
             pbt_session=str(pbt_session),
         )
 
@@ -742,7 +743,7 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=None,
         )
 

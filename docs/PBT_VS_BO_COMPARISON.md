@@ -40,8 +40,8 @@ Each input file should use the tuning-session schema produced by the tuner or BO
 BO outputs are written in the same shape as PBT outputs, with one worker score per BO iteration.
 
 For parity-focused comparisons, run BO with `--pbt-session` and let it inherit
-the reference run's `num_parallel_workers` and per-worker `worker_resources` unless
-you intentionally override the worker count with `--parallel-workers`.
+the reference run's `num_parallel_workers` (acting as `--resource-division`) and per-worker `worker_resources` unless
+you intentionally override the division with `--resource-division`.
 
 ## Scoring Behavior
 
