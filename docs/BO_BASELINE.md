@@ -76,22 +76,22 @@ Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `Pe
 
 The BO baseline supports parallel evaluation and explicit resource division to mirror the concurrency and hardware constraints of a reference PBT session independently.
 
-- `--parallel-workers N` sets the number of PostgreSQL instances evaluated in parallel (values `> 1` enable parallel ask-tell execution).
+- `--batched-bo` enables running Bayesian Optimization in parallel using ask-tell mode.
 - `--resource-division N` acts as the denominator for dividing host resources (RAM/CPU) for the database instance(s), ensuring fairness.
-- When `--pbt-session` is provided, BO copies `num_parallel_workers` from the reference session unless `--parallel-workers` explicitly overrides it.
-- If BO needs to derive the budget or worker count and the PBT session is missing `population_size`, `total_generations`, or `num_parallel_workers`, BO keeps the default or explicitly supplied CLI value for that setting.
+- When `--pbt-session` is provided, BO copies `num_parallel_workers` from the reference session and applies it to `--resource-division`.
+- If BO needs to derive the budget or resource division and the PBT session is missing `population_size`, `total_generations`, or `num_parallel_workers`, BO keeps the default or explicitly supplied CLI value for that setting.
 - If the PBT session includes `worker_resources`, BO uses that per-worker resource slice for knob-range resolution instead of dividing the local host resources via `--resource-division`.
 - The result JSON records completed `iterations`, `num_parallel_workers`, and `resource_equalization` so downstream comparison tools can confirm parity. BO does not record `population_size` because it is not population-based.
 
-In parallel mode (`--parallel-workers > 1`), BO uses SMAC3 ask-tell evaluation with a local `ThreadPoolExecutor`, which keeps the database environment in the main process while evaluating multiple candidates concurrently.
+In parallel mode (`--batched-bo`), BO uses SMAC3 ask-tell evaluation with a local `ThreadPoolExecutor`, which keeps the database environment in the main process while evaluating multiple candidates concurrently.
 
 ### Ask-Tell Execution Model
 
 The runner uses two execution paths:
 
-- **Sequential path (`--parallel-workers 1`)**: uses the standard
+- **Sequential path (default)**: uses the standard
   `facade.optimize()` loop with the objective closure.
-- **Parallel path (`--parallel-workers > 1`)**: uses explicit ask-tell control in
+- **Parallel path (`--batched-bo`)**: uses explicit ask-tell control in
   `runner.py`.
 
 In ask-tell mode, each batch follows this cycle:
@@ -150,7 +150,6 @@ python -m src.scripts.bo_baseline \
 - `--iterations N` - Number of BO iterations. Defaults to `50`, or to `population_size * total_generations` when `--pbt-session` is used.
 - `--seed INT` - Random seed for reproducibility (default: `42`)
 - `--bo-surrogate {rf|gp}` - SMAC Surrogate model: Random Forest (`rf`) or Gaussian Process (`gp`). Default is `rf`.
-- `--parallel-workers INT` - Number of parallel BO workers / PostgreSQL instances. Defaults to `1`, or to the PBT session's `num_parallel_workers` when `--pbt-session` is used. Values `> 1` run parallel ask-tell execution.
 - `--resource-division INT` - Denominator for dividing host resources (RAM/CPU) for the database instance (default: `1`).
 - `--scoring-policy STR` - Custom scoring policy to use for metrics evaluation. Available options:
   - `fixed_v1`: Legacy static weights based on workload type (OLTP/OLAP/MIXED).
@@ -209,8 +208,8 @@ python -m src.scripts.bo_baseline \
 | `--output-dir` | Root directory for BO result files. | `results` |
 | `--verbose` | Logging verbosity. | `INFO` |
 | `--range-update-interval` | Pilot phase size: initial-design iterations before freezing normalization ranges. | `10` |
-| `--parallel-workers` | Number of parallel BO workers. | `1`, or PBT `num_parallel_workers` |
-| `--resource-division` | Divides host resources to constrain the database instance. | `1` |
+| `--batched-bo` | Run BO in parallel using ask-tell mode. | Sequential execution |
+| `--resource-division` | Divides host resources to constrain the database instance. | `1`, or PBT `num_parallel_workers` |
 | `--scoring-policy` | Specific scoring policy to apply to metric evaluation (`fixed_v1` or `feature_driven_v2`). | Set by metric default |
 
 ## Output Format

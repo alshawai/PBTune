@@ -62,6 +62,7 @@ class BOConfig:
 
     # Parallel BO configuration
     max_workers: int = 1
+    batched_bo: bool = False
     pbt_worker_resources: Optional[Dict[str, Any]] = None
     resource_division: int = 1
 
@@ -189,11 +190,11 @@ class BOConfig:
         if set_max_workers:
             num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
             if num_parallel_workers > 0:
-                self.max_workers = num_parallel_workers
+                self.resource_division = num_parallel_workers
             else:
                 LOGGER.warning(
                     "PBT session is missing positive num_parallel_workers; "
-                    "keeping configured BO parallel worker count"
+                    "keeping configured BO resource division"
                 )
 
         # Extract scoring policy from PBT session if present
@@ -274,9 +275,9 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
-            max_workers=args.parallel_workers
-            if args.parallel_workers is not None
-            else base_config.max_workers,
+            batched_bo=args.batched_bo
+            if hasattr(args, "batched_bo") and args.batched_bo is not None
+            else base_config.batched_bo,
             resource_division=args.resource_division
             if hasattr(args, "resource_division") and args.resource_division is not None
             else base_config.resource_division,
@@ -290,13 +291,15 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
-                    set_max_workers=args.parallel_workers is None,
+                    set_max_workers=not hasattr(args, "resource_division") or args.resource_division is None,
                 )
             except Exception as e:
                 LOGGER.warning(
                     f"Failed to load PBT session from {args.pbt_session}: {e}. "
                     f"Falling back to default or CLI-provided settings."
                 )
+
+        config.max_workers = config.resource_division if config.batched_bo else 1
 
         return config
 

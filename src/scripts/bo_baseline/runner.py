@@ -751,19 +751,15 @@ def main():
         ),
     )
     parser.add_argument(
-        "--parallel-workers",
-        type=int,
-        default=None,
-        help=(
-            "Number of parallel BO workers (PostgreSQL instances). "
-            "Defaults to 1, or to PBT num_parallel_workers when --pbt-session is used."
-        ),
+        "--batched-bo",
+        action="store_true",
+        help="Run Bayesian Optimization in parallel using ask-tell mode. If omitted, runs sequentially."
     )
     parser.add_argument(
         "--resource-division",
         type=int,
         default=None,
-        help="Denominator for dividing host resources (RAM/CPU) for the database instance (default: 1)",
+        help="Divides host capacity by this number to determine instance resources. If a PBT session is provided, this automatically takes the PBT session's parallel worker count."
     )
     parser.add_argument(
         "--scoring-policy",
