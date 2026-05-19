@@ -115,6 +115,7 @@ secrets.json
 .env.local
 
 # Optimization results (ignore bulky timestamped traces and HTML logs)
+results/**/comparisons
 results/**/pbt_results_*.json
 results/**/bo_results_*.json
 results/**/best_config*.json
