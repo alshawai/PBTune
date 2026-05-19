@@ -171,8 +171,6 @@ class PBTConfig:
 
         if self.num_parallel_workers < 1:
             raise ValueError("num_parallel_workers must be at least 1")
-        if self.num_parallel_workers > self.population_size:
-            raise ValueError("num_parallel_workers cannot exceed population_size")
 
         if self.snapshot_restore_interval < 1:
             raise ValueError("snapshot_restore_interval must be at least 1")
