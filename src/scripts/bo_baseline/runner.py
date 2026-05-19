@@ -87,12 +87,12 @@ class BOBaselineRunner:
             )
         else:
             self.worker_resources = detect_worker_resources(
-                max_parallel_workers=config.max_workers, data_path=self.data_root
+                max_parallel_workers=config.resource_division, data_path=self.data_root
             )
             self.logger.info(
-                f"Dividing host resources for {config.max_workers} parallel workers: "
+                f"Dividing host resources by {config.resource_division}: "
                 f"{self.worker_resources.cpu_cores} cores, "
-                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per worker"
+                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per instance"
             )
 
         # Load knob space
@@ -274,10 +274,11 @@ class BOBaselineRunner:
             )
 
             # Setup N instances
+            num_instances = self.config.max_workers
             self.logger.info(
-                f"Setting up {self.config.max_workers} PostgreSQL instance(s)..."
+                f"Setting up {num_instances} PostgreSQL instance(s)..."
             )
-            self.env.setup_instances(num_workers=self.config.max_workers)
+            self.env.setup_instances(num_workers=num_instances)
 
             # Prune unsupported knobs
             self._prune_unsupported_runtime_knobs()
@@ -299,7 +300,7 @@ class BOBaselineRunner:
 
             # Create N workers, each bound to its own instance
             workers = []
-            for i in range(self.config.max_workers):
+            for i in range(num_instances):
                 w = Worker(worker_id=i, knob_space=self.knob_space)
                 w.db_config = self.env.get_db_config(i)
                 workers.append(w)
@@ -321,7 +322,7 @@ class BOBaselineRunner:
             pilot_size = min(pilot_size, self.config.n_iterations)
 
             # For sequential mode (max_workers=1), use the original objective closure
-            # For parallel mode, we'll use ask-tell
+            # For parallel mode (max_workers > 1), we'll use ask-tell
             if self.config.max_workers == 1:
                 objective = create_objective(
                     orchestrator=orchestrator,
@@ -757,6 +758,12 @@ def main():
             "Number of parallel BO workers (PostgreSQL instances). "
             "Defaults to 1, or to PBT num_parallel_workers when --pbt-session is used."
         ),
+    )
+    parser.add_argument(
+        "--resource-division",
+        type=int,
+        default=None,
+        help="Denominator for dividing host resources (RAM/CPU) for the database instance (default: 1)",
     )
     parser.add_argument(
         "--scoring-policy",
