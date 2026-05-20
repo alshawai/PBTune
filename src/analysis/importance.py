@@ -79,7 +79,7 @@ class ImportanceResult:
         SHAP-based importance scores for each knob
     shap_values : np.ndarray
         Raw SHAP values for all samples and features
-    fanova_shap_correlation : float
+    fanova_shap_correlation : float | None
         Correlation between fANOVA and SHAP importance rankings
     scoring_policy : str
         Scoring policy used during tuning (default: "fixed_v1")
@@ -97,7 +97,7 @@ class ImportanceResult:
     workload_type: str
     shap_importances: dict[str, float]
     shap_values: np.ndarray
-    fanova_shap_correlation: float
+    fanova_shap_correlation: float | None
     scoring_policy: str = "fixed_v1"
     scoring_policy_version: str = "1.0"
     metric_reference_version: str = "v1"
@@ -110,7 +110,7 @@ class _ImportancePassResult:
     marginal_importances: dict[str, float]
     shap_importances: dict[str, float]
     shap_values: np.ndarray
-    fanova_shap_correlation: float
+    fanova_shap_correlation: float | None
     model_r2: float
     fanova_model: Any
     column_names: list[str]
@@ -364,7 +364,10 @@ def analyze_knob_importance(
             result_pass.model_r2,
         )
 
-    if result_pass.fanova_shap_correlation < CORRELATION_THRESHOLD:
+    if (
+        result_pass.fanova_shap_correlation is not None
+        and result_pass.fanova_shap_correlation < CORRELATION_THRESHOLD
+    ):
         LOGGER.warning(
             "Low correlation between fANOVA and SHAP importance rankings: ρ = %.3f",
             result_pass.fanova_shap_correlation,
