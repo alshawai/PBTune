@@ -172,7 +172,7 @@ def create_objective(
                     if entry["metrics"]
                 ]
                 if all_metrics:
-                    metric_config.expand_ranges_for_metrics(all_metrics)
+                    metric_config.update_ranges(all_metrics)
                     LOGGER.info(
                         "Normalization ranges frozen after %d pilot iterations",
                         state["iteration_count"] + 1,
