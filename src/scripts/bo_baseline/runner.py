@@ -556,7 +556,7 @@ class BOBaselineRunner:
                     if entry["metrics"]
                 ]
                 if all_metrics:
-                    self.metric_config.expand_ranges_for_metrics(all_metrics)
+                    self.metric_config.update_ranges(all_metrics)
                     self.logger.info(
                         "Normalization ranges frozen after %d pilot iterations",
                         iteration_count,
