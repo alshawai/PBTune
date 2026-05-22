@@ -331,6 +331,9 @@ class BOBaselineRunner:
                     metric_config=self.metric_config,
                     iteration_log=iteration_log,
                     pilot_phase_size=pilot_size,
+                    env=self.env,
+                    enable_snapshots=self.config.enable_snapshots,
+                    snapshot_restore_interval=self.config.snapshot_restore_interval,
                 )
             else:
                 objective = None
@@ -465,6 +468,31 @@ class BOBaselineRunner:
 
         while iteration_count < self.config.n_iterations:
             batch_size = min(n_workers, self.config.n_iterations - iteration_count)
+
+            # Handle snapshot restoration before evaluating batch
+            if (
+                self.config.enable_snapshots
+                and iteration_count > 0
+                and iteration_count % self.config.snapshot_restore_interval == 0
+            ):
+                self.logger.info(
+                    "Restoring database snapshots for iteration %d (interval: %d)",
+                    iteration_count,
+                    self.config.snapshot_restore_interval,
+                )
+                try:
+                    failed_workers = []
+                    for w in workers:
+                        restored = self.env.restore_snapshot(w.worker_id)
+                        if not restored:
+                            self.logger.error("Snapshot restore failed for worker %d", w.worker_id)
+                            failed_workers.append(w.worker_id)
+                    if failed_workers:
+                        self.logger.error("Snapshot restore failed for workers: %s", failed_workers)
+                    else:
+                        self.logger.info("✓ Database snapshots restored successfully")
+                except Exception as e:
+                    self.logger.error("Failed to restore databases from snapshots: %s", e)
 
             # Ask for batch of configs
             trial_infos = [facade.ask() for _ in range(batch_size)]
@@ -766,6 +794,18 @@ def main():
         type=str,
         default=None,
         help="Scoring policy to use. Options: 'fixed_v1', 'feature_driven_v2' (default: preset value per workload)",
+    )
+    parser.add_argument(
+        "--enable-snapshots",
+        action="store_true",
+        default=None,
+        help="Enable periodic database snapshot restoration to prevent data drift.",
+    )
+    parser.add_argument(
+        "--snapshot-restore-interval",
+        type=int,
+        default=None,
+        help="Restore snapshots every N iterations.",
     )
 
     args = parser.parse_args()
