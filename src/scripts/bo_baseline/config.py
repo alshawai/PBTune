@@ -60,6 +60,10 @@ class BOConfig:
     pbt_session_path: Optional[Path] = None
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
+    # Snapshot configuration
+    enable_snapshots: bool = False
+    snapshot_restore_interval: int = 1
+
     # Parallel BO configuration
     max_workers: int = 1
     batched_bo: bool = False
@@ -197,6 +201,21 @@ class BOConfig:
                     "keeping configured BO resource division"
                 )
 
+        # Extract snapshot settings
+        if "enable_snapshots" in session:
+            self.enable_snapshots = bool(session["enable_snapshots"])
+        
+        if self.enable_snapshots and "snapshot_restore_interval" in session:
+            # PBT restores every N generations. 
+            # Translate to BO iterations by multiplying by population_size.
+            pbt_interval = int(session["snapshot_restore_interval"])
+            pop_size = int(session.get("population_size", 1))
+            self.snapshot_restore_interval = pbt_interval * pop_size
+            LOGGER.info(
+                f"Extracted PBT snapshot interval ({pbt_interval} gens * {pop_size} pop) "
+                f"-> BO interval: {self.snapshot_restore_interval} iterations"
+            )
+
         # Extract scoring policy from PBT session if present
         if "scoring_policy" in session:
             self.scoring_policy = str(session["scoring_policy"])
@@ -284,6 +303,12 @@ class BOConfig:
             scoring_policy=args.scoring_policy
             if hasattr(args, "scoring_policy") and args.scoring_policy is not None
             else base_config.scoring_policy,
+            enable_snapshots=args.enable_snapshots
+            if hasattr(args, "enable_snapshots") and args.enable_snapshots is not None
+            else base_config.enable_snapshots,
+            snapshot_restore_interval=args.snapshot_restore_interval
+            if hasattr(args, "snapshot_restore_interval") and args.snapshot_restore_interval is not None
+            else base_config.snapshot_restore_interval,
         )
 
         if args.pbt_session:
