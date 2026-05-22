@@ -87,6 +87,9 @@ def create_objective(
     metric_config: MetricConfig,
     iteration_log: List[Dict],
     pilot_phase_size: int = 10,
+    env: Optional["DatabaseEnvironment"] = None,
+    enable_snapshots: bool = False,
+    snapshot_restore_interval: int = 1,
 ) -> Callable[[Configuration, int], float]:
     """
     Create an objective function for SMAC3 with Pilot+Freeze normalization.
@@ -111,6 +114,12 @@ def create_objective(
         Mutable list for tracking convergence
     pilot_phase_size : int
         Number of initial iterations before freezing normalization ranges
+    env : Optional[DatabaseEnvironment]
+        Database environment for snapshot restoration
+    enable_snapshots : bool
+        Whether to enable snapshot restoration
+    snapshot_restore_interval : int
+        Restore snapshots every N iterations
 
     Returns
     -------
@@ -142,10 +151,29 @@ def create_objective(
             Cost value (100 - score), with penalties for failures
         """
         try:
-            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
-                evaluate_config(
-                    config, worker, orchestrator, knob_space, state["previous_config"]
+            # Handle snapshot restoration before evaluating the config
+            if (
+                enable_snapshots
+                and env is not None
+                and state["iteration_count"] > 0
+                and state["iteration_count"] % snapshot_restore_interval == 0
+            ):
+                LOGGER.info(
+                    "Restoring database snapshot for iteration %d (interval: %d)",
+                    state["iteration_count"],
+                    snapshot_restore_interval,
                 )
+                try:
+                    restored = env.restore_snapshot(worker.worker_id)
+                    if not restored:
+                        LOGGER.error("Snapshot restore failed for worker %d", worker.worker_id)
+                    else:
+                        LOGGER.info("✓ Database snapshot restored successfully")
+                except Exception as e:
+                    LOGGER.error("Failed to restore database from snapshot: %s", e)
+
+            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = evaluate_config(
+                config, worker, orchestrator, knob_space, state["previous_config"]
             )
 
             iteration_entry = {
