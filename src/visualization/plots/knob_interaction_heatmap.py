@@ -61,7 +61,9 @@ def _resolve_importance_dir(data_dir: Path) -> Path:
 
 
 def _render_heatmap(
-    importance: ImportanceData, theme: PBTuneTheme
+    importance: ImportanceData,
+    theme: PBTuneTheme,
+    top_k_interactions: int | None = None,
 ) -> tuple[Figure, Axes]:
     """Render a heatmap using seaborn if available, otherwise imshow.
 
@@ -73,6 +75,19 @@ def _render_heatmap(
 
         matrix = np.asarray(importance.pairwise_matrix)
         labels = importance.pairwise_labels
+
+        if top_k_interactions is not None:
+            resolved_top_k = max(1, top_k_interactions)
+            top_labels = [
+                name
+                for name in importance.knob_names
+                if name in labels
+            ][:resolved_top_k]
+            index_map = {name: idx for idx, name in enumerate(labels)}
+            indices = [index_map[name] for name in top_labels if name in index_map]
+            if indices:
+                matrix = matrix[np.ix_(indices, indices)]
+                labels = top_labels
         short_labels = [_shorten_label(label) for label in labels]
 
         if matrix.size == 0 or len(labels) == 0:
@@ -108,7 +123,11 @@ def _render_heatmap(
             ax.set_yticks(range(len(short_labels)))
             ax.set_yticklabels(short_labels)
 
-        ax.set_title("fANOVA pairwise interaction importance")
+        if top_k_interactions is None:
+            title = "fANOVA pairwise interaction importance"
+        else:
+            title = f"fANOVA pairwise interaction importance (top {len(labels)})"
+        ax.set_title(title)
         ax.set_xlabel("")
         ax.set_ylabel("Knob")
         ax.tick_params(axis="y", labelsize=7)
@@ -123,6 +142,7 @@ def generate_knob_interaction_heatmap(
     output_dir: Path | str,
     theme: PBTuneTheme,
     formats: list[ExportFormat],
+    top_k_interactions: int | None = None,
 ) -> None:
     """Generate the knob interaction heatmap figure.
 
@@ -136,7 +156,7 @@ def generate_knob_interaction_heatmap(
     importance_dir = _resolve_importance_dir(base_dir)
     importance = load_importance_from_dir(importance_dir)
 
-    fig, _ = _render_heatmap(importance, theme)
+    fig, _ = _render_heatmap(importance, theme, top_k_interactions=top_k_interactions)
 
     export_figure(
         fig,
