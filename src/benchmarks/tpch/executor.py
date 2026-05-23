@@ -191,8 +191,8 @@ class TPCHExecutor(BenchmarkExecutor):
     def _drop_existing_public_tables(
         self,
         cursor,
-        logger: logging.Logger | None = None,
         log_prefix: str = "[TPC-H]",
+        logger: logging.Logger | None = None,
     ) -> None:
         """Drop all public tables before loading TPC-H data.
 
@@ -205,7 +205,7 @@ class TPCHExecutor(BenchmarkExecutor):
         if not existing_tables:
             return
 
-        active_logger = logger if logger is not None else self.logger
+        active_logger = logger if logger is not None else LOGGER
         if log_prefix:
             active_logger.debug(
                 f"{log_prefix} Dropping existing public tables (%d)...",
@@ -382,7 +382,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 conn.autocommit = True
         logger.debug("  ➤ Warmup complete, starting timed measurement of TPC-H queries")
 
-        logger.info(" Executing Power Test sequence of %s%d%s TPC-H queries...", len(self.queries))
+        logger.info(" Executing Power Test sequence of %d TPC-H queries...", len(self.queries))
 
         latencies: List[float] = []
         errors = 0
@@ -483,3 +483,4 @@ class TPCHExecutor(BenchmarkExecutor):
 
 
         return metrics
+    
