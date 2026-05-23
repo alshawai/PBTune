@@ -4,8 +4,8 @@ pbt_vs_bo_comparison.py
 
 Analyzes and compares the results of Population-Based Training (PBT) and
 Bayesian Optimization (BO) for PostgreSQL auto-tuning. Supports dynamic
-global rescoring, statistical significance testing, and generates
-publication-ready plots.
+global rescoring, timeseries alignment for artifact-free convergence plots, 
+statistical significance testing, and generates publication-ready plots.
 """
 
 from __future__ import annotations
@@ -41,6 +41,83 @@ plt.rcParams.update(
 
 logger = logging.getLogger(__name__)
 METRIC_FIELD_NAMES = {field.name for field in fields(PerformanceMetrics)}
+
+METHOD_COLORS = {"PBT": "C0", "BO": "C1"}
+
+
+def align_timeseries_to_grid(
+    df: pd.DataFrame,
+    resolution_hz: float = 2.0,
+    time_col: str = "WallTimeSeconds",
+    score_col: str = "GlobalScore",
+    method_col: str = "Method",
+    seed_col: str = "Seed",
+) -> pd.DataFrame:
+    """Resample every (Method, Seed) trajectory onto a shared uniform time grid.
+
+    Because each run logs evaluations at slightly different continuous
+    timestamps, direct aggregation across seeds produces "sawtooth" artifacts
+    in the mean line.  This function fixes the problem by:
+
+    1. Building a shared, evenly-spaced time grid from t=0 to the global
+       maximum wall-clock time.
+    2. For each (Method, Seed) group, using :func:`numpy.searchsorted` with
+       ``side='right'`` to perform a *forward-fill* (step-function)
+       interpolation: the score at any grid point equals the score at the
+       most-recent evaluation that occurred at or before that time.
+    3. Grid points that fall *before* the first evaluation of a run are
+       assigned ``NaN`` so they are excluded from aggregation.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Flat DataFrame with at least the four columns listed below.
+    resolution_hz : float
+        Number of blocks per second (default 2.0, for half-second resolution).
+    time_col, score_col, method_col, seed_col : str
+        Column names (defaults match the project convention).
+
+    Returns
+    -------
+    pd.DataFrame
+        New DataFrame with columns ``[method_col, seed_col, time_col, score_col]``
+        where ``time_col`` values are aligned to the shared grid.
+    """
+    t_max = df[time_col].max()
+    # Ensure at least 2 blocks so linspace works correctly even for very short runs
+    num_blocks = max(2, int(t_max * resolution_hz))
+    time_grid = np.linspace(0.0, t_max, num_blocks)
+
+    aligned_rows: list[dict] = []
+
+    for (method, seed), group in df.groupby([method_col, seed_col]):
+        group_sorted = group.sort_values(time_col)
+        times = group_sorted[time_col].values
+        scores = group_sorted[score_col].values
+
+        # searchsorted('right') gives the index of the first element > grid_t,
+        # so (idx - 1) is the last evaluation at or before grid_t.
+        indices = np.searchsorted(times, time_grid, side="right") - 1
+
+        for i, grid_t in enumerate(time_grid):
+            idx = indices[i]
+            if idx < 0:
+                # Grid point is before the run's first evaluation → skip
+                score = np.nan
+            else:
+                score = scores[idx]
+
+            aligned_rows.append(
+                {
+                    method_col: method,
+                    seed_col: seed,
+                    time_col: grid_t,
+                    score_col: score,
+                }
+            )
+
+    return pd.DataFrame(aligned_rows)
+
 
 
 class EvaluationPoint:
@@ -219,7 +296,13 @@ class Analyzer:
         return pd.DataFrame(rows)
 
     def plot_convergence(self) -> None:
-        """Generates convergence plots for Sample and Wall-Clock Efficiency."""
+        """Generates convergence plots for Sample and Wall-Clock Efficiency.
+        
+        The Wall-Clock Efficiency plot automatically aligns timeseries to a 
+        shared uniform grid using a step-function interpolation to prevent 
+        'sawtooth' aggregation artifacts caused by mismatched logging 
+        timestamps across different evaluation seeds.
+        """
         df = self._build_timeseries_df()
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
@@ -230,6 +313,7 @@ class Analyzer:
             x="Evaluations",
             y="GlobalScore",
             hue="Method",
+            palette=METHOD_COLORS,
             errorbar="sd",
             ax=ax1,
             marker="o",
@@ -239,16 +323,16 @@ class Analyzer:
         ax1.set_xlabel("Cumulative Evaluations")
         ax1.set_ylabel("Max Global Composite Score")
 
-        # 2. Wall-Clock Efficiency
+        # 2. Wall-Clock Efficiency (aligned to a shared time grid)
+        df_aligned = align_timeseries_to_grid(df)
         sns.lineplot(
-            data=df,
+            data=df_aligned,
             x="WallTimeSeconds",
             y="GlobalScore",
             hue="Method",
+            palette=METHOD_COLORS,
             errorbar="sd",
             ax=ax2,
-            marker="o",
-            markersize=4,
         )
         ax2.set_title("Wall-Clock Efficiency\n(Global Score vs. Elapsed Time)")
         ax2.set_xlabel("Elapsed Wall-Clock Time (s)")
@@ -286,6 +370,7 @@ class Analyzer:
             y="Latency (p95)",
             hue="Method",
             style="Method",
+            palette=METHOD_COLORS,
             s=150,
             alpha=0.8,
             edgecolor="black",
@@ -319,7 +404,7 @@ class Analyzer:
         df = pd.DataFrame(rows)
         plt.figure(figsize=(6, 6))
         sns.boxplot(
-            data=df, x="Method", y="Memory Utilization", width=0.4, showmeans=True
+            data=df, x="Method", y="Memory Utilization", hue="Method", palette=METHOD_COLORS, width=0.4, showmeans=True
         )
         sns.stripplot(
             data=df,

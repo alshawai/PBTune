@@ -5,7 +5,6 @@ SQLAlchemy==2.0.46
 # Data processing
 pandas==3.0.1
 numpy==2.4.2
-scipy==1.16.2
 
 # System monitoring
 psutil==7.2.2
@@ -31,11 +30,17 @@ PyYAML==6.0.3
 # Evaluation (evaluate_tuning module)
 docker>=7.0.0          # Docker SDK for Python — container lifecycle management
 
-# Importance Analysis
-fanova>=2.0.18
-ConfigSpace>=1.1.0
-shap>=0.49.0
+# Knob importance analysis
+fanova>=2.0.0
+pyrfr>=0.8.0
+shap>=0.44.0
 jenkspy>=0.4.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+scipy>=1.11.0
+# Note for contributors: fanova depends on pyrfr, which may require SWIG and C++ build tools on some systems.
+# If pip install fails, check pyrfr installation docs.
 
 # Bayesian Optimization
+ConfigSpace>=1.1.0
 smac>=2.2.0

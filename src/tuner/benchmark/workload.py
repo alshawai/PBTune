@@ -9,7 +9,7 @@ when the user supplies custom SQL query templates.
 """
 
 from __future__ import annotations
-from typing import Optional
+from typing import Callable, Optional
 from pathlib import Path
 import json
 import subprocess
@@ -175,6 +175,7 @@ class WorkloadExecutor:
         warmup: float = 30.0,
         worker_id: Optional[int] = None,
         random_seed: Optional[int] = None,
+        pre_measurement_callback: Optional[Callable] = None,
     ) -> PerformanceMetrics:
         """
         Execute template queries with optional concurrent execution.
@@ -191,6 +192,10 @@ class WorkloadExecutor:
             Worker ID for logging differentiation
         random_seed : Optional[int]
             Optional random seed for reproducibility
+        pre_measurement_callback : Callable | None
+            Optional callback invoked after warmup completes but before
+            the timed measurement begins.  Used by the barrier system
+            to synchronize workers at the warmup→measurement boundary.
 
         Returns
         -------
@@ -230,6 +235,10 @@ class WorkloadExecutor:
                     work_logger.warning("Warmup query failed: %s", e)
                     connection.rollback()
         cursor.close()
+
+        # Invoke barrier callback between warmup and measurement phases
+        if pre_measurement_callback is not None:
+            pre_measurement_callback()
 
         if self.num_threads > 1:
             work_logger.debug(

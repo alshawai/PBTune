@@ -2,13 +2,15 @@
 
 import time
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List, Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from smac import BlackBoxFacade, HyperparameterOptimizationFacade
 from smac.initial_design import SobolInitialDesign
 from smac.random_design import ProbabilityRandomDesign
 from smac.scenario import Scenario
+from smac.runhistory.dataclasses import TrialInfo, TrialValue
 
 from src.tuner.config import get_knob_space
 from src.tuner.core.worker import Worker
@@ -20,7 +22,11 @@ from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.utils.environments import EnvironmentFactory
 from src.utils.metrics import WorkloadType, create_metric_config
-from src.utils.hardware_info import get_system_info, detect_worker_resources
+from src.utils.hardware_info import (
+    get_system_info,
+    detect_worker_resources,
+    WorkerResources,
+)
 from src.utils.logger import setup_logging, get_logger, log_section_header
 from src.config.database import get_db_config
 from src.config.data_root import resolve_data_root
@@ -28,7 +34,7 @@ from src.database.connection import get_connection
 
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.search_space import build_configspace
-from src.scripts.bo_baseline.objective import create_objective
+from src.scripts.bo_baseline.objective import create_objective, evaluate_config
 from src.scripts.bo_baseline.result_writer import (
     write_bo_results,
     resolve_bo_output_root,
@@ -66,7 +72,28 @@ class BOBaselineRunner:
 
         # Collect system info
         self.system_info = get_system_info(data_path=self.data_root)
-        self.worker_resources = detect_worker_resources(data_path=self.data_root)
+
+        # Resource equalization: use PBT-derived resources if available, else divide host resources
+        if config.pbt_worker_resources:
+            self.worker_resources = WorkerResources(
+                ram_bytes=int(config.pbt_worker_resources.get("ram_bytes", 0)),
+                cpu_cores=int(config.pbt_worker_resources.get("cpu_cores", 1)),
+                disk_type=str(config.pbt_worker_resources.get("disk_type", "unknown")),
+            )
+            self.logger.info(
+                "Using PBT-derived per-worker resources: "
+                f"{self.worker_resources.cpu_cores} cores, "
+                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM"
+            )
+        else:
+            self.worker_resources = detect_worker_resources(
+                max_parallel_workers=config.max_workers, data_path=self.data_root
+            )
+            self.logger.info(
+                f"Dividing host resources for {config.max_workers} parallel workers: "
+                f"{self.worker_resources.cpu_cores} cores, "
+                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per worker"
+            )
 
         # Load knob space
         self.knob_space = get_knob_space(config.knob_tier)
@@ -77,7 +104,10 @@ class BOBaselineRunner:
 
         # Metric config
         workload_type = WorkloadType(config.benchmark_config.workload_type)
-        self.metric_config = create_metric_config(workload_type.value)
+        self.metric_config = create_metric_config(
+            workload_type.value,
+            scoring_policy=config.scoring_policy
+        )
 
         self.logger.info(f"BO Baseline Runner initialized for tier: {config.knob_tier}")
 
@@ -209,7 +239,7 @@ class BOBaselineRunner:
 
     def run(self) -> Dict[str, Any]:
         """
-        Run Bayesian Optimization tuning.
+        Run Bayesian Optimization tuning with parallel evaluation.
 
         Returns
         -------
@@ -225,7 +255,7 @@ class BOBaselineRunner:
             self.logger.info("Creating workload executor...")
             workload_executor = self._create_workload_executor()
 
-            # Create environment
+            # Create environment with N instances
             self.logger.info("Setting up database environment...")
             snapshot_id = (
                 f"{self.config.benchmark_config.benchmark}_"
@@ -243,9 +273,11 @@ class BOBaselineRunner:
                 force_recreate_baseline=self.config.force_recreate_baseline,
             )
 
-            # Setup single instance
-            self.logger.info("Setting up PostgreSQL instance...")
-            self.env.setup_instances(num_workers=1)
+            # Setup N instances
+            self.logger.info(
+                f"Setting up {self.config.max_workers} PostgreSQL instance(s)..."
+            )
+            self.env.setup_instances(num_workers=self.config.max_workers)
 
             # Prune unsupported knobs
             self._prune_unsupported_runtime_knobs()
@@ -265,12 +297,12 @@ class BOBaselineRunner:
                 orchestrator_config, workload_executor, self.env
             )
 
-            # Create worker
-            worker = Worker(
-                worker_id=0,
-                knob_space=self.knob_space,
-            )
-            worker.db_config = self.env.get_db_config(0)
+            # Create N workers, each bound to its own instance
+            workers = []
+            for i in range(self.config.max_workers):
+                w = Worker(worker_id=i, knob_space=self.knob_space)
+                w.db_config = self.env.get_db_config(i)
+                workers.append(w)
 
             # Build ConfigSpace
             self.logger.info("Building ConfigSpace...")
@@ -281,25 +313,28 @@ class BOBaselineRunner:
             # Create iteration log
             iteration_log: list = []
 
-            # Pilot phase size: use range_update_interval as the freeze point
+            # Pilot phase size
             pilot_size = max(
                 self.config.range_update_interval,
                 len(self.knob_space.knobs) + 1,
             )
             pilot_size = min(pilot_size, self.config.n_iterations)
 
-            # Create objective function with freeze-after-pilot logic
-            objective = create_objective(
-                orchestrator=orchestrator,
-                worker=worker,
-                knob_space=self.knob_space,
-                metric_config=self.metric_config,
-                iteration_log=iteration_log,
-                pilot_phase_size=pilot_size,
-            )
+            # For sequential mode (max_workers=1), use the original objective closure
+            # For parallel mode, we'll use ask-tell
+            if self.config.max_workers == 1:
+                objective = create_objective(
+                    orchestrator=orchestrator,
+                    worker=workers[0],
+                    knob_space=self.knob_space,
+                    metric_config=self.metric_config,
+                    iteration_log=iteration_log,
+                    pilot_phase_size=pilot_size,
+                )
+            else:
+                objective = None
 
-            # Create SMAC scenario — deterministic=False because database
-            # benchmarks have inherent measurement variance
+            # Create SMAC scenario with n_workers=1 (we handle parallelism manually)
             self.logger.info(
                 f"Creating SMAC scenario with {self.config.n_iterations} iterations..."
             )
@@ -308,13 +343,14 @@ class BOBaselineRunner:
                 n_trials=self.config.n_iterations,
                 seed=self.config.random_seed,
                 deterministic=False,
+                n_workers=1,
                 output_directory=(
                     self._build_smac_output_root()
                     / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"
                 ),
             )
 
-            # Sobol initial design for uniform pilot-phase coverage
+            # Sobol initial design
             initial_design = SobolInitialDesign(
                 scenario=scenario,
                 n_configs=pilot_size,
@@ -339,7 +375,6 @@ class BOBaselineRunner:
                     f"Using HyperparameterOptimizationFacade (RF) for {num_knobs} knobs, "
                     f"pilot_size={pilot_size}"
                 )
-                # 20% random interleaving prevents surrogate over-exploitation
                 random_design = ProbabilityRandomDesign(
                     probability=0.2, seed=self.config.random_seed
                 )
@@ -355,7 +390,14 @@ class BOBaselineRunner:
             # Run optimization
             self.logger.info("Starting Bayesian Optimization...")
             try:
-                facade.optimize()
+                if self.config.max_workers == 1:
+                    # Sequential mode: use standard facade.optimize()
+                    facade.optimize()
+                else:
+                    # Parallel mode: ask-tell loop with ThreadPoolExecutor
+                    self._run_parallel_optimization(
+                        facade, orchestrator, workers, iteration_log, pilot_size
+                    )
             except KeyboardInterrupt:
                 self.logger.warning("Optimization interrupted by user")
 
@@ -370,7 +412,8 @@ class BOBaselineRunner:
                 system_info=self.system_info,
                 iteration_log=iteration_log,
                 total_time=total_time,
-                output_dir=self.effective_output_dir,
+                output_dir=self.config.output_dir,
+                metric_config=self.metric_config,
                 bo_surrogate=bo_surrogate,
             )
 
@@ -389,6 +432,130 @@ class BOBaselineRunner:
                     self.env.cleanup()
                 except Exception as e:
                     self.logger.warning(f"Error during cleanup: {e}")
+
+    def _run_parallel_optimization(
+        self,
+        facade,
+        orchestrator: WorkloadOrchestrator,
+        workers: list,
+        iteration_log: list,
+        pilot_size: int,
+    ) -> None:
+        """
+        Run parallel BO optimization using ask-tell + ThreadPoolExecutor.
+
+        Parameters
+        ----------
+        facade : BlackBoxFacade or HyperparameterOptimizationFacade
+            SMAC facade in ask-tell mode
+        orchestrator : WorkloadOrchestrator
+            Workload orchestrator
+        workers : list
+            List of Worker instances
+        iteration_log : list
+            Mutable iteration log
+        pilot_size : int
+            Pilot phase size for normalization freezing
+        """
+        n_workers = len(workers)
+        iteration_count = 0
+        previous_configs: List[Optional[Dict[str, Any]]] = [None] * n_workers
+        ranges_frozen = False
+
+        while iteration_count < self.config.n_iterations:
+            batch_size = min(n_workers, self.config.n_iterations - iteration_count)
+
+            # Ask for batch of configs
+            trial_infos = [facade.ask() for _ in range(batch_size)]
+
+            # Evaluate batch in parallel
+            def evaluate_trial(worker_idx: int, trial_info: TrialInfo):
+                worker = workers[worker_idx]
+                try:
+                    cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
+                        evaluate_config(
+                            trial_info.config,
+                            worker,
+                            orchestrator,
+                            self.knob_space,
+                            previous_configs[worker_idx],
+                        )
+                    )
+                    previous_configs[worker_idx] = knob_config
+
+                    return (
+                        trial_info,
+                        cost,
+                        wall_time,
+                        knob_config,
+                        metrics,
+                        score,
+                        score_breakdown,
+                        restarted,
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Error evaluating config on worker {worker_idx}: {e}",
+                        exc_info=True,
+                    )
+                    return trial_info, 100.0, 0.0, {}, None, 0.0, None, False
+
+            with ThreadPoolExecutor(max_workers=batch_size) as executor:
+                futures = {
+                    executor.submit(evaluate_trial, i, info): i
+                    for i, info in enumerate(trial_infos)
+                }
+
+                for future in as_completed(futures):
+                    (
+                        trial_info,
+                        cost,
+                        wall_time,
+                        knob_config,
+                        metrics,
+                        score,
+                        score_breakdown,
+                        restarted,
+                    ) = future.result()
+
+                    # Tell SMAC the result
+                    facade.tell(
+                        trial_info,
+                        TrialValue(cost=cost, time=wall_time),
+                    )
+
+                    # Log iteration
+                    iteration_entry = {
+                        "iteration": iteration_count,
+                        "config": knob_config,
+                        "metrics": metrics.to_dict() if metrics is not None else {},
+                        "score": score if score is not None else 0.0,
+                        "score_breakdown": score_breakdown,
+                        "cost": cost,
+                        "wall_clock_seconds": wall_time,
+                        "restarted": restarted,
+                        "timestamp": time.time(),
+                    }
+                    iteration_log.append(iteration_entry)
+
+                    iteration_count += 1
+
+            # Pilot+Freeze: calibrate ranges exactly once after pilot phase
+            if not ranges_frozen and iteration_count >= pilot_size:
+                from src.utils.metrics import PerformanceMetrics
+
+                all_metrics = [
+                    PerformanceMetrics(**entry["metrics"])
+                    for entry in iteration_log
+                    if entry["metrics"]
+                ]
+                if all_metrics:
+                    self.metric_config.expand_ranges_for_metrics(all_metrics)
+                    self.logger.info(
+                        "Normalization ranges frozen after %d pilot iterations",
+                        iteration_count,
+                    )
+                ranges_frozen = True
 
 
 def main():
@@ -581,6 +748,21 @@ def main():
             "Pilot phase size: number of Sobol initial-design iterations before "
             "freezing normalization ranges (default: preset value)"
         ),
+    )
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of parallel BO workers (PostgreSQL instances). "
+            "Defaults to 1, or to PBT num_parallel_workers when --pbt-session is used."
+        ),
+    )
+    parser.add_argument(
+        "--scoring-policy",
+        type=str,
+        default=None,
+        help="Scoring policy to use. Options: 'fixed_v1', 'feature_driven_v2' (default: preset value per workload)",
     )
 
     args = parser.parse_args()
