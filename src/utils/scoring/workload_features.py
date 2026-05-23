@@ -13,6 +13,7 @@ from src.utils.logger import get_logger, get_color_context
 LOGGER = get_logger("FeatureExtractor")
 COLORS = get_color_context()
 
+
 @dataclass
 class TemplateWorkloadMetadata:
     """Normalized metadata for template SQL workload feature extraction."""
@@ -79,10 +80,10 @@ class WorkloadFeatureExtractor:
         *,
         scale_factor: float,
         warmup_passes: int,
+        query_count: int = 22,
     ) -> dict[str, float]:
         """Extract static workload priors for TPC-H workloads."""
         scale = max(scale_factor, 0.01)
-        query_count = 22
         warmed = 1.0 if warmup_passes > 0 else 0.0
 
         return {

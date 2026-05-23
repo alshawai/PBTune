@@ -105,7 +105,9 @@ from src.utils.hardware_info import (
 from src.utils.types import TuningMode
 
 
-LOGGER = get_logger("PBTune")  # inherits from the root logger (defined in setup_logging)
+LOGGER = get_logger(
+    "PBTune"
+)  # inherits from the root logger (defined in setup_logging)
 COLORS = get_color_context()
 
 
@@ -279,21 +281,25 @@ class PBTTuner:
         self.knob_space = get_knob_space(knob_tier)
 
         if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
-            LOGGER.info("Creating ONLINE knob view by filtering out `restart-required` knobs...")
+            LOGGER.info(
+                "Creating ONLINE knob view by filtering out `restart-required` knobs..."
+            )
             self.knob_space = self.knob_space.create_online_view()
 
         LOGGER.info(
             "Detecting hardware resources for %s%s%s parallel workers...",
             COLORS.bold,
             self.pbt_config.num_parallel_workers,
-            COLORS.reset
+            COLORS.reset,
         )
         self.worker_resources = detect_worker_resources(
             self.pbt_config.num_parallel_workers,
             data_path=self.data_root,
         )
 
-        LOGGER.info("Resolving hardware-relative knob ranges based on detected worker resources...")
+        LOGGER.info(
+            "Resolving hardware-relative knob ranges based on detected worker resources..."
+        )
         self.knob_space.resolve_hardware_ranges(self.worker_resources)
         self.db_config = get_db_config()
 
@@ -352,9 +358,7 @@ class PBTTuner:
             self.workload_type = WorkloadType.OLAP
 
             scale_factor = self.pbt_config.benchmark_config.scale_factor
-            workload_executor = TPCHExecutor(
-                scale_factor=scale_factor
-            )
+            workload_executor = TPCHExecutor(scale_factor=scale_factor)
 
             LOGGER.info(
                 "Extracting workload features from TPC-H (SF=%.2f, warmup_passes=%d)",
@@ -397,9 +401,7 @@ class PBTTuner:
             self.workload_features = self.feature_extractor.extract_template_features(
                 metadata=template_metadata,
             )
-            self.snapshot_identifier = (
-                f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
-            )
+            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
 
         self.snapshot_identifier = self._normalize_snapshot_identifier(
             self.snapshot_identifier
@@ -472,7 +474,10 @@ class PBTTuner:
         self._restarted_this_generation = False
 
         LOGGER.info(
-            "%s%sPBT Tuner Initialization Complete!%s", COLORS.bold, COLORS.green, COLORS.reset
+            "%s%sPBT Tuner Initialization Complete!%s",
+            COLORS.bold,
+            COLORS.green,
+            COLORS.reset,
         )
 
     @property
@@ -620,9 +625,7 @@ class PBTTuner:
 
         template_file = template_map.get(workload_type)
         if template_file:
-            LOGGER.debug(
-                " Loading standard workload template from %s", template_file
-            )
+            LOGGER.debug(" Loading standard workload template from %s", template_file)
             return WorkloadFileLoader.load_from_file(template_file)
 
         # Fallback (should not be reached if Enum is exhaustive)
@@ -659,7 +662,9 @@ class PBTTuner:
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
             metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
-                worker, apply_config=True, generation=self.current_generation,
+                worker,
+                apply_config=True,
+                generation=self.current_generation,
                 barriers=barriers,
             )
 
@@ -759,9 +764,7 @@ class PBTTuner:
         score: float,
     ) -> Tuple[PerformanceMetrics, float]:
         """Build standardized fallback metrics and score for failed worker evaluations."""
-        worker_logger.warning(
-            "➤ Evaluation failed (%s): %s", reason, exception
-        )
+        worker_logger.warning("➤ Evaluation failed (%s): %s", reason, exception)
         fallback_metrics = PerformanceMetrics(
             latency_p50=9999.0,
             latency_p95=9999.0,
@@ -795,7 +798,9 @@ class PBTTuner:
         Dict[str, Any]
             Generation results
         """
-        log_section_header(LOGGER, "%sGENERATION %d%s", COLORS.bold, generation, COLORS.reset)
+        log_section_header(
+            LOGGER, "%sGENERATION %d%s", COLORS.bold, generation, COLORS.reset
+        )
 
         self.current_generation = generation
         self._restarted_this_generation = False
@@ -817,7 +822,7 @@ class PBTTuner:
                 COLORS.bold,
                 COLORS.teal,
                 self.best_score,
-                COLORS.reset
+                COLORS.reset,
             )
 
         gen_summary = {
@@ -900,20 +905,34 @@ class PBTTuner:
             COLORS.reset,
         )
         LOGGER.info(
-            "Population Size: %s%d%s", COLORS.cyan, self.pbt_config.population_size, COLORS.reset
+            "Population Size: %s%d%s",
+            COLORS.cyan,
+            self.pbt_config.population_size,
+            COLORS.reset,
         )
         LOGGER.info(
-            "Max Generations: %s%d%s", COLORS.cyan, self.pbt_config.num_generations, COLORS.reset
+            "Max Generations: %s%d%s",
+            COLORS.cyan,
+            self.pbt_config.num_generations,
+            COLORS.reset,
         )
-        LOGGER.info("Workload Type:   %s%s%s", COLORS.cyan, self.workload_type.value, COLORS.reset)
-        LOGGER.info("Output Dir:      %s%s%s", COLORS.cyan, self.output_dir, COLORS.reset)
+        LOGGER.info(
+            "Workload Type:   %s%s%s",
+            COLORS.cyan,
+            self.workload_type.value,
+            COLORS.reset,
+        )
+        LOGGER.info(
+            "Output Dir:      %s%s%s", COLORS.cyan, self.output_dir, COLORS.reset
+        )
 
         self.start_time = time.time()
         try:
             log_section_header(
                 LOGGER,
                 "%sSetting Up PostgreSQL Instances%s",
-                COLORS.bold, COLORS.reset,
+                COLORS.bold,
+                COLORS.reset,
             )
 
             try:
@@ -933,10 +952,16 @@ class PBTTuner:
                 LOGGER.info("Pruning unsupported knobs based on container version...")
                 self._prune_unsupported_runtime_knobs()
 
-                LOGGER.info("%s%sPostgreSQL instances are ready.%s",
-                            COLORS.bold, COLORS.green, COLORS.reset)
+                LOGGER.info(
+                    "%s%sPostgreSQL instances are ready.%s",
+                    COLORS.bold,
+                    COLORS.green,
+                    COLORS.reset,
+                )
             except Exception as e:
-                LOGGER.error("%sFailed to setup instances:%s %s", COLORS.bold, COLORS.reset, e)
+                LOGGER.error(
+                    "%sFailed to setup instances:%s %s", COLORS.bold, COLORS.reset, e
+                )
                 raise
 
             log_section_header(
@@ -953,14 +978,16 @@ class PBTTuner:
                     seed=42,
                 )
                 LOGGER.info(
-                    "Initializing %d workers configurations", self.pbt_config.population_size
+                    "Initializing %d workers configurations",
+                    self.pbt_config.population_size,
                 )
                 self.population.initialize(
                     initial_configs=warm_configs, random_seed=self.random_seed
                 )
             else:
                 LOGGER.info(
-                    "Initializing %d workers configurations", self.pbt_config.population_size
+                    "Initializing %d workers configurations",
+                    self.pbt_config.population_size,
                 )
                 self.population.initialize(random_seed=self.random_seed)
 
@@ -983,29 +1010,37 @@ class PBTTuner:
                 COLORS.bold,
                 COLORS.green,
                 len(self.population.workers),
-                COLORS.reset
+                COLORS.reset,
             )
 
             try:
                 for generation in range(self.pbt_config.num_generations):
                     self.run_generation(generation)
 
-                    LOGGER.info("Checking stopping criteria after generation %d...", generation)
+                    LOGGER.info(
+                        "Checking stopping criteria after generation %d...", generation
+                    )
                     if self.population.should_stop():
                         break
 
-                    LOGGER.info("Saving intermediate results after generation %d...", generation)
+                    LOGGER.info(
+                        "Saving intermediate results after generation %d...", generation
+                    )
                     if (generation + 1) % 5 == 0:
                         self.save_intermediate_results(generation)
 
             except KeyboardInterrupt:
                 LOGGER.info(
                     "%s%sInterrupted by user. Saving results...%s",
-                    COLORS.bold, COLORS.warning, COLORS.reset
+                    COLORS.bold,
+                    COLORS.warning,
+                    COLORS.reset,
                 )
 
             except (RuntimeError, ValueError) as e:
-                LOGGER.error("%sError during training: %s%s", COLORS.bold, COLORS.reset, e)
+                LOGGER.error(
+                    "%sError during training: %s%s", COLORS.bold, COLORS.reset, e
+                )
                 LOGGER.debug(" Exception details:", exc_info=True)
 
         finally:
@@ -1014,7 +1049,9 @@ class PBTTuner:
             except (RuntimeError, ValueError, ConnectionError, OSError) as e:
                 LOGGER.warning(
                     "%sFailed to stop PostgreSQL instances cleanly:%s %s",
-                    COLORS.warning, COLORS.reset, e
+                    COLORS.warning,
+                    COLORS.reset,
+                    e,
                 )
 
             if self.cleanup_instances:
@@ -1022,7 +1059,10 @@ class PBTTuner:
                     self.env.cleanup(remove_data=True)
                 except (RuntimeError, ValueError, ConnectionError, OSError) as e:
                     LOGGER.warning(
-                        "%sFailed to clean up instance data:%s %s",COLORS.warning, COLORS.reset, e
+                        "%sFailed to clean up instance data:%s %s",
+                        COLORS.warning,
+                        COLORS.reset,
+                        e,
                     )
 
         total_time = time.time() - self.start_time
@@ -1197,7 +1237,9 @@ class PBTTuner:
                 f,
                 indent=2,
             )
-        LOGGER.info("%sSaved best config to %s%s", COLORS.bold, best_config_file, COLORS.reset)
+        LOGGER.info(
+            "%sSaved best config to %s%s", COLORS.bold, best_config_file, COLORS.reset
+        )
 
         return results
 
@@ -1298,9 +1340,7 @@ class PBTTuner:
 
         dropped_knobs = [k for k in base_config if k not in self.knob_space.knobs]
         if dropped_knobs:
-            LOGGER.warning(
-                " Warm-start config dropping extra knobs: %s", dropped_knobs
-            )
+            LOGGER.warning(" Warm-start config dropping extra knobs: %s", dropped_knobs)
             for k in dropped_knobs:
                 del base_config[k]
 
@@ -1311,7 +1351,9 @@ class PBTTuner:
                 "Attempting to repair dependencies.",
                 errors,
             )
-        base_config = self.knob_space.repair_config_dependencies(base_config, worker_id=0)
+        base_config = self.knob_space.repair_config_dependencies(
+            base_config, worker_id=0
+        )
 
         num_warm_start = math.ceil(population_size / 2)
 
@@ -1811,9 +1853,16 @@ def main():
 
         LOGGER.info(
             "%sOutput logs are available at: %s%s",
-            COLORS.italic, output_file.resolve(), COLORS.reset
+            COLORS.italic,
+            output_file.resolve(),
+            COLORS.reset,
         )
-        LOGGER.info("%s%sTuning completed successfully!%s", COLORS.bold, COLORS.green, COLORS.reset)
+        LOGGER.info(
+            "%s%sTuning completed successfully!%s",
+            COLORS.bold,
+            COLORS.green,
+            COLORS.reset,
+        )
 
         return 0
 

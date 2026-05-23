@@ -125,7 +125,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             LOGGER.debug(
                 "    %s➤ Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables.%s",
                 COLORS.italic,
-                COLORS.reset
+                COLORS.reset,
             )
         except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
             LOGGER.warning("Failed to post-vacuum sysbench tables: %s", e)
@@ -155,8 +155,8 @@ class SysbenchExecutor(BenchmarkExecutor):
                     "   %sSysbench table layout mismatch "
                     "(missing=[%s] - extra=[%s] - expected_count=%d - found_count=%d)%s",
                     COLORS.italic,
-                    ', '.join(missing_tables) if missing_tables else "none",
-                    ', '.join(extra_tables) if extra_tables else "none",
+                    ", ".join(missing_tables) if missing_tables else "none",
+                    ", ".join(extra_tables) if extra_tables else "none",
                     len(expected_tables),
                     len(found_tables),
                     COLORS.reset,
@@ -214,7 +214,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             self.threads,
             warmup,
             random_seed,
-            COLORS.reset
+            COLORS.reset,
         )
         stdout, stderr, returncode = self._run_sysbench(
             db_config,
@@ -243,15 +243,29 @@ class SysbenchExecutor(BenchmarkExecutor):
             raise RuntimeError("Sysbench executed but parsed 0 throughput. Check logs.")
 
         log_section_header(
-            logger, "%sSysbench metrics extracted:%s",
-            COLORS.bold, COLORS.reset, "debug", top_separator=False
+            logger,
+            "%sSysbench metrics extracted:%s",
+            COLORS.bold,
+            COLORS.reset,
+            "debug",
+            top_separator=False,
         )
         for metric_name, value in metrics.__dict__.items():
             if metric_name in ["latency_p50", "latency_p95", "latency_p99"]:
-                logger.debug("  %s%-12s: %.3f ms%s", COLORS.bold, metric_name, value, COLORS.reset)
+                logger.debug(
+                    "  %s%-12s: %.3f ms%s",
+                    COLORS.bold,
+                    metric_name,
+                    value,
+                    COLORS.reset,
+                )
             elif metric_name == "throughput":
                 logger.debug(
-                    "  %s%-12s: %.3f TPS%s", COLORS.bold, metric_name, value, COLORS.reset
+                    "  %s%-12s: %.3f TPS%s",
+                    COLORS.bold,
+                    metric_name,
+                    value,
+                    COLORS.reset,
                 )
 
         if metrics.latency_p95 == 0.0 or metrics.latency_p99 == 0.0:

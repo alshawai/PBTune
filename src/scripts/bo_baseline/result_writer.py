@@ -146,13 +146,17 @@ def write_bo_results(
                     "worker_id": 0,
                     "score": score,
                     "metrics": iteration.get("metrics", {}),
-                    "score_breakdown": convert_numpy_types(iteration.get("score_breakdown")),
+                    "score_breakdown": convert_numpy_types(
+                        iteration.get("score_breakdown")
+                    ),
                 }
             ],
             "worker_configs": [
                 {
                     "worker_id": 0,
-                    "config": convert_numpy_types(knob_space.config_to_fractions(iteration.get("config", {}))),
+                    "config": convert_numpy_types(
+                        knob_space.config_to_fractions(iteration.get("config", {}))
+                    ),
                 }
             ],
         }
@@ -198,13 +202,19 @@ def write_bo_results(
         "scoring_policy_version": metric_config.scoring_policy_version,
         "metric_reference_version": metric_config.metric_reference_version,
         "workload_features": convert_numpy_types(metric_config.workload_features),
-        "normalization_metadata": convert_numpy_types(metric_config.get_normalization_metadata()),
+        "normalization_metadata": convert_numpy_types(
+            metric_config.get_normalization_metadata()
+        ),
         "warm_start": {"enabled": False},
         "best_configuration": {
             "score": best_score,
-            "knobs": convert_numpy_types(knob_space.config_to_fractions(best_iteration.get("config", {}))),
+            "knobs": convert_numpy_types(
+                knob_space.config_to_fractions(best_iteration.get("config", {}))
+            ),
             "metrics": best_iteration.get("metrics", {}),
-            "score_breakdown": convert_numpy_types(best_iteration.get("score_breakdown")),
+            "score_breakdown": convert_numpy_types(
+                best_iteration.get("score_breakdown")
+            ),
         },
         "worker_resources": {
             "ram_bytes": worker_resources.ram_bytes,

@@ -164,6 +164,7 @@ from src.utils.scoring.constants import (
 )
 from src.utils.scoring.contracts import NormalizationState, ScoreBreakdown
 
+
 @dataclass
 class MetricConfig:
     """
@@ -377,9 +378,7 @@ class MetricConfig:
         from src.utils.scoring.policies import POLICIES, FIXED_V1_POLICY
 
         _active_policy = POLICIES.get(self.scoring_policy, FIXED_V1_POLICY)
-        normalizer.fit(
-            historical_metrics, metric_whitelist=_active_policy.metrics
-        )
+        normalizer.fit(historical_metrics, metric_whitelist=_active_policy.metrics)
 
     def detect_saturation(
         self, metrics: PerformanceMetrics, saturation_threshold: float = 0.95
@@ -470,7 +469,7 @@ class MetricConfig:
                             metric_name,
                             bound,
                             min_saturated,
-                            COLORS.reset
+                            COLORS.reset,
                         )
                         expanded = True
                 return expanded
@@ -487,9 +486,7 @@ class MetricConfig:
             _active_policy = POLICIES.get(self.scoring_policy, FIXED_V1_POLICY)
             self._normalizer.fit(fit_dataset, metric_whitelist=_active_policy.metrics)
 
-            LOGGER.info(
-                " ➤ Expanded normalization ranges via normalizer recalibration"
-            )
+            LOGGER.info(" ➤ Expanded normalization ranges via normalizer recalibration")
             return True
 
         return False
@@ -526,7 +523,9 @@ class MetricConfig:
         breakdown = engine.compute_breakdown(metrics, worker_logger=worker_logger)
 
         if self.normalize_by_baseline and self.baseline_metrics is not None:
-            baseline = engine.compute_breakdown(self.baseline_metrics, worker_logger=worker_logger)
+            baseline = engine.compute_breakdown(
+                self.baseline_metrics, worker_logger=worker_logger
+            )
             if baseline.final_score > 0:
                 baseline_scaled = (breakdown.final_score / baseline.final_score) * 100.0
                 breakdown = ScoreBreakdown(

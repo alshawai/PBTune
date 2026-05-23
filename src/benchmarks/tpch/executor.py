@@ -182,7 +182,9 @@ class TPCHExecutor(BenchmarkExecutor):
             cursor.close()
             LOGGER.debug(
                 "   %s➤ TPC-H preparation complete (SF=%.2f)%s",
-                COLORS.italic, self.scale_factor, COLORS.reset,
+                COLORS.italic,
+                self.scale_factor,
+                COLORS.reset,
             )
 
         finally:
@@ -194,37 +196,8 @@ class TPCHExecutor(BenchmarkExecutor):
         log_prefix: str = "[TPC-H]",
         logger: logging.Logger | None = None,
     ) -> None:
-        """Drop all public tables before loading TPC-H data.
-
-        If an explicit `logger` is provided, use it for debug diagnostics
-        (tests inject a MagicMock logger). Otherwise, fall back to
-        `self.logger`.
-        """
-        cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-        existing_tables = [str(row[0]) for row in cursor.fetchall()]
-        if not existing_tables:
-            return
-
-        active_logger = logger if logger is not None else LOGGER
-        if log_prefix:
-            active_logger.debug(
-                f"{log_prefix} Dropping existing public tables (%d)...",
-                len(existing_tables),
-            )
-        else:
-            active_logger.debug(
-                "Dropping existing public tables (%d)...",
-                len(existing_tables),
-            )
-
-        from psycopg2 import sql
-
-        for table_name in sorted(existing_tables):
-            cursor.execute(
-                sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
-                    sql.Identifier(table_name)
-                )
-            )
+        """Drop all public tables before loading TPC-H data."""
+        super()._drop_existing_public_tables(cursor, log_prefix=log_prefix)
 
     @staticmethod
     def _strip_trailing_delimiter(file_obj):
@@ -297,7 +270,7 @@ class TPCHExecutor(BenchmarkExecutor):
         warmup_passes = kwargs.get("warmup_passes", 0)
 
         logger.info(
-            " %sStarting TPC-H execution (SF=%.1f, warmup_passes=%d)...%s",
+            " %sStarting TPC-H execution (SF=%.2f, warmup_passes=%d)...%s",
             COLORS.bold,
             self.scale_factor,
             warmup_passes,
@@ -382,7 +355,9 @@ class TPCHExecutor(BenchmarkExecutor):
                 conn.autocommit = True
         logger.debug("  ➤ Warmup complete, starting timed measurement of TPC-H queries")
 
-        logger.info(" Executing Power Test sequence of %d TPC-H queries...", len(self.queries))
+        logger.info(
+            " Executing Power Test sequence of %d TPC-H queries...", len(self.queries)
+        )
 
         latencies: List[float] = []
         errors = 0
@@ -439,7 +414,9 @@ class TPCHExecutor(BenchmarkExecutor):
                 total_time=total_time,
                 failure_type="query_failed_or_timeout",
             )
-        logger.debug("  ➤ TPC-H results: %d queries in %.1fs", total_queries, total_time)
+        logger.debug(
+            "  ➤ TPC-H results: %d queries in %.1fs", total_queries, total_time
+        )
 
         logger.info(" Computing performance metrics from execution results...")
         metrics = PerformanceMetrics()
@@ -468,19 +445,29 @@ class TPCHExecutor(BenchmarkExecutor):
             metrics.error_rate = 0.0  # Since errors > 0 are already caught above
 
         log_section_header(
-            logger, "  %sTPC-H metrics extracted:%s",
-            COLORS.bold, COLORS.reset, level="debug", top_separator=False,
+            logger,
+            "  %sTPC-H metrics extracted:%s",
+            COLORS.bold,
+            COLORS.reset,
+            level="debug",
+            top_separator=False,
         )
         for metric_name, value in metrics.__dict__.items():
             if metric_name in ["latency_p50", "latency_p95", "latency_p99"]:
                 logger.debug(
-                    "    %s%-12s: %.3f s%s", COLORS.bold, metric_name, value / 1000.0, COLORS.reset
+                    "    %s%-12s: %.3f s%s",
+                    COLORS.bold,
+                    metric_name,
+                    value / 1000.0,
+                    COLORS.reset,
                 )
             elif metric_name == "throughput":
                 logger.debug(
-                    "    %s%-12s: %.3f QphH%s", COLORS.bold, metric_name, value, COLORS.reset
+                    "    %s%-12s: %.3f QphH%s",
+                    COLORS.bold,
+                    metric_name,
+                    value,
+                    COLORS.reset,
                 )
 
-
         return metrics
-    

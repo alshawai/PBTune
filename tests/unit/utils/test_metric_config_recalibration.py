@@ -45,20 +45,28 @@ def test_expand_ranges_for_metrics_recalibrates_from_out_of_support_drift() -> N
     assert expanded is True
     # Check that normalizer anchors were expanded
     if old_lat_high is not None:
-        _, new_lat_low, new_lat_high = config._normalizer.anchors.get(lat_metric, (1, old_lat_low, old_lat_high))
+        _, new_lat_low, new_lat_high = config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
         assert new_lat_high > old_lat_high
 
     if old_thr_high is not None:
-        _, new_thr_low, new_thr_high = config._normalizer.anchors.get("throughput", (1, old_thr_low, old_thr_high))
+        _, new_thr_low, new_thr_high = config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
         assert new_thr_high > old_thr_high
 
     # Lower bounds should remain valid and non-negative.
     if old_lat_low is not None:
-        _, new_lat_low, _ = config._normalizer.anchors.get(lat_metric, (1, old_lat_low, old_lat_high))
+        _, new_lat_low, _ = config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
         assert new_lat_low >= 0.0
 
     if old_thr_low is not None:
-        _, new_thr_low, _ = config._normalizer.anchors.get("throughput", (1, old_thr_low, old_thr_high))
+        _, new_thr_low, _ = config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
         assert new_thr_low >= 0.0
 
 
@@ -98,11 +106,15 @@ def test_expand_ranges_for_metrics_recalibrates_from_saturation() -> None:
     assert expanded is True
     # Latency should be expanded due to saturation
     if old_lat_high is not None:
-        _, new_lat_low, new_lat_high = config._normalizer.anchors.get(lat_metric, (1, old_lat_low, old_lat_high))
+        _, new_lat_low, new_lat_high = config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
         assert new_lat_high > old_lat_high
 
     # Throughput was not saturated (all 110 within [100, 119]), so it should NOT be expanded
     if old_thr_high is not None:
-        _, new_thr_low, new_thr_high = config._normalizer.anchors.get("throughput", (1, old_thr_low, old_thr_high))
+        _, new_thr_low, new_thr_high = config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
         assert new_thr_high == old_thr_high
         assert new_thr_low == old_thr_low

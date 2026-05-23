@@ -14,7 +14,7 @@ from src.utils.scoring.policies import ScoringPolicySpec
 from src.utils.scoring.normalization import QuantileUtilityNormalizer
 
 LOGGER = get_logger("Scorer")
-COLORS = get_color_context() 
+COLORS = get_color_context()
 
 
 class CompositeScorer:

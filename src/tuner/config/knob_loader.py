@@ -33,6 +33,7 @@ from src.utils.logger import get_logger, get_color_context
 LOGGER = get_logger("KnobLoader")
 COLORS = get_color_context()
 
+
 def csv_type_to_knob_type(vartype: str) -> KnobType:
     """Convert PostgreSQL vartype to KnobType enum"""
     mapping = {

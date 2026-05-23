@@ -306,7 +306,9 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     population.evaluate_generation = MagicMock()
     population.rescue_dead_workers = MagicMock(return_value=0)
     population.update_metric_ranges_if_needed = MagicMock()
-    population._finalize_scores = MagicMock(side_effect=lambda: call_order.append("finalize"))
+    population._finalize_scores = MagicMock(
+        side_effect=lambda: call_order.append("finalize")
+    )
     population.record_generation = MagicMock(return_value=MagicMock(num_exploited=0))
 
     with patch("src.tuner.core.population.log_worker_metrics_table") as log_table:
@@ -381,9 +383,13 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
 
     # Check that the normalizer anchors were expanded
     if old_lat_high is not None:
-        _, new_lat_low, new_lat_high = metric_config._normalizer.anchors.get(lat_metric, (1, old_lat_low, old_lat_high))
+        _, new_lat_low, new_lat_high = metric_config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
         assert new_lat_high > old_lat_high
 
     if old_thr_low is not None:
-        _, new_thr_low, new_thr_high = metric_config._normalizer.anchors.get("throughput", (1, old_thr_low, old_thr_high))
+        _, new_thr_low, new_thr_high = metric_config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
         assert new_thr_low < old_thr_low

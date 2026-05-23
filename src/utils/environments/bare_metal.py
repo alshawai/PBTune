@@ -276,7 +276,9 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     capture_output=True,
                 )
             except subprocess.CalledProcessError:
-                raise RuntimeError(f"Failed to verify instance for worker {worker_id}")
+                raise RuntimeError(
+                    f"Failed to verify instance for worker {worker_id}"
+                ) from None
 
     def cleanup(self, remove_data: bool = False) -> None:
         self.stop_all(mode="immediate")
@@ -328,7 +330,9 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self.start_instance(worker_id)
         return str(baseline_path)
 
-    def restore_snapshot(self, worker_id: int, snapshot_id: str = "", quiet: bool = False) -> bool:
+    def restore_snapshot(
+        self, worker_id: int, snapshot_id: str = "", quiet: bool = False
+    ) -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
         snapshot_path = self._resolve_snapshot_path(snapshot_id)
         if not snapshot_path.exists():

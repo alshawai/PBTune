@@ -275,7 +275,8 @@ class QuantileUtilityNormalizer:
         if not metrics_list:
             self.logger.debug(
                 "  %s➤ fit() called with empty metrics list, skipping%s",
-                COLORS.italic, COLORS.reset,
+                COLORS.italic,
+                COLORS.reset,
             )
             return
 
@@ -344,8 +345,12 @@ class QuantileUtilityNormalizer:
             self._out_of_support_counts[key] = 0
 
         log_section_header(
-            self.logger, " %sCalibrating normalizer anchors from %d observations: %s",
-            COLORS.bold, len(metrics_list), COLORS.reset, top_separator=False
+            self.logger,
+            " %sCalibrating normalizer anchors from %d observations: %s",
+            COLORS.bold,
+            len(metrics_list),
+            COLORS.reset,
+            top_separator=False,
         )
         for key, (direction, q_low, q_high) in self.anchors.items():
             self.logger.info(
@@ -355,7 +360,7 @@ class QuantileUtilityNormalizer:
                 direction,
                 q_low,
                 q_high,
-                COLORS.reset
+                COLORS.reset,
             )
 
         self._total_samples_since_calibration = 0
@@ -427,7 +432,7 @@ class QuantileUtilityNormalizer:
                 COLORS.bold,
                 len(drifted_metrics),
                 self._total_samples_since_calibration,
-                COLORS.reset
+                COLORS.reset,
             )
             return True
 
@@ -520,8 +525,12 @@ class QuantileUtilityNormalizer:
                 scores[key] = self.score_metric(key, float(val))
 
         log_section_header(
-            logger, "Scored metrics vector %s(normalized to [0, 1])%s",
-            COLORS.italic, COLORS.reset, level="debug", top_separator=False
+            logger,
+            "Scored metrics vector %s(normalized to [0, 1])%s",
+            COLORS.italic,
+            COLORS.reset,
+            level="debug",
+            top_separator=False,
         )
         for k, v in scores.items():
             logger.debug("%20s: %.4f", k, v)

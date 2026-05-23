@@ -328,7 +328,7 @@ class KnobSpace:
                 COLORS.reset,
                 COLORS.italic,
                 filtered_count,
-                COLORS.reset
+                COLORS.reset,
             )
 
         return view
@@ -366,7 +366,7 @@ class KnobSpace:
                     knob.max_value,
                     int(resources.ram_bytes / bytes_per_unit),
                     knob.unit or "units",
-                    COLORS.reset
+                    COLORS.reset,
                 )
 
             elif knob.resource_type == "cpu" and name in HARDWARE_RELATIVE_SPECS:
@@ -380,7 +380,7 @@ class KnobSpace:
                     knob.min_value,
                     knob.max_value,
                     resources.cpu_cores,
-                    COLORS.reset
+                    COLORS.reset,
                 )
 
             elif (
@@ -401,10 +401,9 @@ class KnobSpace:
                     min_val,
                     max_val,
                     disk_type,
-                    COLORS.reset
+                    COLORS.reset,
                 )
         LOGGER.debug("➤ Resolved hardware ranges for %d knobs", len(self.knobs))
-
 
     def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -692,7 +691,7 @@ class KnobSpace:
                     "because wal_level is 'minimal'%s",
                     COLORS.italic,
                     repaired["max_wal_senders"],
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["max_wal_senders"] = 0
 
@@ -703,7 +702,7 @@ class KnobSpace:
                     "because wal_level is 'minimal'%s",
                     COLORS.italic,
                     repaired["summarize_wal"],
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["summarize_wal"] = "off"
 
@@ -717,7 +716,7 @@ class KnobSpace:
                     "because huge_pages is '%s'%s",
                     COLORS.italic,
                     huge_pages,
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["shared_memory_type"] = "mmap"
 
@@ -729,7 +728,7 @@ class KnobSpace:
                     "%s Corrected 'huge_pages' from 'on' to 'try' "
                     "to allow graceful OS fallback%s",
                     COLORS.italic,
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["huge_pages"] = "try"
 
@@ -746,7 +745,7 @@ class KnobSpace:
                     COLORS.italic,
                     max_parallel,
                     max_worker,
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["max_parallel_workers"] = int(max_worker)
 
@@ -765,7 +764,7 @@ class KnobSpace:
                     min_wal,
                     new_min_wal,
                     max_wal,
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["min_wal_size"] = new_min_wal
 
@@ -791,7 +790,7 @@ class KnobSpace:
                     max_conn,
                     new_max,
                     reserved_total,
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 repaired["max_connections"] = new_max
 
@@ -956,7 +955,8 @@ class KnobSpace:
                 config[knob_name] = categorical_samples[knob_name][i]
 
             LOGGER.debug(
-                " ➤ Sampled config for Worker-%d. Attempting to repair dependencies...", i
+                " ➤ Sampled config for Worker-%d. Attempting to repair dependencies...",
+                i,
             )
             configs.append(self.repair_config_dependencies(config, worker_id=i))
 

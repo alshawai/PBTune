@@ -37,8 +37,7 @@ class TestGenerationBarrierBasic:
                     arrival_times[name].append(time.monotonic())
 
         threads = [
-            threading.Thread(target=worker_fn, args=(i,))
-            for i in range(num_workers)
+            threading.Thread(target=worker_fn, args=(i,)) for i in range(num_workers)
         ]
         for t in threads:
             t.start()
@@ -184,7 +183,9 @@ class TestGenerationBarrierReset:
                 with lock:
                     passed.append(wid)
 
-            threads = [threading.Thread(target=w, args=(i,)) for i in range(num_workers)]
+            threads = [
+                threading.Thread(target=w, args=(i,)) for i in range(num_workers)
+            ]
             for t in threads:
                 t.start()
             for t in threads:
@@ -245,7 +246,6 @@ class TestGenerationBarrierEdgeCases:
         barriers = GenerationBarrier(num_workers=num_workers, timeout=30.0)
 
         unblocked = threading.Event()
-        broken_detected = threading.Event()
 
         def waiting_worker():
             """Worker that waits at first barrier forever (3 parties, only 1 arrives)."""
@@ -307,8 +307,7 @@ class TestHybridModeBatching:
                 results.append(worker_id)
 
         threads = [
-            threading.Thread(target=worker_fn, args=(i,))
-            for i in range(batch_size)
+            threading.Thread(target=worker_fn, args=(i,)) for i in range(batch_size)
         ]
         for t in threads:
             t.start()
@@ -327,14 +326,11 @@ class TestHybridModeBatching:
         # Simulate batched evaluation like population.evaluate_generation
         workers = list(range(population_size))
         batches = [
-            workers[i : i + max_workers]
-            for i in range(0, population_size, max_workers)
+            workers[i : i + max_workers] for i in range(0, population_size, max_workers)
         ]
 
         for batch in batches:
-            batch_barriers = GenerationBarrier(
-                num_workers=len(batch), timeout=3.0
-            )
+            batch_barriers = GenerationBarrier(num_workers=len(batch), timeout=3.0)
 
             def worker_fn(wid: int, barriers=batch_barriers):
                 for name in BARRIER_NAMES:
@@ -342,10 +338,7 @@ class TestHybridModeBatching:
                 with lock:
                     all_results.append(wid)
 
-            threads = [
-                threading.Thread(target=worker_fn, args=(wid,))
-                for wid in batch
-            ]
+            threads = [threading.Thread(target=worker_fn, args=(wid,)) for wid in batch]
             for t in threads:
                 t.start()
             for t in threads:

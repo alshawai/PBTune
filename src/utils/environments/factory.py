@@ -89,7 +89,7 @@ class EnvironmentFactory:
             try:
                 LOGGER.info(
                     "Attempting to create Docker environment with image '%s'...",
-                    image_name or "auto-resolve"
+                    image_name or "auto-resolve",
                 )
                 # Test connectivity
                 docker.from_env().ping()
@@ -120,7 +120,7 @@ class EnvironmentFactory:
                     "%sDocker unavailable (%s), falling back to Bare Metal%s",
                     COLORS.warning,
                     e,
-                    COLORS.reset
+                    COLORS.reset,
                 )
 
         # If no_docker or docker failed

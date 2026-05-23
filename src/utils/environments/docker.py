@@ -45,6 +45,7 @@ except ImportError as exc:
 LOGGER = get_logger("DockerEnvironment")
 COLORS = get_color_context()
 
+
 class DockerEnvironment(DatabaseEnvironment):
     """
     Docker-backed PostgreSQL environment supporting multi-worker parallelism.
@@ -197,7 +198,10 @@ class DockerEnvironment(DatabaseEnvironment):
         child, side-stepping the ownership mismatch.
         """
         if not quiet:
-            LOGGER.debug("  Force-removing host directory '%s' via containerized rm -rf", target_dir)
+            LOGGER.debug(
+                "  Force-removing host directory '%s' via containerized rm -rf",
+                target_dir,
+            )
         if not target_dir.exists():
             return
 
@@ -208,7 +212,12 @@ class DockerEnvironment(DatabaseEnvironment):
             container = self.client.containers.run(
                 self.image_name,
                 entrypoint=["rm", "-rf", f"/host/{child_name}"],
-                volumes={self._docker_bind_path(Path(parent_dir)): {"bind": "/host", "mode": "rw"}},
+                volumes={
+                    self._docker_bind_path(Path(parent_dir)): {
+                        "bind": "/host",
+                        "mode": "rw",
+                    }
+                },
                 detach=True,
             )
             result = container.wait()
@@ -351,8 +360,14 @@ class DockerEnvironment(DatabaseEnvironment):
                     entrypoint=["bash", "-lc"],
                     command=["set -euo pipefail; cp -R /source/. /dest/"],
                     volumes={
-                        self._docker_bind_path(snapshot_pgdata): {"bind": "/source", "mode": "ro"},
-                        self._docker_bind_path(pgdata_dir): {"bind": "/dest", "mode": "rw"},
+                        self._docker_bind_path(snapshot_pgdata): {
+                            "bind": "/source",
+                            "mode": "ro",
+                        },
+                        self._docker_bind_path(pgdata_dir): {
+                            "bind": "/dest",
+                            "mode": "rw",
+                        },
                     },
                     detach=True,
                 )
@@ -465,7 +480,13 @@ class DockerEnvironment(DatabaseEnvironment):
         for worker_id in range(num_workers):
             port = self._worker_port(worker_id)
             container_name = self._container_name(worker_id)
-            LOGGER.info(" %sSetting up container '%s' on port %d:%s", COLORS.sky_blue, container_name, port, COLORS.reset)
+            LOGGER.info(
+                " %sSetting up container '%s' on port %d:%s",
+                COLORS.sky_blue,
+                container_name,
+                port,
+                COLORS.reset,
+            )
 
             recreate_worker0_for_baseline = (
                 worker_id == 0
@@ -838,7 +859,9 @@ class DockerEnvironment(DatabaseEnvironment):
                     worker_id,
                 )
         self.instances.clear()
-        LOGGER.info("%s➤ Docker environment cleanup complete.%s", COLORS.bold, COLORS.reset)
+        LOGGER.info(
+            "%s➤ Docker environment cleanup complete.%s", COLORS.bold, COLORS.reset
+        )
 
     @contextmanager
     def _with_timeout(self, seconds: Optional[int]):
@@ -1132,7 +1155,9 @@ class DockerEnvironment(DatabaseEnvironment):
 
         return True
 
-    def restore_snapshot(self, worker_id: int, snapshot_id: str = "", quiet: bool = False) -> bool:
+    def restore_snapshot(
+        self, worker_id: int, snapshot_id: str = "", quiet: bool = False
+    ) -> bool:
         """Restore a worker's PGDATA from the baseline snapshot directory."""
         container_name = self._container_name(worker_id)
         port = self._worker_port(worker_id)
@@ -1207,7 +1232,9 @@ class DockerEnvironment(DatabaseEnvironment):
             stats = container.stats(stream=False)
         except (docker_errors.NotFound, docker_errors.APIError) as exc:
             LOGGER.debug(
-                "  ➤ Unable to collect Docker memory stats for %s: %s", container_name, exc
+                "  ➤ Unable to collect Docker memory stats for %s: %s",
+                container_name,
+                exc,
             )
             return 0.0
 
@@ -1220,7 +1247,9 @@ class DockerEnvironment(DatabaseEnvironment):
             return max(0.0, min(1.0, usage / limit))
         except (TypeError, ValueError) as exc:
             LOGGER.debug(
-                "  ➤ Invalid Docker memory stats payload for %s: %s", container_name, exc
+                "  ➤ Invalid Docker memory stats payload for %s: %s",
+                container_name,
+                exc,
             )
             return 0.0
 
@@ -1255,7 +1284,7 @@ class DockerEnvironment(DatabaseEnvironment):
                         container_name,
                         time.time() - start_time,
                         COLORS.reset,
-                )
+                    )
                 return
             except psycopg2.OperationalError:
                 time.sleep(1)

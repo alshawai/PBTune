@@ -280,7 +280,9 @@ class DatabaseEnvironment(ABC):
         """Create a baseline snapshot from the specified worker instance."""
 
     @abstractmethod
-    def restore_snapshot(self, worker_id: int, snapshot_id: str = "", quiet: bool = False) -> bool:
+    def restore_snapshot(
+        self, worker_id: int, snapshot_id: str = "", quiet: bool = False
+    ) -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
 
     @abstractmethod
