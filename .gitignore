@@ -122,6 +122,7 @@ results/**/bo_best_config*.json
 results/**/comparison_*.json
 results/**/intermediate_*.json
 results/**/*.html
+results/**/multi_arm_comparison_*
 results/oltp/comparisons/
 results/**/fanova_importance.json
 results/**/bo_runs/**/smac_output/
@@ -130,6 +131,7 @@ results/**/bo_runs/**/smac_output/
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
 
 # Graphify knowledge graph (machine-specific intermediates)
+graphify-out/*
 graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/.graphify_analysis.json

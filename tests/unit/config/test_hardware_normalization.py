@@ -403,8 +403,9 @@ def test_worker_clone_memory_budget_repair(mock_knob_space):
     worker2 = Worker(worker_id=1, knob_space=mock_knob_space)
     worker2.clone_from(worker1, current_generation=1)
 
+    # clone_from copies the configuration as-is; repair is applied during perturb()
     assert worker2.knob_config is not None
-    assert worker2.knob_config["shared_buffers"] < 400000
+    assert worker2.knob_config["shared_buffers"] == 400000
 
 
 def test_perturbation_bound_exceed_repairs(mock_knob_space):

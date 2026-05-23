@@ -39,6 +39,7 @@ from psycopg2.extensions import connection as PostgresConnection, register_adapt
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import DatabaseEnvironment
+from src.utils.logger.helpers import log_section_header
 from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
@@ -51,9 +52,10 @@ from src.utils.types import TuningMode
 from src.tuner.benchmark.restart_policy import should_restart
 from src.tuner.core.barriers import GenerationBarrier
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("WorkloadOrchestrator")
+COLORS = get_color_context()
 
 # Register numpy type adapters for psycopg2
 register_adapter(np.int64, lambda x: AsIs(int(x)))
@@ -172,10 +174,10 @@ class WorkloadOrchestrator:
         self.workload_executor = workload_executor
         self.env = env
 
-        LOGGER.debug(
-            "✓ Created WorkloadOrchestrator: workload=%s, mode=%s, duration=%ss",
+        LOGGER.info(
+            "➤ Created WorkloadOrchestrator: workload=%s, mode=%s, duration=%ss",
             config.workload_type.value.upper(),
-            config.tuning_mode.value,
+            config.tuning_mode.value.capitalize(),
             config.measurement_duration,
         )
 
@@ -214,7 +216,7 @@ class WorkloadOrchestrator:
                 connection = get_connection(config=db_config or self.config.db_config)
                 connection.autocommit = False
                 if attempt > 1:
-                    LOGGER.info("Connection established after %d attempts", attempt)
+                    LOGGER.debug(" ➤ Connection established after %d attempts", attempt)
                 return connection
             except psycopg2.Error as e:
                 last_error = e
@@ -232,19 +234,16 @@ class WorkloadOrchestrator:
                 ):
                     if attempt < max_retries:
                         LOGGER.warning(
-                            "Database recovering, retry %d/%d in %.1fs...",
+                            " Database recovering, retry %d/%d in %.1fs...",
                             attempt,
                             max_retries,
                             retry_delay,
                         )
                         time.sleep(retry_delay)
-                        continue
 
-                # Non-recoverable error or last attempt
-                LOGGER.error("Failed to connect to PostgreSQL: %s", e)
-                raise
-
-        LOGGER.error("Failed to connect after %d attempts: %s", max_retries, last_error)
+        LOGGER.error(
+            " ➤ Failed to connect after %d attempts: %s", max_retries, last_error
+        )
         raise last_error  # type: ignore
 
     def disconnect(
@@ -261,30 +260,29 @@ class WorkloadOrchestrator:
             Worker ID for logging context
         """
         if connection:
+            worker_logger = (
+                get_logger("BenchmarkWorker", worker_id=worker_id)
+                if worker_id is not None
+                else LOGGER
+            )
             try:
                 connection.close()
-                if worker_id is not None:
-                    worker_logger = get_logger("BenchmarkWorker", worker_id=worker_id)
-                    worker_logger.debug("Disconnected from PostgreSQL")
-                else:
-                    LOGGER.debug("Disconnected from PostgreSQL")
+                worker_logger.debug(
+                    "  %sDisconnected from PostgreSQL%s", COLORS.italic, COLORS.reset
+                )
             except Exception as e:
-                if worker_id is not None:
-                    worker_logger = get_logger("BenchmarkWorker", worker_id=worker_id)
-                    worker_logger.warning("Error closing connection: %s", e)
-                else:
-                    LOGGER.warning("Error closing connection: %s", e)
+                worker_logger.warning("Error closing connection: %s", e)
 
     def apply_configuration(
         self,
         connection: PostgresConnection,
-        knob_config: Dict[str, Any],
+        worker: Worker,
         knob_applicator: KnobApplicator,
         force_restart: bool = False,
         generation: Optional[int] = None,
-        worker_id: Optional[int] = None,
     ) -> bool:
-        """Apply knob configuration and optionally restart via policy.
+        """
+        Apply knob configuration and optionally restart via policy.
 
         This method applies knobs directly through KnobApplicator,
         then uses RestartPolicy (should_restart) for restart decisions,
@@ -294,30 +292,22 @@ class WorkloadOrchestrator:
         ----------
         connection : PostgresConnection
             Active connection to worker's instance
-        knob_config : Dict[str, Any]
-            Configuration parameters to apply
+        worker : Worker
+            Worker instance for which to apply configuration
         knob_applicator : KnobApplicator
             Applicator for this worker's instance (legacy compat)
         force_restart : bool
             Force immediate restart regardless of mode/interval
         generation : Optional[int]
             Current generation number
-        worker_id : Optional[int]
-            Numeric worker ID
 
         Returns
         -------
         bool
             True if restart occurred during this application
         """
-        worker_logger = (
-            get_logger("BenchmarkWorker", worker_id=worker_id)
-            if worker_id is not None
-            else LOGGER
-        )
-
         try:
-            result = knob_applicator.apply(knob_config)
+            result = knob_applicator.apply(worker.knob_config)  # type: ignore
 
             restart_required = bool(
                 result.restart_required and len(result.restart_required) > 0
@@ -331,10 +321,12 @@ class WorkloadOrchestrator:
                     else restart_required_params
                 )
 
-                worker_logger.info(
-                    "Restart required for %d parameters: %s",
+                worker.logger.info(
+                    " %s➤ Restart required for %d parameter(s): %s%s",
+                    COLORS.bold,
                     len(restart_required_params),
-                    first_three,
+                    ", ".join(first_three),
+                    COLORS.reset,
                 )
 
             do_restart = should_restart(
@@ -346,7 +338,8 @@ class WorkloadOrchestrator:
             )
 
             if do_restart:
-                return self._perform_restart(connection, worker_id=worker_id)
+                worker.logger.debug(" Restarting PostgreSQL instance...")
+                return self._perform_restart(connection, worker=worker)
 
             if restart_required and not do_restart:
                 if self.config.tuning_mode == TuningMode.ADAPTIVE:
@@ -356,25 +349,29 @@ class WorkloadOrchestrator:
                         if generation is not None
                         else interval
                     )
-                    worker_logger.info(
-                        "Deferring restart (will restart at generation %d)",
+                    worker.logger.info(
+                        " ➤ Deferring restart (will restart at generation %s%d%s)",
+                        COLORS.bold,
                         next_restart,
+                        COLORS.reset,
                     )
                 elif self.config.tuning_mode == TuningMode.ONLINE:
-                    worker_logger.debug(
-                        "ONLINE mode: restart-required knobs written but restart skipped"
+                    worker.logger.info(
+                        " %s➤ ONLINE mode: restart-required knobs written but restart skipped%s",
+                        COLORS.bold,
+                        COLORS.reset,
                     )
 
             return False
 
         except Exception as e:
-            worker_logger.error("Failed to apply configuration: %s", e)
+            worker.logger.error("Failed to apply configuration: %s", e)
             raise
 
     def _perform_restart(
         self,
         connection: PostgresConnection,
-        worker_id: Optional[int] = None,
+        worker: Worker,
     ) -> bool:
         """Restart PostgreSQL via the injected environment.
 
@@ -382,22 +379,14 @@ class WorkloadOrchestrator:
         ----------
         connection : PostgresConnection
             Connection to close before restart
-        worker_id : Optional[int]
-            Worker ID for environment restart and logging
+        worker : Worker
+            Worker instance for which to perform restart
 
         Returns
         -------
         bool
             True if restart succeeded
         """
-        worker_logger = (
-            get_logger("BenchmarkWorker", worker_id=worker_id)
-            if worker_id is not None
-            else LOGGER
-        )
-
-        worker_logger.info("Restarting PostgreSQL instance...")
-
         try:
             # Close connection before restart
             try:
@@ -406,17 +395,16 @@ class WorkloadOrchestrator:
             except (psycopg2.Error, AttributeError):
                 pass
 
-            wid = worker_id if worker_id is not None else 0
-            if self.env.restart_instance(wid):
-                worker_logger.info("Restart successful")
+            if self.env.restart_instance(worker.worker_id, quiet=True):
+                worker.logger.info(" ➤ Restart successful")
 
                 return True
             else:
-                worker_logger.error("Restart failed")
+                worker.logger.error(" ➤ Restart failed")
                 return False
 
         except Exception as e:
-            worker_logger.error("Restart failed with exception: %s", e)
+            worker.logger.error("➤ Restart failed with exception: %s", e)
             return False
 
     def collect_system_metrics(
@@ -451,7 +439,7 @@ class WorkloadOrchestrator:
         return metrics
 
     def _vacuum_after_dml(
-        self, db_config: DatabaseConfig, worker_id: Optional[int] = None
+        self, db_config: DatabaseConfig, worker_logger: Optional[logging.Logger] = None
     ) -> None:
         """
         Run bounded post-workload maintenance after DML-heavy workloads.
@@ -463,17 +451,14 @@ class WorkloadOrchestrator:
         # Skip for read-only workloads (OLAP, TPC-H)
         if self.config.workload_type.value in ("olap", "tpch"):
             return
-
-        worker_logger = (
-            get_logger("BenchmarkWorker", worker_id=worker_id)
-            if worker_id is not None
-            else LOGGER
-        )
+        worker_logger = worker_logger or LOGGER
 
         timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
         if timeout_seconds <= 0:
             worker_logger.debug(
-                "Skipping post-workload VACUUM ANALYZE (timeout disabled)"
+                " ➤ Skipping post-workload maintenance %s(timeout disabled)%s",
+                COLORS.italic,
+                COLORS.reset,
             )
             return
 
@@ -499,22 +484,21 @@ class WorkloadOrchestrator:
 
             if not tables:
                 worker_logger.debug(
-                    "Skipping post-workload maintenance (no modified user tables)"
+                    " ➤ Skipping post-workload maintenance %s(no modified user tables)%s",
+                    COLORS.italic,
+                    COLORS.reset,
                 )
                 cursor.close()
                 conn.close()
                 return
 
             worker_logger.debug(
-                "Running post-workload VACUUM ANALYZE on %d modified tables (statement_timeout=%sms, lock_timeout=%sms)",
+                "  Running post-workload VACUUM ANALYZE on %d modified tables...",
                 len(tables),
-                statement_timeout_ms,
-                lock_timeout_ms,
             )
 
             start = time.time()
             for schema_name, table_name in tables:
-                table_start = time.time()
                 try:
                     cursor.execute(
                         sql.SQL("VACUUM ANALYZE {}.{}").format(
@@ -522,15 +506,9 @@ class WorkloadOrchestrator:
                             sql.Identifier(table_name),
                         )
                     )
-                    worker_logger.debug(
-                        "VACUUM ANALYZE completed for %s.%s in %.2fs",
-                        schema_name,
-                        table_name,
-                        time.time() - table_start,
-                    )
                 except Exception as table_error:
                     worker_logger.warning(
-                        "Post-workload maintenance failed for %s.%s: %s",
+                        " ➤ Post-workload maintenance failed for %s.%s: %s",
                         schema_name,
                         table_name,
                         table_error,
@@ -539,13 +517,13 @@ class WorkloadOrchestrator:
             elapsed = time.time() - start
 
             worker_logger.debug(
-                "Post-workload VACUUM ANALYZE completed in %.2fs", elapsed
+                " ➤ Post-workload VACUUM ANALYZE completed in %.2fs", elapsed
             )
             cursor.close()
             conn.close()
 
         except Exception as e:
-            worker_logger.warning("Post-workload VACUUM ANALYZE failed: %s", e)
+            worker_logger.warning(" ➤ Post-workload VACUUM ANALYZE failed: %s", e)
 
     def _ensure_benchmark_ready(
         self,
@@ -559,25 +537,22 @@ class WorkloadOrchestrator:
         worker_logger = worker_logger or LOGGER
 
         try:
-            benchmark_ready = self.workload_executor.validate(db_config)
+            if self.workload_executor.validate(db_config):
+                worker_logger.debug(
+                    " ➤ Benchmark validation successful, ready to execute"
+                )
+                return
         except Exception as e:
             worker_logger.warning(
                 "Benchmark validation raised %s; attempting prepare()", e
             )
-            benchmark_ready = False
 
-        if benchmark_ready:
-            return
-
-        worker_logger.warning(
-            "Benchmark state invalid; running prepare() before workload execution"
-        )
         self.workload_executor.prepare(db_config)
 
         if not self.workload_executor.validate(db_config):
             raise RuntimeError("Benchmark validation still failing after prepare()")
 
-        worker_logger.info("Benchmark state re-prepared successfully")
+        worker_logger.debug(" ➤ Benchmark state re-prepared successfully")
 
     def evaluate_worker(
         self,
@@ -627,14 +602,8 @@ class WorkloadOrchestrator:
         """
         if not worker.db_config:
             raise ValueError(
-                f"Worker {worker.worker_id} has no db_config set. "
-                "Initialize workers with PostgresInstanceManager first."
+                f"[Worker-{worker.worker_id}] Missing db_config for evaluation"
             )
-
-        worker_logger = get_logger("BenchmarkWorker", worker_id=worker.worker_id)
-        worker_logger.info(
-            "Evaluating configuration on instance port %d...", worker.port or 0
-        )
 
         # Helper: wait at a named barrier (no-op when barriers is None/disabled).
         def _barrier(name: str) -> None:
@@ -651,6 +620,7 @@ class WorkloadOrchestrator:
         restart_occurred = False
 
         try:
+            worker.logger.info(" Establishing connection to PostgreSQL...")
             # ── B1: Connect ──────────────────────────────────────────
             connection = self.connect(worker.db_config, max_retries=5, retry_delay=3.0)
             _barrier("connected")
@@ -669,61 +639,64 @@ class WorkloadOrchestrator:
 
                 force_restart = worker.force_restart_next_eval
 
+                worker.logger.info(" Applying knob configuration...")
                 restart_occurred = self.apply_configuration(
                     connection=connection,
-                    knob_config=worker.knob_config,
+                    worker=worker,
                     knob_applicator=knob_applicator,
                     force_restart=force_restart,
                     generation=generation,
-                    worker_id=worker.worker_id,
                 )
+                _barrier("config_applied")
+                last_completed_barrier = "config_applied"
 
                 if force_restart and restart_occurred:
                     worker.force_restart_next_eval = False
-                    worker_logger.debug(
-                        "Cleared forced-restart marker after successful restart"
+                    worker.logger.debug(
+                        " %sCleared forced-restart marker after successful restart%s",
+                        COLORS.italic,
+                        COLORS.reset,
                     )
 
-            _barrier("config_applied")
-            last_completed_barrier = "config_applied"
-
-            # ── B3: Restart (if required) ────────────────────────────
-            # Workers that did NOT restart still hit the barrier so the
-            # population stays in sync.
             if restart_occurred:
                 self.disconnect(connection, worker_id=worker.worker_id)
                 connection = None  # Will reconnect in B4
-
             _barrier("restarted")
             last_completed_barrier = "restarted"
 
             # ── B4: Reconnect after restart ──────────────────────────
             if restart_occurred or connection is None or connection.closed:
+                # Retry connection after restart (instance may be in recovery)
                 connection = self.connect(
                     worker.db_config, max_retries=5, retry_delay=3.0
                 )
                 if restart_occurred:
-                    worker_logger.debug("Reconnected after restart")
-
+                    worker.logger.debug(" ➤ Reconnected after restart")
             _barrier("reconnected")
             last_completed_barrier = "reconnected"
 
             # ── B5: Verify configuration ─────────────────────────────
             if apply_config and worker.knob_config and restart_occurred:
+                worker.logger.info(" Verifying knob configuration after restart...")
                 verification = knob_applicator.verify(worker.knob_config)
                 failed_params = [k for k, v in verification.items() if not v]
                 if failed_params:
-                    worker_logger.warning(
-                        "Configuration verification failed for %d parameters: %s",
+                    worker.logger.warning(
+                        " ➤ Configuration verification failed for %d parameters: %s",
                         len(failed_params),
                         failed_params,
                     )
+                else:
+                    worker.logger.debug(" ➤ All parameters verified.")
 
             _barrier("config_verified")
             last_completed_barrier = "config_verified"
 
             # ── B6: Capture pg_stat_database BEFORE ──────────────────
             try:
+                worker.logger.debug(
+                    " Capturing pre-workload database stats for I/O metrics..."
+                )
                 stats_before = None
                 if connection and not connection.closed:
                     try:
@@ -743,15 +716,20 @@ class WorkloadOrchestrator:
                         stats_before = cursor.fetchone()
                         cursor.close()
                     except Exception as e:
-                        worker_logger.debug("Failed to capture initial stats: %s", e)
+                        worker.logger.debug(" ➤ Failed to capture initial stats: %s", e)
 
                 _barrier("pre_stats_captured")
                 last_completed_barrier = "pre_stats_captured"
 
                 # ── B7: Ensure benchmark ready ───────────────────────
                 if isinstance(self.workload_executor, BenchmarkExecutor):
+                    worker.logger.debug(
+                        " %sEnsuring benchmark is ready...%s",
+                        COLORS.italic,
+                        COLORS.reset,
+                    )
                     self._ensure_benchmark_ready(
-                        worker.db_config, worker_logger=worker_logger
+                        worker.db_config, worker_logger=worker.logger
                     )
 
                 _barrier("benchmark_ready")
@@ -786,6 +764,10 @@ class WorkloadOrchestrator:
                     )
                     last_completed_barrier = "warmup_done"
 
+                worker.logger.debug(
+                    " ➤ Workload execution completed, collecting "
+                    "post-workload stats for I/O metrics..."
+                )
                 _barrier("measurement_done")
                 last_completed_barrier = "measurement_done"
 
@@ -814,7 +796,7 @@ class WorkloadOrchestrator:
                             cursor.close()
                             self.disconnect(fresh_conn, worker_id=worker.worker_id)
                     except Exception as e:
-                        worker_logger.debug("Failed to capture final stats: %s", e)
+                        worker.logger.debug(" ➤ Failed to capture final stats: %s", e)
 
                 _barrier("post_stats_captured")
                 last_completed_barrier = "post_stats_captured"
@@ -822,7 +804,6 @@ class WorkloadOrchestrator:
                 # ── B11: Compute I/O delta ───────────────────────────
                 if stats_after:
                     try:
-                        # Unpack stats arrays
                         (
                             blks_read_after,
                             blks_hit_after,
@@ -841,7 +822,7 @@ class WorkloadOrchestrator:
                             tup_inserted_before,
                             tup_updated_before,
                             tup_deleted_before,
-                        ) = stats_before
+                        ) = stats_before  # type: ignore
 
                         blocks_read_delta = blks_read_after - blks_read_before
                         blocks_hit_delta = blks_hit_after - blks_hit_before
@@ -875,23 +856,25 @@ class WorkloadOrchestrator:
                             metrics.scan_efficiency = 1.0
 
                     except Exception as e:
-                        worker_logger.debug("Failed to calculate IO stats: %s", e)
+                        worker.logger.debug("Failed to calculate IO stats: %s", e)
 
                 _barrier("io_computed")
                 last_completed_barrier = "io_computed"
 
             except Exception as e:
-                worker_logger.error("Workload execution failed: %s", e)
-                # Instead of crashing the entire PBT generation, treat as a dead worker
+                worker.logger.error(" ➤ Workload execution failed: %s", e)
                 metrics = PerformanceMetrics(failure_type="EXECUTION_CRASH")
-                score = self.config.metric_config.compute_score(metrics)
+                score_breakdown = self.config.metric_config.compute_score(
+                    metrics, worker_logger=worker.logger
+                )
+                worker.score_breakdown = score_breakdown
+                score = score_breakdown.final_score
+
                 # Drain remaining barriers so other threads don't deadlock
                 if barriers is not None and last_completed_barrier is not None:
                     next_name = barriers.next_barrier_name(last_completed_barrier)
                     if next_name:
-                        barriers.drain_remaining(
-                            next_name, worker_id=worker.worker_id
-                        )
+                        barriers.drain_remaining(next_name, worker_id=worker.worker_id)
                 _barriers_drained = True
                 return metrics, score, restart_occurred
 
@@ -907,34 +890,37 @@ class WorkloadOrchestrator:
             last_completed_barrier = "system_metrics_collected"
 
             # ── B13: Compute memory pressure ─────────────────────────
+            # Based on memory utilization and cache hit ratio.
             metrics.memory_pressure = metrics.memory_utilization * (
                 1.0 - metrics.cache_hit_ratio
             )
-
             _barrier("memory_pressure_computed")
             last_completed_barrier = "memory_pressure_computed"
 
-            # ── B14: Reliability gate ────────────────────────────────
-            self._apply_reliability_gate(metrics, worker_logger)
-
+            worker.logger.debug(
+                " ➤ Collected all metrics, applying reliability gate..."
+            )
+            self._apply_reliability_gate(metrics, worker.logger)
             _barrier("reliability_gated")
             last_completed_barrier = "reliability_gated"
 
-            # ── B15: VACUUM ANALYZE ──────────────────────────────────
-            # Note: Workload features are refined at generation level after all workers evaluated
-            # to avoid race conditions from parallel workers mutating shared state
-
-            # Clean up dead tuples from DML operations to prevent bloat between generations
-            self._vacuum_after_dml(worker.db_config, worker_id=worker.worker_id)
-
+            worker.logger.info(
+                " Running post-workload maintenance (VACUUM ANALYZE) if needed..."
+            )
+            self._vacuum_after_dml(worker.db_config, worker_logger=worker.logger)
             _barrier("vacuum_done")
             last_completed_barrier = "vacuum_done"
 
-            # ── B16: Compute score ───────────────────────────────────
-            score = self.config.metric_config.compute_score(metrics)
-
+            worker.logger.info(" Computing performance score...")
+            score_breakdown = self.config.metric_config.compute_score(
+                metrics, worker_logger=worker.logger
+            )
+            worker.score_breakdown = score_breakdown
+            score = score_breakdown.final_score
             _barrier("score_computed")
             last_completed_barrier = "score_computed"
+
+            worker.logger.info("➤ Evaluated successfully.")
 
             return metrics, score, restart_occurred
 
@@ -944,14 +930,10 @@ class WorkloadOrchestrator:
                 if last_completed_barrier is not None:
                     next_name = barriers.next_barrier_name(last_completed_barrier)
                     if next_name:
-                        barriers.drain_remaining(
-                            next_name, worker_id=worker.worker_id
-                        )
+                        barriers.drain_remaining(next_name, worker_id=worker.worker_id)
                 else:
                     # Failed before hitting any barrier — drain from the first.
-                    barriers.drain_remaining(
-                        "connected", worker_id=worker.worker_id
-                    )
+                    barriers.drain_remaining("connected", worker_id=worker.worker_id)
             _barriers_drained = True
             raise
 
@@ -961,6 +943,7 @@ class WorkloadOrchestrator:
                 connection,
                 worker_id=worker.worker_id if hasattr(worker, "worker_id") else None,
             )
+
             # Only call the disconnected barrier on the NORMAL path.
             # Exception handlers already drained all barriers (including
             # "disconnected") — calling it again would start a new barrier
@@ -983,10 +966,11 @@ class WorkloadOrchestrator:
         metrics: PerformanceMetrics,
         worker_logger: logging.Logger,
     ) -> None:
-        """Classify the evaluation result and set ``failure_type`` if degraded.
+        """
+        Classify the evaluation result and set ``failure_type`` if degraded.
 
-        The gate runs *after* workload execution succeeds (no exception) but
-        *before* scoring.  It inspects the raw metrics and assigns one of:
+        The gate runs *after* workload execution succeeds but *before* scoring.
+        It inspects the raw metrics and assigns one of:
 
         * ``HIGH_ERROR_RATE`` — more than 50 % of queries failed.
         * ``NEAR_ZERO_THROUGHPUT`` — throughput is effectively zero, meaning
@@ -1004,7 +988,7 @@ class WorkloadOrchestrator:
         if metrics.error_rate >= self._HIGH_ERROR_RATE_THRESHOLD:
             metrics.failure_type = "HIGH_ERROR_RATE"
             worker_logger.warning(
-                "Reliability gate: error_rate=%.2f exceeds threshold %.2f — "
+                " ➤ Reliability gate: error_rate=%.2f exceeds threshold %.2f — "
                 "marking as HIGH_ERROR_RATE",
                 metrics.error_rate,
                 self._HIGH_ERROR_RATE_THRESHOLD,
@@ -1014,7 +998,7 @@ class WorkloadOrchestrator:
         if metrics.throughput <= self._NEAR_ZERO_THROUGHPUT_THRESHOLD:
             metrics.failure_type = "NEAR_ZERO_THROUGHPUT"
             worker_logger.warning(
-                "Reliability gate: throughput=%.4f at or below threshold %.4f — "
+                " ➤ Reliability gate: throughput=%.4f at or below threshold %.4f — "
                 "marking as NEAR_ZERO_THROUGHPUT",
                 metrics.throughput,
                 self._NEAR_ZERO_THROUGHPUT_THRESHOLD,
@@ -1024,7 +1008,7 @@ class WorkloadOrchestrator:
         if metrics.error_rate >= self._DEGRADED_ERROR_RATE_THRESHOLD:
             metrics.failure_type = "DEGRADED"
             worker_logger.warning(
-                "Reliability gate: error_rate=%.2f exceeds degraded threshold "
+                " ➤ Reliability gate: error_rate=%.2f exceeds degraded threshold "
                 "%.2f — marking as DEGRADED",
                 metrics.error_rate,
                 self._DEGRADED_ERROR_RATE_THRESHOLD,
@@ -1034,7 +1018,7 @@ class WorkloadOrchestrator:
     def _refine_workload_features(
         self,
         metrics: PerformanceMetrics,
-    ) -> None:
+    ) -> bool:
         """Refine static workload features with runtime observations using EMA blending.
 
         Blends observed runtime metrics into the static feature vector to capture
@@ -1047,11 +1031,9 @@ class WorkloadOrchestrator:
         - High buffer_miss_rate -> increase working_set_millions proxy
         - Low scan_efficiency -> increase join_intensity (inefficient scans suggest complex joins)
         """
-        logger = get_logger("BenchmarkExecutor")
-
         if not self.config.metric_config.workload_features:
-            logger.debug("No workload features to refine")
-            return
+            LOGGER.debug(" ➤ No workload features to refine")
+            return False
 
         alpha = 0.7  # EMA blending factor: keep static features dominant
         features = self.config.metric_config.workload_features
@@ -1121,12 +1103,31 @@ class WorkloadOrchestrator:
                 refinements["join_intensity"] = (old_val, features["join_intensity"])
 
         if refinements:
-            logger.debug(
-                "Refined workload features: %s",
-                {k: f"{old:.4f} -> {new:.4f}" for k, (old, new) in refinements.items()},
+            log_section_header(
+                LOGGER,
+                "%sRefined workload features: %s",
+                COLORS.bold,
+                COLORS.reset,
+                top_separator=False,
             )
+            for feature, (old, new) in refinements.items():
+                LOGGER.info(
+                    "  %s%-25s:%s %s%.4f >> %s%s%.4f%s",
+                    COLORS.bold,
+                    feature,
+                    COLORS.reset,
+                    COLORS.purple,
+                    old,
+                    COLORS.bold,
+                    COLORS.magenta,
+                    new,
+                    COLORS.reset,
+                )
+            return True
 
-    def refine_workload_features_from_generation(self, workers: List[Any]) -> None:
+        return False
+
+    def refine_workload_features_from_generation(self, workers: List[Any]) -> bool:
         """Refine workload features using aggregated metrics from all workers in a generation.
 
         This generation-level refinement aggregates metrics from all workers before
@@ -1142,16 +1143,21 @@ class WorkloadOrchestrator:
         logger = get_logger("BenchmarkExecutor")
 
         if not workers:
-            logger.debug("No workers to aggregate for feature refinement")
-            return
+            logger.debug(" No workers to aggregate for feature refinement")
+            return False
 
         # Aggregate metrics from all healthy workers
         health_metrics = [w.metrics for w in workers if w.metrics is not None]
         if not health_metrics:
-            logger.debug("No valid metrics to aggregate for feature refinement")
-            return
+            logger.debug(" No valid metrics to aggregate for feature refinement")
+            return False
 
-        # Compute average metrics across workers
+        LOGGER.debug(
+            " Aggregating metrics from %s%d%s healthy workers...",
+            COLORS.bold,
+            len(health_metrics),
+            COLORS.reset,
+        )
         aggregated_metrics = PerformanceMetrics()
 
         # Average numeric metrics
@@ -1178,12 +1184,14 @@ class WorkloadOrchestrator:
         ) / len(health_metrics)
 
         logger.debug(
-            "Aggregated metrics from %d workers for generation-level feature refinement",
+            " ➤ Aggregated metrics from %s%d%s workers for generation-level feature refinement.",
+            COLORS.bold,
             len(health_metrics),
+            COLORS.reset,
         )
 
-        # Refine features using aggregated metrics
-        self._refine_workload_features(aggregated_metrics)
+        logger.debug(" Refining features using aggregated metrics...")
+        return self._refine_workload_features(aggregated_metrics)
 
     def __repr__(self) -> str:
         """String representation."""

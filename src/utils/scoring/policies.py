@@ -34,16 +34,8 @@ class ScoringPolicySpec:
     weight_model: Optional[FeatureDrivenWeightModel] = None
 
 
-# ---------------------------------------------------------------------------
-# Policy: fixed_v1
-# ---------------------------------------------------------------------------
-# Legacy compatibility policy matching exact weights from before migration.
-# Missing metrics default to weight 0.0.
-
 FIXED_V1_METRICS = [
-    "latency_p50",
     "latency_p95",
-    "latency_p99",
     "throughput",
     "memory_utilization",
     "error_rate",
@@ -51,25 +43,19 @@ FIXED_V1_METRICS = [
 
 FIXED_V1_WEIGHTS = {
     "oltp": {
-        "latency_p50": 0.0,
         "latency_p95": 0.5,
-        "latency_p99": 0.0,
         "throughput": 0.3,
         "memory_utilization": 0.05,
         "error_rate": 0.15,
     },
     "olap": {
-        "latency_p50": 0.0,
         "latency_p95": 0.8,
-        "latency_p99": 0.0,
         "throughput": 0.0,
         "memory_utilization": 0.05,
         "error_rate": 0.15,
     },
     "mixed": {
-        "latency_p50": 0.0,
         "latency_p95": 0.4,
-        "latency_p99": 0.0,
         "throughput": 0.4,
         "memory_utilization": 0.05,
         "error_rate": 0.15,
@@ -104,15 +90,6 @@ V2_METRICS = [
     "buffer_miss_rate",
 ]
 
-# Alpha values for floor-constrained softmax.
-# Reduced total from 0.55 → 0.30 to allow more dynamic adaptation.
-V2_FLOORS = {
-    "latency_p95": 0.10,  # Minimum guarantee for primary OLTP SLA metric
-    "throughput": 0.10,  # Minimum guarantee for secondary OLTP metric
-    "error_rate": 0.05,  # Safety floor
-    "latency_p99": 0.05,  # Tail latency floor — OtterTune default objective
-}
-
 # Base logits (before features apply).
 # Positive = higher base importance; negative = suppressed unless features activate.
 # Literature basis: CDBTune (60% latency / 40% throughput for OLTP), OtterTune (P99 primary).
@@ -127,6 +104,15 @@ V2_BASE_WEIGHTS = {
     "memory_pressure": -0.3,  # Resource; low for small OLTP, grows with working set
     "scan_efficiency": -1.0,  # Irrelevant for OLTP indexed lookups; activated by olap_complexity
     "buffer_miss_rate": -0.3,  # Resource; grows with working set via log-saturated feature
+}
+
+# Alpha values for floor-constrained softmax.
+# 0.20 to allow more dynamic adaptation.
+V2_FLOORS = {
+    "latency_p95": 0.08,  # Minimum guarantee for primary OLTP SLA metric
+    "throughput": 0.08,  # Minimum guarantee for secondary OLTP metric
+    "latency_p99": 0.02,  # Tail latency floor — OtterTune default objective
+    "error_rate": 0.02,  # Safety floor
 }
 
 # Feature coefficient matrix (M).
@@ -182,3 +168,38 @@ POLICIES = {
     "fixed_v1": FIXED_V1_POLICY,
     "feature_driven_v2": FEATURE_DRIVEN_V2_POLICY,
 }
+
+
+def resolve_policy(policy_id: str) -> ScoringPolicySpec:
+    """Resolve a scoring policy identifier to a policy spec."""
+    return POLICIES.get(policy_id, FEATURE_DRIVEN_V2_POLICY)
+
+
+def resolve_fixed_v1_weights(
+    policy: ScoringPolicySpec,
+    *,
+    workload_type: str,
+    latency_metric: str,
+    weight_overrides: Optional[Dict[str, float]] = None,
+) -> tuple[Dict[str, float], list[str]]:
+    """Resolve fixed_v1 weights with latency metric override support."""
+    latency_key = f"latency_{latency_metric}"
+    metrics = [latency_key if m == "latency_p95" else m for m in policy.metrics]
+
+    if policy.fixed_weights and workload_type in policy.fixed_weights:
+        weights = policy.fixed_weights[workload_type].copy()
+    else:
+        weights = {m: 1.0 / len(metrics) for m in metrics}
+
+    if latency_key != "latency_p95" and "latency_p95" in weights:
+        weights[latency_key] = weights.pop("latency_p95")
+
+    if weight_overrides:
+        for key, value in weight_overrides.items():
+            weights[key] = value
+
+    for key in weights:
+        if key not in metrics:
+            metrics.append(key)
+
+    return weights, metrics

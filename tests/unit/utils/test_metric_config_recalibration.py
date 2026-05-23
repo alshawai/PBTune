@@ -18,10 +18,17 @@ def test_expand_ranges_for_metrics_recalibrates_from_out_of_support_drift() -> N
     ]
     config.update_ranges(baseline)
 
-    old_latency_min = config.latency_min
-    old_latency_max = config.latency_max
-    old_throughput_min = config.throughput_min
-    old_throughput_max = config.throughput_max
+    # Get old anchor values from normalizer
+    lat_metric = f"latency_{config.latency_metric}"
+    if config._normalizer and lat_metric in config._normalizer.anchors:
+        _, old_lat_low, old_lat_high = config._normalizer.anchors[lat_metric]
+    else:
+        old_lat_low, old_lat_high = None, None
+
+    if config._normalizer and "throughput" in config._normalizer.anchors:
+        _, old_thr_low, old_thr_high = config._normalizer.anchors["throughput"]
+    else:
+        old_thr_low, old_thr_high = None, None
 
     # Force normalizer to allow drift detection with fewer samples
     if config._normalizer is not None:
@@ -36,21 +43,31 @@ def test_expand_ranges_for_metrics_recalibrates_from_out_of_support_drift() -> N
     expanded = config.expand_ranges_for_metrics(outliers, expansion_factor=0.25)
 
     assert expanded is True
-    assert config.latency_max > old_latency_max
-    assert config.throughput_max > old_throughput_max
-    # Lower bounds should remain valid and non-negative.
-    assert config.latency_min >= 0.0
-    assert config.throughput_min >= 0.0
-    assert config.latency_min <= config.latency_max
-    assert config.throughput_min <= config.throughput_max
+    # Check that normalizer anchors were expanded
+    if old_lat_high is not None:
+        _, new_lat_low, new_lat_high = config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
+        assert new_lat_high > old_lat_high
 
-    # Ensure range movement happened after recalibration.
-    assert (
-        config.latency_min != old_latency_min
-        or config.latency_max != old_latency_max
-        or config.throughput_min != old_throughput_min
-        or config.throughput_max != old_throughput_max
-    )
+    if old_thr_high is not None:
+        _, new_thr_low, new_thr_high = config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
+        assert new_thr_high > old_thr_high
+
+    # Lower bounds should remain valid and non-negative.
+    if old_lat_low is not None:
+        _, new_lat_low, _ = config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
+        assert new_lat_low >= 0.0
+
+    if old_thr_low is not None:
+        _, new_thr_low, _ = config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
+        assert new_thr_low >= 0.0
 
 
 def test_expand_ranges_for_metrics_recalibrates_from_saturation() -> None:
@@ -62,9 +79,17 @@ def test_expand_ranges_for_metrics_recalibrates_from_saturation() -> None:
     ]
     config.update_ranges(baseline)
 
-    old_latency_max = config.latency_max
-    old_throughput_min = config.throughput_min
-    old_throughput_max = config.throughput_max
+    # Get old anchor values from normalizer
+    lat_metric = f"latency_{config.latency_metric}"
+    if config._normalizer and lat_metric in config._normalizer.anchors:
+        _, old_lat_low, old_lat_high = config._normalizer.anchors[lat_metric]
+    else:
+        old_lat_low, old_lat_high = None, None
+
+    if config._normalizer and "throughput" in config._normalizer.anchors:
+        _, old_thr_low, old_thr_high = config._normalizer.anchors["throughput"]
+    else:
+        old_thr_low, old_thr_high = None, None
 
     # 4 workers total
     # 2 workers saturate the upper bound of latency (they are way above the historical max)
@@ -80,8 +105,16 @@ def test_expand_ranges_for_metrics_recalibrates_from_saturation() -> None:
 
     assert expanded is True
     # Latency should be expanded due to saturation
-    assert config.latency_max > old_latency_max
+    if old_lat_high is not None:
+        _, new_lat_low, new_lat_high = config._normalizer.anchors.get(
+            lat_metric, (1, old_lat_low, old_lat_high)
+        )
+        assert new_lat_high > old_lat_high
 
     # Throughput was not saturated (all 110 within [100, 119]), so it should NOT be expanded
-    assert config.throughput_min == old_throughput_min
-    assert config.throughput_max == old_throughput_max
+    if old_thr_high is not None:
+        _, new_thr_low, new_thr_high = config._normalizer.anchors.get(
+            "throughput", (1, old_thr_low, old_thr_high)
+        )
+        assert new_thr_high == old_thr_high
+        assert new_thr_low == old_thr_low

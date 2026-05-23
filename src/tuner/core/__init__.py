@@ -18,6 +18,7 @@ from src.tuner.core.evolution import (
     get_population_statistics,
     check_convergence,
 )
+from src.tuner.core.population import GenerationResult
 
 __all__ = [
     "Worker",
@@ -28,4 +29,5 @@ __all__ = [
     "get_best_worker",
     "get_population_statistics",
     "check_convergence",
+    "GenerationResult",
 ]

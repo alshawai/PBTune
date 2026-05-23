@@ -190,9 +190,11 @@ def _save_analysis_results(
             "silhouette_scores": tier_result.silhouette_scores,
             "tier_assignments": tier_result.tier_assignments,
             "jenks_breaks": tier_result.jenks_breaks,
-            "agreement_report": tier_result.agreement_report.to_dict() if tier_result.agreement_report else None,
+            "agreement_report": tier_result.agreement_report.to_dict()
+            if tier_result.agreement_report
+            else None,
             "workload_label": tier_result.workload_label,
-        }
+        },
     }
 
     with open(out_json, "w", encoding="utf-8") as f:
@@ -229,14 +231,14 @@ def _group_files_by_hardware(
     """Group JSON result files by hardware profile key and extract workload."""
     groups: dict[str, tuple[list[Path], dict[str, Any]]] = {}
     json_files = sorted(results_dir.glob("pbt_results_*.json"), key=lambda p: p.name)
-    
+
     first_workload = "unknown"
 
     for idx, file_path in enumerate(json_files):
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            
+
             # Opportunistically extract the true workload from the first file
             if idx == 0:
                 session_meta = data.get("tuning_session", {})
@@ -265,11 +267,11 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
 
     # First, group files and optionally auto-detect the workload type
     groups, auto_workload = _group_files_by_hardware(args.results_dir)
-    
+
     initial_workload = (
         args.workload_label if args.workload_label != "auto" else auto_workload
     )
-    
+
     temp_out_dir = args.output_dir or Path(f"results/{initial_workload}/analysis/")
     temp_out_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(verbosity="INFO", output_file=temp_out_dir / "analysis_log.html")
@@ -285,14 +287,16 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
 
     profile_results: list[tuple[ImportanceResult, dict[str, Any]]] = []
     combined_data_list: list[tuple[LoadedData, dict[str, Any]]] = []
-    
+
     # Keep track of the final resolved paths for the combined model output
     final_actual_workload = initial_workload
     final_base_out_dir = temp_out_dir
 
     for hw_key, (file_paths, wr) in groups.items():
         LOGGER.info(
-            "--- Processing hardware profile: %s (%d files) ---", hw_key, len(file_paths)
+            "--- Processing hardware profile: %s (%d files) ---",
+            hw_key,
+            len(file_paths),
         )
         loaded_data = load_pbt_results(
             args.results_dir,
@@ -305,7 +309,7 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
             workload_label=args.workload_label,
             output_dir=args.output_dir,
         )
-        
+
         final_actual_workload = actual_workload
         final_base_out_dir = base_out_dir
 
@@ -319,7 +323,11 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
         # Re-configure logging in case the directory path was resolved to a new location
         setup_logging(verbosity="INFO", output_file=out_dir / "analysis_log.html")
 
-        LOGGER.info("Running fANOVA%s for %s...", " (skipping SHAP)" if args.skip_shap else "/SHAP", hw_key)
+        LOGGER.info(
+            "Running fANOVA%s for %s...",
+            " (skipping SHAP)" if args.skip_shap else "/SHAP",
+            hw_key,
+        )
         importance_result = analyze_knob_importance(
             loaded_data,
             n_estimators=args.n_estimators,
@@ -336,7 +344,7 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
         )
 
         _save_analysis_results(out_dir, actual_workload, importance_result, tier_result)
-        
+
         # Only print summary for the first group to avoid extreme console spam
         if len(profile_results) == 0:
             _print_analysis_summary(actual_workload, importance_result, tier_result)
@@ -349,50 +357,60 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
         hw_val_res = validate_hardware_importance(
             profile_results, combined_data=combined_data_list
         )
-        
+
         LOGGER.info(
             "Hardware validation completed! Stable universal knobs: %d",
             len(hw_val_res.stable_knobs),
         )
         if hw_val_res.combined_importances:
-            LOGGER.info("Successfully built combined fANOVA model across all hardware profiles.")
-            
+            LOGGER.info(
+                "Successfully built combined fANOVA model across all hardware profiles."
+            )
+
             # Save the combined model outputs to the root analysis dir
             combined_tier = generate_tiers(
                 marginal_importances=hw_val_res.combined_importances.marginal_importances,
                 workload_label=final_actual_workload,
             )
             _save_analysis_results(
-                final_base_out_dir, final_actual_workload, hw_val_res.combined_importances, combined_tier
+                final_base_out_dir,
+                final_actual_workload,
+                hw_val_res.combined_importances,
+                combined_tier,
             )
-            LOGGER.info("Combined model saved to %s", final_base_out_dir / "importance_results.json")
+            LOGGER.info(
+                "Combined model saved to %s",
+                final_base_out_dir / "importance_results.json",
+            )
 
         # Save the full HardwareValidationResult metrics (taus, stable knobs, shifts)
         # We append this to the main importance_results.json file.
         main_json_path = final_base_out_dir / "importance_results.json"
-        
+
         # Convert tuple keys in kendall_taus to strings for JSON serialization
         json_taus = {f"{k[0]}_vs_{k[1]}": v for k, v in hw_val_res.kendall_taus.items()}
-        
+
         report_dict = {
             "stable_knobs": hw_val_res.stable_knobs,
             "shifting_knobs": hw_val_res.shifting_knobs,
             "conservative_tiers": hw_val_res.conservative_tiers,
-            "kendall_taus": json_taus
+            "kendall_taus": json_taus,
         }
-        
+
         try:
             with open(main_json_path, "r", encoding="utf-8") as f:
                 existing_data = json.load(f)
-            
+
             existing_data["hardware_validation"] = report_dict
-            
+
             with open(main_json_path, "w", encoding="utf-8") as f:
                 json.dump(existing_data, f, indent=2)
-                
+
             LOGGER.info("Merged hardware validation report into %s", main_json_path)
         except Exception as exc:
-            LOGGER.error("Failed to merge hardware validation into main results: %s", exc)
+            LOGGER.error(
+                "Failed to merge hardware validation into main results: %s", exc
+            )
 
 
 def main() -> None:

@@ -6,9 +6,13 @@ import psycopg2
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
+from src.utils.logger.helpers import log_section_header
 from src.utils.metrics import PerformanceMetrics
 from src.benchmarks.executor import BenchmarkExecutor
+
+LOGGER = get_logger("SysbenchExecutor")
+COLORS = get_color_context()
 
 SYSBENCH_WORKLOADS = (
     "oltp_read_only",
@@ -65,7 +69,11 @@ class SysbenchExecutor(BenchmarkExecutor):
         script : str
             Sysbench Lua test script name. Default: oltp_read_write.
         """
-        self.logger = get_logger("SysbenchExecutor")
+        LOGGER.info(
+            "%sUsing external Sysbench C-binary for rigorous benchmarking.%s",
+            COLORS.bold,
+            COLORS.reset,
+        )
 
         self.threads = threads
         self.tables = tables
@@ -74,12 +82,14 @@ class SysbenchExecutor(BenchmarkExecutor):
 
     def prepare(self, db_config: DatabaseConfig) -> None:
         """Run native `sysbench prepare` to create all sbtest tables."""
-        self.logger.info(
-            "Preparing %d sysbench tables (%d rows each) on %s:%s...",
+        LOGGER.debug(
+            "   %sPreparing %d sysbench tables (%d rows each) on %s:%s...%s",
+            COLORS.italic,
             self.tables,
             self.table_size,
             db_config.host,
             db_config.port,
+            COLORS.reset,
         )
 
         # Cross-benchmark safety: ensure TPC-H leftovers do not survive into
@@ -112,13 +122,15 @@ class SysbenchExecutor(BenchmarkExecutor):
                 cursor.execute(f"VACUUM ANALYZE sbtest{i}")
             cursor.close()
             conn.close()
-            self.logger.debug(
-                "Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables."
+            LOGGER.debug(
+                "    %s➤ Successfully executed post-prepare VACUUM ANALYZE on all sbtest tables.%s",
+                COLORS.italic,
+                COLORS.reset,
             )
         except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
-            self.logger.warning("Failed to post-vacuum sysbench tables: %s", e)
+            LOGGER.warning("Failed to post-vacuum sysbench tables: %s", e)
 
-        self.logger.info("Sysbench prepare complete.")
+        LOGGER.debug("   %s➤ Sysbench prepare complete.%s", COLORS.italic, COLORS.reset)
 
     def validate(self, db_config: DatabaseConfig) -> bool:
         """Return True only when schema shape matches the configured Sysbench profile."""
@@ -139,13 +151,15 @@ class SysbenchExecutor(BenchmarkExecutor):
             if found_tables != expected_tables:
                 missing_tables = sorted(expected_tables - found_tables)
                 extra_tables = sorted(found_tables - expected_tables)
-                self.logger.debug(
-                    "Sysbench table layout mismatch "
-                    "(missing=%s, extra=%s, expected_count=%d, found_count=%d)",
-                    missing_tables,
-                    extra_tables,
+                LOGGER.debug(
+                    "   %sSysbench table layout mismatch "
+                    "(missing=[%s] - extra=[%s] - expected_count=%d - found_count=%d)%s",
+                    COLORS.italic,
+                    ", ".join(missing_tables) if missing_tables else "none",
+                    ", ".join(extra_tables) if extra_tables else "none",
                     len(expected_tables),
                     len(found_tables),
+                    COLORS.reset,
                 )
                 return False
 
@@ -161,7 +175,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             lower_bound = int(self.table_size * 0.9)
             upper_bound = int(self.table_size * 1.1)
             if row_count is None or row_count < lower_bound or row_count > upper_bound:
-                self.logger.debug(
+                LOGGER.debug(
                     "Sysbench row cardinality mismatch "
                     "(row_count=%s, max_id=%s, expected~%d, bounds=[%d,%d])",
                     row_count,
@@ -175,7 +189,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             return True
 
         except (RuntimeError, psycopg2.Error, OSError, ValueError) as e:
-            self.logger.debug("Sysbench validation failed: %s", e)
+            LOGGER.debug("Sysbench validation failed: %s", e)
             return False
         finally:
             if cursor is not None:
@@ -194,11 +208,13 @@ class SysbenchExecutor(BenchmarkExecutor):
         random_seed = kwargs.get("random_seed", None)
 
         logger.debug(
-            "Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)",
+            "%s Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)%s",
+            COLORS.bold,
             duration,
             self.threads,
             warmup,
             random_seed,
+            COLORS.reset,
         )
         stdout, stderr, returncode = self._run_sysbench(
             db_config,
@@ -212,7 +228,7 @@ class SysbenchExecutor(BenchmarkExecutor):
                 stderr or stdout or "sysbench exited without output"
             ).strip()
             logger.error(
-                "Sysbench failed (exit %d): %s",
+                " Sysbench failed (exit %d): %s",
                 returncode,
                 failure_detail,
             )
@@ -221,22 +237,40 @@ class SysbenchExecutor(BenchmarkExecutor):
         metrics = self._parse_output(stdout)
 
         if metrics.throughput == 0.0:
-            logger.error("Sysbench extracted 0 throughput! Dumping output:")
+            logger.error(" Sysbench extracted 0 throughput! Dumping output:")
             logger.error("STDOUT:\\n%s", stdout)
             logger.error("STDERR:\\n%s", stderr)
             raise RuntimeError("Sysbench executed but parsed 0 throughput. Check logs.")
 
-        logger.debug(
-            "Sysbench metrics extracted: latency_p50=%.2f, latency_p95=%.2f, latency_p99=%.2f, throughput=%.2f",
-            metrics.latency_p50,
-            metrics.latency_p95,
-            metrics.latency_p99,
-            metrics.throughput,
+        log_section_header(
+            logger,
+            "%sSysbench metrics extracted:%s",
+            COLORS.bold,
+            COLORS.reset,
+            "debug",
+            top_separator=False,
         )
+        for metric_name, value in metrics.__dict__.items():
+            if metric_name in ["latency_p50", "latency_p95", "latency_p99"]:
+                logger.debug(
+                    "  %s%-12s: %.3f ms%s",
+                    COLORS.bold,
+                    metric_name,
+                    value,
+                    COLORS.reset,
+                )
+            elif metric_name == "throughput":
+                logger.debug(
+                    "  %s%-12s: %.3f TPS%s",
+                    COLORS.bold,
+                    metric_name,
+                    value,
+                    COLORS.reset,
+                )
 
         if metrics.latency_p95 == 0.0 or metrics.latency_p99 == 0.0:
             logger.warning(
-                "Sysbench extracted 0 for p95=%s or p99=%s! This may indicate output format mismatch. "
+                " ➤ Sysbench extracted 0 for p95=%s or p99=%s! This may indicate output format mismatch. "
                 "Raw output (first 5000 chars):\n%s",
                 metrics.latency_p95,
                 metrics.latency_p99,
@@ -246,11 +280,11 @@ class SysbenchExecutor(BenchmarkExecutor):
             if "General statistics:" in stdout:
                 idx = stdout.find("General statistics:")
                 logger.warning(
-                    "Percentile section (from 'General statistics:'):\n%s",
+                    "➤ Percentile section (from 'General statistics:'):\n%s",
                     stdout[idx : idx + 2000],
                 )
             # Dump sample interval lines to debug format
-            logger.warning("Sample interval lines:")
+            logger.warning("➤ Sample interval lines:")
             for i, line in enumerate(stdout.splitlines()[:30]):
                 if "[" in line and "s ]" in line:
                     logger.warning("  Line %d: %s", i, line)

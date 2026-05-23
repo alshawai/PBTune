@@ -15,7 +15,7 @@ from pathlib import Path
 
 import docker
 
-from src.utils.logger import get_logger, get_isolation_warning_banner
+from src.utils.logger import get_logger, get_color_context, get_isolation_warning_banner
 from src.utils.environments.base import DatabaseEnvironment
 from src.utils.environments.docker import DockerEnvironment
 from src.utils.environments.bare_metal import BareMetalEnvironment
@@ -23,7 +23,8 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
 from src.utils.hardware_info import detect_pg_version
 
-logger = get_logger("EnvironmentFactory")
+LOGGER = get_logger("EnvironmentFactory")
+COLORS = get_color_context()
 
 
 class EnvironmentFactory:
@@ -51,15 +52,15 @@ class EnvironmentFactory:
         major = EnvironmentFactory._extract_pg_major(detected_version)
         if major:
             resolved = f"postgres:{major}"
-            logger.info(
-                "Resolved Docker PostgreSQL image '%s' from host version '%s'",
+            LOGGER.debug(
+                "➤ Resolved Docker PostgreSQL image '%s' from host version '%s'",
                 resolved,
                 detected_version,
             )
             return resolved
 
         fallback = "postgres:18"
-        logger.warning(
+        LOGGER.warning(
             "Could not detect host PostgreSQL version (detected='%s'); using fallback image '%s'",
             detected_version,
             fallback,
@@ -86,6 +87,10 @@ class EnvironmentFactory:
 
         if use_docker:
             try:
+                LOGGER.info(
+                    "Attempting to create Docker environment with image '%s'...",
+                    image_name or "auto-resolve",
+                )
                 # Test connectivity
                 docker.from_env().ping()
                 resolved_image_name = EnvironmentFactory._resolve_docker_image(
@@ -110,12 +115,17 @@ class EnvironmentFactory:
                 RuntimeError,
                 ValueError,
             ) as e:
-                logger.warning(get_isolation_warning_banner())
-                logger.warning("Docker unavailable (%s), falling back to Bare Metal", e)
+                LOGGER.warning(get_isolation_warning_banner())
+                LOGGER.warning(
+                    "%sDocker unavailable (%s), falling back to Bare Metal%s",
+                    COLORS.warning,
+                    e,
+                    COLORS.reset,
+                )
 
         # If no_docker or docker failed
         if not use_docker:
-            logger.warning(get_isolation_warning_banner())
+            LOGGER.warning(get_isolation_warning_banner())
 
         return BareMetalEnvironment(
             run_id=run_id,

@@ -112,6 +112,7 @@ IMPACT_TIERS = {
 
 DATA_DRIVEN_TIERS: Optional[Dict[str, Optional[List[str]]]] = None
 
+
 def load_data_driven_tiers(json_path: str = "data/data_driven_tiers.json") -> None:
     """Load data-driven tiers from JSON and populate DATA_DRIVEN_TIERS."""
     global DATA_DRIVEN_TIERS
@@ -126,7 +127,9 @@ def load_data_driven_tiers(json_path: str = "data/data_driven_tiers.json") -> No
         ) from exc
 
     if "tiers" not in data:
-        raise ValueError(f"Malformed data-driven tiers in '{path}'. Missing 'tiers' key.")
+        raise ValueError(
+            f"Malformed data-driven tiers in '{path}'. Missing 'tiers' key."
+        )
 
     DATA_DRIVEN_TIERS = data["tiers"]
 
@@ -134,7 +137,7 @@ def load_data_driven_tiers(json_path: str = "data/data_driven_tiers.json") -> No
 def get_knobs_by_tier(tier: str, source: str = "expert") -> list:
     """Return knob names for a tier, preserving the existing public API shape."""
     tier_lower = tier.lower()
-    
+
     if source == "data_driven":
         if DATA_DRIVEN_TIERS is not None:
             if tier_lower in DATA_DRIVEN_TIERS:
@@ -147,7 +150,9 @@ def get_knobs_by_tier(tier: str, source: str = "expert") -> list:
                     f"Unknown tier: {tier}. Must be one of {list(DATA_DRIVEN_TIERS.keys())} or {list(IMPACT_TIERS.keys())}"
                 )
         else:
-            logger.warning("Data-driven tiers requested but not loaded. Falling back to expert tiers.")
+            logger.warning(
+                "Data-driven tiers requested but not loaded. Falling back to expert tiers."
+            )
 
     if tier_lower not in IMPACT_TIERS:
         raise ValueError(

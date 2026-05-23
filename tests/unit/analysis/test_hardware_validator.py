@@ -229,9 +229,7 @@ def test_combined_loaded_data_adds_hardware_features():
         [(data_a, resources_a), (data_b, resources_b)]
     )
 
-    assert {"ram_bytes", "cpu_cores", "disk_type"} <= set(
-        combined.config_df.columns
-    )
+    assert {"ram_bytes", "cpu_cores", "disk_type"} <= set(combined.config_df.columns)
     assert combined.config_df["ram_bytes"].nunique() == 2
     assert combined.config_df["cpu_cores"].nunique() == 2
     assert combined.config_df["disk_type"].nunique() == 2
@@ -263,9 +261,7 @@ def test_train_combined_importance_includes_hardware_features(monkeypatch):
 
     monkeypatch.setattr(hardware_validator, "analyze_knob_importance", fake_analyze)
 
-    result = train_combined_importance(
-        [(data_a, resources_a), (data_b, resources_b)]
-    )
+    result = train_combined_importance([(data_a, resources_a), (data_b, resources_b)])
 
     assert {"ram_bytes", "cpu_cores", "disk_type"} <= set(captured_columns)
     assert isinstance(result, ImportanceResult)

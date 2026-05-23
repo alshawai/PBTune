@@ -477,9 +477,10 @@ def test_verify_instances_marks_worker_unhealthy_on_read_timeout() -> None:
     env = _make_environment()
     env.client.containers.get.side_effect = requests.exceptions.ReadTimeout("timeout")
 
-    status = env.verify_instances()
+    with pytest.raises(RuntimeError):
+        env.verify_instances()
 
-    assert status[0] is False
+    # verify_instances marks the instance as not running before raising
     assert env.instances[0].running is False
 
 
