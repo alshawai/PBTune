@@ -117,13 +117,13 @@ def test_record_generation_not_converged_after_all_dead_resample() -> None:
     population.env = MagicMock()
     population.env.recover_instance.return_value = True
 
-    rescued = population.rescue_dead_workers(lambda _w: (PerformanceMetrics(), 0.0))
+    rescued = population.rescue_dead_workers()
 
     assert rescued == 3
     assert all(worker.force_restart_next_eval for worker in population.workers)
     assert all(worker.metrics is None for worker in population.workers)
 
-    population._ranges_updated = True
+    population._ranges_calibrated = True
     result = population.record_generation()
 
     assert result.converged is False
@@ -156,15 +156,15 @@ def test_apply_configuration_force_restart_overrides_interval_deferral() -> None
         applied_count=1,
         restart_required={"shared_buffers"},
     )
+    worker = _make_worker()
 
     with patch.object(evaluator, "_perform_restart", return_value=True) as restart_mock:
         restart_occurred = evaluator.apply_configuration(
             connection=connection,
-            knob_config={"shared_buffers": "256MB"},
+            worker=worker,
             knob_applicator=knob_applicator,
             force_restart=True,
             generation=3,
-            worker_id=0,
         )
 
     assert restart_occurred is True
@@ -219,7 +219,6 @@ def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
     population.rescue_dead_workers = MagicMock(return_value=0)
     population.update_metric_ranges_if_needed = MagicMock()
     population._finalize_scores = MagicMock()
-    population.exploit_and_explore = MagicMock(return_value=0)
     population.record_generation = MagicMock(
         return_value=MagicMock(
             generation=5,
@@ -268,6 +267,67 @@ def test_train_generation_raises_when_snapshot_restore_and_rebuild_fail() -> Non
     population.evaluate_generation.assert_not_called()
 
 
+def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
+    """Generation logging should use the finalized historical best worker."""
+    population = Population(
+        knob_space=MagicMock(),
+        config=PopulationConfig(population_size=2),
+    )
+    population.current_generation = 7
+    population.best_overall_metrics = PerformanceMetrics(
+        latency_p95=5.0,
+        throughput=250.0,
+        total_queries=10,
+        total_time=1.0,
+    )
+    population.best_overall_score = 99.1234
+    population.best_overall_config = {"shared_buffers": "256MB"}
+    population.orchestrator = MagicMock()
+    population.orchestrator.refine_workload_features_from_generation.return_value = True
+    population.workers = [
+        Worker(worker_id=0, knob_space=MagicMock(), knob_config={}),
+        Worker(worker_id=1, knob_space=MagicMock(), knob_config={}),
+    ]
+
+    metrics = PerformanceMetrics(
+        latency_p95=12.0,
+        throughput=100.0,
+        total_queries=10,
+        total_time=1.0,
+    )
+    for worker in population.workers:
+        worker.metrics = metrics
+        worker.performance_score = 80.0 + worker.worker_id
+    call_order: list[str] = []
+
+    def _evaluate(worker: Worker) -> tuple[PerformanceMetrics, float]:
+        return metrics, 80.0 + worker.worker_id
+
+    population.evaluate_generation = MagicMock()
+    population.rescue_dead_workers = MagicMock(return_value=0)
+    population.update_metric_ranges_if_needed = MagicMock()
+    population._finalize_scores = MagicMock(side_effect=lambda: call_order.append("finalize"))
+    population.record_generation = MagicMock(return_value=MagicMock(num_exploited=0))
+
+    with patch("src.tuner.core.population.log_worker_metrics_table") as log_table:
+        with patch("src.tuner.core.population.execute_exploit_explore", return_value=0):
+            population.train_generation(
+                _evaluate,
+                parallel=False,
+                max_workers=1,
+            )
+
+    assert call_order == ["finalize"]
+    assert log_table.call_count == 1
+    args, kwargs = log_table.call_args
+    assert len(args[1]) == 2
+    assert kwargs["title"] == "\nGeneration 7 Worker Metrics"
+    assert kwargs["best_worker_label"] == "Best Worker"
+    assert kwargs["best_worker_metric"] is not None
+    assert kwargs["best_worker_metric"]["score"] == 99.1234
+    assert kwargs["best_worker_metric"]["latency_p95"] == "5.00ms"
+
+
 def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -> None:
     """Out-of-bounds in the opposite direction should also trigger expansion."""
     knob_space = MagicMock()
@@ -282,9 +342,9 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     metric_config.throughput_min = 100.0
     metric_config.throughput_max = 200.0
 
-    population.evaluator = MagicMock()
-    population.evaluator.config.metric_config = metric_config
-    population._ranges_updated = True
+    population.orchestrator = MagicMock()
+    population.orchestrator.config.metric_config = metric_config
+    population._ranges_calibrated = True
     population.current_generation = 5
 
     workers = []
@@ -304,11 +364,26 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     population.best_overall_metrics = workers[0].metrics
     population.best_overall_score = workers[0].performance_score
 
-    old_latency_max = metric_config.latency_max
-    old_throughput_min = metric_config.throughput_min
+    # Get the old anchor values from the normalizer
+    lat_metric = f"latency_{metric_config.latency_metric}"
+    if metric_config._normalizer and lat_metric in metric_config._normalizer.anchors:
+        _, old_lat_low, old_lat_high = metric_config._normalizer.anchors[lat_metric]
+    else:
+        old_lat_low, old_lat_high = None, None
+
+    if metric_config._normalizer and "throughput" in metric_config._normalizer.anchors:
+        _, old_thr_low, old_thr_high = metric_config._normalizer.anchors["throughput"]
+    else:
+        old_thr_low, old_thr_high = None, None
 
     saturation_check = population._finalize_scores
     saturation_check()
 
-    assert metric_config.latency_max > old_latency_max
-    assert metric_config.throughput_min < old_throughput_min
+    # Check that the normalizer anchors were expanded
+    if old_lat_high is not None:
+        _, new_lat_low, new_lat_high = metric_config._normalizer.anchors.get(lat_metric, (1, old_lat_low, old_lat_high))
+        assert new_lat_high > old_lat_high
+
+    if old_thr_low is not None:
+        _, new_thr_low, new_thr_high = metric_config._normalizer.anchors.get("throughput", (1, old_thr_low, old_thr_high))
+        assert new_thr_low < old_thr_low
