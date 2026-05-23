@@ -15,6 +15,10 @@ from psycopg2 import sql
 
 from src.config.database import DatabaseConfig
 from src.utils.metrics import PerformanceMetrics
+from src.utils.logger import get_logger, get_color_context
+
+LOGGER = get_logger("BenchmarkExecutor")
+COLORS = get_color_context()
 
 
 class BenchmarkExecutor(ABC):
@@ -91,13 +95,14 @@ class BenchmarkExecutor(ABC):
             return
 
         if log_prefix:
-            self.logger.debug(
-                f"{log_prefix} Dropping existing public tables (%d)...",
+            LOGGER.debug(
+                "    %s Dropping existing public tables (%d)...",
+                log_prefix,
                 len(existing_tables),
             )
         else:
-            self.logger.debug(
-                "Dropping existing public tables (%d)...",
+            LOGGER.debug(
+                "    Dropping existing public tables (%d)...",
                 len(existing_tables),
             )
 
@@ -107,3 +112,5 @@ class BenchmarkExecutor(ABC):
                     sql.Identifier(table_name)
                 )
             )
+
+        LOGGER.debug("    %s➤ Dropped all existing tables.%s", COLORS.italic, COLORS.reset)
