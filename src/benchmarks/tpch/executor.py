@@ -8,11 +8,14 @@ import numpy as np
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context, log_section_header
 from src.utils.metrics import PerformanceMetrics
 from src.benchmarks.executor import BenchmarkExecutor
 from src.benchmarks.tpch import QUERIES_DIR, SCHEMA_SQL, INDEXES_SQL
 from src.benchmarks.tpch.setup_dbgen import find_or_build_dbgen, generate_data
+
+LOGGER = get_logger("TPCHExecutor")
+COLORS = get_color_context()
 
 
 def _log_pg_error(logger: logging.Logger, query_label: str, exc: Exception) -> None:
@@ -87,7 +90,11 @@ class TPCHExecutor(BenchmarkExecutor):
             TPC-H scale factor. SF=1 produces ~1GB of raw data.
             Common values: 0.01 (tiny), 0.1 (dev), 1.0 (standard), 10.0 (large).
         """
-        self.logger = get_logger("TPCHExecutor")
+        LOGGER.info(
+            "%sUsing TPC-H benchmark for analytical workload evaluation.%s",
+            COLORS.bold,
+            COLORS.reset,
+        )
 
         self.scale_factor = scale_factor
         self._queries: Optional[List[str]] = None
@@ -120,7 +127,7 @@ class TPCHExecutor(BenchmarkExecutor):
         7. Run VACUUM ANALYZE
         """
         # Step 1-2: Get dbgen binary and generate data
-        self.logger.info("[TPC-H] Preparing data (SF=%.1f)...", self.scale_factor)
+        LOGGER.info("   Preparing TPCH-H data (SF=%.1f)...", self.scale_factor)
         self._dbgen_path = find_or_build_dbgen()
         self._data_dir = generate_data(self._dbgen_path, self.scale_factor)
 
@@ -130,10 +137,10 @@ class TPCHExecutor(BenchmarkExecutor):
         try:
             cursor = conn.cursor()
 
-            self.logger.debug("[TPC-H] Dropping old schema if exists...")
+            LOGGER.debug("    Dropping old schema if exists...")
             self._drop_existing_public_tables(cursor)
 
-            self.logger.debug("[TPC-H] Creating schema (8 tables)...")
+            LOGGER.debug("    Creating schema (8 tables)...")
             schema_sql = SCHEMA_SQL.read_text()
             cursor.execute(schema_sql)
 
@@ -143,20 +150,22 @@ class TPCHExecutor(BenchmarkExecutor):
                 if not tbl_file.exists():
                     raise FileNotFoundError(f"Data file missing: {tbl_file}")
 
-                self.logger.debug("[TPC-H] Loading %s...", table_name)
-                with open(tbl_file, "r") as f:
+                LOGGER.debug(
+                    "    %sLoading %s...%s", COLORS.italic, table_name, COLORS.reset
+                )
+                with open(tbl_file, "r", encoding="utf-8") as f:
                     conn.cursor().copy_expert(
                         f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, DELIMITER '|')",
                         self._strip_trailing_delimiter(f),
                     )
 
             # Step 6: Build indexes and FKs
-            self.logger.debug("[TPC-H] Building indexes and foreign keys...")
+            LOGGER.debug("    Building indexes and foreign keys...")
             indexes_sql = INDEXES_SQL.read_text()
             cursor.execute(indexes_sql)
 
             # Step 7: VACUUM ANALYZE
-            self.logger.debug("[TPC-H] Running VACUUM ANALYZE...")
+            LOGGER.debug("    Running VACUUM ANALYZE...")
             for table_name in self.TABLES_LOAD_ORDER:
                 cursor.execute(f"VACUUM ANALYZE {table_name}")
 
@@ -171,8 +180,9 @@ class TPCHExecutor(BenchmarkExecutor):
             )
 
             cursor.close()
-            self.logger.info(
-                "\u2713 TPC-H preparation complete (SF=%.1f)", self.scale_factor
+            LOGGER.debug(
+                "   %s➤ TPC-H preparation complete (SF=%.2f)%s",
+                COLORS.italic, self.scale_factor, COLORS.reset,
             )
 
         finally:
@@ -213,7 +223,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 "WHERE table_name = '_tpch_metadata')"
             )
             if not cursor.fetchone()[0]:  # type: ignore
-                self.logger.debug("TPC-H validation failed: metadata table missing")
+                LOGGER.debug("TPC-H validation failed: metadata table missing")
                 cursor.close()
                 conn.close()
                 return False
@@ -224,8 +234,8 @@ class TPCHExecutor(BenchmarkExecutor):
             row = cursor.fetchone()
             if row is None or float(row[0]) != self.scale_factor:
                 loaded_sf = row[0] if row else "unknown"
-                self.logger.debug(
-                    "TPC-H validation failed: loaded SF=%s, expected SF=%.1f",
+                LOGGER.debug(
+                    " ➤ TPC-H validation failed: loaded SF=%s, expected SF=%.2f",
                     loaded_sf,
                     self.scale_factor,
                 )
@@ -241,18 +251,15 @@ class TPCHExecutor(BenchmarkExecutor):
                     (table_name,),
                 )
                 if not cursor.fetchone()[0]:  # type: ignore
-                    self.logger.debug("TPC-H table missing: %s", table_name)
+                    LOGGER.debug("TPC-H table missing: %s", table_name)
                     cursor.close()
                     conn.close()
                     return False
 
-            cursor.close()
-            conn.close()
-            self.logger.debug("TPC-H schema validated (SF=%.1f)", self.scale_factor)
             return True
 
         except Exception as e:
-            self.logger.debug("TPC-H validation failed: %s", e)
+            LOGGER.debug("TPC-H validation failed: %s", e)
             return False
 
     def execute(
@@ -260,10 +267,17 @@ class TPCHExecutor(BenchmarkExecutor):
     ) -> PerformanceMetrics:
         """Execute TPC-H benchmark and return performance metrics."""
         logger = get_logger("TPCHExecutor", worker_id=worker_id)
-
         warmup_passes = kwargs.get("warmup_passes", 0)
 
-        # Establish connection with health check and retry
+        logger.info(
+            " %sStarting TPC-H execution (SF=%.1f, warmup_passes=%d)...%s",
+            COLORS.bold,
+            self.scale_factor,
+            warmup_passes,
+            COLORS.reset,
+        )
+
+        logger.debug("  Establishing connection to database for TPC-H execution...")
         max_conn_retries = 3
         conn = None
         for attempt in range(max_conn_retries):
@@ -276,7 +290,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 break
             except Exception as e:
                 logger.warning(
-                    "Connection health check failed (attempt %d/%d): %s",
+                    "  Connection health check failed (attempt %d/%d): %s",
                     attempt + 1,
                     max_conn_retries,
                     e,
@@ -289,6 +303,7 @@ class TPCHExecutor(BenchmarkExecutor):
                     raise RuntimeError(
                         f"Failed to establish healthy connection after {max_conn_retries} attempts"
                     ) from e
+        logger.debug("  ➤ Connection established successfully for TPC-H execution")
 
         # Enforce safety timeout to prevent bad configs from hanging indefinitely.
         base_timeout_ms = 300000  # 5 minutes
@@ -298,7 +313,7 @@ class TPCHExecutor(BenchmarkExecutor):
         cursor.execute(f"SET statement_timeout = {statement_timeout_ms}")
         cursor.close()
         logger.debug(
-            "Enforcing failsafe statement_timeout=%ds for TPC-H execution (SF=%.1f)",
+            "  ➤ Enforced failsafe statement_timeout=%ds for TPC-H execution (SF=%.2f)",
             statement_timeout_ms // 1000,
             self.scale_factor,
         )
@@ -306,9 +321,7 @@ class TPCHExecutor(BenchmarkExecutor):
         query_indices = list(range(len(self.queries)))
 
         if warmup_passes > 0:
-            logger.debug(
-                "TPC-H warmup: Executing %d cache warming pass(es)", warmup_passes
-            )
+            logger.info("  Executing %d cache warming pass(es)", warmup_passes)
             cursor = conn.cursor()  # type: ignore
             for _ in range(warmup_passes):
                 for idx in query_indices:
@@ -317,7 +330,7 @@ class TPCHExecutor(BenchmarkExecutor):
                         cursor.fetchall()
                     except Exception as e:
                         _log_pg_error(logger, f"Warmup Q{idx + 1}", e)
-                        logger.warning("Aborting warmup — Assigning fatal penalty.")
+                        logger.warning("  Aborting warmup — Assigning fatal penalty.")
                         if not conn.closed:  # type: ignore
                             conn.close()  # type: ignore
 
@@ -336,15 +349,13 @@ class TPCHExecutor(BenchmarkExecutor):
 
             if conn.closed:  # type: ignore
                 logger.warning(
-                    "Connection lost during warmup — reconnecting for measurement"
+                    "  Connection lost during warmup — reconnecting for measurement"
                 )
                 conn = get_connection(db_config)
                 conn.autocommit = True
-        logger.debug(
-            "TPC-H measurement: Power Test Sequence (%d queries, SF=%.1f)",
-            len(self.queries),
-            self.scale_factor,
-        )
+        logger.debug("  ➤ Warmup complete, starting timed measurement of TPC-H queries")
+
+        logger.info(" Executing Power Test sequence of %s%d%s TPC-H queries...", len(self.queries))
 
         latencies: List[float] = []
         errors = 0
@@ -364,7 +375,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 errors += 1
                 _log_pg_error(logger, f"Q{idx + 1}", e)
                 logger.warning(
-                    "Fast-failing remaining queries to avoid reward hacking."
+                    "  Fast-failing remaining queries to avoid reward hacking."
                 )
                 break
 
@@ -380,14 +391,14 @@ class TPCHExecutor(BenchmarkExecutor):
         if errors > 0 or total_queries < expected_queries:
             if errors == 0:
                 logger.warning(
-                    "TPC-H incomplete: only %d/%d queries executed "
+                    "  ➤ TPC-H incomplete: only %d/%d queries executed "
                     "(no exception caught). Assigning fatal penalty.",
                     total_queries,
                     expected_queries,
                 )
             else:
                 logger.warning(
-                    "TPC-H evaluation failed %d queries. Assigning fatal penalty.",
+                    "  ➤ TPC-H evaluation failed %d queries. Assigning fatal penalty.",
                     errors,
                 )
             return PerformanceMetrics(
@@ -401,8 +412,9 @@ class TPCHExecutor(BenchmarkExecutor):
                 total_time=total_time,
                 failure_type="query_failed_or_timeout",
             )
+        logger.debug("  ➤ TPC-H results: %d queries in %.1fs", total_queries, total_time)
 
-        # Compute metrics for a fully successful run
+        logger.info(" Computing performance metrics from execution results...")
         metrics = PerformanceMetrics()
         metrics.total_queries = total_queries
         metrics.total_time = total_time
@@ -423,19 +435,24 @@ class TPCHExecutor(BenchmarkExecutor):
                 (total_queries / total_time) * 3600.0 if total_time > 0 else 0.0
             )
         else:
-            logger.warning("No successful queries during measurement")
+            logger.warning("  ➤ No successful queries during measurement")
 
         if total_queries > 0:
             metrics.error_rate = 0.0  # Since errors > 0 are already caught above
 
-        logger.debug(
-            "TPC-H results: %d queries in %.1fs, "
-            "p50=%.1fms, p99=%.1fms, throughput=%.2f QphH",
-            total_queries,
-            total_time,
-            metrics.latency_p50,
-            metrics.latency_p99,
-            metrics.throughput,
+        log_section_header(
+            logger, "  %sTPC-H metrics extracted:%s",
+            COLORS.bold, COLORS.reset, level="debug", top_separator=False,
         )
+        for metric_name, value in metrics.__dict__.items():
+            if metric_name in ["latency_p50", "latency_p95", "latency_p99"]:
+                logger.debug(
+                    "    %s%-12s: %.3f s%s", COLORS.bold, metric_name, value / 1000.0, COLORS.reset
+                )
+            elif metric_name == "throughput":
+                logger.debug(
+                    "    %s%-12s: %.3f QphH%s", COLORS.bold, metric_name, value, COLORS.reset
+                )
+
 
         return metrics
