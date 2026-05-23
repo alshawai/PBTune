@@ -251,7 +251,7 @@ class ComparisonRunner:
                 "metric_reference_version": session.metric_reference_version,
                 "workload_features": session.workload_features,
                 "normalization_metadata": session.normalization_metadata,
-                "score_breakdown": session.score_breakdown,
+                "score_breakdown": session.score_breakdown.to_dict(),
             },
         )
 
@@ -959,7 +959,7 @@ def _metrics_to_score(
         workload_features=workload_features,
     )
 
-    return metric_config.compute_score(metrics)
+    return metric_config.compute_score_value(metrics)
 
 
 def _extract_pg_major(pg_version_str: str) -> str:
