@@ -28,7 +28,10 @@ from src.tuner.config.knob_space import (
     KnobType,
     KnobScale,
 )
+from src.utils.logger import get_logger, get_color_context
 
+LOGGER = get_logger("KnobLoader")
+COLORS = get_color_context()
 
 def csv_type_to_knob_type(vartype: str) -> KnobType:
     """Convert PostgreSQL vartype to KnobType enum"""
@@ -277,4 +280,5 @@ def get_knob_space(tier: str = "minimal", force_reload: bool = False) -> KnobSpa
     if force_reload or tier not in _KNOB_SPACES:
         _KNOB_SPACES[tier] = load_knob_space_for_tier(tier)
 
+    LOGGER.debug("➤ Loaded %d knobs", len(_KNOB_SPACES[tier]))
     return _KNOB_SPACES[tier]
