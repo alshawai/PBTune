@@ -130,7 +130,7 @@ def test_normalizer_score_vector():
     normalizer.fit(metrics_list)
 
     metrics = PerformanceMetrics(throughput=5.0, latency_p95=30.0, error_rate=0.05)
-    scores = normalizer.score_vector(metrics)
+    scores = normalizer.score_metrics(metrics)
 
     assert "throughput" in scores
     assert "latency_p95" in scores

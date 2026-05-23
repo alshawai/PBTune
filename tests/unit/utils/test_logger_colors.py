@@ -324,3 +324,167 @@ def test_formatter_preserves_column_alignment_in_no_color_mode():
         assert "DEBUG" in level_long
     finally:
         set_colors_enabled(True)
+
+
+def test_worker_metrics_table_renders_one_section_for_four_workers():
+    """Worker metric tables should stay single-block when the worker count is small."""
+    table = _logger_helpers.format_worker_metrics_table(
+        [
+            {
+                "score": 91.25,
+                "latency_p95": "12.34 ms",
+                "throughput": "1200 TPS",
+            },
+            {
+                "score": 89.5,
+                "latency_p95": "13.00 ms",
+                "throughput": "1188 TPS",
+            },
+            {
+                "score": 88.2,
+                "latency_p95": "13.75 ms",
+                "throughput": "1174 TPS",
+            },
+            {
+                "score": 87.0,
+                "latency_p95": "14.10 ms",
+                "throughput": "1160 TPS",
+            },
+        ],
+        worker_labels=["Worker-0", "Worker-1", "Worker-2", "Worker-3"],
+        metric_order=["score", "latency_p95", "throughput"],
+        title="Generation 3 Worker Metrics",
+    )
+
+    assert table.count("Generation 3 Worker Metrics") == 1
+    assert "part 1/2" not in table
+    assert "| Metric" in table
+    assert "Score" in table
+    assert "Latency P95" in table
+    assert "Throughput" in table
+    assert "Worker-3" in table
+
+
+def test_worker_metrics_table_colours_headers_and_formats_score_to_three_decimals():
+    """Worker tables should colorize columns and render score with three decimals."""
+    colors = _logger_helpers.get_color_context()
+    table = _logger_helpers.format_worker_metrics_table(
+        [
+            {"score": 80.9105, "latency_p95": "118.92ms"},
+            {"score": 78.3736, "latency_p95": "112.67ms"},
+        ],
+        worker_labels=["Worker-0", "Worker-1"],
+        metric_order=["score", "latency_p95"],
+        title="Generation 2 Worker Metrics",
+        split_threshold=4,
+    )
+
+    assert "80.9105" not in table
+    assert "80.910" in table
+    assert f"{colors.bold}{colors.green}80.910" not in table
+    assert f"{colors.green}80.910" in table
+    assert colors.cyan in table or colors.teal in table or colors.sky_blue in table
+    assert _logger_helpers.ColorPalette.get_worker_color(0, "ansi") in table
+    assert _logger_helpers.ColorPalette.get_worker_color(1, "ansi") in table
+
+
+def test_worker_metrics_table_centers_block_and_appends_best_worker_to_last_table():
+    """The best worker should be appended to the last section without splitting."""
+    colors = _logger_helpers.get_color_context()
+    table = _logger_helpers.format_worker_metrics_table(
+        [
+            {"score": 91.25, "latency_p95": "12.34 ms"},
+            {"score": 89.5, "latency_p95": "13.00 ms"},
+            {"score": 88.2, "latency_p95": "13.75 ms"},
+            {"score": 87.0, "latency_p95": "14.10 ms"},
+        ],
+        worker_labels=["Worker-0", "Worker-1", "Worker-2", "Worker-3"],
+        metric_order=["score", "latency_p95"],
+        best_worker_metric={"score": 95.3334, "latency_p95": "11.11 ms"},
+        best_worker_label="Best Worker",
+        title="\nGeneration 6 Worker Metrics",
+        split_threshold=4,
+        center_width=120,
+    )
+
+    assert table.count("Generation 6 Worker Metrics") == 1
+    assert table.startswith("\n")
+    assert "Best Worker" in table
+    assert "part 1/2" not in table
+    assert "95.3334" not in table
+    assert "95.333" in table
+    assert f"{colors.bold}{colors.green}95.333" in table
+    assert f"{colors.green}95.333" in table
+
+
+def test_worker_metrics_table_splits_into_two_sections_for_more_than_four_workers():
+    """Worker metric tables should split vertically once the worker count grows too wide."""
+    table = _logger_helpers.format_worker_metrics_table(
+        [
+            {"score": 91.25, "latency_p95": "12.34 ms"},
+            {"score": 89.5, "latency_p95": "13.00 ms"},
+            {"score": 88.2, "latency_p95": "13.75 ms"},
+            {"score": 87.0, "latency_p95": "14.10 ms"},
+            {"score": 86.1, "latency_p95": "14.85 ms"},
+        ],
+        worker_labels=[
+            "Worker-0",
+            "Worker-1",
+            "Worker-2",
+            "Worker-3",
+            "Worker-4",
+        ],
+        metric_order=["score", "latency_p95"],
+        title="Generation 4 Worker Metrics",
+    )
+
+    sections = table.split("\n\n")
+
+    assert len(sections) == 2
+    assert sections[0].lstrip().startswith("Generation 4 Worker Metrics (part 1/2)")
+    assert sections[1].lstrip().startswith("Generation 4 Worker Metrics (part 2/2)")
+    assert "Worker-4" not in sections[0]
+    assert "Worker-4" in sections[1]
+    assert table.count("Score") == 2
+
+
+def test_worker_metrics_table_creates_additional_sections_for_large_worker_counts():
+    """Worker metric tables should keep chunking as the worker count keeps growing."""
+    table = _logger_helpers.format_worker_metrics_table(
+        [
+            {"score": 91.25, "latency_p95": "12.34 ms"},
+            {"score": 89.5, "latency_p95": "13.00 ms"},
+            {"score": 88.2, "latency_p95": "13.75 ms"},
+            {"score": 87.0, "latency_p95": "14.10 ms"},
+            {"score": 86.1, "latency_p95": "14.85 ms"},
+            {"score": 85.4, "latency_p95": "15.22 ms"},
+            {"score": 84.8, "latency_p95": "15.81 ms"},
+            {"score": 84.1, "latency_p95": "16.03 ms"},
+            {"score": 83.6, "latency_p95": "16.44 ms"},
+        ],
+        worker_labels=[
+            "Worker-0",
+            "Worker-1",
+            "Worker-2",
+            "Worker-3",
+            "Worker-4",
+            "Worker-5",
+            "Worker-6",
+            "Worker-7",
+            "Worker-8",
+        ],
+        metric_order=["score", "latency_p95"],
+        title="Generation 5 Worker Metrics",
+        split_threshold=4,
+    )
+
+    sections = table.split("\n\n")
+
+    assert len(sections) == 3
+    assert sections[0].lstrip().startswith("Generation 5 Worker Metrics (part 1/3)")
+    assert sections[1].lstrip().startswith("Generation 5 Worker Metrics (part 2/3)")
+    assert sections[2].lstrip().startswith("Generation 5 Worker Metrics (part 3/3)")
+    assert "Worker-0" in sections[0]
+    assert "Worker-4" in sections[1]
+    assert "Worker-8" in sections[2]
+    assert "Worker-8" not in sections[0]
