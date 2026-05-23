@@ -13,11 +13,13 @@ from src.utils.scoring.contracts import (
     NormalizationState,
     ScoreBreakdown,
     WorkloadFeatures,
+    score_breakdown_from_dict,
 )
 from src.utils.scoring.workload_features import (
     TemplateWorkloadMetadata,
     WorkloadFeatureExtractor,
 )
+from src.utils.scoring.engine import ScoringEngine
 
 __all__ = [
     "DEFAULT_METRIC_REFERENCE_VERSION",
@@ -28,7 +30,9 @@ __all__ = [
     "REQUIRED_METRIC_IDS",
     "MetricSnapshot",
     "NormalizationState",
+    "ScoringEngine",
     "ScoreBreakdown",
+    "score_breakdown_from_dict",
     "WorkloadFeatures",
     "TemplateWorkloadMetadata",
     "WorkloadFeatureExtractor",
