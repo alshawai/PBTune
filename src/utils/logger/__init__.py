@@ -43,6 +43,12 @@ from src.utils.logger.setup import (
     setup_logging,
 )
 
+# Color context
+from src.utils.logger.context import (
+    ColorContext,
+    get_color_context,
+)
+
 # Banners
 from src.utils.logger.banners import (
     get_evaluation_banner,
@@ -52,8 +58,11 @@ from src.utils.logger.banners import (
 
 # Helper functions
 from src.utils.logger.helpers import (
+    format_worker_metrics_table,
     log_generation_summary,
+    log_worker_metrics_table,
     log_section_header,
+    log_final_summary,
 )
 
 __all__ = [
@@ -62,6 +71,9 @@ __all__ = [
     "ColorPalette",
     "colors_enabled",
     "set_colors_enabled",
+    # Color context
+    "ColorContext",
+    "get_color_context",
     # Formatters
     "ColoredFormatter",
     "HTMLFormatter",
@@ -77,6 +89,9 @@ __all__ = [
     "get_evaluation_banner",
     "get_isolation_warning_banner",
     # Helpers
+    "format_worker_metrics_table",
     "log_section_header",
     "log_generation_summary",
+    "log_worker_metrics_table",
+    "log_final_summary",
 ]
