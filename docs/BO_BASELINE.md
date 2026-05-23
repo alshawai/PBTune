@@ -72,6 +72,54 @@ The BO runner uses a **Pilot + Freeze** strategy:
 
 Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `PerformanceMetrics` to recompute scores with globally calibrated ranges, so the frozen in-run scores do not affect final comparison validity.
 
+### Parallel BO Evaluation and Resource Equalization
+
+The BO baseline now supports batched parallel evaluation so it can mirror the
+worker count used by a reference PBT session.
+
+- `--parallel-workers N` sets the number of PostgreSQL instances evaluated in
+  parallel.
+- When `--pbt-session` is provided, BO copies `num_parallel_workers` from the
+  reference session unless `--parallel-workers` explicitly overrides it.
+- If BO needs to derive the budget or worker count and the PBT session is
+  missing `population_size`, `total_generations`, or `num_parallel_workers`, BO
+  keeps the default or explicitly supplied CLI value for that setting.
+- If the PBT session includes `worker_resources`, BO uses that per-worker
+  resource slice for knob-range resolution instead of dividing the local host
+  resources.
+- The result JSON records completed `iterations`, `num_parallel_workers`,
+  and `resource_equalization` so downstream comparison tools can confirm parity.
+  BO does not record `population_size` because it is not population-based.
+
+In parallel mode, BO uses SMAC3 ask-tell evaluation with a local
+`ThreadPoolExecutor`, which keeps the database environment in the main process
+while evaluating multiple candidates concurrently.
+
+### Ask-Tell Execution Model
+
+The runner uses two execution paths:
+
+- **Sequential path (`--parallel-workers 1`)**: uses the standard
+  `facade.optimize()` loop with the objective closure.
+- **Parallel path (`--parallel-workers > 1`)**: uses explicit ask-tell control in
+  `runner.py`.
+
+In ask-tell mode, each batch follows this cycle:
+
+1. `ask()` requests one `TrialInfo` per worker for the current batch.
+2. Configurations are evaluated concurrently using `ThreadPoolExecutor`.
+3. Each completed trial is returned to SMAC via
+   `tell(trial_info, TrialValue(...))`.
+4. After each batch, the surrogate is updated before the next `ask()` calls.
+
+This design is intentional:
+
+- The SMAC `Scenario` keeps `n_workers=1` to avoid Dask process workers.
+- Parallelism is handled in-process via threads, which avoids pickling issues
+  with environment objects such as Docker clients.
+- Worker-local previous configuration state is tracked independently, so
+  restart detection is isolated per BO worker.
+
 ## Configuration Options
 
 ### PBT Session Parity
@@ -112,6 +160,13 @@ python -m src.scripts.bo_baseline \
 - `--iterations N` - Number of BO iterations. Defaults to `50`, or to `population_size * total_generations` when `--pbt-session` is used.
 - `--seed INT` - Random seed for reproducibility (default: `42`)
 - `--bo-surrogate {rf|gp}` - SMAC Surrogate model: Random Forest (`rf`) or Gaussian Process (`gp`). Default is `rf`.
+- `--parallel-workers INT` - Number of parallel BO workers / PostgreSQL
+  instances. Defaults to `1`, or to the PBT session's `num_parallel_workers` when
+  `--pbt-session` is used.
+- `--scoring-policy STR` - Custom scoring policy to use for metrics evaluation. Available options:
+  - `fixed_v1`: Legacy static weights based on workload type (OLTP/OLAP/MIXED).
+  - `feature_driven_v2`: Dynamic weights based on workload features and a coefficient matrix, evaluating variance, tail amplification, and DB stats.
+  (default: predefined policy per workload).
 
 ### Benchmark Options
 - `--benchmark {sysbench|tpch}` - Benchmark type (default: sysbench)
@@ -165,6 +220,7 @@ python -m src.scripts.bo_baseline \
 | `--output-dir` | Root directory for BO result files. | `results` |
 | `--verbose` | Logging verbosity. | `INFO` |
 | `--range-update-interval` | Pilot phase size: initial-design iterations before freezing normalization ranges. | `10` |
+| `--scoring-policy` | Specific scoring policy to apply to metric evaluation (`fixed_v1` or `feature_driven_v2`). | Set by metric default |
 
 ## Output Format
 
@@ -173,11 +229,13 @@ Results are written to:
 {output_dir}/{workload_type}/bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json
 ```
 
-The JSON format is compatible with the evaluation pipeline:
-- `tuning_session` - Metadata about the BO run
-- `best_configuration` - Best knob config and score found
+The JSON format is strictly compatible with the evaluation pipeline and identical to the PBT schema:
+- `tuning_session` - Metadata about the BO run, including optimizer, scoring policy, and version information
+- `scoring_policy` / `scoring_policy_version` - Global scoring engine properties
+- `normalization_metadata` / `workload_features` - Details around the environment constraints and bounds
+- `best_configuration` - Best knob config (fractionally normalized `[0.0, 1.0]`) and score found, including full `score_breakdown`
 - `worker_resources` - Hardware constraints
-- `generation_history` - Per-iteration convergence data
+- `generation_history` - Per-iteration convergence data and metric breakdown (`wall_clock_seconds`, `generation_elapsed_seconds`)
 - `system_info` - System snapshot
 
 The BO CLI `--seed` value is recorded as `tuning_session.seed` in the result
@@ -187,6 +245,9 @@ than inferring one from file order.
 When `--pbt-session` is used, `tuning_session` also records:
 - `reference_pbt_session` - Path to the PBT session used as the reference
 - `reference_pbt_knobs` - Knob names copied from `best_configuration.knobs`
+- `num_parallel_workers` - Parallel BO worker count used for the run
+- `resource_equalization` - Whether BO used the reference PBT worker resource
+  slice
 
 ## Multi-Seed Evaluation
 

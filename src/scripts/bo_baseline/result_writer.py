@@ -10,8 +10,28 @@ from src.utils.hardware_info import WorkerResources
 from src.utils.types import BenchmarkConfig
 from src.scripts.bo_baseline.config import BOConfig
 from src.utils.logger import get_logger
+from src.utils.metrics import MetricConfig
+import numpy as np
 
 LOGGER = get_logger("ResultWriter")
+
+
+def convert_numpy_types(obj: Any) -> Any:
+    """Recursively convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
 
 
 def resolve_bo_output_root(
@@ -41,6 +61,7 @@ def write_bo_results(
     iteration_log: List[Dict],
     total_time: float,
     output_dir: Path,
+    metric_config: MetricConfig,
     bo_surrogate: str = "gp",
 ) -> Dict[str, Any]:
     """
@@ -62,6 +83,8 @@ def write_bo_results(
         Total tuning time in seconds
     output_dir : Path
         Output directory for results
+    metric_config : MetricConfig
+        The metric configuration for scoring policy metadata
     bo_surrogate : str
         Surrogate model type (gp or rf)
 
@@ -86,6 +109,7 @@ def write_bo_results(
             "config": {},
             "metrics": {},
             "score": 0.0,
+            "score_breakdown": None,
         }
 
     # Build generation history from iteration log
@@ -100,7 +124,7 @@ def write_bo_results(
 
         # Estimate BO overhead (ask + tell time) - for now, estimate as 5% of wall time
         # In a real implementation, this would be tracked separately
-        bo_overhead = iteration.get("wall_time_seconds", 0.0) * 0.05
+        bo_overhead = iteration.get("wall_clock_seconds", 0.0) * 0.05
         bo_overhead_total += bo_overhead
 
         generation_entry = {
@@ -115,19 +139,20 @@ def write_bo_results(
             "timestamp": datetime.fromtimestamp(
                 iteration.get("timestamp", 0.0)
             ).isoformat(),
-            "iteration_wall_time_seconds": iteration.get("wall_time_seconds", 0.0),
-            "bo_overhead_seconds": bo_overhead,
+            "wall_clock_seconds": iteration.get("wall_clock_seconds", 0.0),
+            "generation_elapsed_seconds": bo_overhead,
             "worker_scores": [
                 {
                     "worker_id": 0,
                     "score": score,
                     "metrics": iteration.get("metrics", {}),
+                    "score_breakdown": convert_numpy_types(iteration.get("score_breakdown")),
                 }
             ],
             "worker_configs": [
                 {
                     "worker_id": 0,
-                    "config": iteration.get("config", {}),
+                    "config": convert_numpy_types(knob_space.config_to_fractions(iteration.get("config", {}))),
                 }
             ],
         }
@@ -142,13 +167,16 @@ def write_bo_results(
             "bo_library": "smac3",
             "bo_surrogate": bo_surrogate,
             "bo_acquisition": "expected_improvement",
+            "scoring_policy": metric_config.scoring_policy,
+            "scoring_policy_version": metric_config.scoring_policy_version,
+            "metric_reference_version": metric_config.metric_reference_version,
             "knob_tier": config.knob_tier,
             "num_knobs": len(knob_space.knobs),
             "workload_type": config.benchmark_config.workload_type,
             "benchmark_name": config.benchmark_config.benchmark,
-            "n_iterations": config.n_iterations,
+            "iterations": len(iteration_log),
             "seed": config.random_seed,
-            "population_size": 1,
+            "num_parallel_workers": config.max_workers,
             "total_generations": len(iteration_log),
             "total_time_seconds": total_time,
             "timestamp": timestamp,
@@ -164,11 +192,19 @@ def write_bo_results(
                 str(config.pbt_session_path) if config.pbt_session_path else None
             ),
             "reference_pbt_knobs": list(config.pbt_knob_names or ()),
+            "resource_equalization": config.pbt_worker_resources is not None,
         },
+        "scoring_policy": metric_config.scoring_policy,
+        "scoring_policy_version": metric_config.scoring_policy_version,
+        "metric_reference_version": metric_config.metric_reference_version,
+        "workload_features": convert_numpy_types(metric_config.workload_features),
+        "normalization_metadata": convert_numpy_types(metric_config.get_normalization_metadata()),
+        "warm_start": {"enabled": False},
         "best_configuration": {
             "score": best_score,
-            "knobs": best_iteration.get("config", {}),
+            "knobs": convert_numpy_types(knob_space.config_to_fractions(best_iteration.get("config", {}))),
             "metrics": best_iteration.get("metrics", {}),
+            "score_breakdown": convert_numpy_types(best_iteration.get("score_breakdown")),
         },
         "worker_resources": {
             "ram_bytes": worker_resources.ram_bytes,
@@ -178,7 +214,7 @@ def write_bo_results(
         "generation_history": generation_history,
         "convergence": {
             "converged": False,
-            "iterations_without_improvement": 0,
+            "generations_without_improvement": 0,
         },
         "system_info": system_info,
     }

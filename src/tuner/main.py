@@ -62,6 +62,7 @@ from src.tuner.config import (
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
+from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -630,6 +631,8 @@ class PBTTuner:
     def evaluate_worker(
         self,
         worker: Worker,
+        *,
+        barriers: Optional[GenerationBarrier] = None,
     ) -> Tuple[PerformanceMetrics, float]:
         """
         Evaluate a single worker.
@@ -640,6 +643,8 @@ class PBTTuner:
         ----------
         worker : Worker
             Worker to evaluate
+        barriers : GenerationBarrier | None
+            Optional lockstep barriers for synchronized evaluation.
 
         Returns
         -------
@@ -654,7 +659,8 @@ class PBTTuner:
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
             metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
-                worker, apply_config=True, generation=self.current_generation
+                worker, apply_config=True, generation=self.current_generation,
+                barriers=barriers,
             )
 
             if restart_occurred and not self._restarted_this_generation:
@@ -664,6 +670,10 @@ class PBTTuner:
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as e:
+            # Safety: drain any remaining barriers not already drained by orchestrator
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
+
             recovered = False
             if self.env is None:
                 worker.logger.error(
@@ -698,6 +708,8 @@ class PBTTuner:
             )
 
         except TimeoutError as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             return self._build_failure_result(
                 worker=worker,
                 worker_logger=worker.logger,
@@ -708,6 +720,8 @@ class PBTTuner:
             )
 
         except RuntimeError as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             return self._build_failure_result(
                 worker=worker,
                 worker_logger=worker.logger,
@@ -718,6 +732,8 @@ class PBTTuner:
             )
 
         except Exception as e:
+            if barriers is not None:
+                barriers.drain_remaining("connected", worker_id=worker.worker_id)
             worker.logger.error(
                 "Unexpected error evaluating worker %s: %s",
                 worker.worker_id,
@@ -790,6 +806,8 @@ class PBTTuner:
             parallel=True,
             require_ready=True,
             max_workers=self.pbt_config.num_parallel_workers,
+            synchronize_workers=self.pbt_config.synchronize_workers,
+            barrier_timeout=self.pbt_config.barrier_timeout_seconds,
         )
         gen_elapsed_time = time.time() - gen_start_time
 
@@ -1107,6 +1125,7 @@ class PBTTuner:
                 "sysbench_duration_seconds": self.pbt_config.benchmark_config.evaluation_duration,
                 "sysbench_warmup_seconds": self.pbt_config.benchmark_config.warmup_duration,
                 "population_size": self.pbt_config.population_size,
+                "num_parallel_workers": self.pbt_config.num_parallel_workers,
                 "exploit_quantile": self.pbt_config.exploit_quantile,
                 "perturbation_factors": self.pbt_config.perturbation_factors,
                 "ready_interval": self.pbt_config.ready_interval,
@@ -1408,6 +1427,16 @@ on your hardware, configuration, and workload/benchmark.
         help=(
             "Disable the no-improvement early stop gate "
             "(low-variance convergence and max generations still apply)"
+        ),
+    )
+
+    config_group.add_argument(
+        "--no-sync",
+        action="store_true",
+        help=(
+            "Disable lockstep barrier synchronization between workers. "
+            "By default, workers wait at each sub-step so they advance "
+            "in lockstep for fair resource sharing."
         ),
     )
 
@@ -1715,6 +1744,7 @@ def main():
             if args.scoring_calibration_evals is not None
             else base_config.scoring_calibration_evals
         ),
+        synchronize_workers=not args.no_sync,
         benchmark_config=benchmark_config,
     )
 

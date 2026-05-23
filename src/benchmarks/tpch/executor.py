@@ -191,13 +191,40 @@ class TPCHExecutor(BenchmarkExecutor):
     def _drop_existing_public_tables(
         self,
         cursor,
+        logger: logging.Logger | None = None,
         log_prefix: str = "[TPC-H]",
     ) -> None:
-        """Drop all public tables before loading TPC-H data."""
-        super()._drop_existing_public_tables(
-            cursor,
-            log_prefix=log_prefix,
-        )
+        """Drop all public tables before loading TPC-H data.
+
+        If an explicit `logger` is provided, use it for debug diagnostics
+        (tests inject a MagicMock logger). Otherwise, fall back to
+        `self.logger`.
+        """
+        cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        existing_tables = [str(row[0]) for row in cursor.fetchall()]
+        if not existing_tables:
+            return
+
+        active_logger = logger if logger is not None else self.logger
+        if log_prefix:
+            active_logger.debug(
+                f"{log_prefix} Dropping existing public tables (%d)...",
+                len(existing_tables),
+            )
+        else:
+            active_logger.debug(
+                "Dropping existing public tables (%d)...",
+                len(existing_tables),
+            )
+
+        from psycopg2 import sql
+
+        for table_name in sorted(existing_tables):
+            cursor.execute(
+                sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
+                    sql.Identifier(table_name)
+                )
+            )
 
     @staticmethod
     def _strip_trailing_delimiter(file_obj):

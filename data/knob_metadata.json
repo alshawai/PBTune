@@ -530,7 +530,7 @@
     "resource_type": ""
   },
   "commit_timestamp_buffers": {
-    "tuning_min": 0,
+    "tuning_min": 16,
     "tuning_max": 1024,
     "scale": "log",
     "impact_tier": "extensive",
@@ -550,7 +550,7 @@
     "resource_type": ""
   },
   "subtransaction_buffers": {
-    "tuning_min": 0,
+    "tuning_min": 16,
     "tuning_max": 1024,
     "scale": "log",
     "impact_tier": "extensive",
@@ -560,7 +560,7 @@
     "resource_type": ""
   },
   "transaction_buffers": {
-    "tuning_min": 0,
+    "tuning_min": 16,
     "tuning_max": 1024,
     "scale": "log",
     "impact_tier": "extensive",

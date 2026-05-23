@@ -36,8 +36,8 @@ from src.tuner.core.evolution import (
     get_population_statistics,
     check_convergence,
 )
-
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.environments import DatabaseEnvironment
 from src.utils.logger.helpers import log_section_header, log_worker_metrics_table
@@ -361,6 +361,8 @@ class Population:
         evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         max_workers: Optional[int] = None,
+        synchronize_workers: bool = False,
+        barrier_timeout: float = 120.0,
     ) -> None:
         """
         Evaluate all workers in the current generation.
@@ -383,6 +385,11 @@ class Population:
             Whether to evaluate workers in parallel
         max_workers : Optional[int]
             Maximum number of parallel threads. Defaults to population_size.
+        synchronize_workers : bool, default=False
+            When True and parallel, insert threading.Barrier sync points
+            between every sub-step so workers advance in lockstep.
+        barrier_timeout : float, default=120.0
+            Timeout in seconds for each barrier wait.
 
         Example
         -------
@@ -394,44 +401,136 @@ class Population:
         >>>
         >>> population.evaluate_generation(my_evaluate, parallel=True)
         """
-        self._features_refined = False
-        max_workers = max_workers or self.config.population_size
+        LOGGER.info(
+            "Evaluating generation %s - %s%s",
+            self.current_generation,
+            "parallel" if parallel else "sequential",
+            " (lockstep sync)" if (parallel and synchronize_workers) else "",
+        )
 
-        if not parallel or max_workers == 1:
-            LOGGER.info(
-                "%sStarting sequential evaluation of %d workers...%s",
-                COLORS.bold, len(self.workers), COLORS.reset
+        # Barrier usage flag — actual barrier objects are created per-batch
+        # in parallel mode to match the number of concurrent threads.
+        use_barriers = parallel and synchronize_workers
+
+        if not parallel:
+            # Sequential mode: pass a disabled barrier (all waits are no-ops).
+            disabled_barriers = GenerationBarrier(
+                num_workers=1, timeout=barrier_timeout, enabled=False
             )
+            self._features_refined = False
             for worker in self.workers:
                 try:
-                    metrics, score = evaluate_fn(worker)
+                    metrics, score = evaluate_fn(worker, barriers=disabled_barriers)
                     worker.update_metrics(metrics, score)
 
                 except Exception as e:
                     worker.logger.error("Error evaluating: %s", e)
                     raise
         else:
-            LOGGER.info(
-                "%sStarting parallel evaluation of %d workers with max_workers=%d...%s",
-                COLORS.bold, len(self.workers), max_workers, COLORS.reset
-            )
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all evaluation tasks
-                future_to_worker = {
-                    executor.submit(evaluate_fn, worker): worker
-                    for worker in self.workers
-                }
+            self._features_refined = False
+            max_workers = max_workers or self.config.population_size
+            num_workers = len(self.workers)
 
-                # Collect results as they complete
-                for future in as_completed(future_to_worker):
-                    worker = future_to_worker[future]
+            # Hybrid mode: when max_workers < population, we must evaluate
+            # in batches.  Barriers synchronize threads *within* a batch
+            # (since only batch-mates run concurrently and contend for
+            # shared hardware resources).
+            if max_workers >= num_workers:
+                # All workers fit in a single batch — original behavior.
+                batches = [self.workers]
+            else:
+                # Chunk workers into batches of max_workers.
+                batches = [
+                    self.workers[i : i + max_workers]
+                    for i in range(0, num_workers, max_workers)
+                ]
+                LOGGER.info(
+                    "Hybrid mode: %d workers evaluated in %d batches of up to %d",
+                    num_workers,
+                    len(batches),
+                    max_workers,
+                )
+
+            for batch_idx, batch in enumerate(batches):
+                # Create batch-local barriers sized to this batch.
+                batch_barriers = GenerationBarrier(
+                    num_workers=len(batch),
+                    timeout=barrier_timeout,
+                    enabled=use_barriers,
+                )
+                if use_barriers and len(batches) > 1:
+                    LOGGER.debug(
+                        "Batch %d/%d: %d workers, barriers enabled",
+                        batch_idx + 1,
+                        len(batches),
+                        len(batch),
+                    )
+
+                with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                    # Submit all evaluation tasks in this batch
+                    future_to_worker = {
+                        executor.submit(
+                            evaluate_fn, worker, barriers=batch_barriers
+                        ): worker
+                        for worker in batch
+                    }
+
+                    # Collect results as they complete.
+                    # Use a generous timeout to detect truly stuck workers
+                    # (barrier_timeout * num_barriers + headroom).
+                    collection_timeout = (barrier_timeout * len(batch)) + 60.0
+                    completed_futures = set()
+
                     try:
-                        metrics, score = future.result()
-                        worker.update_metrics(metrics, score)
-                    
-                    except Exception as e:
-                        worker.logger.error("Error evaluating: %s", e)
-                        raise
+                        for future in as_completed(
+                            future_to_worker, timeout=collection_timeout
+                        ):
+                            completed_futures.add(future)
+                            worker = future_to_worker[future]
+                            try:
+                                metrics, score = future.result()
+                                worker.update_metrics(metrics, score)
+                                worker_logger = get_logger(
+                                    "PopulationWorker",
+                                    worker_id=worker.worker_id,
+                                )
+                                worker_logger.debug(
+                                    "score=%.4f, step_count=%s",
+                                    score,
+                                    worker.step_count,
+                                )
+                            except Exception as e:
+                                worker_logger = get_logger(
+                                    "PopulationWorker",
+                                    worker_id=worker.worker_id,
+                                )
+                                worker_logger.error(
+                                    "Error evaluating: %s", e
+                                )
+                                # Abort barriers so remaining threads unblock
+                                batch_barriers.abort()
+                                raise
+                    except TimeoutError:
+                        # as_completed raised TimeoutError — some futures
+                        # never completed within the generous deadline.
+                        pass
+
+                    # Check for stuck workers that never completed
+                    stuck_futures = set(future_to_worker.keys()) - completed_futures
+                    if stuck_futures:
+                        batch_barriers.abort()
+                        for future in stuck_futures:
+                            stuck_worker = future_to_worker[future]
+                            worker_logger = get_logger(
+                                "PopulationWorker",
+                                worker_id=stuck_worker.worker_id,
+                            )
+                            worker_logger.error(
+                                "Worker stuck — did not complete within %.0fs; "
+                                "aborting barriers and continuing",
+                                collection_timeout,
+                            )
+                            future.cancel()
 
         LOGGER.info(
             "%s➤ Evaluation of %d workers is completed.%s",
@@ -869,6 +968,8 @@ class Population:
         parallel: bool = True,
         require_ready: bool = True,
         max_workers: Optional[int] = None,
+        synchronize_workers: bool = False,
+        barrier_timeout: float = 120.0,
     ) -> GenerationResult:
         """
         Execute one complete PBT generation.
@@ -891,6 +992,11 @@ class Population:
             Maximum parallel workers for evaluation. When less than
             population_size, workers evaluate in batches. If None,
             defaults to population_size.
+        synchronize_workers : bool, default=False
+            When True and parallel, insert lockstep barriers between every
+            sub-step of worker evaluation for experimental fairness.
+        barrier_timeout : float, default=120.0
+            Timeout per barrier in seconds.
 
         Returns
         -------
@@ -960,7 +1066,11 @@ class Population:
                 raise
 
         self.evaluate_generation(
-            evaluate_fn, parallel=parallel, max_workers=max_workers
+            evaluate_fn,
+            parallel=parallel,
+            max_workers=max_workers,
+            synchronize_workers=synchronize_workers,
+            barrier_timeout=barrier_timeout,
         )
 
         rescued = self.rescue_dead_workers()

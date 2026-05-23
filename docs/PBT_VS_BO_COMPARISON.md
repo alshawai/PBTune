@@ -39,6 +39,10 @@ Each input file should use the tuning-session schema produced by the tuner or BO
 
 BO outputs are written in the same shape as PBT outputs, with one worker score per BO iteration.
 
+For parity-focused comparisons, run BO with `--pbt-session` and let it inherit
+the reference run's `num_parallel_workers` and per-worker `worker_resources` unless
+you intentionally override the worker count with `--parallel-workers`.
+
 ## Scoring Behavior
 
 The script pools all metrics from all PBT and BO runs, then calls `rescore_metrics_globally()`. This recalibrates normalization ranges once across the combined dataset and assigns a comparable `GlobalScore` to every evaluation.
@@ -116,7 +120,7 @@ Columns:
 Two-panel convergence plot:
 
 - Sample efficiency: best global score versus cumulative evaluations.
-- Wall-clock efficiency: best global score versus elapsed seconds.
+- Wall-clock efficiency: best global score versus elapsed seconds. The wall-clock timeseries is automatically aligned to a shared uniform time grid using a step-function interpolation to prevent "sawtooth" artifacts caused by unaligned logging timestamps across runs.
 
 Each method is plotted with a mean line and standard-deviation error band when multiple runs are provided.
 
@@ -135,6 +139,8 @@ Box/strip plot of memory utilization for final best configurations, grouped by m
 ## Recommended Workflow
 
 1. Run PBT and save one or more tuning-session files.
-2. Run BO with `--pbt-session` so its benchmark, workload, knob set, and evaluation budget match the selected PBT session.
+2. Run BO with `--pbt-session` so its benchmark, workload, knob set,
+   evaluation budget, and worker-parity metadata match the selected PBT
+   session.
 3. Pass the generated PBT and BO JSON files to `pbt_vs_bo_comarison.py`.
 4. Use `comparison_summary.csv` for aggregate numbers, `comparison_runs.csv` for per-run checks, and the PDFs for figures.

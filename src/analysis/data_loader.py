@@ -245,7 +245,9 @@ def _build_session_metadata(
 
 
 def load_pbt_results(
-    directory_path: str | Path, default_workload_type: str = "oltp"
+    directory_path: str | Path,
+    default_workload_type: str = "oltp",
+    file_paths: Optional[list[Path]] = None,
 ) -> LoadedData:
     """
     Load, validate, and globally re-score PBT training results across multiple files.
@@ -277,9 +279,14 @@ def load_pbt_results(
     if not dir_path.exists() or not dir_path.is_dir():
         raise FileNotFoundError(f"Directory not found: {directory_path}")
 
-    json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
-    if not json_files:
-        raise FileNotFoundError(f"No PBT result files found in {directory_path}")
+    if file_paths is not None:
+        json_files = file_paths
+        if not json_files:
+            raise FileNotFoundError("Provided file_paths list is empty")
+    else:
+        json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
+        if not json_files:
+            raise FileNotFoundError(f"No PBT result files found in {directory_path}")
 
     LOGGER.info(f"Loading {len(json_files)} PBT result records from {directory_path}")
 

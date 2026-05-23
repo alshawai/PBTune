@@ -148,3 +148,4 @@ graphify-out/.graphify_chunk_*.json
 graphify-out/.needs_update
 graphify-out/manifest.json
 graphify-out/cost.json
+graphify-out/cache/

@@ -41,11 +41,11 @@ CORRELATION_THRESHOLD = 0.7
 DEFAULT_RF_N_ESTIMATORS = 400
 DEFAULT_RF_MAX_DEPTH = 1024
 DEFAULT_RF_RANDOM_STATE = 42
-DEFAULT_RF_MIN_SAMPLES_SPLIT = 2
-DEFAULT_RF_MIN_SAMPLES_LEAF = 1
-DEFAULT_RF_MAX_FEATURES = 1.0
+DEFAULT_RF_MIN_SAMPLES_SPLIT = 5
+DEFAULT_RF_MIN_SAMPLES_LEAF = 3
+DEFAULT_RF_MAX_FEATURES = 0.33
 DEFAULT_RF_BOOTSTRAP = True
-DEFAULT_RF_MAX_SAMPLES = None
+DEFAULT_RF_MAX_SAMPLES = 0.8
 DEFAULT_TOP_K = 20
 DEFAULT_INTERACTION_ORDER = 2
 
@@ -79,7 +79,7 @@ class ImportanceResult:
         SHAP-based importance scores for each knob
     shap_values : np.ndarray
         Raw SHAP values for all samples and features
-    fanova_shap_correlation : float
+    fanova_shap_correlation : float | None
         Correlation between fANOVA and SHAP importance rankings
     scoring_policy : str
         Scoring policy used during tuning (default: "fixed_v1")
@@ -97,7 +97,7 @@ class ImportanceResult:
     workload_type: str
     shap_importances: dict[str, float]
     shap_values: np.ndarray
-    fanova_shap_correlation: float
+    fanova_shap_correlation: float | None
     scoring_policy: str = "fixed_v1"
     scoring_policy_version: str = "1.0"
     metric_reference_version: str = "v1"
@@ -110,7 +110,7 @@ class _ImportancePassResult:
     marginal_importances: dict[str, float]
     shap_importances: dict[str, float]
     shap_values: np.ndarray
-    fanova_shap_correlation: float
+    fanova_shap_correlation: float | None
     model_r2: float
     fanova_model: Any
     column_names: list[str]
@@ -185,6 +185,7 @@ def _run_importance_pass(
     max_features: Optional[float | int | str],
     bootstrap: bool,
     max_samples: Optional[int | float],
+    skip_shap: bool = False,
 ) -> _ImportancePassResult:
     """Run one full SHAP + fANOVA decomposition pass."""
     rf = RandomForestRegressor(
@@ -200,22 +201,36 @@ def _run_importance_pass(
     rf.fit(X, y)
     pass_r2 = float(rf.score(X, y))
 
-    explainer = shap.TreeExplainer(rf)
-    shap_values = explainer.shap_values(X)
-    mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
+    shap_importances = {}
+    shap_values = []
+    if not skip_shap:
+        explainer = shap.TreeExplainer(rf)
+        shap_values = explainer.shap_values(X)
+        mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
 
-    if len(col_names) != len(mean_abs_shap):
-        raise ValueError(
-            "SHAP vector length does not match feature count: "
-            f"{len(mean_abs_shap)} vs {len(col_names)}"
+        if len(col_names) != len(mean_abs_shap):
+            raise ValueError(
+                "SHAP vector length does not match feature count: "
+                f"{len(mean_abs_shap)} vs {len(col_names)}"
+            )
+
+        shap_importances = {
+            col: float(mean_abs_shap[idx]) for idx, col in enumerate(col_names)
+        }
+        shap_importances = dict(
+            sorted(shap_importances.items(), key=lambda item: item[1], reverse=True)
         )
 
-    shap_importances = {
-        col: float(mean_abs_shap[idx]) for idx, col in enumerate(col_names)
-    }
-    shap_importances = dict(
-        sorted(shap_importances.items(), key=lambda item: item[1], reverse=True)
-    )
+    fanova_max_features = None
+    if isinstance(max_features, (int, float)):
+        if isinstance(max_features, float) and 0.0 < max_features <= 1.0:
+            fanova_max_features = max(1, int(max_features * X.shape[1]))
+        elif isinstance(max_features, int):
+            fanova_max_features = max_features
+    elif max_features == "sqrt":
+        fanova_max_features = max(1, int(np.sqrt(X.shape[1])))
+    elif max_features == "log2":
+        fanova_max_features = max(1, int(np.log2(X.shape[1])))
 
     fanova_model = fANOVA(
         X=X,
@@ -223,7 +238,11 @@ def _run_importance_pass(
         config_space=config_space,
         n_trees=n_estimators,
         seed=random_state,
-        max_depth=max_depth,
+        max_depth=max_depth if max_depth is not None else 64,
+        min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,
+        max_features=fanova_max_features,
+        bootstrapping=bootstrap,
     )
 
     marginal_importances: dict[str, float] = {}
@@ -234,11 +253,13 @@ def _run_importance_pass(
     marginal_importances = dict(
         sorted(marginal_importances.items(), key=lambda item: item[1], reverse=True)
     )
-    correlation = _compute_rank_correlation(
-        col_names=col_names,
-        fanova_importances=marginal_importances,
-        shap_importances=shap_importances,
-    )
+    correlation = None
+    if not skip_shap:
+        correlation = _compute_rank_correlation(
+            col_names=col_names,
+            fanova_importances=marginal_importances,
+            shap_importances=shap_importances,
+        )
 
     return _ImportancePassResult(
         marginal_importances=marginal_importances,
@@ -263,6 +284,7 @@ def analyze_knob_importance(
     max_samples: Optional[int | float] = DEFAULT_RF_MAX_SAMPLES,
     top_k: int = DEFAULT_TOP_K,
     interaction_order: int = DEFAULT_INTERACTION_ORDER,
+    skip_shap: bool = False,
 ) -> ImportanceResult:
     """
     Train a Random Forest and perform fANOVA decomposition to measure knob importance.
@@ -332,6 +354,7 @@ def analyze_knob_importance(
         max_features=max_features,
         bootstrap=bootstrap,
         max_samples=max_samples,
+        skip_shap=skip_shap,
     )
 
     if result_pass.model_r2 < 0.5:
@@ -341,7 +364,10 @@ def analyze_knob_importance(
             result_pass.model_r2,
         )
 
-    if result_pass.fanova_shap_correlation < CORRELATION_THRESHOLD:
+    if (
+        result_pass.fanova_shap_correlation is not None
+        and result_pass.fanova_shap_correlation < CORRELATION_THRESHOLD
+    ):
         LOGGER.warning(
             "Low correlation between fANOVA and SHAP importance rankings: ρ = %.3f",
             result_pass.fanova_shap_correlation,
