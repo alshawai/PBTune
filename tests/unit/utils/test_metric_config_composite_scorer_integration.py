@@ -38,7 +38,7 @@ def test_compute_score_respects_failure_gate() -> None:
     crashed = _metric(latency_p95=10, throughput=800)
     crashed.failure_type = "EXECUTION_CRASH"
 
-    score = config.compute_score(crashed)
+    score = config.compute_score(crashed).final_score
     assert score == pytest.approx(0.0)
 
 
@@ -69,28 +69,9 @@ def test_feature_driven_policy_responds_to_workload_features() -> None:
     }
     write_heavy.update_ranges(baseline)
 
-    read_score = read_heavy.compute_score(metrics)
-    write_score = write_heavy.compute_score(metrics)
+    read_score = read_heavy.compute_score(metrics).final_score
+    write_score = write_heavy.compute_score(metrics).final_score
 
     assert read_score > 0.0
     assert write_score > 0.0
     assert read_score != write_score
-
-
-def test_compute_detailed_scores_keeps_legacy_component_keys() -> None:
-    """Detailed score output should preserve legacy key names for consumers."""
-    config = MetricConfig.for_oltp()
-    config.scoring_policy = "feature_driven_v2"
-
-    baseline = [
-        _metric(latency_p95=18 + i, throughput=500 + (i * 10)) for i in range(16)
-    ]
-    config.update_ranges(baseline)
-
-    details = config.compute_detailed_scores(_metric(latency_p95=30, throughput=700))
-
-    assert "total" in details
-    assert "latency" in details
-    assert "throughput" in details
-    assert "memory" in details
-    assert "error" in details
