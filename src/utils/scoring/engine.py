@@ -34,7 +34,11 @@ class ScoringContext:
     features: dict[str, float]
     weight_overrides: dict[str, float]
 
-    def key(self) -> Tuple[str, str, str, Tuple[Tuple[str, float], ...], Tuple[Tuple[str, float], ...]]:
+    def key(
+        self,
+    ) -> Tuple[
+        str, str, str, Tuple[Tuple[str, float], ...], Tuple[Tuple[str, float], ...]
+    ]:
         """Return a hashable key for cache comparisons."""
         return (
             self.policy_id,
@@ -149,9 +153,7 @@ class ScoringEngine:
                     normalized_value=util,
                     weight=weight,
                     weighted_contribution=contribution * 100.0,
-                    directionality=METRIC_DIRECTIONALITY.get(
-                        metric, "lower_is_better"
-                    ),
+                    directionality=METRIC_DIRECTIONALITY.get(metric, "lower_is_better"),
                 )
             )
 
@@ -173,7 +175,7 @@ class ScoringEngine:
             breakdown.final_score,
             gate,
             len(components),
-            COLORS.reset
+            COLORS.reset,
         )
         return breakdown
 
@@ -221,15 +223,13 @@ class ScoringEngine:
                 if key not in self._metrics:
                     self._metrics.append(key)
 
-    def _compute_reliability_gate(
-        self, metrics: PerformanceMetrics, logger
-    ) -> float:
+    def _compute_reliability_gate(self, metrics: PerformanceMetrics, logger) -> float:
         if metrics.failure_type is not None:
             logger.warning(
                 "  %sReliability gate = 0.0 (failure_type=%s)%s",
                 COLORS.italic,
                 metrics.failure_type,
-                COLORS.reset
+                COLORS.reset,
             )
             return 0.0
 
@@ -239,7 +239,7 @@ class ScoringEngine:
                 COLORS.italic,
                 metrics.error_rate,
                 self._fatal_error_threshold,
-                COLORS.reset
+                COLORS.reset,
             )
             return 0.0
 
@@ -250,7 +250,7 @@ class ScoringEngine:
                 COLORS.italic,
                 gate,
                 metrics.error_rate,
-                COLORS.reset
+                COLORS.reset,
             )
             return gate
 

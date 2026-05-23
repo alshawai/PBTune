@@ -20,7 +20,7 @@ from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("DataRoot")
 COLORS = get_color_context()
-    
+
 
 def resolve_data_root(cli_override: Optional[str] = None) -> Path:
     """
@@ -91,7 +91,9 @@ def resolve_data_root(cli_override: Optional[str] = None) -> Path:
                 )
         except OSError as e:
             LOGGER.error("Failed to create data root directory `%s`: %s", path, e)
-            LOGGER.warning("➤ Falling back to default relative path: `%s`", default_path)
+            LOGGER.warning(
+                "➤ Falling back to default relative path: `%s`", default_path
+            )
             return default_path.resolve()
 
     # Validate directory
@@ -107,7 +109,13 @@ def resolve_data_root(cli_override: Optional[str] = None) -> Path:
         return default_path.resolve()
 
     if source != "default":
-        LOGGER.info("%s➤ Using data root: %s (from %s)%s", COLORS.info, path, source, COLORS.reset)
+        LOGGER.info(
+            "%s➤ Using data root: %s (from %s)%s",
+            COLORS.info,
+            path,
+            source,
+            COLORS.reset,
+        )
 
     return path
 

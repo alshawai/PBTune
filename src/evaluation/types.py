@@ -106,7 +106,9 @@ class TuningSessionData:
     metric_reference_version: str = "v1"
     workload_features: dict[str, Any] = field(default_factory=dict)
     normalization_metadata: dict[str, Any] = field(default_factory=dict)
-    score_breakdown: ScoreBreakdown = field(default_factory=lambda: ScoreBreakdown(final_score=0.0))
+    score_breakdown: ScoreBreakdown = field(
+        default_factory=lambda: ScoreBreakdown(final_score=0.0)
+    )
 
 
 @dataclass

@@ -131,7 +131,9 @@ def score_breakdown_from_dict(payload: dict[str, Any]) -> ScoreBreakdown:
     return ScoreBreakdown(
         final_score=legacy_score,
         policy=str(payload.get("policy", DEFAULT_SCORING_POLICY)),
-        policy_version=str(payload.get("policy_version", DEFAULT_SCORING_POLICY_VERSION)),
+        policy_version=str(
+            payload.get("policy_version", DEFAULT_SCORING_POLICY_VERSION)
+        ),
         reliability_gate=float(payload.get("reliability_gate", 1.0) or 1.0),
         components=[],
         metadata={"legacy_payload": dict(payload)},

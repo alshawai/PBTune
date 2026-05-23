@@ -119,7 +119,13 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     tuner.current_generation = 0
     tuner._restarted_this_gen = False
     tuner.restart_count = 0
-    tuner.metric_config = SimpleNamespace(latency_metric="p95")
+    from src.utils.scoring.contracts import ScoreBreakdown
+
+    # metric_config now exposes compute_score() which returns a ScoreBreakdown
+    tuner.metric_config = SimpleNamespace(
+        latency_metric="p95",
+        compute_score=lambda metrics, worker_logger=None: ScoreBreakdown(final_score=0.0),
+    )
     tuner.pbt_config = SimpleNamespace(dead_config_score=0.0, crash_score=0.0)
 
     tuner.orchestrator = MagicMock()
@@ -130,7 +136,7 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     tuner.env = MagicMock()
     tuner.env.recover_instance.side_effect = RuntimeError("docker read timeout")
 
-    worker = SimpleNamespace(worker_id=0)
+    worker = SimpleNamespace(worker_id=0, logger=MagicMock(), port=None)
 
     metrics, score = tuner.evaluate_worker(worker)
 

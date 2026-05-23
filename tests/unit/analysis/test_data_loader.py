@@ -220,8 +220,13 @@ def test_load_pbt_results_global_rescoring(mock_pbt_directory):
     # Latencies: 15.0, 10.0, 25.0 -> min ~10.0, max ~25.0 (without padding logic)
     # Throughput: 1000, 1500, 800 -> min ~820, max ~1450
     # The normalizer anchors are now the source of truth
-    if dataset.metric_config._normalizer and dataset.metric_config._normalizer.is_calibrated:
-        _, thr_low, thr_high = dataset.metric_config._normalizer.anchors.get("throughput", (1, 0, 0))
+    if (
+        dataset.metric_config._normalizer
+        and dataset.metric_config._normalizer.is_calibrated
+    ):
+        _, thr_low, thr_high = dataset.metric_config._normalizer.anchors.get(
+            "throughput", (1, 0, 0)
+        )
         assert thr_high == 1450.0
         assert thr_low == 820.0
 

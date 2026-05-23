@@ -339,7 +339,9 @@ def _coerce_metric_mapping(metric_source: Any) -> dict[str, Any]:
     )
 
 
-def _normalize_metric_label(metric_name: str, custom_labels: Mapping[str, str] | None = None) -> str:
+def _normalize_metric_label(
+    metric_name: str, custom_labels: Mapping[str, str] | None = None
+) -> str:
     """Return a human-friendly label for a metric key."""
     if custom_labels and metric_name in custom_labels:
         return custom_labels[metric_name]
@@ -376,7 +378,9 @@ def _render_ascii_table(
     def _row(cells: Sequence[str], alignments: Sequence[str]) -> str:
         padded_cells = [
             f" {_pad_cell(str(cell), width, alignment)} "
-            for cell, width, alignment in zip(cells, column_widths, alignments)
+            for cell, width, alignment in zip(
+                cells, column_widths, alignments, strict=True
+            )
         ]
         return "|" + "|".join(padded_cells) + "|"
 
@@ -389,7 +393,7 @@ def _render_ascii_table(
     )
     lines.append(_border())
 
-    for row_label, row_values in zip(metric_rows, cell_rows):
+    for row_label, row_values in zip(metric_rows, cell_rows, strict=True):
         lines.append(
             _row(
                 [row_label, *row_values],
@@ -502,7 +506,9 @@ def format_worker_metrics_table(
         chunk_cell_rows: list[list[str]] = []
 
         for metric_index, metric_name in enumerate(ordered_metric_names):
-            metric_color = metric_label_palette[metric_index % len(metric_label_palette)]
+            metric_color = metric_label_palette[
+                metric_index % len(metric_label_palette)
+            ]
             chunk_metric_rows.append(
                 f"{colors.bold}{metric_color}{_normalize_metric_label(metric_name, metric_labels)}{colors.reset}"
             )
@@ -526,7 +532,9 @@ def format_worker_metrics_table(
         ]
 
         if best_worker_mapping is not None and chunk_index == len(worker_chunks) - 1:
-            styled_worker_labels[-1] = f"{colors.bold}{colors.green}{best_worker_label}{colors.reset}"
+            styled_worker_labels[-1] = (
+                f"{colors.bold}{colors.green}{best_worker_label}{colors.reset}"
+            )
 
             for metric_index, metric_name in enumerate(ordered_metric_names):
                 value = best_worker_mapping.get(metric_name)
@@ -538,10 +546,10 @@ def format_worker_metrics_table(
         sections.append(
             _center_text_block(
                 _render_ascii_table(
-                section_title,
-                chunk_metric_rows,
-                styled_worker_labels,
-                chunk_cell_rows,
+                    section_title,
+                    chunk_metric_rows,
+                    styled_worker_labels,
+                    chunk_cell_rows,
                 ),
                 width=center_width,
             )
@@ -649,7 +657,7 @@ def log_generation_summary(
     mean_score: float,
     std_score: float,
     exploited: int,
-    converged: bool
+    converged: bool,
 ) -> None:
     """
     Log a formatted generation summary.
@@ -662,8 +670,12 @@ def log_generation_summary(
         Result of the generation to summarize
     """
     log_section_header(
-        logger, "%sGeneration %s Summary:%s",
-        COLORS.bold, generation, COLORS.reset, top_separator=False
+        logger,
+        "%sGeneration %s Summary:%s",
+        COLORS.bold,
+        generation,
+        COLORS.reset,
+        top_separator=False,
     )
     logger.info("  Best Score:  %s%.3f%%%s", COLORS.cyan, best_score, COLORS.reset)
     logger.info("  Mean Score:  %s%.3f%%%s", COLORS.cyan, mean_score, COLORS.reset)
@@ -672,7 +684,10 @@ def log_generation_summary(
     logger.info("  Restarts:    %s%s%s total", COLORS.cyan, restart_count, COLORS.reset)
     logger.info("  Elapsed:     %s%.1f%s", COLORS.cyan, elapsed, COLORS.reset)
     logger.info(
-        "  Converged:   %s%s%s", COLORS.orange, 'YES' if converged else 'NO', COLORS.reset
+        "  Converged:   %s%s%s",
+        COLORS.orange,
+        "YES" if converged else "NO",
+        COLORS.reset,
     )
     logger.info("%s==========================%s", COLORS.bold, COLORS.reset)
 
@@ -680,40 +695,65 @@ def log_generation_summary(
 def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
     """Print final summary of tuning session"""
     log_section_header(logger, "%sPBT TUNING COMPLETE%s", COLORS.bold, COLORS.reset)
-    session = results["tuning_session"]
-    best = results["best_configuration"]
+    session = results.get("tuning_session")
+    best = results.get("best_configuration")
+
+    if not isinstance(session, dict) or not isinstance(best, dict):
+        logger.info("Final results: %s", results)
+        return
 
     logger.info("%sSession Summary:%s", COLORS.green, COLORS.reset)
-    logger.info("  Total Generations:  %s%d%s", COLORS.cyan, session["total_generations"], COLORS.reset)
+    logger.info(
+        "  Total Generations:  %s%d%s",
+        COLORS.cyan,
+        session["total_generations"],
+        COLORS.reset,
+    )
     logger.info(
         "  Total Time:         %s%.1fs (%.1f min)%s",
         COLORS.cyan,
         session["total_time_seconds"],
         session["total_time_seconds"] / 60,
-        COLORS.reset
+        COLORS.reset,
     )
-    logger.info("  Knobs Tuned:        %s%d%s", COLORS.cyan, session["num_knobs"], COLORS.reset)
     logger.info(
-        "  Workload Type:      %s%s%s", COLORS.cyan, session["workload_type"], COLORS.reset
+        "  Knobs Tuned:        %s%d%s", COLORS.cyan, session["num_knobs"], COLORS.reset
+    )
+    logger.info(
+        "  Workload Type:      %s%s%s",
+        COLORS.cyan,
+        session["workload_type"],
+        COLORS.reset,
     )
 
     logger.info("%sBest Performance Metrics:%s", COLORS.green, COLORS.reset)
-    logger.info("  Score:              %s%.3f%%%s", COLORS.cyan, best["score"], COLORS.reset)
+    logger.info(
+        "  Score:              %s%.3f%%%s", COLORS.cyan, best["score"], COLORS.reset
+    )
     logger.info(
         "  Latency95:          %s%.3f ms%s",
-        COLORS.cyan, best["metrics"]["latency_p95"], COLORS.reset
+        COLORS.cyan,
+        best["metrics"]["latency_p95"],
+        COLORS.reset,
     )
     logger.info(
         "  Latency99:          %s%.3f ms%s",
-        COLORS.cyan, best["metrics"]["latency_p99"], COLORS.reset
+        COLORS.cyan,
+        best["metrics"]["latency_p99"],
+        COLORS.reset,
     )
-    logger.info("  Throughput:         %s%.3f %s%s",
-                COLORS.cyan, best["metrics"]["throughput"],
-                best["metrics"]["throughput_unit"], COLORS.reset
-            )
     logger.info(
-        "  Memory Utilization: %s%.1f%%%s", COLORS.cyan,
-        best["metrics"]["memory_utilization"] * 100.0, COLORS.reset
+        "  Throughput:         %s%.3f %s%s",
+        COLORS.cyan,
+        best["metrics"]["throughput"],
+        best["metrics"]["throughput_unit"],
+        COLORS.reset,
+    )
+    logger.info(
+        "  Memory Utilization: %s%.1f%%%s",
+        COLORS.cyan,
+        best["metrics"]["memory_utilization"] * 100.0,
+        COLORS.reset,
     )
 
     logger.info("%sBest Knob Configurations:%s", COLORS.green, COLORS.reset)

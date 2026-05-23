@@ -349,12 +349,16 @@ class Population:
         self.restore_interval = getattr(pbt_config, "snapshot_restore_interval", 5)
 
         if not self.enable_snapshots:
-            LOGGER.debug("%sSnapshots are disabled in config%s", COLORS.italic, COLORS.reset)
+            LOGGER.debug(
+                "%sSnapshots are disabled in config%s", COLORS.italic, COLORS.reset
+            )
             return
 
         LOGGER.info(
             "Snapshot restoration enabled: interval=%s%d%s",
-            COLORS.bold, self.restore_interval, COLORS.reset
+            COLORS.bold,
+            self.restore_interval,
+            COLORS.reset,
         )
 
     def evaluate_generation(
@@ -411,7 +415,9 @@ class Population:
         if not parallel or max_workers == 1:
             LOGGER.info(
                 "%sStarting sequential evaluation of %d workers...%s",
-                COLORS.bold, len(self.workers), COLORS.reset
+                COLORS.bold,
+                len(self.workers),
+                COLORS.reset,
             )
             disabled_barriers = GenerationBarrier(
                 num_workers=1, timeout=barrier_timeout, enabled=False
@@ -428,7 +434,10 @@ class Population:
         else:
             LOGGER.info(
                 "%sStarting parallel evaluation of %d workers with max_workers=%d...%s",
-                COLORS.bold, len(self.workers), max_workers, COLORS.reset
+                COLORS.bold,
+                len(self.workers),
+                max_workers,
+                COLORS.reset,
             )
             num_workers = len(self.workers)
 
@@ -493,9 +502,7 @@ class Population:
                                 metrics, score = future.result()
                                 worker.update_metrics(metrics, score)
                             except Exception as e:
-                                worker.logger.error(
-                                    "Error evaluating: %s", e
-                                )
+                                worker.logger.error("Error evaluating: %s", e)
                                 batch_barriers.abort()  # Abort barriers so remaining threads unblock
                                 raise
                     except TimeoutError:
@@ -522,7 +529,9 @@ class Population:
 
         LOGGER.info(
             "%s➤ Evaluation of %d workers is completed.%s",
-            COLORS.bold, self.config.population_size, COLORS.reset
+            COLORS.bold,
+            self.config.population_size,
+            COLORS.reset,
         )
 
         LOGGER.info("Refining workload features at generation level...")
@@ -613,7 +622,7 @@ class Population:
                 "resampling %d dead workers for next generation%s",
                 COLORS.warning,
                 len(dead_workers),
-                COLORS.reset
+                COLORS.reset,
             )
 
             seed_base = (self.current_generation + 1) * 1000
@@ -685,9 +694,7 @@ class Population:
         rescued = 0
         for index, dead_worker in enumerate(dead_workers):
             donor = alive_workers[index % len(alive_workers)]
-            dead_logger = get_logger(
-                "WorkerRescuer", worker_id=dead_worker.worker_id
-            )
+            dead_logger = get_logger("WorkerRescuer", worker_id=dead_worker.worker_id)
 
             dead_logger.warning(
                 " Triggering immediate rescue: exploit [Worker-%d] (score=%.3f)",
@@ -763,7 +770,7 @@ class Population:
                 len(all_metrics),
                 min_samples_needed,
                 self.current_generation,
-                COLORS.reset
+                COLORS.reset,
             )
             return
 
@@ -772,7 +779,7 @@ class Population:
                 " %sExcluded %d failure-tagged metrics from adaptive normalization updates%s",
                 COLORS.italic,
                 excluded_failure_metrics,
-                COLORS.reset
+                COLORS.reset,
             )
 
         LOGGER.info(
@@ -780,7 +787,7 @@ class Population:
             COLORS.bold,
             len(all_metrics),
             len(self.workers),
-            COLORS.reset
+            COLORS.reset,
         )
 
         if self.orchestrator is not None and hasattr(self.orchestrator, "config"):
@@ -814,15 +821,15 @@ class Population:
         """Build a reusable metric payload for the worker metrics table."""
         return {
             "score": score,
-            "latency_p95": f"{getattr(metrics, 'latency_p95'):.2f}{metrics.latency_unit}",
-            "latency_p99": f"{getattr(metrics, 'latency_p99'):.2f}{metrics.latency_unit}",
+            "latency_p95": f"{metrics.latency_p95:.2f}{metrics.latency_unit}",
+            "latency_p99": f"{metrics.latency_p99:.2f}{metrics.latency_unit}",
             "latency_variance": (
-                f"{getattr(metrics, 'latency_variance'):.2f}{metrics.latency_unit}"
+                f"{metrics.latency_variance:.2f}{metrics.latency_unit}"
             ),
-            "tail_amplification": f"{getattr(metrics, 'tail_amplification'):.2f}",
+            "tail_amplification": f"{metrics.tail_amplification:.2f}",
             "throughput": f"{metrics.throughput:.1f} {metrics.throughput_unit}",
             "throughput_variance": (
-                f"{getattr(metrics, 'throughput_variance'):.2f} {metrics.throughput_unit}"
+                f"{metrics.throughput_variance:.2f} {metrics.throughput_unit}"
             ),
             "memory_utilization": f"{metrics.memory_utilization * 100.0:.2f}%",
             "io_read_mb": f"{metrics.io_read_mb:.2f} MB",
@@ -906,7 +913,7 @@ class Population:
 
         Computes population statistics, identifies best worker, and checks
         convergence.
-        
+
         Returns
         -------
         GenerationResult
@@ -926,7 +933,8 @@ class Population:
         else:
             LOGGER.debug(
                 "%s Convergence check deferred: adaptive normalization not yet active%s",
-                COLORS.italic, COLORS.reset
+                COLORS.italic,
+                COLORS.reset,
             )
 
         result = GenerationResult(
@@ -1014,7 +1022,7 @@ class Population:
                 COLORS.bold,
                 self.current_generation,
                 COLORS.reset,
-                top_separator=False
+                top_separator=False,
             )
 
             try:
@@ -1023,10 +1031,10 @@ class Population:
                     restored = self.env.restore_snapshot(worker.worker_id, quiet=True)  # type: ignore
                     if restored:
                         LOGGER.info(
-                            " %sRestored snapshot for [Worker-%d]%s", 
+                            " %sRestored snapshot for [Worker-%d]%s",
                             COLORS.italic,
                             worker.worker_id,
-                            COLORS.reset
+                            COLORS.reset,
                         )
                     if not restored:
                         LOGGER.error(
@@ -1046,7 +1054,9 @@ class Population:
                     )
 
                 log_section_header(
-                    LOGGER, "➤ Database snapshots restored successfully.", top_separator=False
+                    LOGGER,
+                    "➤ Database snapshots restored successfully.",
+                    top_separator=False,
                 )
             except Exception as e:
                 LOGGER.error("Failed to restore databases from snapshots: %s", e)
@@ -1108,7 +1118,10 @@ class Population:
         """
         if self.current_generation >= self.config.max_generations:
             LOGGER.info(
-                "%s➤ Stopping: %smax_generations reached.%s", COLORS.bold, COLORS.violet, COLORS.reset
+                "%s➤ Stopping: %smax_generations reached.%s",
+                COLORS.bold,
+                COLORS.violet,
+                COLORS.reset,
             )
             return True
 
@@ -1128,11 +1141,16 @@ class Population:
 
         if self.history and self.history[-1].converged:
             LOGGER.info(
-                "%s➤ Stopping: %spopulation converged.%s", COLORS.bold, COLORS.violet, COLORS.reset
+                "%s➤ Stopping: %spopulation converged.%s",
+                COLORS.bold,
+                COLORS.violet,
+                COLORS.reset,
             )
             return True
 
-        LOGGER.info("%sStopping criteria not met, continuing...%s", COLORS.italic, COLORS.reset)
+        LOGGER.info(
+            "%sStopping criteria not met, continuing...%s", COLORS.italic, COLORS.reset
+        )
         return False
 
     def _determine_overall_best(self, best_current: Worker) -> None:
@@ -1163,13 +1181,16 @@ class Population:
             )
             return
 
-        LOGGER.debug(" Checking for saturation/drift to determine if range expansion is needed...")
+        LOGGER.debug(
+            " Checking for saturation/drift to determine if range expansion is needed..."
+        )
         if not self._ranges_calibrated:
             self._determine_overall_best(best_current)
 
             LOGGER.debug(
                 "➤ Skipping range expansion check: %sNormalizer is not yet calibrated.%s",
-                COLORS.italic, COLORS.reset,
+                COLORS.italic,
+                COLORS.reset,
             )
             return
 
@@ -1185,7 +1206,8 @@ class Population:
         if not current_metrics:
             LOGGER.warning(
                 " ➤ No viable metrics for saturation check: %sAll workers are dead%s",
-                COLORS.italic, COLORS.reset,
+                COLORS.italic,
+                COLORS.reset,
             )
 
         ranges_expanded = metric_config.expand_ranges_for_metrics(
@@ -1207,7 +1229,10 @@ class Population:
 
         LOGGER.debug(
             " %sRescoring required%s - ranges_expanded=%s, features_refined=%s, ",
-            COLORS.bold, COLORS.reset, ranges_expanded, self._features_refined,
+            COLORS.bold,
+            COLORS.reset,
+            ranges_expanded,
+            self._features_refined,
         )
         significant_changes = 0
         for worker in self.workers:
@@ -1231,7 +1256,9 @@ class Population:
             self.best_overall_score = self.best_overall_score_breakdown.final_score
         LOGGER.debug(
             " ➤ Rescoring complete: %s%d%s workers with significant score changes",
-            COLORS.bold, significant_changes, COLORS.reset,
+            COLORS.bold,
+            significant_changes,
+            COLORS.reset,
         )
 
         best_current = max(
@@ -1242,10 +1269,11 @@ class Population:
 
         LOGGER.info(
             "➤ Finalized scores after %s",
-            "refining features" if self._features_refined else "expanding metric ranges"
+            "refining features"
+            if self._features_refined
+            else "expanding metric ranges",
         )
         return
-
 
     def get_best_configuration(self) -> tuple[Dict[str, Any], float]:
         """

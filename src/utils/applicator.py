@@ -415,7 +415,11 @@ class KnobApplicator:
 
         if self.config.dry_run:
             self.logger.debug(
-                "  %s[DRY RUN]%s Would apply: %s = %s",COLORS.bold, COLORS.reset, name, value
+                "  %s[DRY RUN]%s Would apply: %s = %s",
+                COLORS.bold,
+                COLORS.reset,
+                name,
+                value,
             )
             return True, None
 
@@ -538,7 +542,9 @@ class KnobApplicator:
             if missing:
                 self.logger.warning(
                     "  %sUnknown parameters (will skip): %s%s",
-                    COLORS.italic, missing, COLORS.reset
+                    COLORS.italic,
+                    missing,
+                    COLORS.reset,
                 )
                 for name in missing:
                     result.failed[name] = "Parameter not found in pg_settings"
@@ -556,7 +562,9 @@ class KnobApplicator:
                             result.failed_count += 1
                             self.logger.warning(
                                 "  %sValidation failed:%s %s",
-                                COLORS.bold, error_msg, COLORS.reset
+                                COLORS.bold,
+                                error_msg,
+                                COLORS.reset,
                             )
 
             self.logger.debug("  Applying knob values...")
@@ -583,7 +591,9 @@ class KnobApplicator:
             if result.failed_count > 0 and self.config.rollback_on_error:
                 self.logger.warning(
                     "  %sFailed to apply %d parameters%s",
-                    COLORS.italic, result.failed_count, COLORS.reset
+                    COLORS.italic,
+                    result.failed_count,
+                    COLORS.reset,
                 )
                 result.success = False
                 result.message = f"{result.failed_count} failures"
@@ -801,7 +811,10 @@ class KnobApplicator:
                 except Exception as e:
                     self.logger.warning(
                         "  %sFailed to verify parameter '%s': %s%s",
-                        COLORS.italic, param_name, e, COLORS.reset
+                        COLORS.italic,
+                        param_name,
+                        e,
+                        COLORS.reset,
                     )
                     verification[param_name] = False
 
@@ -822,7 +835,7 @@ class KnobApplicator:
                     COLORS.italic,
                     verified_count,
                     total_count,
-                    COLORS.reset
+                    COLORS.reset,
                 )
                 for mismatch in mismatches:
                     self.logger.warning("  %s", mismatch)

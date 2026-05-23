@@ -233,7 +233,9 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     return tunable
 
 
-def create_tier_dataframes(df: pd.DataFrame, tier_source: str = "expert") -> Dict[str, pd.DataFrame]:
+def create_tier_dataframes(
+    df: pd.DataFrame, tier_source: str = "expert"
+) -> Dict[str, pd.DataFrame]:
     """
     Create separate dataframes for each impact tier.
 
@@ -253,6 +255,7 @@ def create_tier_dataframes(df: pd.DataFrame, tier_source: str = "expert") -> Dic
 
     if tier_source == "data_driven":
         from src.knobs.knob_metadata import DATA_DRIVEN_TIERS
+
         if DATA_DRIVEN_TIERS is not None:
             for tier_name in DATA_DRIVEN_TIERS.keys():
                 if tier_name == "extensive":
@@ -260,7 +263,9 @@ def create_tier_dataframes(df: pd.DataFrame, tier_source: str = "expert") -> Dic
                 knob_names = get_knobs_by_tier(tier_name, source=tier_source)
                 tiers[tier_name] = df[df["name"].isin(knob_names)].copy()
         else:
-            logger.warning("Data-driven tiers not loaded. Falling back to expert tiers.")
+            logger.warning(
+                "Data-driven tiers not loaded. Falling back to expert tiers."
+            )
             tier_source = "expert"
 
     if tier_source == "expert":
@@ -279,7 +284,9 @@ def create_tier_dataframes(df: pd.DataFrame, tier_source: str = "expert") -> Dic
 
 
 def preprocess_and_save_knobs(
-    raw_csv_path: Optional[str] = None, output_dir: str = "data/tuner_knobs", tier_source: str = "expert"
+    raw_csv_path: Optional[str] = None,
+    output_dir: str = "data/tuner_knobs",
+    tier_source: str = "expert",
 ) -> Dict[str, str]:
     """
     Complete preprocessing pipeline.

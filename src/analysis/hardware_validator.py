@@ -226,9 +226,7 @@ def validate_hardware_importance(
         )
         for key in profile_keys
     }
-    tier_assignments = {
-        key: tier_results[key].tier_assignments for key in profile_keys
-    }
+    tier_assignments = {key: tier_results[key].tier_assignments for key in profile_keys}
 
     stable_knobs: list[str] = []
     shifting_knobs: dict[str, dict[str, str]] = {}
@@ -269,9 +267,7 @@ def validate_hardware_importance(
     combined_importances = None
     if combined_data is not None:
         if len(profile_keys) < 2:
-            LOGGER.info(
-                "Skipping combined model: need at least two hardware profiles."
-            )
+            LOGGER.info("Skipping combined model: need at least two hardware profiles.")
         else:
             combined_importances = train_combined_importance(combined_data)
 
@@ -285,7 +281,7 @@ def validate_hardware_importance(
 
 
 def build_combined_loaded_data(
-    profile_data: Sequence[tuple[LoadedData, WorkerResources | dict[str, Any]]]
+    profile_data: Sequence[tuple[LoadedData, WorkerResources | dict[str, Any]]],
 ) -> LoadedData:
     """Build a combined LoadedData with hardware features added.
 

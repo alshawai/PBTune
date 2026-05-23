@@ -24,7 +24,9 @@ class _MetricConfigStub:
         self.expand_calls += 1
         return self._expand
 
-    def compute_score(self, metrics: PerformanceMetrics, worker_logger=None) -> ScoreBreakdown:
+    def compute_score(
+        self, metrics: PerformanceMetrics, worker_logger=None
+    ) -> ScoreBreakdown:
         self.rescore_calls += 1
         final_score = float(metrics.throughput / 10.0)
         return ScoreBreakdown(final_score=final_score)

@@ -31,7 +31,6 @@ Where:
 """
 
 from typing import List, Tuple, Optional
-import logging
 import numpy as np
 
 from src.tuner.core.worker import Worker
@@ -289,7 +288,9 @@ def execute_exploit_explore(
 
     LOGGER.info(
         "%s➤ Exploit-explore complete: %d workers modified.%s",
-        COLORS.bold, len(pairs), COLORS.reset
+        COLORS.bold,
+        len(pairs),
+        COLORS.reset,
     )
 
     return len(pairs)

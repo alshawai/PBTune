@@ -181,7 +181,7 @@ def _find_mount_point(target_path: Path) -> tuple[str, str]:
             COLORS.italic,
             target_path,
             e,
-            COLORS.reset
+            COLORS.reset,
         )
 
     return best_match, best_device
@@ -270,7 +270,7 @@ def detect_worker_resources(
         "➤ Worker resources allocated: RAM=%s bytes, CPU=%s cores, Disk=%s",
         worker_ram,
         worker_cpu,
-        disk_type
+        disk_type,
     )
 
     return WorkerResources(
@@ -322,15 +322,13 @@ def _detect_disk_type_linux(device_path: Optional[str] = None) -> str:
             return disk_type
     except (OSError, IndexError, ValueError) as e:
         LOGGER.debug(
-            "%s  Error detecting Linux disk type: %s%s",
-            COLORS.italic,
-            e,
-            COLORS.reset)
+            "%s  Error detecting Linux disk type: %s%s", COLORS.italic, e, COLORS.reset
+        )
 
     LOGGER.debug(
         "%s  Could not detect Linux disk type, defaulting to unknown%s",
         COLORS.warning,
-        COLORS.reset
+        COLORS.reset,
     )
     return "unknown"
 
@@ -356,15 +354,13 @@ def _detect_disk_type_macos(mount_point: str = "/") -> str:
                     return disk_type
     except (subprocess.TimeoutExpired, OSError) as e:
         LOGGER.debug(
-            "%s Error detecting macOS disk type: %s%s",
-            COLORS.italic,
-            e,
-            COLORS.reset)
+            "%s Error detecting macOS disk type: %s%s", COLORS.italic, e, COLORS.reset
+        )
 
     LOGGER.debug(
         "%s Could not detect macOS disk type, defaulting to unknown%s",
         COLORS.warning,
-        COLORS.reset
+        COLORS.reset,
     )
     return "unknown"
 
@@ -397,15 +393,13 @@ def _detect_disk_type_windows() -> str:
                 return disk_type
     except (subprocess.TimeoutExpired, OSError) as e:
         LOGGER.debug(
-            "%s Error detecting Windows disk type: %s%s",
-            COLORS.italic,
-            e,
-            COLORS.reset)
+            "%s Error detecting Windows disk type: %s%s", COLORS.italic, e, COLORS.reset
+        )
 
     LOGGER.debug(
         "%s Could not detect Windows disk type, defaulting to unknown%s",
         COLORS.warning,
-        COLORS.reset
+        COLORS.reset,
     )
     return "unknown"
 
@@ -439,7 +433,7 @@ def detect_pg_version() -> str:
                 COLORS.italic,
                 cmd[0],
                 e,
-                COLORS.reset
+                COLORS.reset,
             )
             continue
 
@@ -550,39 +544,39 @@ def log_system_info(
         " CPU Model:      %s%s%s",
         COLORS.cyan,
         system_info.get("cpu_model", "unknown"),
-        COLORS.reset
+        COLORS.reset,
     )
     logger.info(
         " CPU Cores:      %s%s physical / %s logical%s",
         COLORS.cyan,
         cores.get("physical", "?"),
         cores.get("logical", "?"),
-        COLORS.reset
+        COLORS.reset,
     )
     logger.info(
         " RAM:            %s%.2f GB%s",
         COLORS.cyan,
         ram.get("total_gb", 0.0),
-        COLORS.reset
+        COLORS.reset,
     )
     logger.info(
         " Disk Type:      %s%s%s",
         COLORS.cyan,
         system_info.get("disk_type", "unknown"),
-        COLORS.reset
+        COLORS.reset,
     )
     if "data_disk_type" in system_info:
         logger.info(
             " Data Disk Type: %s%s%s",
             COLORS.cyan,
             system_info["data_disk_type"],
-            COLORS.reset
+            COLORS.reset,
         )
     logger.info(
         " PostgreSQL:     %s%s%s",
         COLORS.cyan,
         system_info.get("pg_version", "unknown"),
-        COLORS.reset
+        COLORS.reset,
     )
     logger.info(
         " OS:             %s%s %s (%s)%s",
@@ -590,7 +584,7 @@ def log_system_info(
         os_info.get("system", "unknown"),
         os_info.get("release", ""),
         os_info.get("machine", ""),
-        COLORS.reset
+        COLORS.reset,
     )
 
     return system_info

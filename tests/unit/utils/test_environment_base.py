@@ -51,6 +51,9 @@ class _DummyEnvironment(DatabaseEnvironment):
     def collect_memory_utilization(self, worker_id: int) -> float:
         return 0.0
 
+    def rebuild_worker_instance(self, worker_id: int) -> bool:
+        return True
+
 
 class _SchemaProvider:
     """No-op schema provider stand-in."""

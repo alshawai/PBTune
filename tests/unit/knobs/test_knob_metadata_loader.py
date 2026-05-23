@@ -121,7 +121,7 @@ def test_get_knobs_by_tier_fallback_to_expert(caplog):
     module = _load_knob_metadata_module()
     # Ensure not loaded
     module.DATA_DRIVEN_TIERS = None
-    
+
     # Should fall back
     result = module.get_knobs_by_tier("minimal", source="data_driven")
     assert result == module.IMPACT_TIERS["minimal"]
@@ -131,13 +131,13 @@ def test_get_knobs_by_tier_fallback_to_expert(caplog):
 def test_load_data_driven_tiers_populates_data(tmp_path: Path):
     module = _load_knob_metadata_module()
     json_path = tmp_path / "data_driven_tiers.json"
-    json_path.write_text(json.dumps({
-        "tiers": {
-            "minimal": ["shared_buffers"],
-            "standard": ["work_mem"]
-        }
-    }), encoding="utf-8")
-    
+    json_path.write_text(
+        json.dumps(
+            {"tiers": {"minimal": ["shared_buffers"], "standard": ["work_mem"]}}
+        ),
+        encoding="utf-8",
+    )
+
     module.load_data_driven_tiers(str(json_path))
     assert module.DATA_DRIVEN_TIERS is not None
     assert module.DATA_DRIVEN_TIERS["minimal"] == ["shared_buffers"]
@@ -147,25 +147,35 @@ def test_load_data_driven_tiers_populates_data(tmp_path: Path):
 def test_get_knobs_by_tier_returns_data_driven_tiers(tmp_path: Path):
     module = _load_knob_metadata_module()
     json_path = tmp_path / "data_driven_tiers.json"
-    json_path.write_text(json.dumps({
-        "tiers": {
-            "minimal": ["shared_buffers", "work_mem"],
-            "standard": ["bgwriter_delay"],
-            "extensive": None
-        }
-    }), encoding="utf-8")
-    
+    json_path.write_text(
+        json.dumps(
+            {
+                "tiers": {
+                    "minimal": ["shared_buffers", "work_mem"],
+                    "standard": ["bgwriter_delay"],
+                    "extensive": None,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
     module.load_data_driven_tiers(str(json_path))
-    
-    assert module.get_knobs_by_tier("minimal", source="data_driven") == ["shared_buffers", "work_mem"]
-    assert module.get_knobs_by_tier("standard", source="data_driven") == ["bgwriter_delay"]
+
+    assert module.get_knobs_by_tier("minimal", source="data_driven") == [
+        "shared_buffers",
+        "work_mem",
+    ]
+    assert module.get_knobs_by_tier("standard", source="data_driven") == [
+        "bgwriter_delay"
+    ]
     assert module.get_knobs_by_tier("extensive", source="data_driven") == []
 
 
 def test_load_data_driven_tiers_invalid_path_raises_filenotfound(tmp_path: Path):
     module = _load_knob_metadata_module()
     missing_path = tmp_path / "missing.json"
-    
+
     with pytest.raises(FileNotFoundError, match="Data-driven tiers file not found at"):
         module.load_data_driven_tiers(str(missing_path))
 
@@ -173,9 +183,7 @@ def test_load_data_driven_tiers_invalid_path_raises_filenotfound(tmp_path: Path)
 def test_load_data_driven_tiers_missing_tiers_key_raises_valueerror(tmp_path: Path):
     module = _load_knob_metadata_module()
     json_path = tmp_path / "invalid.json"
-    json_path.write_text(json.dumps({
-        "metadata": {"optimal_k": 3}
-    }), encoding="utf-8")
-    
+    json_path.write_text(json.dumps({"metadata": {"optimal_k": 3}}), encoding="utf-8")
+
     with pytest.raises(ValueError, match="Missing 'tiers' key"):
         module.load_data_driven_tiers(str(json_path))

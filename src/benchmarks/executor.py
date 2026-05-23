@@ -113,4 +113,6 @@ class BenchmarkExecutor(ABC):
                 )
             )
 
-        LOGGER.debug("    %s➤ Dropped all existing tables.%s", COLORS.italic, COLORS.reset)
+        LOGGER.debug(
+            "    %s➤ Dropped all existing tables.%s", COLORS.italic, COLORS.reset
+        )
