@@ -8,6 +8,10 @@ from typing import Any
 
 import numpy as np
 
+from src.utils.logger import get_logger, get_color_context
+
+LOGGER = get_logger("FeatureExtractor")
+COLORS = get_color_context()
 
 @dataclass
 class TemplateWorkloadMetadata:
@@ -75,11 +79,12 @@ class WorkloadFeatureExtractor:
         *,
         scale_factor: float,
         warmup_passes: int,
-        query_count: int = 22,
     ) -> dict[str, float]:
         """Extract static workload priors for TPC-H workloads."""
         scale = max(scale_factor, 0.01)
+        query_count = 22
         warmed = 1.0 if warmup_passes > 0 else 0.0
+
         return {
             "read_ratio": 1.0,
             "write_ratio": 0.0,
@@ -101,6 +106,7 @@ class WorkloadFeatureExtractor:
     ) -> dict[str, float]:
         """Extract feature vector from weighted SQL templates and schema metadata."""
         queries = metadata.queries
+
         if not queries:
             return {
                 "read_ratio": 0.5,

@@ -8,10 +8,13 @@ the active scoring policy (weights), utility normalization, and reliability gati
 
 from typing import Dict, Optional, Tuple
 
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.policies import ScoringPolicySpec
 from src.utils.scoring.normalization import QuantileUtilityNormalizer
+
+LOGGER = get_logger("Scorer")
+COLORS = get_color_context() 
 
 
 class CompositeScorer:
@@ -51,7 +54,6 @@ class CompositeScorer:
         weight_overrides : Optional[Dict[str, float]]
             Overrides for static weights (used for backward compatibility).
         """
-        self.logger = get_logger("Scorer")
         self.policy = policy
         self.normalizer = normalizer
         self.workload_type = workload_type
@@ -69,14 +71,14 @@ class CompositeScorer:
                 weights = {
                     m: 1.0 / len(self.policy.metrics) for m in self.policy.metrics
                 }
-                self.logger.debug(
+                LOGGER.debug(
                     "Using uniform weights (policy=%s): %s",
                     self.policy.policy_id,
                     {k: f"{v:.4f}" for k, v in weights.items()},
                 )
             else:
                 weights = self.policy.fixed_weights.get(self.workload_type, {}).copy()
-                self.logger.debug(
+                LOGGER.debug(
                     "Using fixed weights (policy=%s, workload=%s): %s",
                     self.policy.policy_id,
                     self.workload_type,
@@ -85,7 +87,7 @@ class CompositeScorer:
 
             # Apply legacy overrides
             if self.weight_overrides:
-                self.logger.debug(
+                LOGGER.debug(
                     "Applying weight overrides: %s",
                     {k: f"{v:.4f}" for k, v in self.weight_overrides.items()},
                 )
@@ -96,7 +98,7 @@ class CompositeScorer:
 
         if self.policy.weight_model:
             weights = self.policy.weight_model.compute_weights(self.features)
-            self.logger.debug(
+            LOGGER.debug(
                 "Using dynamic weights (policy=%s, model=%s): %s",
                 self.policy.policy_id,
                 self.policy.weight_model.__class__.__name__,
@@ -104,7 +106,7 @@ class CompositeScorer:
             )
             return weights
 
-        self.logger.warning(
+        LOGGER.warning(
             "No weight model available for dynamic policy %s", self.policy.policy_id
         )
         return {}
@@ -117,13 +119,13 @@ class CompositeScorer:
         If error rate is too high, G decays to 0.
         """
         if metrics.failure_type is not None:
-            self.logger.warning(
+            LOGGER.warning(
                 "Reliability gate = 0.0 (failure_type=%s)", metrics.failure_type
             )
             return 0.0
 
         if metrics.error_rate >= self.fatal_error_threshold:
-            self.logger.warning(
+            LOGGER.warning(
                 "Reliability gate = 0.0 (error_rate=%.4f >= threshold=%.4f)",
                 metrics.error_rate,
                 self.fatal_error_threshold,
@@ -132,29 +134,15 @@ class CompositeScorer:
 
         if metrics.error_rate > 0:
             gate = 1.0 - (metrics.error_rate / self.fatal_error_threshold)
-            self.logger.debug(
+            LOGGER.debug(
                 "Reliability gate = %.4f (error_rate=%.4f, linear decay)",
                 gate,
                 metrics.error_rate,
             )
             return gate
 
-        self.logger.debug("Reliability gate = 1.0 (no errors)")
+        LOGGER.debug("Reliability gate = 1.0 (no errors)")
         return 1.0
-
-    def compute_score(
-        self,
-        metrics: PerformanceMetrics,
-        fallback_utilities: Optional[Dict[str, float]] = None,
-    ) -> float:
-        """
-        Compute scalar composite score.
-        """
-        _, total = self.compute_detailed_score(
-            metrics,
-            fallback_utilities=fallback_utilities,
-        )
-        return total
 
     def compute_detailed_score(
         self,
@@ -171,27 +159,27 @@ class CompositeScorer:
         """
         gate = self._compute_reliability_gate(metrics)
         if gate == 0.0:
-            self.logger.warning("Score computation aborted: reliability gate = 0.0")
+            LOGGER.warning("Score computation aborted: reliability gate = 0.0")
             return {}, 0.0
 
         # Score utilities
         if self.normalizer is not None and self.normalizer.is_calibrated:
-            utilities = self.normalizer.score_vector(metrics)
-            self.logger.debug(
+            utilities = self.normalizer.score_metrics(metrics)
+            LOGGER.debug(
                 "Utilities from normalizer: %s",
                 {k: f"{v:.4f}" for k, v in utilities.items()},
             )
         else:
             utilities = fallback_utilities or {}
             if self.normalizer is None:
-                self.logger.debug("Normalizer not available, using fallback utilities")
+                LOGGER.debug("Normalizer not available, using fallback utilities")
             else:
-                self.logger.debug(
+                LOGGER.debug(
                     "Normalizer uncalibrated (samples=%d), using fallback utilities",
                     self.normalizer.total_samples_since_calibration,
                 )
             if utilities:
-                self.logger.debug(
+                LOGGER.debug(
                     "Fallback utilities: %s",
                     {k: f"{v:.4f}" for k, v in utilities.items()},
                 )
@@ -222,13 +210,13 @@ class CompositeScorer:
                 self.normalizer is not None and self.normalizer.is_calibrated
             )
             if is_calibrated:
-                self.logger.debug(
+                LOGGER.debug(
                     "Missing utilities for %d metrics (using default 0.5): %s",
                     len(missing_metrics),
                     missing_metrics,
                 )
 
-        self.logger.debug(
+        LOGGER.debug(
             "Score computation complete: total=%.4f (gate=%.4f, %d components)",
             total_score,
             gate,
