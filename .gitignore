@@ -130,6 +130,7 @@ results/**/bo_runs/**/smac_output/
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
 
 # Graphify knowledge graph (machine-specific intermediates)
+graphify-out/*
 graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/.graphify_analysis.json

@@ -1,1 +1,0 @@
-{"nodes": [{"id": "tpch_queries_q1", "label": "Q1: Pricing Summary Report", "file_type": "code", "source_file": "src/benchmarks/tpch/queries/1.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
