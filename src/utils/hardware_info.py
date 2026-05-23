@@ -22,6 +22,12 @@ from dataclasses import dataclass
 
 import psutil
 
+from src.utils.logger.setup import get_logger
+from src.utils.logger.context import get_color_context
+
+LOGGER = get_logger("HardwareInfo")
+COLORS = get_color_context()
+
 
 @dataclass
 class WorkerResources:
@@ -43,7 +49,9 @@ def detect_cpu_model() -> str:
                 text = cpuinfo_path.read_text(encoding="utf-8")
                 for line in text.splitlines():
                     if line.startswith("model name"):
-                        return line.split(":", 1)[1].strip()
+                        model = line.split(":", 1)[1].strip()
+                        LOGGER.debug(" ➤ Detected CPU model: %s", model)
+                        return model
         except OSError:
             pass
 
@@ -59,7 +67,9 @@ def detect_cpu_model() -> str:
                     check=False,
                 )
                 if result.returncode == 0 and result.stdout.strip():
-                    return result.stdout.strip()
+                    model = result.stdout.strip()
+                    LOGGER.debug(" ➤ Detected CPU model: %s", model)
+                    return model
             except (subprocess.TimeoutExpired, OSError):
                 pass
 
@@ -74,15 +84,19 @@ def detect_cpu_model() -> str:
             value, _ = winreg.QueryValueEx(key, "ProcessorNameString")  # type: ignore[attr-defined]
             winreg.CloseKey(key)  # type: ignore[attr-defined]
             if value:
-                return value.strip()
+                model = value.strip()
+                LOGGER.debug(" ➤ Detected CPU model: %s", model)
+                return model
         except (OSError, ImportError):
             pass
 
     # Generic fallback
     processor = platform.processor()
     if processor:
+        LOGGER.debug(" ➤ Detected CPU model via generic fallback: %s", processor)
         return processor
 
+    LOGGER.warning(" ➤ Could not detect CPU model.")
     return "unknown"
 
 
@@ -90,6 +104,7 @@ def detect_core_count() -> Dict[str, int]:
     """Detect physical and logical CPU core counts."""
     physical = psutil.cpu_count(logical=False)
     logical = psutil.cpu_count(logical=True)
+    LOGGER.debug(" ➤ Detected CPU cores: %s physical, %s logical", physical, logical)
     return {
         "physical": physical or 0,
         "logical": logical or 0,
@@ -101,6 +116,7 @@ def detect_ram_total() -> Dict[str, Any]:
     mem = psutil.virtual_memory()
     total_bytes = mem.total
     total_gb = round(total_bytes / (1024**3), 2)
+    LOGGER.debug(" ➤ Detected total RAM: %s GB", total_gb)
     return {
         "total_bytes": total_bytes,
         "total_gb": total_gb,
@@ -159,8 +175,14 @@ def _find_mount_point(target_path: Path) -> tuple[str, str]:
                     best_device = part.device
                     break
 
-    except (OSError, PermissionError, AttributeError):
-        pass
+    except (OSError, PermissionError, AttributeError) as e:
+        LOGGER.debug(
+            "%s Error finding mount point for %s: %s%s",
+            COLORS.italic,
+            target_path,
+            e,
+            COLORS.reset
+        )
 
     return best_match, best_device
 
@@ -184,21 +206,26 @@ def detect_disk_type_for_path(target_path: Path) -> str:
     if system == "Darwin":
         return _detect_disk_type_macos(mount_point)
     if system == "Windows":
-        return _detect_disk_type_windows(mount_point)
+        return _detect_disk_type_windows()
 
+    LOGGER.warning(" ➤ Unknown operating system for disk detection: %s", system)
     return "unknown"
 
 
 def _is_containerized() -> bool:
     """Detect if running inside a Docker/container environment."""
     if os.path.exists("/.dockerenv"):
+        LOGGER.debug("  ➤ Detected container environment via /.dockerenv")
         return True
     try:
         with open("/proc/1/cgroup", "rt", encoding="utf-8") as f:
-            if "docker" in f.read() or "containerd" in f.read():
+            content = f.read()
+            if "docker" in content or "containerd" in content:
+                LOGGER.debug("  ➤ Detected container environment via /proc/1/cgroup")
                 return True
     except OSError:
         pass
+    LOGGER.debug("  ➤ No container environment detected")
     return False
 
 
@@ -238,6 +265,13 @@ def detect_worker_resources(
     worker_cpu = max(
         1, math.floor(usable_cpu / max_parallel_workers)
     )  # min 1 logical core
+
+    LOGGER.debug(
+        "➤ Worker resources allocated: RAM=%s bytes, CPU=%s cores, Disk=%s",
+        worker_ram,
+        worker_cpu,
+        disk_type
+    )
 
     return WorkerResources(
         ram_bytes=worker_ram, cpu_cores=worker_cpu, disk_type=disk_type
@@ -284,10 +318,20 @@ def _detect_disk_type_linux(device_path: Optional[str] = None) -> str:
         rotational_path = Path(f"/sys/block/{base}/queue/rotational")
         if rotational_path.exists():
             val = rotational_path.read_text(encoding="utf-8").strip()
-            return "HDD" if val == "1" else "SSD"
-    except (OSError, IndexError, ValueError):
-        pass
+            disk_type = "HDD" if val == "1" else "SSD"
+            return disk_type
+    except (OSError, IndexError, ValueError) as e:
+        LOGGER.debug(
+            "%s  Error detecting Linux disk type: %s%s",
+            COLORS.italic,
+            e,
+            COLORS.reset)
 
+    LOGGER.debug(
+        "%s  Could not detect Linux disk type, defaulting to unknown%s",
+        COLORS.warning,
+        COLORS.reset
+    )
     return "unknown"
 
 
@@ -308,14 +352,24 @@ def _detect_disk_type_macos(mount_point: str = "/") -> str:
             for line in result.stdout.splitlines():
                 stripped = line.strip().lower()
                 if "solid state" in stripped:
-                    return "SSD" if "yes" in stripped else "HDD"
-    except (subprocess.TimeoutExpired, OSError):
-        pass
+                    disk_type = "SSD" if "yes" in stripped else "HDD"
+                    return disk_type
+    except (subprocess.TimeoutExpired, OSError) as e:
+        LOGGER.debug(
+            "%s Error detecting macOS disk type: %s%s",
+            COLORS.italic,
+            e,
+            COLORS.reset)
 
+    LOGGER.debug(
+        "%s Could not detect macOS disk type, defaulting to unknown%s",
+        COLORS.warning,
+        COLORS.reset
+    )
     return "unknown"
 
 
-def _detect_disk_type_windows(mount_point: str = "C:\\") -> str:
+def _detect_disk_type_windows() -> str:
     """Windows disk type detection via PowerShell Get-PhysicalDisk."""
     powershell = shutil.which("powershell")
     if not powershell:
@@ -339,10 +393,20 @@ def _detect_disk_type_windows(mount_point: str = "C:\\") -> str:
             if media == "SSD":
                 return "SSD"
             if media in ("HDD", "Unspecified"):
-                return "HDD" if media == "HDD" else "unknown"
-    except (subprocess.TimeoutExpired, OSError):
-        pass
+                disk_type = "HDD" if media == "HDD" else "unknown"
+                return disk_type
+    except (subprocess.TimeoutExpired, OSError) as e:
+        LOGGER.debug(
+            "%s Error detecting Windows disk type: %s%s",
+            COLORS.italic,
+            e,
+            COLORS.reset)
 
+    LOGGER.debug(
+        "%s Could not detect Windows disk type, defaulting to unknown%s",
+        COLORS.warning,
+        COLORS.reset
+    )
     return "unknown"
 
 
@@ -351,6 +415,7 @@ def detect_pg_version() -> str:
     Detect PostgreSQL server version by running ``pg_config --version``.
 
     Falls back to ``psql --version`` if pg_config is unavailable.
+    LOGGER.info("  Detecting PostgreSQL version...")
     """
     for cmd in (["pg_config", "--version"], ["psql", "--version"]):
         binary = shutil.which(cmd[0])
@@ -365,21 +430,33 @@ def detect_pg_version() -> str:
                 check=False,
             )
             if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except (subprocess.TimeoutExpired, OSError):
+                version = result.stdout.strip()
+                LOGGER.debug(" ➤ Detected PostgreSQL version: %s", version)
+                return version
+        except (subprocess.TimeoutExpired, OSError) as e:
+            LOGGER.debug(
+                "%s  Error checking postgres version via %s: %s%s",
+                COLORS.italic,
+                cmd[0],
+                e,
+                COLORS.reset
+            )
             continue
 
+    LOGGER.debug(" ➤ Could not detect PostgreSQL version, defaulting to unknown")
     return "unknown"
 
 
 def detect_os_info() -> Dict[str, str]:
     """Detect operating system details."""
-    return {
+    os_info = {
         "system": platform.system(),
         "release": platform.release(),
         "version": platform.version(),
         "machine": platform.machine(),
     }
+    LOGGER.debug(" ➤ Detected OS info: %s %s", os_info["system"], os_info["release"])
+    return os_info
 
 
 def get_system_info(data_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -393,17 +470,20 @@ def get_system_info(data_path: Optional[Path] = None) -> Dict[str, Any]:
 
     try:
         info["cpu_model"] = detect_cpu_model()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as e:
+        LOGGER.warning("Failed to detect CPU model: %s", e)
         info["cpu_model"] = "detection_failed"
 
     try:
         info["cpu_cores"] = detect_core_count()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as e:
+        LOGGER.warning("Failed to detect CPU cores: %s", e)
         info["cpu_cores"] = {"physical": 0, "logical": 0}
 
     try:
         info["ram"] = detect_ram_total()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as e:
+        LOGGER.warning("Failed to detect RAM: %s", e)
         info["ram"] = {"total_bytes": 0, "total_gb": 0.0}
 
     try:
@@ -415,17 +495,20 @@ def get_system_info(data_path: Optional[Path] = None) -> Dict[str, Any]:
             data_disk = detect_disk_type_for_path(data_path)
             if data_disk != system_disk:
                 info["data_disk_type"] = data_disk
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as e:
+        LOGGER.warning("Failed to detect disk type: %s", e)
         info["disk_type"] = "detection_failed"
 
     try:
         info["pg_version"] = detect_pg_version()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as e:
+        LOGGER.warning("Failed to detect PostgreSQL version: %s", e)
         info["pg_version"] = "detection_failed"
 
     try:
         info["os"] = detect_os_info()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as e:
+        LOGGER.warning("Failed to detect OS info: %s", e)
         info["os"] = {
             "system": "detection_failed",
             "release": "",
@@ -463,22 +546,51 @@ def log_system_info(
     os_info = system_info.get("os", {})
 
     logger.info("System Information:")
-    logger.info("  CPU Model:      %s", system_info.get("cpu_model", "unknown"))
     logger.info(
-        "  CPU Cores:      %s physical / %s logical",
+        " CPU Model:      %s%s%s",
+        COLORS.cyan,
+        system_info.get("cpu_model", "unknown"),
+        COLORS.reset
+    )
+    logger.info(
+        " CPU Cores:      %s%s physical / %s logical%s",
+        COLORS.cyan,
         cores.get("physical", "?"),
         cores.get("logical", "?"),
+        COLORS.reset
     )
-    logger.info("  RAM:            %.2f GB", ram.get("total_gb", 0.0))
-    logger.info("  Disk Type:      %s", system_info.get("disk_type", "unknown"))
-    if "data_disk_type" in system_info:
-        logger.info("  Data Disk Type: %s", system_info["data_disk_type"])
-    logger.info("  PostgreSQL:     %s", system_info.get("pg_version", "unknown"))
     logger.info(
-        "  OS:             %s %s (%s)",
+        " RAM:            %s%.2f GB%s",
+        COLORS.cyan,
+        ram.get("total_gb", 0.0),
+        COLORS.reset
+    )
+    logger.info(
+        " Disk Type:      %s%s%s",
+        COLORS.cyan,
+        system_info.get("disk_type", "unknown"),
+        COLORS.reset
+    )
+    if "data_disk_type" in system_info:
+        logger.info(
+            " Data Disk Type: %s%s%s",
+            COLORS.cyan,
+            system_info["data_disk_type"],
+            COLORS.reset
+        )
+    logger.info(
+        " PostgreSQL:     %s%s%s",
+        COLORS.cyan,
+        system_info.get("pg_version", "unknown"),
+        COLORS.reset
+    )
+    logger.info(
+        " OS:             %s%s %s (%s)%s",
+        COLORS.cyan,
         os_info.get("system", "unknown"),
         os_info.get("release", ""),
         os_info.get("machine", ""),
+        COLORS.reset
     )
 
     return system_info
