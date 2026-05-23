@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from src.utils.hardware_info import WorkerResources
 from src.utils.metrics import PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
 
 
 @dataclass
@@ -88,7 +89,7 @@ class TuningSessionData:
         metric_reference_version: Version of metric schema used for scoring.
         workload_features: Feature vector metadata persisted by the tuner.
         normalization_metadata: Normalization state metadata for rescoring.
-        score_breakdown: Best-configuration score component contributions.
+        score_breakdown: Best-configuration score breakdown.
     """
 
     best_knobs: dict[str, Any]
@@ -105,7 +106,7 @@ class TuningSessionData:
     metric_reference_version: str = "v1"
     workload_features: dict[str, Any] = field(default_factory=dict)
     normalization_metadata: dict[str, Any] = field(default_factory=dict)
-    score_breakdown: dict[str, Any] = field(default_factory=dict)
+    score_breakdown: ScoreBreakdown = field(default_factory=lambda: ScoreBreakdown(final_score=0.0))
 
 
 @dataclass
