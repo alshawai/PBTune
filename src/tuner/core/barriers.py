@@ -56,32 +56,32 @@ would deadlock the remaining threads. Two safeguards prevent this:
 from __future__ import annotations
 
 import threading
-import time
 from typing import Dict, List, Optional
 
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("GenerationBarrier")
+COLORS = get_color_context()
 
 # Canonical ordered list of all barrier names.
 BARRIER_NAMES: List[str] = [
-    "connected",               # B1
-    "config_applied",          # B2
-    "restarted",               # B3
-    "reconnected",             # B4
-    "config_verified",         # B5
-    "pre_stats_captured",      # B6
-    "benchmark_ready",         # B7
-    "warmup_done",             # B8
-    "measurement_done",        # B9
-    "post_stats_captured",     # B10
-    "io_computed",             # B11
+    "connected",  # B1
+    "config_applied",  # B2
+    "restarted",  # B3
+    "reconnected",  # B4
+    "config_verified",  # B5
+    "pre_stats_captured",  # B6
+    "benchmark_ready",  # B7
+    "warmup_done",  # B8
+    "measurement_done",  # B9
+    "post_stats_captured",  # B10
+    "io_computed",  # B11
     "system_metrics_collected",  # B12
     "memory_pressure_computed",  # B13
-    "reliability_gated",       # B14
-    "vacuum_done",             # B15
-    "score_computed",          # B16
-    "disconnected",            # B17
+    "reliability_gated",  # B14
+    "vacuum_done",  # B15
+    "score_computed",  # B16
+    "disconnected",  # B17
 ]
 
 
@@ -126,10 +126,6 @@ class GenerationBarrier:
             name: idx for idx, name in enumerate(BARRIER_NAMES)
         }
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     @property
     def enabled(self) -> bool:
         """Whether barriers are active."""
@@ -143,8 +139,7 @@ class GenerationBarrier:
     def wait(
         self,
         name: str,
-        *,
-        worker_id: Optional[int] = None,
+        worker_id: int,
     ) -> None:
         """
         Block until all workers reach barrier *name*.
@@ -153,8 +148,8 @@ class GenerationBarrier:
         ----------
         name : str
             One of the names in ``BARRIER_NAMES``.
-        worker_id : int | None
-            Optional worker ID for log messages.
+        worker_id : int
+            Worker ID for log messages.
 
         Raises
         ------
@@ -166,38 +161,29 @@ class GenerationBarrier:
 
         if name not in self._barriers:
             raise ValueError(
-                f"Unknown barrier name '{name}'. "
-                f"Valid names: {BARRIER_NAMES}"
+                f"Unknown barrier name '{name}'. Valid names: {BARRIER_NAMES}"
             )
 
         barrier = self._barriers[name]
-        tag = f"Worker-{worker_id}" if worker_id is not None else "worker"
-
-        LOGGER.debug("[%s] waiting at barrier '%s'", tag, name)
-        t0 = time.monotonic()
+        logger = get_logger("WorkerBarrier", worker_id=worker_id)
 
         try:
             barrier.wait()
         except threading.BrokenBarrierError:
             self._broken = True
-            LOGGER.warning(
-                "[%s] barrier '%s' broken — disabling remaining barriers "
-                "for this generation",
-                tag,
+            logger.warning(
+                "  %s ➤ Broke '%s' broken — disabling remaining barriers "
+                "for this generation%s",
+                COLORS.italic,
                 name,
+                COLORS.reset,
             )
             return
-
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        LOGGER.debug(
-            "[%s] passed barrier '%s' (waited %.1f ms)", tag, name, elapsed_ms
-        )
 
     def drain_remaining(
         self,
         start_from: str,
-        *,
-        worker_id: Optional[int] = None,
+        worker_id: int,
     ) -> None:
         """
         Release all barriers from *start_from* onward (inclusive).
@@ -212,8 +198,8 @@ class GenerationBarrier:
         ----------
         start_from : str
             First barrier name to drain (inclusive).
-        worker_id : int | None
-            Optional worker ID for log messages.
+        worker_id : int
+            Worker ID for log messages.
         """
         if not self._enabled or self._broken:
             return
@@ -221,17 +207,21 @@ class GenerationBarrier:
         start_idx = self._name_to_index.get(start_from)
         if start_idx is None:
             LOGGER.warning(
-                "drain_remaining called with unknown barrier '%s'", start_from
+                "  %s ➤ drain_remaining called with unknown barrier '%s'%s",
+                COLORS.italic,
+                start_from,
+                COLORS.reset,
             )
             return
 
-        tag = f"Worker-{worker_id}" if worker_id is not None else "worker"
+        logger = get_logger("WorkerBarrier", worker_id=worker_id)
         remaining = BARRIER_NAMES[start_idx:]
-        LOGGER.debug(
-            "[%s] draining %d remaining barriers starting from '%s'",
-            tag,
+        logger.debug(
+            "  %s Draining %d remaining barriers starting from '%s'...%s",
+            COLORS.italic,
             len(remaining),
             start_from,
+            COLORS.reset,
         )
 
         for name in remaining:
@@ -241,8 +231,11 @@ class GenerationBarrier:
                 self._barriers[name].wait()
             except threading.BrokenBarrierError:
                 self._broken = True
-                LOGGER.debug(
-                    "[%s] barrier '%s' broke during drain", tag, name
+                logger.debug(
+                    "  %s ➤ Broke '%s' during drain%s",
+                    COLORS.italic,
+                    name,
+                    COLORS.reset,
                 )
                 return
 
@@ -298,7 +291,9 @@ class GenerationBarrier:
         return BARRIER_NAMES[idx + 1]
 
     def __repr__(self) -> str:
-        status = "enabled" if self.enabled else ("broken" if self._broken else "disabled")
+        status = (
+            "enabled" if self.enabled else ("broken" if self._broken else "disabled")
+        )
         return (
             f"GenerationBarrier(workers={self._num_workers}, "
             f"timeout={self._timeout}s, status={status})"

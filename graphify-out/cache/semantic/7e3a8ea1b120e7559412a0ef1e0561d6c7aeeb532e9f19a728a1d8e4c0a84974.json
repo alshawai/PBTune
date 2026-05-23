@@ -1,1 +1,0 @@
-{"nodes": [{"id": "tpch_queries_q19", "label": "Q19: Discounted Revenue", "file_type": "code", "source_file": "src/benchmarks/tpch/queries/19.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}

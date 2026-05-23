@@ -19,10 +19,12 @@ Functions:
 
 import shutil
 
-from src.utils.logger.colors import ColorCode, ColorPalette
+from src.utils.logger.context import get_color_context
+
+COLORS = get_color_context()
 
 
-def print_startup_banner(enable_colors: bool = True) -> None:
+def print_startup_banner() -> None:
     """
     Print a colorful ASCII art banner directly to stdout.
     Bypasses the logging module to avoid adding timestamps and log levels.
@@ -35,12 +37,6 @@ def print_startup_banner(enable_colors: bool = True) -> None:
 /_/   /_____/ /_/    /_/    \____/____/\__/\____/_/   \___/ /____/\___\_\/_____/  /_/  \__,_/_/ /_/\___/_/     
 """
 
-    reset = ColorCode.RESET if enable_colors else ""
-    bold = ColorCode.BOLD if enable_colors else ""
-    italic = ColorCode.ITALIC if enable_colors else ""
-    sky_blue = ColorCode.SKY_BLUE if enable_colors else ""
-    purple = ColorCode.PURPLE if enable_colors else ""
-
     term_width = shutil.get_terminal_size().columns
     term_width = max(term_width, 100)
 
@@ -52,12 +48,14 @@ def print_startup_banner(enable_colors: bool = True) -> None:
     # If we wanted to center the banner block itself, we could left-pad each line:
     padding = " " * max(0, (term_width - banner_width) // 2)
     for line in banner_lines:
-        print(f"{padding}{sky_blue}{bold}{line}{reset}")
+        print(f"{padding}{COLORS.sky_blue}{COLORS.bold}{line}{COLORS.reset}")
 
     subtitle = "Population-Based Training for Automatic Database Parameter Tuning"
     # Center the subtitle text relative to the terminal
-    print(f"\n{bold}{italic}{sky_blue}{subtitle.center(term_width)}{reset}")
-    print("\n" + f"{bold}{purple}={reset}" * term_width + "\n")
+    print(
+        f"\n{COLORS.bold}{COLORS.italic}{COLORS.sky_blue}{subtitle.center(term_width)}{COLORS.reset}"
+    )
+    print("\n" + f"{COLORS.bold}{COLORS.purple}={COLORS.reset}" * term_width + "\n")
 
 
 def get_evaluation_banner(
@@ -86,10 +84,6 @@ def get_evaluation_banner(
         Multiline ANSI-colored banner string.
     """
     bench_display = "TPC-H" if benchmark == "tpch" else "Sysbench"
-    color = ColorPalette.get_level_color("INFO", "ansi")
-    bold = ColorCode.BOLD
-    reset = ColorCode.RESET
-    dim = ColorPalette.get_level_color("DEBUG", "ansi")
 
     content_lines = [
         f"  Session   : {session_name}",
@@ -100,13 +94,13 @@ def get_evaluation_banner(
     inner_width = max(len(line) for line in content_lines) + 4
 
     lines = [
-        f"{color}{bold}{'═' * inner_width}{reset}",
-        f"{color}{bold}  COMPARATIVE EVALUATION{reset}",
-        f"{color}{'─' * inner_width}{reset}",
+        f"{COLORS.info}{COLORS.bold}{'═' * inner_width}{COLORS.reset}",
+        f"{COLORS.info}{COLORS.bold}  COMPARATIVE EVALUATION{COLORS.reset}",
+        f"{COLORS.info}{'─' * inner_width}{COLORS.reset}",
     ]
     for cl in content_lines:
-        lines.append(f"{dim}{cl}{reset}")
-    lines.append(f"{color}{bold}{'═' * inner_width}{reset}")
+        lines.append(f"{COLORS.debug}{cl}{COLORS.reset}")
+    lines.append(f"{COLORS.info}{COLORS.bold}{'═' * inner_width}{COLORS.reset}")
 
     return "\n".join(lines)
 
@@ -125,30 +119,24 @@ def get_isolation_warning_banner() -> str:
     str
         Multiline ANSI-colored warning string.
     """
-    warn_color = ColorPalette.get_level_color("WARNING", "ansi")
-    err_color = ColorPalette.get_level_color("ERROR", "ansi")
-    bold = ColorCode.BOLD
-    reset = ColorCode.RESET
-    dim = ColorPalette.get_level_color("DEBUG", "ansi")
-
     width = 72
-    bar = f"{warn_color}{bold}{'━' * width}{reset}"
+    bar = f"{COLORS.warning}{COLORS.bold}{'━' * width}{COLORS.reset}"
 
     lines = [
         "",
         bar,
-        f"{warn_color}{bold}  ⚠  BARE-METAL MODE — REDUCED ISOLATION{reset}",
+        f"{COLORS.warning}{COLORS.bold}  ⚠  BARE-METAL MODE — REDUCED ISOLATION{COLORS.reset}",
         bar,
         "",
-        f"{dim}  Running WITHOUT Docker means:{reset}",
+        f"{COLORS.debug}  Running WITHOUT Docker means:{COLORS.reset}",
         "",
-        f"{err_color}    •{reset} {dim}No cgroup resource limits (CPU/RAM uncontrolled){reset}",
-        f"{err_color}    •{reset} {dim}No filesystem isolation (shared host state){reset}",
-        f"{err_color}    •{reset} {dim}Background processes may skew benchmark results{reset}",
-        f"{err_color}    •{reset} {dim}Results are NOT directly comparable to Docker runs{reset}",
+        f"{COLORS.error}    •{COLORS.reset} {COLORS.debug}No cgroup resource limits (CPU/RAM uncontrolled){COLORS.reset}",
+        f"{COLORS.error}    •{COLORS.reset} {COLORS.debug}No filesystem isolation (shared host state){COLORS.reset}",
+        f"{COLORS.error}    •{COLORS.reset} {COLORS.debug}Background processes may skew benchmark results{COLORS.reset}",
+        f"{COLORS.error}    •{COLORS.reset} {COLORS.debug}Results are NOT directly comparable to Docker runs{COLORS.reset}",
         "",
-        f"{warn_color}  For reproducible, publication-quality results, use Docker.{reset}",
-        f"{warn_color}  Re-run without --no-docker to enable Docker automatically.{reset}",
+        f"{COLORS.warning}  For reproducible, publication-quality results, use Docker.{COLORS.reset}",
+        f"{COLORS.warning}  Re-run without --no-docker to enable Docker automatically.{COLORS.reset}",
         "",
         bar,
         "",

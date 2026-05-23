@@ -79,7 +79,7 @@ class ScoreBreakdown:
 class NormalizationState:
     """Normalization state exported for reproducible rescoring."""
 
-    normalizer: str = "adaptive_minmax"
+    normalizer: str = "quantile_utility"
     metric_reference_version: str = DEFAULT_METRIC_REFERENCE_VERSION
     ranges: dict[str, dict[str, float]] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -92,3 +92,49 @@ class NormalizationState:
             "ranges": {metric: dict(bounds) for metric, bounds in self.ranges.items()},
             "metadata": dict(self.metadata),
         }
+
+
+def score_breakdown_from_dict(payload: dict[str, Any]) -> ScoreBreakdown:
+    """Parse a ScoreBreakdown from serialized metadata (legacy-safe)."""
+    if not payload:
+        return ScoreBreakdown(final_score=0.0)
+
+    if "final_score" in payload:
+        components = []
+        for item in payload.get("components", []):
+            if not isinstance(item, dict):
+                continue
+            components.append(
+                MetricSnapshot(
+                    metric_id=str(item.get("metric_id", "")),
+                    raw_value=float(item.get("raw_value", 0.0) or 0.0),
+                    normalized_value=float(item.get("normalized_value", 0.0) or 0.0),
+                    weight=float(item.get("weight", 0.0) or 0.0),
+                    weighted_contribution=float(
+                        item.get("weighted_contribution", 0.0) or 0.0
+                    ),
+                    directionality=str(item.get("directionality", "lower_is_better")),
+                )
+            )
+        return ScoreBreakdown(
+            final_score=float(payload.get("final_score", 0.0) or 0.0),
+            policy=str(payload.get("policy", DEFAULT_SCORING_POLICY)),
+            policy_version=str(
+                payload.get("policy_version", DEFAULT_SCORING_POLICY_VERSION)
+            ),
+            reliability_gate=float(payload.get("reliability_gate", 1.0) or 1.0),
+            components=components,
+            metadata=dict(payload.get("metadata", {})),
+        )
+
+    legacy_score = float(payload.get("total", payload.get("score", 0.0)) or 0.0)
+    return ScoreBreakdown(
+        final_score=legacy_score,
+        policy=str(payload.get("policy", DEFAULT_SCORING_POLICY)),
+        policy_version=str(
+            payload.get("policy_version", DEFAULT_SCORING_POLICY_VERSION)
+        ),
+        reliability_gate=float(payload.get("reliability_gate", 1.0) or 1.0),
+        components=[],
+        metadata={"legacy_payload": dict(payload)},
+    )

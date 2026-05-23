@@ -244,9 +244,10 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self.stop_instance(worker_id, mode="immediate")
         return self.start_instance(worker_id)
 
-    def restart_instance(self, worker_id: int) -> bool:
+    def restart_instance(self, worker_id: int, quiet: bool = False) -> bool:
         """Restart a specific worker's PostgreSQL instance via pg_ctl."""
-        logger.info("Restarting bare-metal worker %d...", worker_id)
+        if not quiet:
+            logger.info("Restarting bare-metal worker %d...", worker_id)
         if not self.stop_instance(worker_id):
             logger.warning(
                 "Stop failed for worker %d, attempting start anyway", worker_id
@@ -258,14 +259,15 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     "Worker %d restarted but statistics reset failed.",
                     worker_id,
                 )
-            logger.info("Worker %d restarted successfully.", worker_id)
+
+            if not quiet:
+                logger.info("Worker %d restarted successfully.", worker_id)
         else:
             logger.error("Worker %d restart failed.", worker_id)
         return success
 
-    def verify_instances(self) -> dict[int, bool]:
+    def verify_instances(self) -> None:
         """Verify the status of all worker instances."""
-        res = {}
         for worker_id, inst in self.instances.items():
             try:
                 subprocess.run(
@@ -273,11 +275,10 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     check=True,
                     capture_output=True,
                 )
-                res[worker_id] = True
             except subprocess.CalledProcessError:
-                res[worker_id] = False
-            inst.running = res[worker_id]
-        return res
+                raise RuntimeError(
+                    f"Failed to verify instance for worker {worker_id}"
+                ) from None
 
     def cleanup(self, remove_data: bool = False) -> None:
         self.stop_all(mode="immediate")
@@ -329,7 +330,9 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self.start_instance(worker_id)
         return str(baseline_path)
 
-    def restore_snapshot(self, worker_id: int, snapshot_id: str = "") -> bool:
+    def restore_snapshot(
+        self, worker_id: int, snapshot_id: str = "", quiet: bool = False
+    ) -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
         snapshot_path = self._resolve_snapshot_path(snapshot_id)
         if not snapshot_path.exists():
@@ -366,6 +369,12 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self.start_instance(worker_id)
         self._wait_for_ready(worker_id)
         return True
+
+    def rebuild_worker_instance(self, worker_id: int) -> bool:
+        """Rebuild a worker instance from scratch."""
+        self.stop_instance(worker_id)
+        self.cleanup(remove_data=True)
+        return self.setup_instances(1, force_recreate=True)[0].worker_id == worker_id
 
     def get_db_config(self, worker_id: int) -> DatabaseConfig:
         port = self.base_port + worker_id

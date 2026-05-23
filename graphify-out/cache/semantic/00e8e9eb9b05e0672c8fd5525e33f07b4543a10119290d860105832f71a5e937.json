@@ -1,1 +1,0 @@
-{"nodes": [{"id": "tpch_queries_q10", "label": "Q10: Returned Item Reporting", "file_type": "code", "source_file": "src/benchmarks/tpch/queries/10.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}

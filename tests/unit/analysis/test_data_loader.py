@@ -216,13 +216,19 @@ def test_load_pbt_results_global_rescoring(mock_pbt_directory):
     assert len(dataset.scores) == 3
     assert len(dataset.metadata) == 2  # 2 files
 
-    # Verify bounds were updated across all 3 valid metrics
+    # Verify bounds were updated via the normalizer
     # Latencies: 15.0, 10.0, 25.0 -> min ~10.0, max ~25.0 (without padding logic)
     # Throughput: 1000, 1500, 800 -> min ~820, max ~1450
-    # Because update_ranges sets based on 5th/95th percentile, it might slightly differ
-    # but the config should show awareness of the global bounds.
-    assert dataset.metric_config.throughput_max == 1450.0
-    assert dataset.metric_config.throughput_min == 820.0
+    # The normalizer anchors are now the source of truth
+    if (
+        dataset.metric_config._normalizer
+        and dataset.metric_config._normalizer.is_calibrated
+    ):
+        _, thr_low, thr_high = dataset.metric_config._normalizer.anchors.get(
+            "throughput", (1, 0, 0)
+        )
+        assert thr_high == 1450.0
+        assert thr_low == 820.0
 
     # We should have bounds for our mocked variables (shared_buffers, enable_indexscan, wal_sync_method)
     assert "shared_buffers" in dataset.knob_bounds

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
 from src.utils.metrics import PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
 
 
 class _MetricConfigStub:
@@ -23,9 +24,16 @@ class _MetricConfigStub:
         self.expand_calls += 1
         return self._expand
 
-    def compute_score(self, metrics: PerformanceMetrics) -> float:
+    def compute_score(
+        self, metrics: PerformanceMetrics, worker_logger=None
+    ) -> ScoreBreakdown:
         self.rescore_calls += 1
-        return float(metrics.throughput / 10.0)
+        final_score = float(metrics.throughput / 10.0)
+        return ScoreBreakdown(final_score=final_score)
+
+    def compute_score_value(self, metrics: PerformanceMetrics) -> float:
+        breakdown = self.compute_score(metrics)
+        return breakdown.final_score
 
 
 def _make_worker(worker_id: int, throughput: float, score: float) -> Worker:
@@ -45,9 +53,9 @@ def test_finalize_scores_grounds_best_to_current() -> None:
     population = Population(
         knob_space=MagicMock(),
         config=PopulationConfig(population_size=2, dead_config_threshold=6.0),
-        evaluator=evaluator,
+        orchestrator=evaluator,
     )
-    population._ranges_updated = True
+    population._ranges_calibrated = True
 
     worker_a = _make_worker(worker_id=0, throughput=100.0, score=20.0)
     worker_b = _make_worker(worker_id=1, throughput=80.0, score=18.0)
@@ -75,9 +83,9 @@ def test_finalize_scores_overwrites_best_if_worse() -> None:
     population = Population(
         knob_space=MagicMock(),
         config=PopulationConfig(population_size=2, dead_config_threshold=6.0),
-        evaluator=evaluator,
+        orchestrator=evaluator,
     )
-    population._ranges_updated = True
+    population._ranges_calibrated = True
 
     worker_a = _make_worker(worker_id=0, throughput=100.0, score=20.0)
     worker_b = _make_worker(worker_id=1, throughput=80.0, score=18.0)
@@ -98,16 +106,17 @@ def test_finalize_scores_overwrites_best_if_worse() -> None:
 
 
 def test_finalize_scores_always_rescores_workers() -> None:
-    """Even when no range expansion is needed, workers should be rescored."""
+    """Even when no range expansion is needed, workers should be rescored if features are refined."""
     metric_config = _MetricConfigStub(expand=False)
     evaluator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
 
     population = Population(
         knob_space=MagicMock(),
         config=PopulationConfig(population_size=1, dead_config_threshold=6.0),
-        evaluator=evaluator,
+        orchestrator=evaluator,
     )
-    population._ranges_updated = True
+    population._ranges_calibrated = True
+    population._features_refined = True
 
     worker = _make_worker(worker_id=0, throughput=100.0, score=22.0)
     population.workers = [worker]

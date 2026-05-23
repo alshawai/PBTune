@@ -373,8 +373,10 @@ class TestObjectiveEvaluation:
             scoring_policy_version = "1.0"
             metric_reference_version = "1.0"
             workload_features = {}
+
             def get_normalization_metadata(self):
                 return {}
+
             def compute_detailed_scores(self, metrics):
                 return {"total": 87.5}
 
@@ -392,12 +394,14 @@ class TestObjectiveEvaluation:
 
         orchestrator = DummyOrchestrator()
 
-        cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = evaluate_config(
-            config=config,
-            worker=worker,
-            orchestrator=orchestrator,
-            knob_space=knob_space,
-            previous_config=None,
+        cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
+            evaluate_config(
+                config=config,
+                worker=worker,
+                orchestrator=orchestrator,
+                knob_space=knob_space,
+                previous_config=None,
+            )
         )
 
         assert cost == 12.5
@@ -473,6 +477,7 @@ class TestResultFormat:
             scoring_policy_version = "1.0"
             metric_reference_version = "1.0"
             workload_features = {}
+
             def get_normalization_metadata(self):
                 return {}
 
@@ -567,6 +572,7 @@ class TestResultFormat:
             scoring_policy_version = "1.0"
             metric_reference_version = "1.0"
             workload_features = {}
+
             def get_normalization_metadata(self):
                 return {}
 

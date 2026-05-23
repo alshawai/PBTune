@@ -1,1 +1,0 @@
-{"nodes": [{"id": "tpch_dbgen_q22", "label": "TPC-H Q22: Global Sales Opportunity (customer with avg subquery and NOT EXISTS on orders)", "file_type": "code", "source_file": "src/benchmarks/tpch/tpch-dbgen/queries/22.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}

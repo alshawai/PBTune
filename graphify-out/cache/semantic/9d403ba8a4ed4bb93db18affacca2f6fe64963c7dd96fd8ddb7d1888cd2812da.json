@@ -1,1 +1,0 @@
-{"nodes": [{"id": "tpch_dbgen_q19", "label": "TPC-H Q19: Discounted Revenue (lineitem-part with 3-way OR disjunction on brand/container/size)", "file_type": "code", "source_file": "src/benchmarks/tpch/tpch-dbgen/queries/19.sql", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}

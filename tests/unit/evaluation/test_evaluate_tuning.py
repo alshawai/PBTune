@@ -235,12 +235,12 @@ class TestLoadTuningSession:
         """Legacy sessions without scoring metadata should receive defaults."""
         result = load_tuning_session(sample_session_file)
 
-        assert result.scoring_policy == "fixed_v1"
-        assert result.scoring_policy_version == "1.0"
-        assert result.metric_reference_version == "v1"
+        assert result.scoring_policy == "feature_driven_v2"
+        assert result.scoring_policy_version == "2.0"
+        assert result.metric_reference_version == "v2"
         assert result.workload_features == {}
         assert result.normalization_metadata == {}
-        assert result.score_breakdown == {}
+        assert result.score_breakdown.final_score == pytest.approx(0.0)
 
     def test_scoring_metadata_loaded_when_present(
         self,
@@ -270,7 +270,7 @@ class TestLoadTuningSession:
         assert result.metric_reference_version == "v2"
         assert result.workload_features["read_ratio"] == pytest.approx(0.8)
         assert result.normalization_metadata["normalizer"] == "quantile_utility"
-        assert result.score_breakdown["total"] == pytest.approx(91.5)
+        assert result.score_breakdown.final_score == pytest.approx(91.5)
 
     def test_invalid_scoring_metadata_type_raises(
         self,

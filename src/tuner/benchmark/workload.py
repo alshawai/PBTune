@@ -556,7 +556,7 @@ class WorkloadFileLoader:
             )
 
         LOGGER.debug(
-            "-> Loaded workload '%s': %s (%d queries, %d tables × %d rows)\n",
+            "➤ Loaded workload '%s': %s (%d queries, %d tables × %d rows)\n",
             name,
             description,
             len(query_list),
