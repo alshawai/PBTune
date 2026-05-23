@@ -84,15 +84,17 @@ from src.utils.metrics import (
 )
 from src.utils.types import clone_benchmark_config
 from src.utils.scoring.workload_features import WorkloadFeatureExtractor
+from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.logger import (
     setup_logging,
+    add_html_file_logging,
+    set_colors_enabled,
     get_logger,
+    get_color_context,
+    print_startup_banner,
     log_section_header,
     log_generation_summary,
-    print_startup_banner,
-    ColorCode,
-    ColorPalette,
-    set_colors_enabled,
+    log_final_summary,
 )
 from src.utils.hardware_info import (
     get_system_info,
@@ -100,6 +102,10 @@ from src.utils.hardware_info import (
     detect_worker_resources,
 )
 from src.utils.types import TuningMode
+
+
+LOGGER = get_logger("PBTune")  # inherits from the root logger (defined in setup_logging)
+COLORS = get_color_context()
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -131,6 +137,51 @@ def convert_numpy_types(obj: Any) -> Any:
         return [convert_numpy_types(item) for item in obj]
     else:
         return obj
+
+
+def resolve_output_file_path(
+    base_output_dir: Path,
+    benchmark: str,
+    tier: str,
+    timestamp: str,
+    sysbench_workload: Optional[str] = None,
+    workload: Optional[str] = None,
+) -> Path:
+    """
+    Resolve the HTML log file path based on benchmark configuration and tier.
+
+    Creates the structured output directory hierarchy and returns the full path
+    to the HTML log file that will contain the tuning session results.
+
+    Parameters
+    ----------
+    base_output_dir : Path
+        Base output directory (computed from colocate_output and output_dir)
+    benchmark : str
+        Benchmark type ("sysbench", "tpch", or custom)
+    tier : str
+        Knob tier ("minimal", "core", "standard", "extensive")
+    timestamp : str
+        Timestamp string (format: YYYYMMDD_HHMM)
+    sysbench_workload : Optional[str]
+        Sysbench workload name (only used if benchmark=="sysbench")
+    workload : Optional[str]
+        Custom workload name (used if benchmark is neither sysbench nor tpch)
+
+    Returns
+    -------
+    Path
+        Full path to the HTML log file (pbt_tuning_<timestamp>.html)
+    """
+    if benchmark == "sysbench":
+        workload_name = sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD
+        log_output_dir = base_output_dir / "oltp" / workload_name / "pbt_runs" / tier
+    else:
+        workload_name = "olap" if benchmark == "tpch" else workload
+        log_output_dir = base_output_dir / workload_name / "pbt_runs" / tier
+
+    log_output_dir.mkdir(parents=True, exist_ok=True)
+    return log_output_dir / f"pbt_tuning_{timestamp}.html"
 
 
 class PBTTuner:
@@ -189,11 +240,16 @@ class PBTTuner:
                     Timestamp for result files (format: YYYYMMDD_HHMM)
                 - logger: Optional[logging.Logger] (default: None)
                     Custom logger instance. If None, a default logger is created.
-                - enable_colors: bool (default: True)
-                    Enable ANSI colors in manually colorized startup log messages.
                 - disable_early_stopping: bool (default: False)
                     Disable the no-improvement early stop gate.
         """
+        log_section_header(
+            LOGGER,
+            "%sStarting PBT Tuner initialization%s",
+            COLORS.bold,
+            COLORS.reset,
+        )
+
         self.knob_tier = knob_tier
         self.pbt_config = pbt_config or STANDARD_CONFIG
         self.random_seed = random_seed
@@ -204,11 +260,11 @@ class PBTTuner:
         self.cleanup_instances = kwargs.get("cleanup_instances", False)
         self.no_docker = kwargs.get("no_docker", False)
         self.docker_image = kwargs.get("docker_image", None)
-        self.enable_colors = kwargs.get("enable_colors", True)
         self.disable_early_stopping = kwargs.get("disable_early_stopping", False)
 
-        self.data_dir = kwargs.get("data_dir", None)
-        self.data_root = resolve_data_root(cli_override=self.data_dir)
+        self.data_root = kwargs.get("data_root")
+        if self.data_root is None:
+            self.data_root = resolve_data_root()
 
         self.warm_start_path = kwargs.get("warm_start_path", None)
         self.warm_start_provenance = {"enabled": False}
@@ -217,28 +273,27 @@ class PBTTuner:
         self.ablation_value = kwargs.get("ablation_value", None)
 
         self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
-        self.logger = kwargs.get("logger", get_logger(__name__))
 
-        self.logger.debug("Loading knob space: %s", knob_tier.upper())
+        LOGGER.info("Loading knob space: %s", knob_tier.capitalize())
         self.knob_space = get_knob_space(knob_tier)
-        if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
-            create_online_view = getattr(self.knob_space, "create_online_view", None)
-            if callable(create_online_view):
-                self.knob_space = create_online_view()
-            else:
-                self.logger.debug(
-                    "KnobSpace.create_online_view() not available; using full knob tier"
-                )
 
-        self.logger.debug("  Detecting hardware resources...")
+        if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
+            LOGGER.info("Creating ONLINE knob view by filtering out `restart-required` knobs...")
+            self.knob_space = self.knob_space.create_online_view()
+
+        LOGGER.info(
+            "Detecting hardware resources for %s%s%s parallel workers...",
+            COLORS.bold,
+            self.pbt_config.num_parallel_workers,
+            COLORS.reset
+        )
         self.worker_resources = detect_worker_resources(
             self.pbt_config.num_parallel_workers,
             data_path=self.data_root,
         )
+
+        LOGGER.info("Resolving hardware-relative knob ranges based on detected worker resources...")
         self.knob_space.resolve_hardware_ranges(self.worker_resources)
-
-        self.logger.debug("✓ Loaded %d knobs\n", len(self.knob_space))
-
         self.db_config = get_db_config()
 
         self.metric_config = create_metric_config(
@@ -251,77 +306,70 @@ class PBTTuner:
         self.workload_features: Dict[str, float] = {}
         self.feature_extractor = WorkloadFeatureExtractor()
 
-        self.evaluator_config = WorkloadOrchestratorConfig(
-            workload_type=workload_type,
-            metric_config=self.metric_config,
-            db_config=self.db_config,
-            warmup_duration=self.pbt_config.benchmark_config.warmup_duration,
-            measurement_duration=self.pbt_config.benchmark_config.evaluation_duration,
-            cooldown_duration=3.0,
-            tuning_mode=self.pbt_config.benchmark_config.tuning_mode,
-            adaptive_restart_interval=self.pbt_config.benchmark_config.adaptive_restart_interval,
-            random_seed=random_seed,
-            warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
-            worker_memory_budget_bytes=self.worker_resources.ram_bytes,
-        )
-
-        info_color = (
-            ColorPalette.get_level_color("INFO", "ansi") if self.enable_colors else ""
-        )
-        bold = ColorCode.BOLD if self.enable_colors else ""
-        reset = ColorCode.RESET if self.enable_colors else ""
-
         if benchmark == "sysbench":
             self.benchmark_name = "sysbench"
             self.workload_type = WorkloadType.OLTP
 
-            self.logger.info(
-                "%s%sUsing external Sysbench C-binary for rigorous benchmarking.%s",
-                bold,
-                info_color,
-                reset,
-            )
+            tables = self.pbt_config.benchmark_config.sysbench_tables
+            table_size = self.pbt_config.benchmark_config.sysbench_table_size
+            script = self.pbt_config.benchmark_config.sysbench_workload
+
             workload_executor = SysbenchExecutor(
-                tables=self.pbt_config.benchmark_config.sysbench_tables,
-                table_size=self.pbt_config.benchmark_config.sysbench_table_size,
-                script=self.pbt_config.benchmark_config.sysbench_workload,
+                tables=tables,
+                table_size=table_size,
+                script=script,
+            )
+
+            LOGGER.info(
+                "Extracting workload features from Sysbench (script='%s', threads=%d, "
+                "cpu_cores=%d, tables=%d, table_size=%d)",
+                script,
+                self.pbt_config.num_parallel_workers,
+                int(self.worker_resources.cpu_cores or 1),
+                tables,
+                table_size,
             )
             self.workload_features = self.feature_extractor.extract_sysbench_features(
-                script=self.pbt_config.benchmark_config.sysbench_workload,
+                script=script,
                 threads=self.pbt_config.num_parallel_workers,
                 cpu_cores=int(self.worker_resources.cpu_cores or 1),
-                table_size=self.pbt_config.benchmark_config.sysbench_table_size,
-                tables=self.pbt_config.benchmark_config.sysbench_tables,
+                table_size=table_size,
+                tables=tables,
             )
-            self.snapshot_identifier = (
-                f"sysbench_{self.pbt_config.benchmark_config.sysbench_workload}_"
-                f"t{self.pbt_config.benchmark_config.sysbench_tables}_"
-                f"s{self.pbt_config.benchmark_config.sysbench_table_size}"
-            )
+            self.snapshot_identifier = f"sysbench_{script}_t{tables}_s{table_size}"
+
+            if script == "oltp_read_only":
+                LOGGER.debug(
+                    "%sSysbench read-only workload detected; no need for snapshot restorations.%s",
+                    COLORS.italic,
+                    COLORS.reset,
+                )
+                self.pbt_config.enable_snapshots = False
 
         elif benchmark == "tpch":
             self.benchmark_name = "tpch"
             self.workload_type = WorkloadType.OLAP
 
-            self.logger.info(
-                "%s%sUsing TPC-H benchmark for analytical workload evaluation.%s",
-                bold,
-                info_color,
-                reset,
-            )
+            scale_factor = self.pbt_config.benchmark_config.scale_factor
             workload_executor = TPCHExecutor(
-                scale_factor=self.pbt_config.benchmark_config.scale_factor
-            )
-            self.workload_features = self.feature_extractor.extract_tpch_features(
-                scale_factor=self.pbt_config.benchmark_config.scale_factor,
-                warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
-            )
-            self.snapshot_identifier = (
-                f"tpch_sf{self.pbt_config.benchmark_config.scale_factor}"
+                scale_factor=scale_factor
             )
 
-            self.logger.debug(
-                "💡 TPC-H is a read-only OLAP benchmark; no need for snapshot restorations."
+            LOGGER.info(
+                "Extracting workload features from TPC-H (SF=%.2f, warmup_passes=%d)",
+                scale_factor,
+                self.pbt_config.benchmark_config.warmup_passes,
+            )
+            self.workload_features = self.feature_extractor.extract_tpch_features(
+                scale_factor=scale_factor,
+                warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
+            )
+            self.snapshot_identifier = f"tpch_sf{scale_factor}"
+
+            LOGGER.debug(
+                "%sTPC-H is a read-only OLAP benchmark; no need for snapshot restorations.%s",
+                COLORS.italic,
+                COLORS.reset,
             )
             self.pbt_config.enable_snapshots = False
 
@@ -329,21 +377,28 @@ class PBTTuner:
             self.benchmark_name = workload_type.value
             self.workload_type = workload_type
 
-            self.logger.info(
-                "%s%sUsing custom workload executor defined in %s.%s",
-                bold,
-                info_color,
+            LOGGER.info(
+                "%s%sInitializing custom workload executor...%s",
+                COLORS.bold,
                 workload_file,
-                reset,
+                COLORS.reset,
             )
             workload_executor = self._create_workload_executor(
                 workload_type, workload_file
             )
+
             template_metadata = extract_workload_template_metadata(workload_executor)
+            LOGGER.info(
+                "Extracting workload features from TemplateWorkload (query_count=%d)",
+                len(template_metadata.queries),
+            )
+
             self.workload_features = self.feature_extractor.extract_template_features(
                 metadata=template_metadata,
             )
-            self.snapshot_identifier = f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
+            self.snapshot_identifier = (
+                f"{self.benchmark_name}_sf{self.pbt_config.benchmark_config.scale_factor}"
+            )
 
         self.snapshot_identifier = self._normalize_snapshot_identifier(
             self.snapshot_identifier
@@ -362,12 +417,21 @@ class PBTTuner:
             force_recreate_baseline=self.force_recreate_baseline,
         )
 
-        self.output_dir = self._build_output_dir(
-            Path(kwargs.get("output_dir", "results"))
-        )
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
         self.metric_config.workload_features = dict(self.workload_features)
+
+        self.evaluator_config = WorkloadOrchestratorConfig(
+            workload_type=workload_type,
+            metric_config=self.metric_config,
+            db_config=self.db_config,
+            warmup_duration=self.pbt_config.benchmark_config.warmup_duration,
+            measurement_duration=self.pbt_config.benchmark_config.evaluation_duration,
+            cooldown_duration=3.0,
+            tuning_mode=self.pbt_config.benchmark_config.tuning_mode,
+            adaptive_restart_interval=self.pbt_config.benchmark_config.adaptive_restart_interval,
+            random_seed=random_seed,
+            warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
+            worker_memory_budget_bytes=self.worker_resources.ram_bytes,
+        )
 
         self.orchestrator = WorkloadOrchestrator(
             self.evaluator_config, workload_executor, self.env
@@ -386,20 +450,28 @@ class PBTTuner:
         )
 
         self.population = Population(
-            self.knob_space, pop_config, evaluator=self.orchestrator
+            self.knob_space, pop_config, orchestrator=self.orchestrator
         )
 
+        LOGGER.info("Collecting system hardware and software information...")
         self.system_info = get_system_info(data_path=self.data_root)
-        self.start_time: Optional[float] = None
+
+        self.output_dir = self._build_output_dir(
+            Path(kwargs.get("output_dir", "results"))
+        )
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # initialized at tuning start to accurately track wall clock time
+        self.start_time: float = 0
         self.generation_history = []
 
         self.current_generation: int = 0
         self.restart_count: int = 0
-        self._restart_logged_this_gen: bool = False
-        self._last_logged_best_score: float = -1.0
 
-        self.logger.info(
-            "%s%sPBT Database Tuner Initialization Complete!%s", bold, info_color, reset
+        self._restarted_this_generation = False
+
+        LOGGER.info(
+            "%s%sPBT Tuner Initialization Complete!%s", COLORS.bold, COLORS.green, COLORS.reset
         )
 
     @property
@@ -468,7 +540,7 @@ class PBTTuner:
             supported_knobs = {str(row[0]) for row in cursor.fetchall()}
             return supported_knobs, server_version
         except (psycopg2.Error, RuntimeError, OSError, ValueError) as exc:
-            self.logger.warning(
+            LOGGER.warning(
                 "Failed to inspect runtime pg_settings for knob compatibility: %s",
                 exc,
             )
@@ -486,8 +558,8 @@ class PBTTuner:
         unsupported_knobs = sorted(configured_knobs - supported_knobs)
 
         if not unsupported_knobs:
-            self.logger.info(
-                "✓ Runtime knob compatibility check passed against PostgreSQL %s (%d knobs)",
+            LOGGER.debug(
+                "➤ Runtime knob compatibility check passed against PostgreSQL %s (%d knobs)",
                 server_version,
                 len(configured_knobs),
             )
@@ -496,10 +568,10 @@ class PBTTuner:
         for knob_name in unsupported_knobs:
             self.knob_space.knobs.pop(knob_name, None)
 
-        preview = unsupported_knobs[:20]
+        preview = unsupported_knobs[:10]
         suffix = " ..." if len(unsupported_knobs) > len(preview) else ""
-        self.logger.warning(
-            "Pruned %d unsupported knobs for PostgreSQL %s: %s%s",
+        LOGGER.warning(
+            " Pruned %d unsupported knobs for PostgreSQL %s: %s%s",
             len(unsupported_knobs),
             server_version,
             ", ".join(preview),
@@ -511,8 +583,8 @@ class PBTTuner:
                 "No runtime-compatible knobs remain after pg_settings compatibility pruning."
             )
 
-        self.logger.info(
-            "✓ Continuing with %d runtime-compatible knobs", len(self.knob_space)
+        LOGGER.debug(
+            "➤ Continuing with %d runtime-compatible knobs", len(self.knob_space)
         )
 
     def _create_workload_executor(
@@ -535,7 +607,7 @@ class PBTTuner:
             Configured workload executor
         """
         if workload_file:
-            self.logger.debug("Loading custom workload from file: %s", workload_file)
+            LOGGER.debug(" Loading custom workload from file: %s", workload_file)
             return WorkloadFileLoader.load_from_file(workload_file)
 
         # Standard workload templates map
@@ -547,15 +619,18 @@ class PBTTuner:
 
         template_file = template_map.get(workload_type)
         if template_file:
-            self.logger.debug(
-                "Loading standard workload template from %s", template_file
+            LOGGER.debug(
+                " Loading standard workload template from %s", template_file
             )
             return WorkloadFileLoader.load_from_file(template_file)
 
         # Fallback (should not be reached if Enum is exhaustive)
         raise ValueError(f"Unknown workload type: {workload_type}")
 
-    def evaluate_worker(self, worker: Worker) -> Tuple[PerformanceMetrics, float]:
+    def evaluate_worker(
+        self,
+        worker: Worker,
+    ) -> Tuple[PerformanceMetrics, float]:
         """
         Evaluate a single worker.
 
@@ -571,69 +646,51 @@ class PBTTuner:
         Tuple[PerformanceMetrics, float]
             (metrics, score)
         """
-        worker_logger = get_logger(__name__, worker_id=worker.worker_id)
 
         try:
+            worker.logger.info(
+                "Evaluating configuration on instance port %d...", worker.port or 0
+            )
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
             metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
                 worker, apply_config=True, generation=self.current_generation
             )
 
-            # Track restart occurrence (will be logged once per generation, not per worker)
-            if restart_occurred and not self._restart_logged_this_gen:
-                self._restart_logged_this_gen = True
+            if restart_occurred and not self._restarted_this_generation:
                 self.restart_count += 1
-
-            latency_label = self.metric_config.latency_metric
-            latency_value = getattr(metrics, f"latency_{latency_label}", 0.0)
-
-            worker_logger.info(
-                "score=%.4f, latency_%s=%.2f%s, throughput=%.1f %s,\n "
-                "Memory=%.2f%%, IO Read=%.2f MB, IO Write=%.2f MB, "
-                "Cache Hit=%.1f%%, Error Rate=%.2f%%",
-                score,
-                latency_label,
-                latency_value,
-                metrics.latency_unit,
-                metrics.throughput,
-                metrics.throughput_unit,
-                metrics.memory_utilization * 100.0,
-                metrics.io_read_mb,
-                metrics.io_write_mb,
-                metrics.cache_hit_ratio * 100.0,
-                metrics.error_rate,
-            )
+                self._restarted_this_generation = True
 
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as e:
             recovered = False
             if self.env is None:
-                worker_logger.error(
-                    "[DEAD_CONFIG] No environment available for immediate recovery"
+                worker.logger.error(
+                    " ➤ No environment available for immediate recovery"
                 )
             else:
                 try:
                     recovered = self.env.recover_instance(worker.worker_id)
                 except (ConnectionError, RuntimeError, OSError) as recovery_error:
-                    worker_logger.error(
-                        "[DEAD_CONFIG] Immediate recovery raised an unexpected error: %s",
+                    worker.logger.error(
+                        " ➤ Immediate recovery raised an unexpected error: %s",
                         recovery_error,
                         exc_info=True,
                     )
 
             if recovered:
-                worker_logger.info(
-                    "[DEAD_CONFIG] Immediate instance recovery succeeded after connection failure"
+                worker.logger.debug(
+                    " ➤ Immediate instance recovery succeeded after connection failure"
                 )
             else:
-                worker_logger.error(
-                    "[DEAD_CONFIG] Immediate instance recovery failed after connection failure"
+                worker.logger.error(
+                    " ➤ Immediate instance recovery failed after connection failure"
                 )
 
             return self._build_failure_result(
-                worker_logger=worker_logger,
+                worker=worker,
+                worker_logger=worker.logger,
                 reason="connection",
                 exception=e,
                 failure_type="crash_dead",
@@ -642,7 +699,8 @@ class PBTTuner:
 
         except TimeoutError as e:
             return self._build_failure_result(
-                worker_logger=worker_logger,
+                worker=worker,
+                worker_logger=worker.logger,
                 reason="timeout",
                 exception=e,
                 failure_type="crash_timeout",
@@ -651,7 +709,8 @@ class PBTTuner:
 
         except RuntimeError as e:
             return self._build_failure_result(
-                worker_logger=worker_logger,
+                worker=worker,
+                worker_logger=worker.logger,
                 reason="runtime",
                 exception=e,
                 failure_type="crash_runtime",
@@ -659,14 +718,15 @@ class PBTTuner:
             )
 
         except Exception as e:
-            worker_logger.error(
+            worker.logger.error(
                 "Unexpected error evaluating worker %s: %s",
                 worker.worker_id,
                 e,
                 exc_info=True,
             )
             return self._build_failure_result(
-                worker_logger=worker_logger,
+                worker=worker,
+                worker_logger=worker.logger,
                 reason="unexpected",
                 exception=e,
                 failure_type="crash_unexpected",
@@ -675,6 +735,7 @@ class PBTTuner:
 
     def _build_failure_result(
         self,
+        worker: Worker,
         worker_logger: logging.Logger,
         reason: str,
         exception: Exception,
@@ -683,7 +744,7 @@ class PBTTuner:
     ) -> Tuple[PerformanceMetrics, float]:
         """Build standardized fallback metrics and score for failed worker evaluations."""
         worker_logger.warning(
-            "[DEAD_CONFIG] Evaluation failed (%s): %s", reason, exception
+            "➤ Evaluation failed (%s): %s", reason, exception
         )
         fallback_metrics = PerformanceMetrics(
             latency_p50=9999.0,
@@ -698,6 +759,9 @@ class PBTTuner:
             total_queries=0,
             total_time=1.0,
             failure_type=failure_type,
+        )
+        worker.score_breakdown = self.metric_config.compute_score(
+            fallback_metrics, worker_logger=worker_logger
         )
         return fallback_metrics, score
 
@@ -715,14 +779,13 @@ class PBTTuner:
         Dict[str, Any]
             Generation results
         """
-        log_section_header(self.logger, f"GENERATION {generation}")
+        log_section_header(LOGGER, "%sGENERATION %d%s", COLORS.bold, generation, COLORS.reset)
 
         self.current_generation = generation
-
-        self._restart_logged_this_gen = False
+        self._restarted_this_generation = False
 
         gen_start_time = time.time()
-        result = self.population.train_generation(
+        generation_result = self.population.train_generation(
             self.evaluate_worker,
             parallel=True,
             require_ready=True,
@@ -730,31 +793,20 @@ class PBTTuner:
         )
         gen_elapsed_time = time.time() - gen_start_time
 
-        if self._restart_logged_this_gen:
-            self.logger.info(
-                "🟢 PostgreSQL restarted (total restarts: %d)", self.restart_count
+        if self.population.generations_without_improvement == 0:
+            LOGGER.info(
+                "%s🔺 NEW BEST SCORE: %s%.4f%%%s",
+                COLORS.bold,
+                COLORS.teal,
+                self.best_score,
+                COLORS.reset
             )
 
-        # Notify user of new high score conditionally (handles dynamic rescales upwards too)
-        _, current_global_best_score = self.population.get_best_configuration()
-        if self.population.generations_without_improvement == 0 and generation > 0:
-            self.logger.info("🎉 NEW BEST SCORE: %.4f", current_global_best_score)
-
-        self._last_logged_best_score = current_global_best_score
-
         gen_summary = {
-            "generation": generation,
-            "best_score": result.best_score,
-            "mean_score": result.mean_score,
-            "std_score": result.std_score,
-            "num_exploited": result.num_exploited,
-            "best_worker_id": result.best_worker_id,
-            "converged": result.converged,
+            **generation_result.to_dict(),
             "restart_count": self.restart_count,
             "timestamp": datetime.now().isoformat(),
-            "wall_clock_seconds": time.time() - self.start_time
-            if self.start_time
-            else 0.0,
+            "wall_clock_seconds": time.time() - self.start_time,
             "generation_elapsed_seconds": gen_elapsed_time,
             "worker_scores": [
                 {
@@ -765,11 +817,19 @@ class PBTTuner:
                         else None
                     ),
                     "metrics": w.metrics.to_dict() if w.metrics else None,
-                    "score_breakdown": convert_numpy_types(
-                        self.metric_config.compute_detailed_scores(w.metrics)
-                    )
-                    if w.metrics
-                    else None,
+                    "score_breakdown": (
+                        convert_numpy_types(w.score_breakdown.to_dict())
+                        if w.score_breakdown is not None
+                        else (
+                            convert_numpy_types(
+                                self.metric_config.compute_score(
+                                    w.metrics, worker_logger=w.logger
+                                ).to_dict()
+                            )
+                            if w.metrics
+                            else None
+                        )
+                    ),
                 }
                 for w in self.population.workers
             ],
@@ -784,17 +844,17 @@ class PBTTuner:
 
         self.generation_history.append(gen_summary)
 
-        elapsed = time.time() - self.start_time if self.start_time else 0
+        elapsed = time.time() - self.start_time
         log_generation_summary(
-            self.logger,
-            generation=generation,
-            best_score=result.best_score,
-            mean_score=result.mean_score,
-            std_score=result.std_score,
-            exploited=result.num_exploited,
-            restarts=self.restart_count,
-            elapsed=elapsed,
-            converged=result.converged,
+            LOGGER,
+            elapsed,
+            self.restart_count,
+            generation=generation_result.generation,
+            best_score=generation_result.best_score,
+            mean_score=generation_result.mean_score,
+            std_score=generation_result.std_score,
+            exploited=generation_result.num_exploited,
+            converged=generation_result.converged,
         )
         return gen_summary
 
@@ -807,148 +867,171 @@ class PBTTuner:
         Dict[str, Any]
             Final tuning results
         """
-        log_section_header(self.logger, "PBT PostgreSQL Tuner - Starting Optimization")
-        log_system_info(self.logger, self.system_info)
-        self.logger.info(
-            "Knob Tier:       %s (%d knobs)", self.knob_tier, len(self.knob_space)
+        log_section_header(
+            LOGGER,
+            "%sPBT PostgreSQL Tuner - Starting Optimization%s",
+            COLORS.bold,
+            COLORS.reset,
         )
-        self.logger.info("Population Size: %d", self.pbt_config.population_size)
-        self.logger.info("Max Generations: %d", self.pbt_config.num_generations)
-        self.logger.info("Workload Type:   %s", self.workload_type.value)
-        self.logger.info("Output Dir:      %s", self.output_dir)
-        self.start_time = time.time()
+        log_system_info(LOGGER, self.system_info)
+        LOGGER.info(
+            "Knob Tier:       %s%s (%d knobs)%s",
+            COLORS.cyan,
+            self.knob_tier,
+            len(self.knob_space),
+            COLORS.reset,
+        )
+        LOGGER.info(
+            "Population Size: %s%d%s", COLORS.cyan, self.pbt_config.population_size, COLORS.reset
+        )
+        LOGGER.info(
+            "Max Generations: %s%d%s", COLORS.cyan, self.pbt_config.num_generations, COLORS.reset
+        )
+        LOGGER.info("Workload Type:   %s%s%s", COLORS.cyan, self.workload_type.value, COLORS.reset)
+        LOGGER.info("Output Dir:      %s%s%s", COLORS.cyan, self.output_dir, COLORS.reset)
 
+        self.start_time = time.time()
         try:
-            log_section_header(self.logger, "Setting Up PostgreSQL Instances")
-            self.logger.info(
-                "Creating %d PostgreSQL instances for parallel execution...",
-                self.pbt_config.population_size,
+            log_section_header(
+                LOGGER,
+                "%sSetting Up PostgreSQL Instances%s",
+                COLORS.bold, COLORS.reset,
             )
 
             try:
+                LOGGER.info(
+                    "Creating %d PostgreSQL containers (force_recreate=%s)",
+                    self.pbt_config.population_size,
+                    self.force_recreate_instances,
+                )
                 instances = self.env.setup_instances(
                     num_workers=self.pbt_config.population_size,
                     force_recreate=self.force_recreate_instances,
                 )
-                self.logger.info("✓ Created %d instances", len(instances))
 
-                verification = self.env.verify_instances()
-                failed = [wid for wid, status in verification.items() if not status]
-                if failed:
-                    self.logger.error("❌ Failed to verify instances: %s", failed)
-                    raise RuntimeError(
-                        f"Instance verification failed for workers: {failed}"
-                    )
+                LOGGER.info("Verifying instance accessibility and configurations...")
+                self.env.verify_instances()
 
-                self.logger.info("✓ All instances verified and accessible\n")
+                LOGGER.info("Pruning unsupported knobs based on container version...")
                 self._prune_unsupported_runtime_knobs()
+
+                LOGGER.info("%s%sPostgreSQL instances are ready.%s",
+                            COLORS.bold, COLORS.green, COLORS.reset)
             except Exception as e:
-                self.logger.error("❌ Failed to setup instances: %s", e)
+                LOGGER.error("%sFailed to setup instances:%s %s", COLORS.bold, COLORS.reset, e)
                 raise
 
-            self.logger.info("Initializing population...")
+            log_section_header(
+                LOGGER,
+                "%sInitializing PBT population%s",
+                COLORS.bold,
+                COLORS.reset,
+            )
             if self.warm_start_path:
-                self.logger.debug("Warm-starting from %s", self.warm_start_path)
+                LOGGER.info("Warm-starting from %s", self.warm_start_path)
                 warm_configs = self._build_warm_start_configs(
                     warm_start_path=Path(self.warm_start_path),
                     population_size=self.pbt_config.population_size,
                     seed=42,
                 )
+                LOGGER.info(
+                    "Initializing %d workers configurations", self.pbt_config.population_size
+                )
                 self.population.initialize(
                     initial_configs=warm_configs, random_seed=self.random_seed
                 )
             else:
+                LOGGER.info(
+                    "Initializing %d workers configurations", self.pbt_config.population_size
+                )
                 self.population.initialize(random_seed=self.random_seed)
 
-            self.logger.debug("Assigning instance configurations to workers...")
+            LOGGER.info("Assigning instance configurations to workers...")
             self.population.setup_worker_instances(
                 instances=instances,
                 dbname=self.db_config.dbname,
                 user=self.db_config.user,
                 password=self.db_config.password,
             )
-            self.population.env = self.env
-            self.logger.info(
-                "✓ Initialized %d workers with dedicated instances\n",
-                len(self.population.workers),
+
+            LOGGER.info("Configuring snapshot restoration...")
+            self.population.setup_snapshots(
+                env=self.env,
+                pbt_config=self.pbt_config,
             )
 
-            # Register snapshot manager with population
-            if self.pbt_config.enable_snapshots:
-                self.population.setup_snapshots(
-                    env=self.env,
-                    pbt_config=self.pbt_config,
-                )
-                self.logger.info("✓ Snapshot restoration configured\n")
+            LOGGER.info(
+                "%s%sInitialized %d workers with dedicated instances.%s",
+                COLORS.bold,
+                COLORS.green,
+                len(self.population.workers),
+                COLORS.reset
+            )
 
             try:
                 for generation in range(self.pbt_config.num_generations):
                     self.run_generation(generation)
 
+                    LOGGER.info("Checking stopping criteria after generation %d...", generation)
                     if self.population.should_stop():
-                        reason = self._get_stop_reason()
-                        self.logger.info("⚠ Early stopping triggered: %s", reason)
                         break
 
+                    LOGGER.info("Saving intermediate results after generation %d...", generation)
                     if (generation + 1) % 5 == 0:
                         self.save_intermediate_results(generation)
 
             except KeyboardInterrupt:
-                self.logger.info("⚠ Interrupted by user. Saving results...")
+                LOGGER.info(
+                    "%s%sInterrupted by user. Saving results...%s",
+                    COLORS.bold, COLORS.warning, COLORS.reset
+                )
 
             except (RuntimeError, ValueError) as e:
-                self.logger.error("\n❌ Error during training: %s", e)
-                self.logger.debug("Exception details:", exc_info=True)
+                LOGGER.error("%sError during training: %s%s", COLORS.bold, COLORS.reset, e)
+                LOGGER.debug(" Exception details:", exc_info=True)
 
         finally:
-            self.logger.info("Stopping PostgreSQL instances...")
             try:
                 self.env.stop_all()
             except (RuntimeError, ValueError, ConnectionError, OSError) as e:
-                self.logger.warning(
-                    "⚠ Failed to stop PostgreSQL instances cleanly: %s", e
+                LOGGER.warning(
+                    "%sFailed to stop PostgreSQL instances cleanly:%s %s",
+                    COLORS.warning, COLORS.reset, e
                 )
 
             if self.cleanup_instances:
-                self.logger.info("Cleaning up environment...")
                 try:
                     self.env.cleanup(remove_data=True)
-                    self.logger.info("✓ Instance data removed")
                 except (RuntimeError, ValueError, ConnectionError, OSError) as e:
-                    self.logger.warning("⚠ Failed to clean up instance data: %s", e)
+                    LOGGER.warning(
+                        "%sFailed to clean up instance data:%s %s",COLORS.warning, COLORS.reset, e
+                    )
 
         total_time = time.time() - self.start_time
+
+        LOGGER.info("Saving final results to output directory...")
         results = self.save_final_results(total_time)
-        self.print_final_summary(results)
+        log_final_summary(LOGGER, results)
 
         return results
 
-    def _get_stop_reason(self) -> str:
-        """Get the reason for early stopping"""
-        if self.population.current_generation >= self.pbt_config.num_generations:
-            return "Maximum generations reached"
-
-        if (
-            not self.population.config.disable_early_stopping
-            and self.population.generations_without_improvement >= 10
-        ):
-            return (
-                f"No improvement for "
-                f" {self.population.generations_without_improvement} generations"
-            )
-        if self.population.history and self.population.history[-1].converged:
-            return "Population converged (low variance)"
-
-        return "Unknown reason"
-
     def _build_scoring_payload(
-        self, metrics: Optional[PerformanceMetrics]
+        self,
+        metrics: Optional[PerformanceMetrics],
+        score_breakdown: Optional[ScoreBreakdown] = None,
     ) -> Dict[str, Any]:
         """Build score metadata payload persisted into tuning artifacts."""
-        score_breakdown: Dict[str, Any] = {}
-        if metrics is not None:
-            score_breakdown = convert_numpy_types(
-                self.metric_config.compute_detailed_scores(metrics)
+        score_breakdown_payload: Dict[str, Any] = {}
+        if score_breakdown is not None:
+            score_breakdown_payload = convert_numpy_types(score_breakdown.to_dict())
+        elif metrics is not None:
+            LOGGER.debug(
+                "  %sComputing detailed score breakdown...%s",
+                COLORS.italic,
+                COLORS.reset,
+            )
+            score_breakdown_payload = convert_numpy_types(
+                self.metric_config.compute_score(metrics).to_dict()
             )
 
         scoring_metadata = convert_numpy_types(
@@ -966,7 +1049,7 @@ class PBTTuner:
             "normalization_metadata": scoring_metadata.get(
                 "normalization_metadata", {}
             ),
-            "score_breakdown": score_breakdown,
+            "score_breakdown": score_breakdown_payload,
         }
 
     def save_intermediate_results(self, generation: int):
@@ -985,24 +1068,30 @@ class PBTTuner:
                 if self.best_config
                 else {}
             ),
-            "elapsed_time": time.time() - self.start_time if self.start_time else 0,
+            "elapsed_time": time.time() - self.start_time,
         }
 
         scoring_payload = self._build_scoring_payload(
-            metrics=self.population.best_overall_metrics
+            metrics=self.population.best_overall_metrics,
+            score_breakdown=self.population.best_overall_score_breakdown,
         )
         results.update(scoring_payload)
 
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
 
-        self.logger.info("💾 Saved intermediate results to %s", filename)
+        LOGGER.debug("%sSaved intermediate result.%s", COLORS.italic, COLORS.reset)
 
     def save_final_results(self, total_time: float) -> Dict[str, Any]:
         """Save final tuning results"""
         best_metrics = self.population.best_overall_metrics
         worker_resources = self.knob_space.worker_resources
-        scoring_payload = self._build_scoring_payload(metrics=best_metrics)
+
+        LOGGER.debug(" Building scoring payload for final results...")
+        scoring_payload = self._build_scoring_payload(
+            metrics=best_metrics,
+            score_breakdown=self.population.best_overall_score_breakdown,
+        )
 
         results = {
             "tuning_session": {
@@ -1073,7 +1162,7 @@ class PBTTuner:
 
         with open(json_file, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
-        self.logger.info("💾 Saved results to %s", json_file)
+        LOGGER.info("%sSaved results to %s%s", COLORS.bold, json_file, COLORS.reset)
 
         best_config_output_dir = self.output_dir / "best_configs"
         best_config_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1089,7 +1178,7 @@ class PBTTuner:
                 f,
                 indent=2,
             )
-        self.logger.info("💾 Saved best config to %s", best_config_file)
+        LOGGER.info("%sSaved best config to %s%s", COLORS.bold, best_config_file, COLORS.reset)
 
         return results
 
@@ -1143,8 +1232,8 @@ class PBTTuner:
                     "Warm-start tuning session file is missing best_configuration.knobs"
                 )
 
-            self.logger.debug(
-                "Warm-start source detected as tuning session output; using best_configuration.knobs"
+            LOGGER.debug(
+                " Warm-start source detected as tuning session output; using best_configuration.knobs"
             )
             best_config_frac = knobs
         else:
@@ -1180,8 +1269,8 @@ class PBTTuner:
 
         missing_knobs = [k for k in self.knob_space.knobs if k not in base_config]
         if missing_knobs:
-            self.logger.warning(
-                "Warm-start config missing knobs, filling in with random values: %s",
+            LOGGER.warning(
+                " Warm-start config missing knobs, filling in with random values: %s",
                 missing_knobs,
             )
             template = self.knob_space.sample_random_config(seed=seed)
@@ -1190,20 +1279,20 @@ class PBTTuner:
 
         dropped_knobs = [k for k in base_config if k not in self.knob_space.knobs]
         if dropped_knobs:
-            self.logger.warning(
-                "Warm-start config dropping extra knobs: %s", dropped_knobs
+            LOGGER.warning(
+                " Warm-start config dropping extra knobs: %s", dropped_knobs
             )
             for k in dropped_knobs:
                 del base_config[k]
 
         is_valid, errors = self.knob_space.validate_config(base_config)
         if not is_valid:
-            self.logger.warning(
-                "Warm-start base config validation issues: %s. "
+            LOGGER.warning(
+                " Warm-start base config validation issues: %s. "
                 "Attempting to repair dependencies.",
                 errors,
             )
-        base_config = self.knob_space.repair_config_dependencies(base_config)
+        base_config = self.knob_space.repair_config_dependencies(base_config, worker_id=0)
 
         num_warm_start = math.ceil(population_size / 2)
 
@@ -1218,6 +1307,7 @@ class PBTTuner:
             )
             warm_configs.append(perturbed)
 
+        LOGGER.debug("➤ Built warm start configs")
         self.warm_start_provenance = {
             "enabled": True,
             "source_path": str(warm_start_path),
@@ -1227,31 +1317,6 @@ class PBTTuner:
         }
 
         return warm_configs
-
-    def print_final_summary(self, results: Dict[str, Any]):
-        """Print final summary of tuning session"""
-        log_section_header(self.logger, "PBT TUNING COMPLETE")
-        session = results["tuning_session"]
-        best = results["best_configuration"]
-
-        self.logger.info("Session Summary:")
-        self.logger.info("  Total Generations:  %d", session["total_generations"])
-        self.logger.info(
-            "  Total Time:         %.1fs (%.1f min)",
-            session["total_time_seconds"],
-            session["total_time_seconds"] / 60,
-        )
-        self.logger.info("  Knobs Tuned:        %d", session["num_knobs"])
-        self.logger.info("  Workload Type:      %s", session["workload_type"])
-
-        self.logger.info("Best Configuration Found:")
-        self.logger.info("  Performance Score:  %.4f", best["score"])
-
-        self.logger.info("Optimized Knobs:")
-        for knob_name, value in sorted(best["knobs"].items()):
-            self.logger.info("    %-40s = %s", knob_name, value)
-
-        self.logger.info("Results saved to: %s", self.output_dir)
 
 
 def parse_args():
@@ -1555,47 +1620,12 @@ def main():
     """Main entry point"""
     args = parse_args()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+
     enable_colors = not args.no_color
     set_colors_enabled(enable_colors)
+    print_startup_banner()
 
-    # Resolve data root and potentially adjust output dir
-    data_root = resolve_data_root(cli_override=args.data_dir)
-    base_output_dir = (
-        data_root / "results" if args.colocate_output else Path(args.output_dir)
-    )
-
-    # Compute structured log directory.
-    if args.benchmark == "sysbench":
-        sysbench_workload = args.sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD
-        log_output_dir = (
-            base_output_dir / "oltp" / sysbench_workload / "pbt_runs" / args.tier
-        )
-    else:
-        workload_for_dir = "olap" if args.benchmark == "tpch" else args.workload
-        log_output_dir = base_output_dir / workload_for_dir / "pbt_runs" / args.tier
-    log_output_dir.mkdir(parents=True, exist_ok=True)
-
-    output_file = log_output_dir / f"pbt_tuning_{timestamp}.html"
-
-    print_startup_banner(enable_colors=enable_colors)
-
-    setup_logging(
-        verbosity=args.verbose,
-        show_module=True,
-        output_file=output_file,
-    )
-    logger = get_logger(
-        "PBTune"
-    )  # inherits from the root logger (defined in setup_logging)
-
-    info_color = ColorPalette.get_level_color("INFO", "ansi") if enable_colors else ""
-    bold = ColorCode.BOLD if enable_colors else ""
-    reset = ColorCode.RESET if enable_colors else ""
-    logger.info(
-        "%s%sStarting PBT Database Tuner Initialization...%s", bold, info_color, reset
-    )
-
-    logger.debug("📝 Logging to HTML file: %s", output_file)
+    setup_logging(verbosity=args.verbose, show_module=True)
 
     config_map = {
         "rapid": RAPID_CONFIG,
@@ -1605,6 +1635,7 @@ def main():
         "extreme": EXTREME_CONFIG,
     }
     base_config = config_map[args.config]
+
     benchmark_config = replace(
         clone_benchmark_config(base_config.benchmark_config),
         benchmark=args.benchmark,
@@ -1698,6 +1729,30 @@ def main():
         "sysbench": WorkloadType.OLTP,
     }.get(args.benchmark, workload_type)
 
+    # Resolve data root and potentially adjust output dir
+    data_root = resolve_data_root(cli_override=args.data_dir)
+    base_output_dir = (
+        data_root / "results" if args.colocate_output else Path(args.output_dir)
+    )
+
+    output_file = resolve_output_file_path(
+        base_output_dir=base_output_dir,
+        benchmark=benchmark_config.benchmark or "custom",
+        tier=args.tier,
+        timestamp=timestamp,
+        sysbench_workload=benchmark_config.sysbench_workload,
+        workload=getattr(benchmark_config, "workload", None),
+    )
+
+    add_html_file_logging(output_file=output_file, show_module=True)
+
+    LOGGER.debug(
+        "%sLogging to HTML file: %s%s",
+        COLORS.italic,
+        output_file,
+        COLORS.reset,
+    )
+
     try:
         tuner = PBTTuner(
             knob_tier=args.tier,
@@ -1712,25 +1767,29 @@ def main():
             warm_start_path=args.warm_start,
             skip_schema_init=args.skip_schema_init,
             output_dir=str(base_output_dir),
-            logger=logger,
+            logger=LOGGER,
             timestamp=timestamp,
             no_docker=args.no_docker,
             docker_image=args.docker_image,
-            enable_colors=enable_colors,
+            data_root=data_root,
             disable_early_stopping=args.disable_early_stopping,
             ablation_variable=args.ablation_variable,
             ablation_value=args.ablation_value,
-            data_dir=args.data_dir,
         )
 
         tuner.run()
 
-        logger.info("🟢 Tuning completed successfully!")
+        LOGGER.info(
+            "%sOutput logs are available at: %s%s",
+            COLORS.italic, output_file.resolve(), COLORS.reset
+        )
+        LOGGER.info("%s%sTuning completed successfully!%s", COLORS.bold, COLORS.green, COLORS.reset)
+
         return 0
 
     except (RuntimeError, ValueError, ConnectionError) as e:
-        logger.error("🔴 Fatal error: %s", e)
-        logger.debug("Exception details:", exc_info=True)
+        LOGGER.error("🔴 Fatal error: %s", e)
+        LOGGER.debug("Exception details:", exc_info=True)
         return 1
 
 
