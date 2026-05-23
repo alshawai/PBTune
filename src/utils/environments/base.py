@@ -18,11 +18,12 @@ from psycopg2 import sql
 
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
-from src.utils.logger import get_logger, ColorCode
+from src.utils.logger import get_logger, get_color_context
 from src.benchmarks.executor import BenchmarkExecutor
 
 
 LOGGER = get_logger("BaseEnvironment")
+COLORS = get_color_context()
 
 
 @dataclass
@@ -101,46 +102,42 @@ class DatabaseEnvironment(ABC):
         self._ensure_database_exists(config)
         self._reset_persisted_configuration(worker_id, config)
 
-        LOGGER.debug("    Validating schema for worker %d...", worker_id)
+        LOGGER.debug("  Initializing schema for worker %d...", worker_id)
         if self.schema_provider.validate(config):
             LOGGER.debug(
-                "%s    ➤ Schema already exists and valid for worker %d%s",
-                ColorCode.GREEN,
+                "%s  ➤ Schema already exists and valid for worker %d%s",
+                COLORS.italic,
                 worker_id,
-                ColorCode.RESET,
+                COLORS.reset,
             )
             return
 
         LOGGER.debug(
-            "%s    Invalid schema detected. Attempting to restore from snapshot for worker %d...%s",
-            ColorCode.YELLOW,
+            "  Invalid schema detected. Attempting to restore from snapshot for worker %d...",
             worker_id,
-            ColorCode.RESET,
         )
         if self.restore_snapshot(worker_id):
             if self.schema_provider.validate(config):
                 self._reset_persisted_configuration(worker_id, config)
                 LOGGER.debug(
-                    "%s    ➤ Schema restored from snapshot for worker %d%s",
-                    ColorCode.GREEN,
+                    "  %s➤ Schema restored from snapshot for worker %d%s",
+                    COLORS.italic,
                     worker_id,
-                    ColorCode.RESET,
+                    COLORS.reset,
                 )
                 return
 
         LOGGER.debug(
-            "%s    Snapshot restoration failed or schema still invalid."
-            " Preparing schema for worker %d...%s",
-            ColorCode.YELLOW,
+            "  Snapshot restoration failed or schema still invalid."
+            " Preparing schema for worker %d...",
             worker_id,
-            ColorCode.RESET,
         )
         self.schema_provider.prepare(config)
         LOGGER.debug(
-            "%s    ➤ Schema prepared for worker %d%s",
-            ColorCode.GREEN,
+            "%s  ➤ Schema prepared for worker %d%s",
+            COLORS.italic,
             worker_id,
-            ColorCode.RESET,
+            COLORS.reset,
         )
 
     def _ensure_database_exists(self, config: DatabaseConfig) -> None:
@@ -258,7 +255,7 @@ class DatabaseEnvironment(ABC):
         """Attempt to recover/restart a failed worker instance."""
 
     @abstractmethod
-    def restart_instance(self, worker_id: int) -> bool:
+    def restart_instance(self, worker_id: int, quiet: bool = False) -> bool:
         """Restart a specific worker's database instance.
 
         Handles the full stop → start → wait-for-ready cycle.
@@ -271,7 +268,7 @@ class DatabaseEnvironment(ABC):
         """
 
     @abstractmethod
-    def verify_instances(self) -> dict[int, bool]:
+    def verify_instances(self) -> None:
         """Verify heartbeat/connectivity of all managed instances."""
 
     @abstractmethod
@@ -283,8 +280,12 @@ class DatabaseEnvironment(ABC):
         """Create a baseline snapshot from the specified worker instance."""
 
     @abstractmethod
-    def restore_snapshot(self, worker_id: int) -> bool:
+    def restore_snapshot(self, worker_id: int, snapshot_id: str = "", quiet: bool = False) -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
+
+    @abstractmethod
+    def rebuild_worker_instance(self, worker_id: int) -> bool:
+        """Rebuild a worker instance from scratch, in cases like failed snapshot restoration."""
 
     @abstractmethod
     def get_db_config(self, worker_id: int) -> DatabaseConfig:
