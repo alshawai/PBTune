@@ -35,8 +35,10 @@ import logging
 import numpy as np
 
 from src.tuner.core.worker import Worker
+from src.utils.logger import get_logger, get_color_context
 
-LOGGER = logging.getLogger("Evolution")
+LOGGER = get_logger("Evolution")
+COLORS = get_color_context()
 
 
 def truncation_selection(
@@ -259,16 +261,15 @@ def execute_exploit_explore(
     )
 
     if not pairs:
-        LOGGER.debug("No workers exploited (not enough ready workers)")
+        LOGGER.debug(" ➤ No workers exploited (not enough ready workers)")
         return 0
 
     for poor_idx, elite_idx in pairs:
         poor_worker = workers[poor_idx]
         elite_worker = workers[elite_idx]
 
-        LOGGER.info(
-            "Worker-%d (score=%.4f) ← exploits Worker-%d (score=%.4f)",
-            poor_worker.worker_id,
+        poor_worker.logger.info(
+            "(score=%.3f%%) ← exploits [Worker-%d] (score=%.3f%%)",
             poor_worker.performance_score,
             elite_worker.worker_id,
             elite_worker.performance_score,
@@ -284,7 +285,12 @@ def execute_exploit_explore(
             exclude_knobs=exclude_knobs,
         )
 
-        LOGGER.debug("  → Copied config and applied perturbation")
+        LOGGER.debug(" ➤ Copied config and applied perturbation")
+
+    LOGGER.info(
+        "%s➤ Exploit-explore complete: %d workers modified.%s",
+        COLORS.bold, len(pairs), COLORS.reset
+    )
 
     return len(pairs)
 
