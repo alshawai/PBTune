@@ -30,7 +30,7 @@ from docker import errors as docker_errors
 
 from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
 from src.benchmarks.executor import BenchmarkExecutor
-from src.utils.logger import get_logger, ColorCode
+from src.utils.logger import get_logger, get_color_context
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
 
@@ -43,7 +43,7 @@ except ImportError as exc:
     ) from exc
 
 LOGGER = get_logger("DockerEnvironment")
-
+COLORS = get_color_context()
 
 class DockerEnvironment(DatabaseEnvironment):
     """
@@ -174,20 +174,21 @@ class DockerEnvironment(DatabaseEnvironment):
             return False
         return True
 
-    def _prepare_worker_pgdata_dir(self, worker_id: int) -> Path:
-        """Prepare a clean host directory for a worker's PGDATA bind mount.
+    def _prepare_worker_pgdata_dir(self, worker_id: int, quiet: bool = False) -> Path:
+        """
+        Prepare a clean host directory for a worker's PGDATA bind mount.
 
         Removes any existing data and creates a fresh directory with
         permissions that allow the container's ``postgres`` user
         (typically UID 999) to write.
         """
         pgdata_dir = self._worker_host_pgdata_dir(worker_id)
-        self._force_remove_host_dir(pgdata_dir)
+        self._force_remove_host_dir(pgdata_dir, quiet=quiet)
         pgdata_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(pgdata_dir, 0o777)
         return pgdata_dir
 
-    def _force_remove_host_dir(self, target_dir: Path) -> None:
+    def _force_remove_host_dir(self, target_dir: Path, quiet: bool = False) -> None:
         """Remove a host directory that may contain Docker-owned files.
 
         Files created by containerized PostgreSQL (UID 999) are not
@@ -195,6 +196,8 @@ class DockerEnvironment(DatabaseEnvironment):
         directory into a disposable container and ``rm -rf``'s the
         child, side-stepping the ownership mismatch.
         """
+        if not quiet:
+            LOGGER.debug("  Force-removing host directory '%s' via containerized rm -rf", target_dir)
         if not target_dir.exists():
             return
 
@@ -216,12 +219,13 @@ class DockerEnvironment(DatabaseEnvironment):
                 )
             container.remove(force=True)
         except docker_errors.DockerException as exc:
-            LOGGER.debug(
-                "Container-based removal of '%s' failed: %s; "
-                "attempting host-side rmtree as fallback",
-                target_dir,
-                exc,
-            )
+            if not quiet:
+                LOGGER.debug(
+                    "  ➤ Container-based removal of '%s' failed: %s; "
+                    "attempting host-side rmtree as fallback...",
+                    target_dir,
+                    exc,
+                )
             shutil.rmtree(target_dir, ignore_errors=True)
 
     def _ensure_container_running_after_timeout(
@@ -298,7 +302,7 @@ class DockerEnvironment(DatabaseEnvironment):
             return True, None
         except requests.exceptions.ReadTimeout as exc:
             LOGGER.warning(
-                "Docker timed out %s '%s'; checking container state: %s",
+                "  ➤ Docker timed out %s '%s'; checking container state: %s",
                 action_label,
                 container_name,
                 exc,
@@ -321,6 +325,7 @@ class DockerEnvironment(DatabaseEnvironment):
     def _seed_pgdata_dir_from_snapshot(
         self,
         worker_id: int,
+        quiet: bool = False,
     ) -> Optional[Path]:
         """Prepare a clean host PGDATA directory and seed it from the baseline snapshot.
 
@@ -336,7 +341,7 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return None
 
-        pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
+        pgdata_dir = self._prepare_worker_pgdata_dir(worker_id, quiet=quiet)
 
         try:
             with self._with_timeout(self._restore_api_timeout):
@@ -450,14 +455,6 @@ class DockerEnvironment(DatabaseEnvironment):
         if num_workers <= 0:
             raise ValueError("Must specify at least 1 worker")
 
-        LOGGER.info(
-            "%sSetting up %d PostgreSQL containers (force_recreate=%s)%s",
-            ColorCode.BOLD,
-            num_workers,
-            force_recreate,
-            ColorCode.RESET,
-        )
-
         if self.force_recreate_baseline:
             self._remove_baseline_snapshot()
 
@@ -468,7 +465,7 @@ class DockerEnvironment(DatabaseEnvironment):
         for worker_id in range(num_workers):
             port = self._worker_port(worker_id)
             container_name = self._container_name(worker_id)
-            LOGGER.info("  Setting up container '%s' on port %d:", container_name, port)
+            LOGGER.info(" %sSetting up container '%s' on port %d:%s", COLORS.sky_blue, container_name, port, COLORS.reset)
 
             recreate_worker0_for_baseline = (
                 worker_id == 0
@@ -478,7 +475,12 @@ class DockerEnvironment(DatabaseEnvironment):
             )
 
             if force_recreate:
-                LOGGER.debug("    Removing existing container '%s'...", container_name)
+                LOGGER.debug(
+                    "  %sRemoving existing container '%s'...%s",
+                    COLORS.italic,
+                    container_name,
+                    COLORS.reset,
+                )
                 if not self._remove_worker_container(
                     worker_id=worker_id,
                     purpose="forced recreate",
@@ -488,36 +490,36 @@ class DockerEnvironment(DatabaseEnvironment):
                     )
 
                 LOGGER.debug(
-                    "%s    ➤ Container '%s' removed successfully%s",
-                    ColorCode.GREEN,
+                    "%s  ➤ Container '%s' removed successfully%s",
+                    COLORS.italic,
                     container_name,
-                    ColorCode.RESET,
+                    COLORS.reset,
                 )
 
             try:  # Exists already
                 container = self.client.containers.get(container_name)
                 if recreate_worker0_for_baseline:
                     LOGGER.debug(
-                        "    Recreating existing worker-0 container because baseline snapshot is missing"
+                        "  Recreating existing worker-0 container because baseline snapshot is missing"
                     )
                     container.remove(force=True)
                     raise docker_errors.NotFound("recreate worker-0 for baseline")
 
                 if container.status != "running":
                     LOGGER.debug(
-                        "    Starting stopped container '%s'...", container_name
+                        "   Starting stopped container '%s'...", container_name
                     )
                     container.start()
                 running = True
 
                 LOGGER.debug(
                     "%s  ➤ Container '%s' already exists, reusing it.%s",
-                    ColorCode.GREEN,
+                    COLORS.italic,
                     container_name,
-                    ColorCode.RESET,
+                    COLORS.reset,
                 )
             except docker_errors.NotFound:  # Create it
-                LOGGER.debug("    Creating container '%s'...", container_name)
+                LOGGER.debug("  Creating container '%s'...", container_name)
                 pgdata_dir = self._prepare_worker_pgdata_dir(worker_id)
                 volumes = {
                     self._docker_bind_path(pgdata_dir): {
@@ -540,9 +542,9 @@ class DockerEnvironment(DatabaseEnvironment):
                 running = True
                 LOGGER.debug(
                     "%s  ➤ Container '%s' created successfully.%s",
-                    ColorCode.GREEN,
+                    COLORS.italic,
                     container_name,
-                    ColorCode.RESET,
+                    COLORS.reset,
                 )
 
             self.instances[worker_id] = InstanceConfig(
@@ -555,18 +557,19 @@ class DockerEnvironment(DatabaseEnvironment):
 
             # Auto-initialize schema natively and leverage snapshots to accelerate parallel workers
             if self.schema_provider:
-                LOGGER.debug("  Initializing schema for worker %d...", worker_id)
                 self.initialize_schema(worker_id)
 
                 if worker_id == 0:
                     baseline_snapshot_available = self.snapshot_exists(worker_id=0)
                     if baseline_snapshot_available:
                         LOGGER.debug(
-                            "    Baseline snapshot already exists; skipping snapshot creation"
+                            "  %s➤ Baseline snapshot already exists; skipping snapshot creation%s",
+                            COLORS.italic,
+                            COLORS.reset,
                         )
                     else:
                         LOGGER.debug(
-                            "    Caching worker 0 baseline snapshot for fast-path initialization...",
+                            "  Caching worker 0 baseline snapshot for fast-path initialization...",
                         )
                         snapshot_id = self.create_snapshot(worker_id=0)
                         if not snapshot_id:
@@ -576,18 +579,15 @@ class DockerEnvironment(DatabaseEnvironment):
                         baseline_snapshot_available = True
 
             LOGGER.debug(
-                "%s  ➤ Container '%s' set up successfully.%s",
-                ColorCode.GREEN,
+                " ➤ Container '%s' set up successfully.",
                 container_name,
-                ColorCode.RESET,
             )
 
         LOGGER.info(
-            "%s%s➤ All %d containers set up successfully.%s",
-            ColorCode.BOLD,
-            ColorCode.GREEN,
+            "%s➤ All %d containers set up successfully.%s",
+            COLORS.bold,
             num_workers,
-            ColorCode.RESET,
+            COLORS.reset,
         )
 
         return list(self.instances.values())
@@ -621,6 +621,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
     def stop_instance(self, worker_id: int, mode: str = "fast") -> bool:
         """Stop a running container."""
+        LOGGER.debug("  Stopping container for [worker-%d]...", worker_id)
         container_name = self._container_name(worker_id)
         try:
             with self._with_timeout(self._restore_api_timeout):
@@ -662,8 +663,10 @@ class DockerEnvironment(DatabaseEnvironment):
 
     def stop_all(self, mode: str = "fast") -> bool:
         """Stop all running containers associated with this environment."""
+        LOGGER.info("%sStopping PostgreSQL instances...%s", COLORS.bold, COLORS.reset)
         for worker_id in list(self.instances):
             self.stop_instance(worker_id, mode)
+        LOGGER.debug("➤ All stop commands issued, verifying container states...")
 
         managed_name_pattern = re.compile(rf"^{re.escape(self.container_prefix)}-\d+$")
         try:
@@ -676,7 +679,7 @@ class DockerEnvironment(DatabaseEnvironment):
                         container.stop(timeout=5)
                 except requests.exceptions.ReadTimeout as exc:
                     LOGGER.debug(
-                        "Docker timed out stopping container '%s' during stop_all; checking state: %s",
+                        "  Docker timed out stopping container '%s' during stop_all; checking state: %s",
                         container_name,
                         exc,
                     )
@@ -684,7 +687,7 @@ class DockerEnvironment(DatabaseEnvironment):
                         container.reload()
                         if getattr(container, "status", "") == "running":
                             LOGGER.debug(
-                                "Container '%s' is still running after timeout in stop_all",
+                                "  Container '%s' is still running after timeout in stop_all",
                                 container_name,
                             )
                     except docker_errors.DockerException as reload_exc:
@@ -700,7 +703,7 @@ class DockerEnvironment(DatabaseEnvironment):
                     OSError,
                 ) as exc:
                     LOGGER.debug(
-                        "Failed to stop container '%s' during stop_all: %s",
+                        "  Failed to stop container '%s' during stop_all: %s",
                         container_name,
                         exc,
                     )
@@ -711,9 +714,10 @@ class DockerEnvironment(DatabaseEnvironment):
             OSError,
         ) as exc:
             LOGGER.debug(
-                "Unable to list running Docker containers during stop_all: %s", exc
+                "  Unable to list running Docker containers during stop_all: %s", exc
             )
 
+        LOGGER.info("%s➤ All containers stopped.%s", COLORS.bold, COLORS.reset)
         return True
 
     def recover_instance(self, worker_id: int) -> bool:
@@ -735,7 +739,7 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return False
 
-    def restart_instance(self, worker_id: int) -> bool:
+    def restart_instance(self, worker_id: int, quiet: bool = False) -> bool:
         """
         Restart a specific worker's Docker container.
 
@@ -745,7 +749,8 @@ class DockerEnvironment(DatabaseEnvironment):
         container_name = self._container_name(worker_id)
         try:
             container = self.client.containers.get(container_name)
-            LOGGER.info("Restarting container '%s'...", container_name)
+            if not quiet:
+                LOGGER.info("Restarting container '%s'...", container_name)
             container.restart(timeout=10)
             db_config = self.get_db_config(worker_id)
             self._wait_for_ready(
@@ -753,13 +758,16 @@ class DockerEnvironment(DatabaseEnvironment):
                 db_config.port,
                 timeout=self._ready_timeout,
                 context="restart",
+                quiet=quiet,
             )
             if not self.reset_statistics(worker_id):
                 LOGGER.warning(
                     "Container '%s' restarted but statistics reset failed.",
                     container_name,
                 )
-            LOGGER.info("Container '%s' restarted successfully.", container_name)
+
+            if not quiet:
+                LOGGER.info("Container '%s' restarted successfully.", container_name)
             return True
         except (
             docker_errors.DockerException,
@@ -771,34 +779,37 @@ class DockerEnvironment(DatabaseEnvironment):
             LOGGER.error("Failed to restart container '%s': %s", container_name, exc)
             return False
 
-    def verify_instances(self) -> dict[int, bool]:
+    def verify_instances(self) -> None:
         """Check status of containers."""
-        res = {}
         for worker_id, instance_config in self.instances.items():
             container_name = self._container_name(worker_id)
             try:
-                container = self.client.containers.get(container_name)
-                res[worker_id] = container.status == "running"
-                instance_config.running = res[worker_id]
+                self.client.containers.get(container_name)
             except (
                 docker_errors.DockerException,
                 requests.exceptions.RequestException,
                 TimeoutError,
                 OSError,
             ) as exc:
-                res[worker_id] = False
                 instance_config.running = False
-                LOGGER.debug(
+                LOGGER.error(
                     "Unable to verify container '%s' for worker %d: %s",
                     container_name,
                     worker_id,
                     exc,
                 )
-        return res
+                raise RuntimeError(
+                    f"Failed to verify container '{container_name}' for worker {worker_id}"
+                ) from exc
+
+        LOGGER.debug("➤ All containers verified successfully.")
 
     def cleanup(self, remove_data: bool = False) -> None:
         """Remove containers and optionally their host PGDATA directories."""
+        LOGGER.info("%sCleaning up Docker environment...%s", COLORS.bold, COLORS.reset)
+
         for worker_id in list(self.instances):
+            LOGGER.debug("  Cleaning up [Worker-%d]...", worker_id)
             container_name = self._container_name(worker_id)
             try:
                 container = self.client.containers.get(container_name)
@@ -812,7 +823,7 @@ class DockerEnvironment(DatabaseEnvironment):
                 OSError,
             ) as exc:
                 LOGGER.debug(
-                    "Unable to remove container '%s' for worker %d during cleanup: %s",
+                    "  Unable to remove container '%s' for [Worker-%d] during cleanup: %s",
                     container_name,
                     worker_id,
                     exc,
@@ -822,11 +833,12 @@ class DockerEnvironment(DatabaseEnvironment):
                 pgdata_dir = self._worker_host_pgdata_dir(worker_id)
                 self._force_remove_host_dir(pgdata_dir)
                 LOGGER.debug(
-                    "Removed host PGDATA directory '%s' for worker %d",
+                    "  ➤ Removed host PGDATA directory '%s' for [Worker-%d]",
                     pgdata_dir,
                     worker_id,
                 )
         self.instances.clear()
+        LOGGER.info("%s➤ Docker environment cleanup complete.%s", COLORS.bold, COLORS.reset)
 
     @contextmanager
     def _with_timeout(self, seconds: Optional[int]):
@@ -1000,8 +1012,8 @@ class DockerEnvironment(DatabaseEnvironment):
         snapshot_dir = self._snapshot_host_dir()
         if snapshot_dir.exists():
             snapshot_id = self._default_snapshot_id()
-            LOGGER.info(
-                "Removing baseline snapshot '%s' at '%s' (force_recreate_baseline=True)",
+            LOGGER.debug(
+                " Removing baseline snapshot '%s' at '%s' (force_recreate_baseline=True)",
                 snapshot_id,
                 snapshot_dir,
             )
@@ -1073,6 +1085,12 @@ class DockerEnvironment(DatabaseEnvironment):
             )
 
             self._write_snapshot_manifest(snapshot_id=snapshot_id)
+            LOGGER.debug(
+                "   %s➤ Baseline snapshot created for worker %d%s",
+                COLORS.italic,
+                worker_id,
+                COLORS.reset,
+            )
             return snapshot_id
         except (docker_errors.DockerException, RuntimeError) as e:
             LOGGER.error("Failed to create snapshot from %s: %s", container_name, e)
@@ -1088,7 +1106,7 @@ class DockerEnvironment(DatabaseEnvironment):
         manifest = self._read_snapshot_manifest()
         if manifest is None:
             LOGGER.debug(
-                "Snapshot dir '%s' exists but manifest is missing/invalid; treating as stale",
+                "    Snapshot dir '%s' exists but manifest is missing/invalid; treating as stale",
                 snapshot_pgdata,
             )
             return False
@@ -1103,7 +1121,7 @@ class DockerEnvironment(DatabaseEnvironment):
             or manifest_signature != expected_signature
         ):
             LOGGER.debug(
-                "Snapshot '%s' manifest mismatch (manifest_snapshot_id=%s, "
+                "    Snapshot '%s' manifest mismatch (manifest_snapshot_id=%s, "
                 "manifest_signature=%s, expected_signature=%s); treating as stale",
                 snapshot_id,
                 manifest_snapshot_id,
@@ -1114,7 +1132,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
         return True
 
-    def restore_snapshot(self, worker_id: int, snapshot_id: str = "") -> bool:
+    def restore_snapshot(self, worker_id: int, snapshot_id: str = "", quiet: bool = False) -> bool:
         """Restore a worker's PGDATA from the baseline snapshot directory."""
         container_name = self._container_name(worker_id)
         port = self._worker_port(worker_id)
@@ -1135,6 +1153,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
             pgdata_dir = self._seed_pgdata_dir_from_snapshot(
                 worker_id=worker_id,
+                quiet=quiet,
             )
             if not pgdata_dir:
                 return False
@@ -1160,6 +1179,7 @@ class DockerEnvironment(DatabaseEnvironment):
                 port,
                 timeout=self._restore_ready_timeout,
                 context="snapshot-restore",
+                quiet=quiet,
             )
             if worker_id in self.instances:
                 self.instances[worker_id].running = True
@@ -1187,12 +1207,12 @@ class DockerEnvironment(DatabaseEnvironment):
             stats = container.stats(stream=False)
         except (docker_errors.NotFound, docker_errors.APIError) as exc:
             LOGGER.debug(
-                "Unable to collect Docker memory stats for %s: %s", container_name, exc
+                "  ➤ Unable to collect Docker memory stats for %s: %s", container_name, exc
             )
             return 0.0
 
         try:
-            memory_stats = stats.get("memory_stats", {})
+            memory_stats = stats.get("memory_stats", {})  # type: ignore
             usage = float(memory_stats.get("usage", 0.0))
             limit = float(memory_stats.get("limit", 0.0))
             if limit <= 0.0:
@@ -1200,7 +1220,7 @@ class DockerEnvironment(DatabaseEnvironment):
             return max(0.0, min(1.0, usage / limit))
         except (TypeError, ValueError) as exc:
             LOGGER.debug(
-                "Invalid Docker memory stats payload for %s: %s", container_name, exc
+                "  ➤ Invalid Docker memory stats payload for %s: %s", container_name, exc
             )
             return 0.0
 
@@ -1210,6 +1230,7 @@ class DockerEnvironment(DatabaseEnvironment):
         port: int,
         timeout: int = 60,
         context: str = "startup",
+        quiet: bool = False,
     ) -> None:
         """Wait until PostgreSQL is accepting connections."""
         active_config = DatabaseConfig(
@@ -1220,18 +1241,20 @@ class DockerEnvironment(DatabaseEnvironment):
             password=self.base_config.password,
         )
 
-        LOGGER.debug("  Waiting for container '%s' to be ready...", container_name)
+        if not quiet:
+            LOGGER.debug("  Waiting for container '%s' to be ready...", container_name)
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
                 conn = get_connection(config=active_config, connect_timeout=2)
                 conn.close()
-                LOGGER.debug(
-                    "%s  ➤ Container '%s' is ready after %.2f seconds.%s",
-                    ColorCode.GREEN,
-                    container_name,
-                    time.time() - start_time,
-                    ColorCode.RESET,
+                if not quiet:
+                    LOGGER.debug(
+                        "  %s➤ Container '%s' is ready after %.2f seconds.%s",
+                        COLORS.italic,
+                        container_name,
+                        time.time() - start_time,
+                        COLORS.reset,
                 )
                 return
             except psycopg2.OperationalError:
