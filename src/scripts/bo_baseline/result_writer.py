@@ -30,6 +30,8 @@ def convert_numpy_types(obj: Any) -> Any:
         return {key: convert_numpy_types(value) for key, value in obj.items()}
     elif isinstance(obj, (list, tuple)):
         return [convert_numpy_types(item) for item in obj]
+    elif hasattr(obj, "to_dict") and callable(obj.to_dict):
+        return convert_numpy_types(obj.to_dict())
     else:
         return obj
 
