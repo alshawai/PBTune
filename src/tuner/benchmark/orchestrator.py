@@ -620,7 +620,7 @@ class WorkloadOrchestrator:
         restart_occurred = False
 
         try:
-            worker.logger.info(" Establishing connection to PostgreSQL...")
+            worker.logger.debug(" Establishing connection to PostgreSQL...")
             # ── B1: Connect ──────────────────────────────────────────
             connection = self.connect(worker.db_config, max_retries=5, retry_delay=3.0)
             _barrier("connected")
@@ -677,7 +677,7 @@ class WorkloadOrchestrator:
 
             # ── B5: Verify configuration ─────────────────────────────
             if apply_config and worker.knob_config and restart_occurred:
-                worker.logger.info(" Verifying knob configuration after restart...")
+                worker.logger.debug(" Verifying knob configuration after restart...")
                 verification = knob_applicator.verify(worker.knob_config)
                 failed_params = [k for k, v in verification.items() if not v]
                 if failed_params:
@@ -904,7 +904,7 @@ class WorkloadOrchestrator:
             _barrier("reliability_gated")
             last_completed_barrier = "reliability_gated"
 
-            worker.logger.info(
+            worker.logger.debug(
                 " Running post-workload maintenance (VACUUM ANALYZE) if needed..."
             )
             self._vacuum_after_dml(worker.db_config, worker_logger=worker.logger)

@@ -636,7 +636,8 @@ def log_section_header(
 
     sep = "=" * visible_len
     if level.lower() == "debug":
-        logger.debug("%s%s%s", COLORS.bold, sep, COLORS.reset)
+        if top_separator:
+            logger.debug("%s%s%s", COLORS.bold, sep, COLORS.reset)
         if formatted_title:
             logger.debug(formatted_title)
         logger.debug("%s%s%s", COLORS.bold, sep, COLORS.reset)
