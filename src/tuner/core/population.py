@@ -37,12 +37,17 @@ from src.tuner.core.evolution import (
     check_convergence,
 )
 from src.tuner.core.barriers import GenerationBarrier
+
+from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.environments import DatabaseEnvironment
+from src.utils.logger.helpers import log_section_header, log_worker_metrics_table
 from src.utils.metrics import PerformanceMetrics
-from src.utils.logger import get_logger
+from src.utils.scoring.contracts import ScoreBreakdown
+from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("Population")
+COLORS = get_color_context()
 
 
 @dataclass
@@ -105,6 +110,19 @@ class GenerationResult:
     best_config: Dict[str, Any]
     converged: bool
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert GenerationResult to a dictionary for logging or serialization."""
+        return {
+            "generation": self.generation,
+            "best_score": self.best_score,
+            "mean_score": self.mean_score,
+            "std_score": self.std_score,
+            "num_exploited": self.num_exploited,
+            "best_worker_id": self.best_worker_id,
+            "best_config": self.best_config,
+            "converged": self.converged,
+        }
+
 
 class Population:
     """
@@ -160,7 +178,7 @@ class Population:
         self,
         knob_space: KnobSpace,
         config: Optional[PopulationConfig] = None,
-        evaluator: Optional[Any] = None,
+        orchestrator: Optional[WorkloadOrchestrator] = None,
     ):
         """
         Initialize a Population instance.
@@ -171,13 +189,13 @@ class Population:
             The search space for knob configurations
         config : Optional[PopulationConfig]
             Configuration parameters. Uses defaults if None.
-        evaluator : Optional[WorkloadOrchestrator]
+        orchestrator : Optional[WorkloadOrchestrator]
             WorkloadOrchestrator instance (for accessing metric config). If None, adaptive
             normalization will use global config objects (less clean but works).
         """
         self.knob_space = knob_space
         self.config = config or PopulationConfig()
-        self.evaluator = evaluator
+        self.orchestrator = orchestrator
 
         self.workers: List[Worker] = []
         self.current_generation: int = 0
@@ -186,6 +204,7 @@ class Population:
         self.best_overall_score: float = 0.0
         self.best_overall_metrics: Optional[PerformanceMetrics] = None
         self.best_overall_config: Dict[str, Any] = {}
+        self.best_overall_score_breakdown: Optional[ScoreBreakdown] = None
         self.generations_without_improvement: int = 0
 
         # Snapshot support (configured via setup_snapshots() method)
@@ -193,10 +212,11 @@ class Population:
         self.restore_interval: int = 5
         self.env: Optional[DatabaseEnvironment] = None
 
-        self._ranges_updated: bool = False
+        self._ranges_calibrated: bool = False
+        self._features_refined: bool = False
 
-        LOGGER.debug(
-            "-> Created Population: size=%s, ready_interval=%s, exploit_quantile=%s",
+        LOGGER.info(
+            "➤ Created Population: size=%s, ready_interval=%s, exploit_quantile=%s",
             self.config.population_size,
             self.config.ready_interval,
             self.config.exploit_quantile,
@@ -239,7 +259,7 @@ class Population:
             num_lhs_needed = self.config.population_size - len(initial_configs)
             if num_lhs_needed > 0:
                 LOGGER.debug(
-                    "Partial seeding: %d configs provided, filling %d configs with LHS",
+                    " Partial seeding: %d configs provided, filling %d configs with LHS",
                     len(initial_configs),
                     num_lhs_needed,
                 )
@@ -248,6 +268,7 @@ class Population:
                 )
                 initial_configs = initial_configs + lhs_configs
         else:
+            LOGGER.debug(" Sampling %d configs with LHS", self.config.population_size)
             initial_configs = self.knob_space.sample_diverse_configs(
                 num_samples=self.config.population_size, seed=random_seed
             )
@@ -310,9 +331,10 @@ class Population:
                 user=user,
                 password=password,
             )
+            worker_logger = get_logger("Population", worker_id=worker.worker_id)
+            worker_logger.debug("➤ Assigned to instance port %d", worker.port)
 
-            worker_logger = get_logger("PopulationWorker", worker_id=worker.worker_id)
-            worker_logger.info("Assigned to instance port %d", worker.port)
+        LOGGER.debug("➤ Instance configurations assigned to all workers")
 
     def setup_snapshots(
         self,
@@ -327,10 +349,17 @@ class Population:
         self.restore_interval = getattr(pbt_config, "snapshot_restore_interval", 5)
 
         if not self.enable_snapshots:
-            LOGGER.debug("Snapshots disabled in config")
+            LOGGER.debug(
+                "%sSnapshots are disabled in config%s", COLORS.italic, COLORS.reset
+            )
             return
 
-        LOGGER.info("Snapshot restoration enabled: interval=%d", self.restore_interval)
+        LOGGER.info(
+            "Snapshot restoration enabled: interval=%s%d%s",
+            COLORS.bold,
+            self.restore_interval,
+            COLORS.reset,
+        )
 
     def evaluate_generation(
         self,
@@ -377,80 +406,138 @@ class Population:
         >>>
         >>> population.evaluate_generation(my_evaluate, parallel=True)
         """
-        LOGGER.info(
-            "Evaluating generation %s - %s%s",
-            self.current_generation,
-            "parallel" if parallel else "sequential",
-            " (lockstep sync)" if (parallel and synchronize_workers) else "",
-        )
-
-        # Create barriers for lockstep synchronization.
-        # Disabled when running sequentially or when synchronize_workers=False.
+        self._features_refined = False
+        max_workers = max_workers or self.config.population_size
+        # Barrier usage flag — actual barrier objects are created per-batch
+        # in parallel mode to match the number of concurrent threads.
         use_barriers = parallel and synchronize_workers
-        barriers = GenerationBarrier(
-            num_workers=len(self.workers),
-            timeout=barrier_timeout,
-            enabled=use_barriers,
-        )
-        if use_barriers:
-            LOGGER.debug(
-                "Lockstep barriers enabled: %d workers, %.0fs timeout",
+
+        if not parallel or max_workers == 1:
+            LOGGER.info(
+                "%sStarting sequential evaluation of %d workers...%s",
+                COLORS.bold,
                 len(self.workers),
-                barrier_timeout,
+                COLORS.reset,
+            )
+            disabled_barriers = GenerationBarrier(
+                num_workers=1, timeout=barrier_timeout, enabled=False
             )
 
-        if not parallel:
-            # Sequential mode: barriers are disabled (no-op).
             for worker in self.workers:
                 try:
-                    metrics, score = evaluate_fn(worker, barriers=barriers)
+                    metrics, score = evaluate_fn(worker, barriers=disabled_barriers)
                     worker.update_metrics(metrics, score)
-                    worker_logger = get_logger(
-                        "PopulationWorker", worker_id=worker.worker_id
-                    )
-                    worker_logger.debug(
-                        "score=%.4f, step_count=%s", score, worker.step_count
-                    )
+
                 except Exception as e:
-                    worker_logger = get_logger(
-                        "PopulationWorker", worker_id=worker.worker_id
-                    )
-                    worker_logger.error("Error evaluating: %s", e)
+                    worker.logger.error("Error evaluating: %s", e)
                     raise
         else:
-            max_workers = max_workers or self.config.population_size
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all evaluation tasks (barrier object shared across threads)
-                future_to_worker = {
-                    executor.submit(evaluate_fn, worker, barriers=barriers): worker
-                    for worker in self.workers
-                }
+            LOGGER.info(
+                "%sStarting parallel evaluation of %d workers with max_workers=%d...%s",
+                COLORS.bold,
+                len(self.workers),
+                max_workers,
+                COLORS.reset,
+            )
+            num_workers = len(self.workers)
 
-                # Collect results as they complete
-                for future in as_completed(future_to_worker):
-                    worker = future_to_worker[future]
+            # Hybrid mode: when max_workers < population, we must evaluate
+            # in batches.  Barriers synchronize threads *within* a batch
+            # (since only batch-mates run concurrently and contend for
+            # shared hardware resources).
+            if max_workers >= num_workers:
+                batches = [self.workers]  # All workers fit in a single batch
+            else:
+                batches = [  # Chunk workers into batches of max_workers.
+                    self.workers[i : i + max_workers]
+                    for i in range(0, num_workers, max_workers)
+                ]
+                LOGGER.info(
+                    " %sHybrid mode: %d workers evaluated in %d batches of up to %d workers%s",
+                    COLORS.italic,
+                    num_workers,
+                    len(batches),
+                    max_workers,
+                    COLORS.reset,
+                )
+
+            for batch_idx, batch in enumerate(batches):
+                # Create batch-local barriers sized to this batch.
+                batch_barriers = GenerationBarrier(
+                    num_workers=len(batch),
+                    timeout=barrier_timeout,
+                    enabled=use_barriers,
+                )
+                if use_barriers and len(batches) > 1:
+                    LOGGER.debug(
+                        " %sBatch %d/%d: %d workers, barriers enabled%s",
+                        COLORS.italic,
+                        batch_idx + 1,
+                        len(batches),
+                        len(batch),
+                        COLORS.reset,
+                    )
+
+                with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                    # Submit all evaluation tasks in this batch
+                    future_to_worker = {
+                        executor.submit(
+                            evaluate_fn, worker, barriers=batch_barriers
+                        ): worker
+                        for worker in batch
+                    }
+
+                    # Use a generous timeout to detect stuck workers
+                    # (barrier_timeout * num_barriers + headroom).
+                    collection_timeout = (barrier_timeout * len(batch)) + 60.0
+                    completed_futures = set()
+
                     try:
-                        metrics, score = future.result()
-                        worker.update_metrics(metrics, score)
-                        worker_logger = get_logger(
-                            "PopulationWorker", worker_id=worker.worker_id
-                        )
-                        worker_logger.debug(
-                            "score=%.4f, step_count=%s", score, worker.step_count
-                        )
-                    except Exception as e:
-                        worker_logger = get_logger(
-                            "PopulationWorker", worker_id=worker.worker_id
-                        )
-                        worker_logger.error("Error evaluating: %s", e)
-                        raise
+                        for future in as_completed(
+                            future_to_worker, timeout=collection_timeout
+                        ):
+                            completed_futures.add(future)
+                            worker = future_to_worker[future]
+                            try:
+                                metrics, score = future.result()
+                                worker.update_metrics(metrics, score)
+                            except Exception as e:
+                                worker.logger.error("Error evaluating: %s", e)
+                                batch_barriers.abort()  # Abort barriers so remaining threads unblock
+                                raise
+                    except TimeoutError:
+                        # as_completed raised TimeoutError — some futures
+                        # never completed within the generous deadline.
+                        pass
 
-        LOGGER.info("Generation %s evaluation complete", self.current_generation)
+                    # Check for stuck workers that never completed
+                    stuck_futures = set(future_to_worker.keys()) - completed_futures
+                    if stuck_futures:
+                        batch_barriers.abort()
+                        for future in stuck_futures:
+                            stuck_worker = future_to_worker[future]
+                            worker_logger = get_logger(
+                                "PopulationWorker",
+                                worker_id=stuck_worker.worker_id,
+                            )
+                            worker_logger.error(
+                                "Worker stuck — did not complete within %.0fs; "
+                                "aborting barriers and continuing",
+                                collection_timeout,
+                            )
+                            future.cancel()
 
-        # Refine workload features at generation level using aggregated metrics from all workers
-        # This ensures all workers in a generation use the same features and weights for scoring
-        if self.evaluator is not None:
-            self.evaluator.refine_workload_features_from_generation(self.workers)
+        LOGGER.info(
+            "%s➤ Evaluation of %d workers is completed.%s",
+            COLORS.bold,
+            self.config.population_size,
+            COLORS.reset,
+        )
+
+        LOGGER.info("Refining workload features at generation level...")
+        self._features_refined = bool(
+            self.orchestrator.refine_workload_features_from_generation(self.workers)  # type: ignore
+        )
 
     @staticmethod
     def _config_change_ratio(
@@ -503,7 +590,6 @@ class Population:
 
     def rescue_dead_workers(
         self,
-        evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
     ) -> int:
         """Immediately rescue dead workers by exploiting alive configs.
 
@@ -532,8 +618,11 @@ class Population:
         ]
         if not alive_workers:
             LOGGER.warning(
-                "Dead-config rescue fallback: no alive workers available; resampling %d dead workers for next generation",
+                "%sDead-config rescue fallback: no alive workers available; "
+                "resampling %d dead workers for next generation%s",
+                COLORS.warning,
                 len(dead_workers),
+                COLORS.reset,
             )
 
             seed_base = (self.current_generation + 1) * 1000
@@ -547,7 +636,7 @@ class Population:
             resampled = 0
             for dead_worker in dead_workers:
                 dead_logger = get_logger(
-                    "PopulationWorker", worker_id=dead_worker.worker_id
+                    "WorkerRescuer", worker_id=dead_worker.worker_id
                 )
                 previous_config = dead_worker.get_config_copy()
                 selected_config, change_ratio = self._choose_diverse_resample_config(
@@ -558,6 +647,7 @@ class Population:
                 dead_worker.knob_config = selected_config
                 dead_worker.performance_score = 0.0
                 dead_worker.metrics = None
+                dead_worker.score_breakdown = None
                 dead_worker.force_restart_next_eval = True
 
                 dead_worker.parent_id = None
@@ -570,28 +660,28 @@ class Population:
                         recovered = self.env.recover_instance(dead_worker.worker_id)
                     except (ConnectionError, RuntimeError, OSError) as exc:
                         dead_logger.error(
-                            "[DEAD_CONFIG] Fallback resample recovery raised an unexpected error: %s",
+                            " ➤ Fallback resample recovery raised an unexpected error: %s",
                             exc,
                             exc_info=True,
                         )
 
                     if not recovered:
                         dead_logger.error(
-                            "[DEAD_CONFIG] Fallback resample could not recover worker instance"
+                            " ➤ Fallback resample could not recover worker instance"
                         )
                     else:
-                        dead_logger.info(
-                            "[DEAD_CONFIG] Recovered instance after all-dead fallback resample"
+                        dead_logger.debug(
+                            " ➤ Recovered instance after all-dead fallback resample"
                         )
 
-                dead_logger.info(
-                    "[DEAD_CONFIG] Resample outcome: changed_config=%s changed_ratio=%.3f",
+                dead_logger.debug(
+                    " ➤ Resample outcome: changed_config=%s changed_ratio=%.3f",
                     config_changed,
                     change_ratio,
                 )
 
                 dead_logger.warning(
-                    "[DEAD_CONFIG] No alive donor available; resampled a fresh configuration for next generation"
+                    " ➤ No alive donor available; resampled a fresh configuration for next generation"
                 )
                 resampled += 1
 
@@ -604,12 +694,10 @@ class Population:
         rescued = 0
         for index, dead_worker in enumerate(dead_workers):
             donor = alive_workers[index % len(alive_workers)]
-            dead_logger = get_logger(
-                "PopulationWorker", worker_id=dead_worker.worker_id
-            )
+            dead_logger = get_logger("WorkerRescuer", worker_id=dead_worker.worker_id)
 
             dead_logger.warning(
-                "[DEAD_CONFIG] Triggering immediate rescue: exploit Worker-%d (score=%.4f)",
+                " Triggering immediate rescue: exploit [Worker-%d] (score=%.3f)",
                 donor.worker_id,
                 donor.performance_score,
             )
@@ -623,20 +711,20 @@ class Population:
                     recovered = self.env.recover_instance(dead_worker.worker_id)
                 except (ConnectionError, RuntimeError, OSError) as exc:
                     dead_logger.error(
-                        "[DEAD_CONFIG] Instance recovery raised an unexpected error during immediate rescue: %s",
+                        " ➤ Instance recovery raised an unexpected error during immediate rescue: %s",
                         exc,
                         exc_info=True,
                     )
 
                 if not recovered:
                     dead_logger.error(
-                        "[DEAD_CONFIG] Instance recovery failed during immediate rescue"
+                        " ➤ Instance recovery failed during immediate rescue"
                     )
                     continue
 
                 rescued += 1
-                dead_logger.info(
-                    "[DEAD_CONFIG] Instance recovered. Will be re-evaluated in next generation."
+                dead_logger.debug(
+                    " ➤ Instance recovered. Will be re-evaluated in next generation."
                 )
             else:
                 rescued += 1  # If no env, just count as rescued
@@ -658,7 +746,7 @@ class Population:
 
         Called automatically during train_generation() after evaluations.
         """
-        if self._ranges_updated:
+        if self._ranges_calibrated:
             return
 
         all_metrics: List[PerformanceMetrics] = []
@@ -676,115 +764,155 @@ class Population:
 
         if len(all_metrics) < min_samples_needed:
             LOGGER.debug(
-                "Waiting for sufficient samples for adaptive normalization: "
-                "%d/%d (generation %d)",
+                "%s Waiting for sufficient samples for adaptive normalization: "
+                "%d/%d (generation %d)%s",
+                COLORS.italic,
                 len(all_metrics),
                 min_samples_needed,
                 self.current_generation,
+                COLORS.reset,
             )
             return
 
         if excluded_failure_metrics > 0:
             LOGGER.debug(
-                "Excluded %d failure-tagged metrics from adaptive normalization updates",
+                " %sExcluded %d failure-tagged metrics from adaptive normalization updates%s",
+                COLORS.italic,
                 excluded_failure_metrics,
+                COLORS.reset,
             )
 
         LOGGER.info(
-            "Updating normalization ranges from %d observations across %d workers",
+            " %sUpdating normalization ranges from %d observations across %d workers%s",
+            COLORS.bold,
             len(all_metrics),
             len(self.workers),
+            COLORS.reset,
         )
 
-        if self.evaluator is not None and hasattr(self.evaluator, "config"):
-            metric_config = self.evaluator.config.metric_config
+        if self.orchestrator is not None and hasattr(self.orchestrator, "config"):
+            metric_config = self.orchestrator.config.metric_config
 
             try:
                 already_initialized = getattr(
                     metric_config, "_ranges_initialized", False
                 )
-                if not already_initialized:
-                    metric_config.update_ranges(all_metrics)
-                    LOGGER.info(
-                        "✓ Adaptive normalization activated for %s "
-                        "workload (based on %d observations)",
-                        metric_config.workload_type.value,
-                        len(all_metrics),
-                    )
+                if already_initialized:
+                    LOGGER.debug("➤ Metric ranges already initialized, skipping update")
+                metric_config.update_ranges(all_metrics)
+                LOGGER.info(
+                    "➤ Adaptive normalization activated for %s "
+                    "workload (based on %d observations)",
+                    metric_config.workload_type.value,
+                    len(all_metrics),
+                )
 
-                    # Historical scores from generation 0 are on a different scale.
-                    # We reset the historical best, but leave worker rescoring to _finalize_scores()
-                    LOGGER.info(
-                        "♻️  Resetting historical best score to align with new adaptive bounds"
-                    )
-                    self.best_overall_score = 0.0
-                    self.best_overall_metrics = None
-                    self.best_overall_config = {}
-                    self.generations_without_improvement = 0
-                else:
-                    LOGGER.debug("Metric ranges already initialized, skipping update")
             except AttributeError as e:
-                LOGGER.warning("Failed to update metric ranges: %s", e)
+                LOGGER.warning("➤ Failed to update metric ranges: %s", e)
 
-        self._ranges_updated = True
-        LOGGER.info("Metric normalization ranges updated successfully")
+        self._ranges_calibrated = True
+        LOGGER.info("➤ Metric normalization ranges updated successfully")
 
-    def exploit_and_explore(
-        self, require_ready: bool = True, exclude_knobs: Optional[List[str]] = None
-    ) -> int:
-        """
-        Perform exploit-explore step on poor-performing workers.
+    def _build_worker_metric_payload_from_metrics(
+        self,
+        metrics: PerformanceMetrics,
+        score: float | None,
+    ) -> dict[str, Any]:
+        """Build a reusable metric payload for the worker metrics table."""
+        return {
+            "score": score,
+            "latency_p95": f"{metrics.latency_p95:.2f}{metrics.latency_unit}",
+            "latency_p99": f"{metrics.latency_p99:.2f}{metrics.latency_unit}",
+            "latency_variance": (
+                f"{metrics.latency_variance:.2f}{metrics.latency_unit}"
+            ),
+            "tail_amplification": f"{metrics.tail_amplification:.2f}",
+            "throughput": f"{metrics.throughput:.1f} {metrics.throughput_unit}",
+            "throughput_variance": (
+                f"{metrics.throughput_variance:.2f} {metrics.throughput_unit}"
+            ),
+            "memory_utilization": f"{metrics.memory_utilization * 100.0:.2f}%",
+            "io_read_mb": f"{metrics.io_read_mb:.2f} MB",
+            "io_write_mb": f"{metrics.io_write_mb:.2f} MB",
+            "scan_efficiency": f"{metrics.scan_efficiency * 100.0:.1f}%",
+            "cache_hit_ratio": f"{metrics.cache_hit_ratio * 100.0:.1f}%",
+        }
 
-        Delegates to evolution.execute_exploit_explore() to perform:
-        1. Identify poor and elite workers (truncation selection)
-        2. Clone elite configs to poor workers (exploit)
-        3. Perturb poor workers' configs (explore)
+    def _build_worker_metric_payload(self, worker: Worker) -> dict[str, Any] | None:
+        """Build a reusable metric payload for the worker metrics table."""
+        metrics = worker.metrics
+        if metrics is None:
+            return None
 
-        Parameters
-        ----------
-        require_ready : bool, default=True
-            Only consider workers that have completed ready_interval steps
-        verbose : bool, default=False
-            Enable verbose logging of exploit-explore details
-        exclude_knobs : Optional[List[str]]
-            Knobs to exclude from perturbation (keep constant)
-
-        Returns
-        -------
-        int
-            Number of workers that were exploited and explored
-        """
-        num_exploited = execute_exploit_explore(
-            workers=self.workers,
-            exploit_quantile=self.config.exploit_quantile,
-            perturbation_factors=self.config.perturbation_factors,
-            current_generation=self.current_generation,
-            require_ready=require_ready,
-            dead_config_threshold=self.config.dead_config_threshold,
-            exclude_knobs=exclude_knobs,
+        return self._build_worker_metric_payload_from_metrics(
+            metrics,
+            worker.performance_score,
         )
 
-        LOGGER.info(
-            "Exploit-explore complete: %s workers modified (generation %s)",
-            num_exploited,
-            self.current_generation,
+    def _prepare_generation_worker_metrics_table_payloads(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
+        """Prepare current-generation rows and the finalized historical best row."""
+        worker_metric_payloads: list[dict[str, Any]] = []
+        worker_labels: list[str] = []
+
+        for worker in self.workers:
+            payload = self._build_worker_metric_payload(worker)
+            if payload is None:
+                continue
+
+            worker_metric_payloads.append(payload)
+            worker_labels.append(f"Worker-{worker.worker_id}")
+
+        best_worker_payload: dict[str, Any] | None = None
+        if self.best_overall_metrics is not None:
+            best_worker_payload = self._build_worker_metric_payload_from_metrics(
+                self.best_overall_metrics,
+                self.best_overall_score,
+            )
+
+        return worker_metric_payloads, worker_labels, best_worker_payload
+
+    def _log_generation_worker_metrics_table(self) -> None:
+        """Render the finalized generation worker table for both sequential and parallel runs."""
+        metric_order = [
+            "score",
+            "latency_p95",
+            "latency_p99",
+            "latency_variance",
+            "tail_amplification",
+            "throughput",
+            "throughput_variance",
+            "memory_utilization",
+            "io_read_mb",
+            "io_write_mb",
+            "scan_efficiency",
+            "cache_hit_ratio",
+        ]
+
+        worker_metric_payloads, worker_labels, best_worker_payload = (
+            self._prepare_generation_worker_metrics_table_payloads()
         )
 
-        return num_exploited
+        if not worker_metric_payloads:
+            return
 
-    def record_generation(self, previous_best_score: float = 0.0) -> GenerationResult:
+        log_worker_metrics_table(
+            LOGGER,
+            worker_metric_payloads,
+            worker_labels=worker_labels,
+            metric_order=metric_order,
+            best_worker_metric=best_worker_payload,
+            best_worker_label="Best Worker",
+            title=f"\nGeneration {self.current_generation} Worker Metrics",
+        )
+
+    def record_generation(self) -> GenerationResult:
         """
         Record statistics and results for the current generation.
 
-        Computes population statistics, identifies best worker, checks convergence,
-        and tracks improvements against the score from BEFORE finalization (to avoid
-        double-counting when _finalize_scores already updated best_overall_score).
-
-        Parameters
-        ----------
-        previous_best_score : float
-            The best_overall_score value BEFORE _finalize_scores() was called.
-            Defaults to 0.0 for backward compatibility.
+        Computes population statistics, identifies best worker, and checks
+        convergence.
 
         Returns
         -------
@@ -794,7 +922,8 @@ class Population:
         stats = get_population_statistics(self.workers)
         best_worker = get_best_worker(self.workers)
         converged = False
-        if self._ranges_updated:
+
+        if self._ranges_calibrated:
             converged = check_convergence(
                 self.workers,
                 self.config.convergence_threshold,
@@ -803,7 +932,9 @@ class Population:
             )
         else:
             LOGGER.debug(
-                "Convergence check deferred: adaptive normalization not yet active"
+                "%s Convergence check deferred: adaptive normalization not yet active%s",
+                COLORS.italic,
+                COLORS.reset,
             )
 
         result = GenerationResult(
@@ -817,15 +948,6 @@ class Population:
             converged=converged,
         )
         self.history.append(result)
-
-        # Compare against the score from BEFORE finalization to correctly track improvements.
-        # The _finalize_scores() method has already updated best_overall_score, so we compare
-        # against what it was before that update to detect true new discoveries.
-        if result.best_score > previous_best_score:
-            self.generations_without_improvement = 0
-            LOGGER.info("New best score: %.4f", self.best_overall_score)
-        else:
-            self.generations_without_improvement += 1
 
         return result
 
@@ -889,57 +1011,53 @@ class Population:
         ...     if population.should_stop():
         ...         break
         """
-        # Restore database snapshots if enabled and it's time to restore
         if (
             self.enable_snapshots
             and self.current_generation > 0
             and self.current_generation % self.restore_interval == 0
         ):
-            LOGGER.info(
-                "Restoring database snapshots for generation %d (interval: %d)",
+            log_section_header(
+                LOGGER,
+                "%sRestoring database snapshots for generation %d%s",
+                COLORS.bold,
                 self.current_generation,
-                self.restore_interval,
+                COLORS.reset,
+                top_separator=False,
             )
 
             try:
-                if self.env:
-                    failed_workers = []
-                    for worker in self.workers:
-                        restored = self.env.restore_snapshot(worker.worker_id)
-                        if not restored:
-                            LOGGER.error(
-                                "Snapshot restore failed for worker %d; attempting clean-slate rebuild",
-                                worker.worker_id,
-                            )
-
-                            rebuilt = False
-                            rebuild_fn = getattr(
-                                self.env, "rebuild_worker_instance", None
-                            )
-                            rebuilt = self._invoke_optional_worker_callback(
-                                rebuild_fn,
-                                worker.worker_id,
-                            )
-                            if not callable(rebuild_fn):
-                                LOGGER.error(
-                                    "Environment does not implement clean-slate rebuild for worker %d",
-                                    worker.worker_id,
-                                )
-
-                            if not rebuilt:
-                                failed_workers.append(worker.worker_id)
-
-                    if failed_workers:
-                        raise RuntimeError(
-                            "Snapshot restore recovery failed for workers: "
-                            f"{failed_workers}"
+                failed_workers = []
+                for worker in self.workers:
+                    restored = self.env.restore_snapshot(worker.worker_id, quiet=True)  # type: ignore
+                    if restored:
+                        LOGGER.info(
+                            " %sRestored snapshot for [Worker-%d]%s",
+                            COLORS.italic,
+                            worker.worker_id,
+                            COLORS.reset,
+                        )
+                    if not restored:
+                        LOGGER.error(
+                            "Snapshot restore failed for [Worker-%d]; attempting clean-slate rebuild",
+                            worker.worker_id,
                         )
 
-                    LOGGER.info("✓ Database snapshots restored successfully")
-                else:
-                    LOGGER.warning(
-                        "Snapshot restoration requested but env not available"
+                        rebuilt = self.env.rebuild_worker_instance(worker.worker_id)  # type: ignore
+
+                        if not rebuilt:
+                            failed_workers.append(worker.worker_id)
+
+                if failed_workers:
+                    raise RuntimeError(
+                        "Snapshot restore recovery failed for workers: "
+                        f"{failed_workers}"
                     )
+
+                log_section_header(
+                    LOGGER,
+                    "➤ Database snapshots restored successfully.",
+                    top_separator=False,
+                )
             except Exception as e:
                 LOGGER.error("Failed to restore databases from snapshots: %s", e)
                 LOGGER.debug("Exception details:", exc_info=True)
@@ -953,40 +1071,34 @@ class Population:
             barrier_timeout=barrier_timeout,
         )
 
-        rescued = self.rescue_dead_workers(evaluate_fn)
+        rescued = self.rescue_dead_workers()
         if rescued > 0:
-            LOGGER.info("Immediate dead-config rescue recovered %d workers", rescued)
+            LOGGER.info("➤ Immediate dead-config rescue recovered %d workers", rescued)
 
+        LOGGER.info("Checking for adaptive normalization updates...")
         self.update_metric_ranges_if_needed()
 
-        # Save the previous best score before finalization to track true improvements
-        # (finalize_scores() will update best_overall_score, so we need the old value for comparison)
-        previous_best_overall = self.best_overall_score
-
-        # Finalize scores (detect saturation, rescore workers/best_overall)
+        LOGGER.info("Determining final scores...")
         self._finalize_scores()
 
-        # Record generation with finalized scores
-        result = self.record_generation(previous_best_score=previous_best_overall)
+        self._log_generation_worker_metrics_table()
 
-        num_exploited = self.exploit_and_explore(
+        LOGGER.info("Recording generation...")
+        result = self.record_generation()
+
+        LOGGER.info("Performing evolution step...")
+        num_exploited = execute_exploit_explore(
+            workers=self.workers,
+            exploit_quantile=self.config.exploit_quantile,
+            perturbation_factors=self.config.perturbation_factors,
+            current_generation=self.current_generation,
             require_ready=require_ready,
-            exclude_knobs=None,  # No restrictions in multi-instance mode
+            dead_config_threshold=self.config.dead_config_threshold,
+            exclude_knobs=None,
         )
 
         result.num_exploited = num_exploited
-
         self.current_generation += 1
-
-        LOGGER.info(
-            "Generation %s complete: best=%.4f, mean=%.4f, std=%.4f, exploited=%s, converged=%s",
-            result.generation,
-            result.best_score,
-            result.mean_score,
-            result.std_score,
-            num_exploited,
-            result.converged,
-        )
 
         return result
 
@@ -1005,7 +1117,12 @@ class Population:
             True if training should stop
         """
         if self.current_generation >= self.config.max_generations:
-            LOGGER.info("Stopping: max_generations reached")
+            LOGGER.info(
+                "%s➤ Stopping: %smax_generations reached.%s",
+                COLORS.bold,
+                COLORS.violet,
+                COLORS.reset,
+            )
             return True
 
         if (
@@ -1014,16 +1131,37 @@ class Population:
             >= self.config.early_stopping_patience
         ):
             LOGGER.info(
-                "Stopping: no improvement for %s generations",
+                "%s➤ Stopping: %sno improvement for %s generations.%s",
+                COLORS.bold,
+                COLORS.violet,
                 self.config.early_stopping_patience,
+                COLORS.reset,
             )
             return True
 
         if self.history and self.history[-1].converged:
-            LOGGER.info("Stopping: population converged")
+            LOGGER.info(
+                "%s➤ Stopping: %spopulation converged.%s",
+                COLORS.bold,
+                COLORS.violet,
+                COLORS.reset,
+            )
             return True
 
+        LOGGER.info(
+            "%sStopping criteria not met, continuing...%s", COLORS.italic, COLORS.reset
+        )
         return False
+
+    def _determine_overall_best(self, best_current: Worker) -> None:
+        if best_current.performance_score >= self.best_overall_score:
+            self.best_overall_score = best_current.performance_score
+            self.best_overall_metrics = best_current.metrics
+            self.best_overall_score_breakdown = best_current.score_breakdown
+            self.best_overall_config = best_current.get_config_copy()
+            self.generations_without_improvement = 0
+        else:
+            self.generations_without_improvement += 1
 
     def _finalize_scores(self) -> None:
         """
@@ -1034,17 +1172,30 @@ class Population:
         3. Rescore historical best
         4. Update historical best config if a current worker is genuinely better
         """
-        if not self._ranges_updated or self.evaluator is None:
-            LOGGER.debug(
-                "Score finalization skipped: ranges_updated=%s, evaluator=%s",
-                self._ranges_updated,
-                self.evaluator is not None,
+        scored_workers = [w for w in self.workers if w.metrics is not None]
+        best_current = max(scored_workers, key=lambda w: w.performance_score)
+
+        if not scored_workers:
+            LOGGER.warning(
+                " %sAll workers have malformed metrics.%s", COLORS.warning, COLORS.reset
             )
             return
 
-        metric_config = self.evaluator.config.metric_config
+        LOGGER.debug(
+            " Checking for saturation/drift to determine if range expansion is needed..."
+        )
+        if not self._ranges_calibrated:
+            self._determine_overall_best(best_current)
 
-        # Expand ranges based on current generation's metrics
+            LOGGER.debug(
+                "➤ Skipping range expansion check: %sNormalizer is not yet calibrated.%s",
+                COLORS.italic,
+                COLORS.reset,
+            )
+            return
+
+        LOGGER.debug(" Detecting metric ranges saturation/drift...")
+        metric_config = self.orchestrator.config.metric_config  # type: ignore
         dead_threshold = self.config.dead_config_threshold if self.config else 6.0
         current_metrics = [
             w.metrics
@@ -1052,62 +1203,77 @@ class Population:
             if w.metrics is not None and w.performance_score > dead_threshold
         ]
 
-        if current_metrics:
-            ranges_expanded = metric_config.expand_ranges_for_metrics(
-                current_metrics,
-                expansion_factor=0.25,  # 25% headroom for continued improvement
+        if not current_metrics:
+            LOGGER.warning(
+                " ➤ No viable metrics for saturation check: %sAll workers are dead%s",
+                COLORS.italic,
+                COLORS.reset,
             )
-            if ranges_expanded:
-                LOGGER.info("Saturation/drift detected: expanded normalizer ranges")
-        else:
+
+        ranges_expanded = metric_config.expand_ranges_for_metrics(
+            current_metrics,
+            expansion_factor=0.25,  # 25% headroom for continued improvement
+        )
+        if ranges_expanded:
+            LOGGER.debug(" ➤ Saturation/drift detected: expanded normalizer ranges")
+
+        if not (ranges_expanded or self._features_refined):
+            self._determine_overall_best(best_current)
+
             LOGGER.debug(
-                "No viable metrics for saturation check (all workers below dead threshold)"
+                " ➤ No rescore needed: ranges_expanded=%s, features_refined=%s",
+                ranges_expanded,
+                self._features_refined,
             )
+            return
 
-        # Single rescore pass for ALL workers
-        rescored_count = 0
+        LOGGER.debug(
+            " %sRescoring required%s - ranges_expanded=%s, features_refined=%s, ",
+            COLORS.bold,
+            COLORS.reset,
+            ranges_expanded,
+            self._features_refined,
+        )
         significant_changes = 0
-
         for worker in self.workers:
             if worker.metrics is not None:
                 old_score = worker.performance_score
-                new_score = metric_config.compute_score(worker.metrics)
+                breakdown = metric_config.compute_score(
+                    worker.metrics, worker_logger=worker.logger
+                )
+                worker.score_breakdown = breakdown
+                new_score = breakdown.final_score
                 worker.performance_score = new_score
-                rescored_count += 1
 
                 if abs(new_score - old_score) > 0.5:  # Log significant changes
                     significant_changes += 1
 
-        # Single rescore pass for historical best
+        if self.best_overall_metrics is not None:
+            LOGGER.info(" Rescoring historical best configuration...")
+            self.best_overall_score_breakdown = metric_config.compute_score(
+                self.best_overall_metrics
+            )
+            self.best_overall_score = self.best_overall_score_breakdown.final_score
+        LOGGER.debug(
+            " ➤ Rescoring complete: %s%d%s workers with significant score changes",
+            COLORS.bold,
+            significant_changes,
+            COLORS.reset,
+        )
+
         best_current = max(
             (w for w in self.workers if w.metrics is not None),
             key=lambda w: w.performance_score,
         )
-
-        if self.best_overall_metrics is not None:
-            rescored_historical = metric_config.compute_score(self.best_overall_metrics)
-        else:
-            rescored_historical = 0.0
-
-        # Grounding: compare current gen's best vs rescored historical best
-        if best_current.performance_score >= rescored_historical:
-            self.best_overall_score = best_current.performance_score
-            self.best_overall_config = best_current.knob_config.copy()
-            self.best_overall_metrics = best_current.metrics
-            winner = "current"
-        else:
-            self.best_overall_score = rescored_historical
-            winner = "historical"
+        self._determine_overall_best(best_current)
 
         LOGGER.info(
-            "Finalized scores: %d workers rescored (%d significant), "
-            "best_current=%.4f, historical_rescored=%.4f (winner=%s)",
-            rescored_count,
-            significant_changes,
-            best_current.performance_score,
-            rescored_historical,
-            winner,
+            "➤ Finalized scores after %s",
+            "refining features"
+            if self._features_refined
+            else "expanding metric ranges",
         )
+        return
 
     def get_best_configuration(self) -> tuple[Dict[str, Any], float]:
         """

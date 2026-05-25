@@ -31,11 +31,13 @@ from src.tuner.core.worker import Worker
 
 from src.tuner.config.tuner_config import PBTConfig
 from src.tuner.config.knob_space import KnobSpace
+from src.tuner.core import GenerationResult
 from src.tuner.config.knob_loader import get_knob_space
 
 __all__ = [
     "Worker",
     "PBTConfig",
     "KnobSpace",
+    "GenerationResult",
     "get_knob_space",
 ]

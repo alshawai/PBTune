@@ -4,7 +4,7 @@ pbt_vs_bo_comparison.py
 
 Analyzes and compares the results of Population-Based Training (PBT) and
 Bayesian Optimization (BO) for PostgreSQL auto-tuning. Supports dynamic
-global rescoring, timeseries alignment for artifact-free convergence plots, 
+global rescoring, timeseries alignment for artifact-free convergence plots,
 statistical significance testing, and generates publication-ready plots.
 """
 
@@ -16,9 +16,10 @@ from dataclasses import fields
 from pathlib import Path
 from typing import List, Optional
 
+from dateutil import parser as dateutil_parser
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 
@@ -92,15 +93,17 @@ def align_timeseries_to_grid(
 
     for (method, seed), group in df.groupby([method_col, seed_col]):
         group_sorted = group.sort_values(time_col)
-        times = group_sorted[time_col].values
-        scores = group_sorted[score_col].values
+        times = group_sorted[time_col].to_numpy(dtype=float)
+        scores = group_sorted[score_col].to_numpy()
 
         # searchsorted('right') gives the index of the first element > grid_t,
         # so (idx - 1) is the last evaluation at or before grid_t.
-        indices = np.searchsorted(times, time_grid, side="right") - 1
+        indices = [
+            int(np.searchsorted(times, grid_t, side="right") - 1)
+            for grid_t in time_grid
+        ]
 
-        for i, grid_t in enumerate(time_grid):
-            idx = indices[i]
+        for grid_t, idx in zip(time_grid, indices, strict=True):
             if idx < 0:
                 # Grid point is before the run's first evaluation → skip
                 score = np.nan
@@ -117,7 +120,6 @@ def align_timeseries_to_grid(
             )
 
     return pd.DataFrame(aligned_rows)
-
 
 
 class EvaluationPoint:
@@ -150,9 +152,7 @@ class TuningRun:
 
     def _parse_json(self) -> None:
         """Loads JSON and parses the sequence of evaluations."""
-        import dateutil.parser  # type: ignore
-
-        with open(self.filepath, "r") as f:
+        with open(self.filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         session = data.get("tuning_session", {})
@@ -184,7 +184,7 @@ class TuningRun:
             # Parse timestamp for wall time calculation
             ts_str = gen.get("timestamp")
             if ts_str:
-                current_time = dateutil.parser.isoparse(ts_str)
+                current_time = dateutil_parser.isoparse(ts_str)
                 if start_time is None:
                     # Give it a tiny offset (e.g. 20 seconds) for the very first step
                     start_time = current_time - pd.Timedelta(seconds=20)
@@ -251,7 +251,7 @@ class Analyzer:
             pooled_metrics.extend(run.get_all_metrics())
 
         logger.info("Applying rescore_metrics_globally...")
-        metric_cfg, rescored_values, metadata = rescore_metrics_globally(
+        _metric_cfg, rescored_values, metadata = rescore_metrics_globally(
             pooled_metrics, benchmark=self.benchmark, workload=self.workload
         )
 
@@ -297,10 +297,10 @@ class Analyzer:
 
     def plot_convergence(self) -> None:
         """Generates convergence plots for Sample and Wall-Clock Efficiency.
-        
-        The Wall-Clock Efficiency plot automatically aligns timeseries to a 
-        shared uniform grid using a step-function interpolation to prevent 
-        'sawtooth' aggregation artifacts caused by mismatched logging 
+
+        The Wall-Clock Efficiency plot automatically aligns timeseries to a
+        shared uniform grid using a step-function interpolation to prevent
+        'sawtooth' aggregation artifacts caused by mismatched logging
         timestamps across different evaluation seeds.
         """
         df = self._build_timeseries_df()
@@ -404,7 +404,13 @@ class Analyzer:
         df = pd.DataFrame(rows)
         plt.figure(figsize=(6, 6))
         sns.boxplot(
-            data=df, x="Method", y="Memory Utilization", hue="Method", palette=METHOD_COLORS, width=0.4, showmeans=True
+            data=df,
+            x="Method",
+            y="Memory Utilization",
+            hue="Method",
+            palette=METHOD_COLORS,
+            width=0.4,
+            showmeans=True,
         )
         sns.stripplot(
             data=df,
@@ -450,20 +456,28 @@ class Analyzer:
 
         logger.info("=== Statistical Significance (Mann-Whitney U) ===")
         logger.info(
-            f"PBT best scores (N={len(pbt_scores)}): {np.mean(pbt_scores):.4f} ± {np.std(pbt_scores):.4f}"
+            "PBT best scores (N=%d): %.4f ± %.4f",
+            len(pbt_scores),
+            np.mean(pbt_scores),
+            np.std(pbt_scores),
         )
         logger.info(
-            f"BO best scores (N={len(bo_scores)}): {np.mean(bo_scores):.4f} ± {np.std(bo_scores):.4f}"
+            "BO best scores (N=%d): %.4f ± %.4f",
+            len(bo_scores),
+            np.mean(bo_scores),
+            np.std(bo_scores),
         )
-        logger.info(f"U-Statistic: {stat}, p-value: {p_value:.5f}")
+        logger.info("U-Statistic: %s, p-value: %.5f", stat, p_value)
 
         if p_value < alpha:
             winner = "PBT" if np.mean(pbt_scores) > np.mean(bo_scores) else "BO"
             logger.info(
-                f"Result: SIGNIFICANT at α={alpha}. Method {winner} is superior."
+                "Result: SIGNIFICANT at α=%s. Method %s is superior.",
+                alpha,
+                winner,
             )
         else:
-            logger.info(f"Result: NOT SIGNIFICANT at α={alpha}.")
+            logger.info("Result: NOT SIGNIFICANT at α=%s.", alpha)
 
         result = pd.DataFrame(
             [

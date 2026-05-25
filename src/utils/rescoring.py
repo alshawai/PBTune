@@ -98,13 +98,6 @@ def rescore_metrics_globally(
             padding_factor,
         )
         metric_config.update_ranges(metrics, padding_factor=padding_factor)
-        logger.debug(
-            "Calibrated ranges: latency=[%.2f, %.2f], throughput=[%.2f, %.2f]",
-            metric_config.latency_min,
-            metric_config.latency_max,
-            metric_config.throughput_min,
-            metric_config.throughput_max,
-        )
     else:
         logger.warning(
             "Insufficient observations for calibration (latency=%d, throughput=%d). "
@@ -113,7 +106,7 @@ def rescore_metrics_globally(
             valid_throughput,
         )
 
-    scores = [metric_config.compute_score(m) for m in metrics]
+    scores = [metric_config.compute_score_value(m) for m in metrics]
     logger.info(
         "Rescoring complete: %d scores computed (mean=%.4f, min=%.4f, max=%.4f)",
         len(scores),
@@ -136,10 +129,6 @@ def rescore_metrics_globally(
             "latency": valid_latency,
             "throughput": valid_throughput,
         },
-        "latency_min": metric_config.latency_min,
-        "latency_max": metric_config.latency_max,
-        "throughput_min": metric_config.throughput_min,
-        "throughput_max": metric_config.throughput_max,
         "normalizer_type": "QuantileUtilityNormalizer",
         "metric_reference_version": metric_config.metric_reference_version,
         "scoring_policy": metric_config.scoring_policy,

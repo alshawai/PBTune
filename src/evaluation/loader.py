@@ -28,6 +28,7 @@ from src.utils.scoring.constants import (
     DEFAULT_SCORING_POLICY,
     DEFAULT_SCORING_POLICY_VERSION,
 )
+from src.utils.scoring.contracts import score_breakdown_from_dict
 
 LOGGER = get_logger("Loader")
 
@@ -182,6 +183,8 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         worker_resources.ram_bytes / (1024**3),
     )
 
+    score_breakdown = score_breakdown_from_dict(scoring_metadata["score_breakdown"])
+
     return TuningSessionData(
         best_knobs=best_knobs,
         best_score=best_score,
@@ -197,7 +200,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         metric_reference_version=scoring_metadata["metric_reference_version"],
         workload_features=scoring_metadata["workload_features"],
         normalization_metadata=scoring_metadata["normalization_metadata"],
-        score_breakdown=scoring_metadata["score_breakdown"],
+        score_breakdown=score_breakdown,
     )
 
 

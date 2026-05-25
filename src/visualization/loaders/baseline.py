@@ -102,7 +102,7 @@ def load_bo_trace(
                 metric_reference_version=metric_ref,
             )
 
-        new_scores = [metric_config.compute_score(m) for m in all_metrics]
+        new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
     else:
         new_scores = None
 

@@ -71,7 +71,7 @@ class PBTConfig:
         Whether to enable database snapshot restoration between generations.
         When True, workers' data directories are restored to a baseline state
         before each generation to prevent data drift from write operations.
-        Default: False (must be explicitly enabled)
+        Default: True (must be explicitly disabled)
 
     snapshot_restore_interval : int
         Restore snapshots every N generations. Only used if enable_snapshots=True.
@@ -135,7 +135,7 @@ class PBTConfig:
     benchmark_config: BenchmarkConfig = field(
         default_factory=lambda: clone_benchmark_config(STANDARD_BENCHMARK_CONFIG)
     )
-    enable_snapshots: bool = False
+    enable_snapshots: bool = True
     snapshot_restore_interval: int = 1
     verbose: bool = True
     dead_config_threshold: float = 6.0
@@ -171,8 +171,6 @@ class PBTConfig:
 
         if self.num_parallel_workers < 1:
             raise ValueError("num_parallel_workers must be at least 1")
-        if self.num_parallel_workers > self.population_size:
-            raise ValueError("num_parallel_workers cannot exceed population_size")
 
         if self.snapshot_restore_interval < 1:
             raise ValueError("snapshot_restore_interval must be at least 1")
@@ -269,7 +267,7 @@ RAPID_CONFIG = PBTConfig(
     ready_interval=1,
     num_parallel_workers=4,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
-    enable_snapshots=False,
+    snapshot_restore_interval=10,  # Infrequent snapshotting for speed
     verbose=True,
 )
 
@@ -281,7 +279,6 @@ STANDARD_CONFIG = PBTConfig(
     ready_interval=2,
     num_parallel_workers=4,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
-    enable_snapshots=True,
     snapshot_restore_interval=5,
     verbose=True,
 )
@@ -292,9 +289,8 @@ THOROUGH_CONFIG = PBTConfig(
     num_generations=50,
     exploit_quantile=0.2,
     ready_interval=3,
-    num_parallel_workers=4,
+    num_parallel_workers=8,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
-    enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True,
 )

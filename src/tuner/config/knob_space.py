@@ -29,10 +29,10 @@ from enum import Enum
 import numpy as np
 
 from src.utils.hardware_info import WorkerResources
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
 
-logger = get_logger("KnobSpace")
-
+LOGGER = get_logger("KnobSpace")
+COLORS = get_color_context()
 
 # Hardware-relative specifications for converting fractions to absolute values
 HARDWARE_RELATIVE_SPECS = {
@@ -321,11 +321,14 @@ class KnobSpace:
 
         filtered_count = len(self.knobs) - len(runtime_knobs)
         if filtered_count > 0:
-            logger.info(
-                "Created ONLINE knob view: %d runtime knobs "
-                "(filtered %d restart-required)",
+            LOGGER.debug(
+                "➤ Created ONLINE knob view: %s%d%s runtime knobs %s(filtered %d knob(s))%s",
+                COLORS.bold,
                 len(runtime_knobs),
+                COLORS.reset,
+                COLORS.italic,
                 filtered_count,
+                COLORS.reset,
             )
 
         return view
@@ -355,25 +358,29 @@ class KnobSpace:
                 bytes_per_unit = self._get_bytes_per_unit(knob)
                 knob.min_value = int(resources.ram_bytes * f_min / bytes_per_unit)
                 knob.max_value = int(resources.ram_bytes * f_max / bytes_per_unit)
-                logger.debug(
-                    "Resolved %s range to [%s, %s] for %s %s",
+                LOGGER.debug(
+                    " %sPruned `%s` range to [%s, %s] for %s %s%s",
+                    COLORS.italic,
                     name,
                     knob.min_value,
                     knob.max_value,
                     int(resources.ram_bytes / bytes_per_unit),
                     knob.unit or "units",
+                    COLORS.reset,
                 )
 
             elif knob.resource_type == "cpu" and name in HARDWARE_RELATIVE_SPECS:
                 f_min, f_max, floor_min = HARDWARE_RELATIVE_SPECS[name]  # type: ignore
                 knob.min_value = max(floor_min, round(resources.cpu_cores * f_min))
                 knob.max_value = max(floor_min, round(resources.cpu_cores * f_max))
-                logger.debug(
-                    "Resolved %s range to [%s, %s] for %s CPUs",
+                LOGGER.debug(
+                    " %sPruned `%s` range to [%s, %s] for %s CPUs%s",
+                    COLORS.italic,
                     name,
                     knob.min_value,
                     knob.max_value,
                     resources.cpu_cores,
+                    COLORS.reset,
                 )
 
             elif (
@@ -387,13 +394,16 @@ class KnobSpace:
                 min_val, max_val = ranges[disk_type]
                 knob.min_value = min_val
                 knob.max_value = max_val
-                logger.debug(
-                    "Resolved %s range to [%s, %s] for %s disk",
+                LOGGER.debug(
+                    " %sPruned `%s` range to [%s, %s] for %s disk%s",
+                    COLORS.italic,
                     name,
                     min_val,
                     max_val,
                     disk_type,
+                    COLORS.reset,
                 )
+        LOGGER.debug("➤ Resolved hardware ranges for %d knobs", len(self.knobs))
 
     def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -653,19 +663,21 @@ class KnobSpace:
         If a memory budget is provided, it will also adjust memory-related knobs to fit within the budget.
         """
         worker_logger = (
-            get_logger(__name__, worker_id=worker_id)
+            get_logger("ConfigRepairer", worker_id=worker_id)
             if worker_id is not None
-            else logger
+            else LOGGER
         )
         repaired = dict(config)
 
         wal_level = repaired.get("wal_level")
         if wal_level == "minimal":
             if repaired.get("archive_mode") in {"on", "always"}:
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'archive_mode' from '%s' to 'off' "
-                    "because wal_level is 'minimal'",
+                worker_logger.debug(
+                    "%s Corrected 'archive_mode' from '%s' to 'off' "
+                    "because wal_level is 'minimal'%s",
+                    COLORS.italic,
                     repaired["archive_mode"],
+                    COLORS.reset,
                 )
                 repaired["archive_mode"] = "off"
 
@@ -674,19 +686,23 @@ class KnobSpace:
                 isinstance(max_wal_senders, (int, np.integer, float, np.floating))
                 and max_wal_senders > 0
             ):
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'max_wal_senders' from %s to 0 "
-                    "because wal_level is 'minimal'",
+                worker_logger.debug(
+                    "%s Corrected 'max_wal_senders' from %s to 0 "
+                    "because wal_level is 'minimal'%s",
+                    COLORS.italic,
                     repaired["max_wal_senders"],
+                    COLORS.reset,
                 )
                 repaired["max_wal_senders"] = 0
 
             summarize_wal = repaired.get("summarize_wal")
             if str(summarize_wal).lower() in {"on", "true", "1"}:
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'summarize_wal' from '%s' to 'off' "
-                    "because wal_level is 'minimal'",
+                worker_logger.debug(
+                    "%s Corrected 'summarize_wal' from '%s' to 'off' "
+                    "because wal_level is 'minimal'%s",
+                    COLORS.italic,
                     repaired["summarize_wal"],
+                    COLORS.reset,
                 )
                 repaired["summarize_wal"] = "off"
 
@@ -695,10 +711,12 @@ class KnobSpace:
         if huge_pages in {"on", "try"}:
             # huge_pages is not supported with sysv shared_memory_type
             if repaired.get("shared_memory_type") == "sysv":
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'shared_memory_type' from 'sysv' to 'mmap' "
-                    "because huge_pages is '%s'",
+                worker_logger.debug(
+                    "%s Corrected 'shared_memory_type' from 'sysv' to 'mmap' "
+                    "because huge_pages is '%s'%s",
+                    COLORS.italic,
                     huge_pages,
+                    COLORS.reset,
                 )
                 repaired["shared_memory_type"] = "mmap"
 
@@ -706,9 +724,11 @@ class KnobSpace:
             # the process strictly crashes. Convert "on" to "try" to allow graceful
             # fallback but retain performance if possible.
             if huge_pages == "on":
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'huge_pages' from 'on' to 'try' "
-                    "to allow graceful OS fallback"
+                worker_logger.debug(
+                    "%s Corrected 'huge_pages' from 'on' to 'try' "
+                    "to allow graceful OS fallback%s",
+                    COLORS.italic,
+                    COLORS.reset,
                 )
                 repaired["huge_pages"] = "try"
 
@@ -719,11 +739,13 @@ class KnobSpace:
             max_parallel, (int, float, np.number)
         ):
             if max_worker < max_parallel:
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'max_parallel_workers' from %s to %s "
-                    "because it cannot exceed 'max_worker_processes'",
+                worker_logger.debug(
+                    "%s Corrected 'max_parallel_workers' from %s to %s "
+                    "because it cannot exceed 'max_worker_processes'%s",
+                    COLORS.italic,
                     max_parallel,
                     max_worker,
+                    COLORS.reset,
                 )
                 repaired["max_parallel_workers"] = int(max_worker)
 
@@ -735,12 +757,14 @@ class KnobSpace:
         ):
             if min_wal > max_wal:
                 new_min_wal = max(1, int(max_wal) // 2)  # Give it a reasonable gap
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'min_wal_size' from %s to %s "
-                    "because it cannot exceed 'max_wal_size' (%s)",
+                worker_logger.debug(
+                    "%s Corrected 'min_wal_size' from %s to %s "
+                    "because it cannot exceed 'max_wal_size' (%s)%s",
+                    COLORS.italic,
                     min_wal,
                     new_min_wal,
                     max_wal,
+                    COLORS.reset,
                 )
                 repaired["min_wal_size"] = new_min_wal
 
@@ -759,12 +783,14 @@ class KnobSpace:
                 new_max = (
                     reserved_total + 10
                 )  # Ensure at least 10 slots for regular users
-                worker_logger.warning(
-                    "[REPAIR] Corrected 'max_connections' from %s to %s "
-                    "because reserved slots (%s) consumed all capacity",
+                worker_logger.debug(
+                    "%s Corrected 'max_connections' from %s to %s "
+                    "because reserved slots (%s) consumed all capacity%s",
+                    COLORS.italic,
                     max_conn,
                     new_max,
                     reserved_total,
+                    COLORS.reset,
                 )
                 repaired["max_connections"] = new_max
 
@@ -786,6 +812,7 @@ class KnobSpace:
         if budget is not None:
             repaired = self._repair_memory_budget(repaired, budget)
 
+        worker_logger.debug("➤ Validated dependencies and constraints.")
         return repaired
 
     def sample_random_config(self, seed: Optional[int] = None) -> Dict[str, Any]:
@@ -927,7 +954,11 @@ class KnobSpace:
             for knob_name, _ in categorical_knobs:
                 config[knob_name] = categorical_samples[knob_name][i]
 
-            configs.append(self.repair_config_dependencies(config))
+            LOGGER.debug(
+                " ➤ Sampled config for Worker-%d. Attempting to repair dependencies...",
+                i,
+            )
+            configs.append(self.repair_config_dependencies(config, worker_id=i))
 
         return configs
 

@@ -20,7 +20,9 @@ def evaluate_config(
     orchestrator: WorkloadOrchestrator,
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
-) -> Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float]:
+) -> Tuple[
+    float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float
+]:
     """
     Evaluate a single configuration on a specific worker instance.
 
@@ -71,7 +73,11 @@ def evaluate_config(
         score_breakdown = None
     else:
         cost = max(0.0, min(100.0, 100.0 - score))
-        score_breakdown = orchestrator.config.metric_config.compute_detailed_scores(metrics)
+        score_breakdown = worker.score_breakdown
+        if score_breakdown is None:
+            score_breakdown = orchestrator.config.metric_config.compute_score(
+                metrics, worker_logger=worker.logger
+            )
 
     return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
 

@@ -61,7 +61,10 @@ from psycopg2.extensions import connection as PostgresConnection
 
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
+
+LOGGER = get_logger("KnobApplicator")
+COLORS = get_color_context()
 
 
 class KnobContext(Enum):
@@ -218,12 +221,12 @@ class KnobApplicator:
         self._lock = threading.Lock()  # Thread safety for connection management
         self.logger = get_logger("KnobApplicator", worker_id=worker_id)
 
-        self.logger.debug(
-            "Initialized KnobApplicator: persist=%s, validate=%s, dry_run=%s",
-            self.config.persist,
-            self.config.validate,
-            self.config.dry_run,
-        )
+        # self.logger.debug(
+        #     " Initialized KnobApplicator: persist=%s, validate=%s, dry_run=%s",
+        #     self.config.persist,
+        #     self.config.validate,
+        #     self.config.dry_run,
+        # )
 
     def connect(self) -> None:
         """Establish connection to PostgreSQL (thread-safe)."""
@@ -236,7 +239,7 @@ class KnobApplicator:
             self.connection = get_connection(config=self.db_config)
 
             self.connection.autocommit = True
-            self.logger.debug("Connected to PostgreSQL")
+            self.logger.debug(" Connected to PostgreSQL")
         except psycopg2.Error as e:
             self.logger.error("Failed to connect to PostgreSQL: %s", e)
             raise
@@ -251,7 +254,7 @@ class KnobApplicator:
         if self.connection:
             self.connection.close()
             self.connection = None
-            self.logger.info("Disconnected from PostgreSQL")
+            self.logger.debug(" Disconnected from PostgreSQL")
 
     def _load_parameter_info(self, param_names: List[str]) -> None:
         """
@@ -302,7 +305,7 @@ class KnobApplicator:
                 )
                 self.param_cache[param_info.name] = param_info
 
-            self.logger.debug("Loaded info for %d parameters", len(rows))
+            self.logger.debug(" Loaded info for %d parameters", len(rows))
 
         except psycopg2.Error as e:
             self.logger.error("Failed to load parameter info: %s", e)
@@ -411,43 +414,35 @@ class KnobApplicator:
             return False, "Not connected to PostgreSQL"
 
         if self.config.dry_run:
-            self.logger.info("[DRY RUN] Would apply: %s = %s", name, value)
+            self.logger.debug(
+                "  %s[DRY RUN]%s Would apply: %s = %s",
+                COLORS.bold,
+                COLORS.reset,
+                name,
+                value,
+            )
             return True, None
 
         cursor = self.connection.cursor()
         try:
             if param_info.context == "postmaster":
-                if self.config.persist:
-                    cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
-                    self.logger.info("(restart required) Applied %s = %s", name, value)
-                else:
-                    self.logger.warning(
-                        "%s requires restart, skipping (persist=False)", name
-                    )
+                if not self.config.persist:
                     return False, f"{name} requires restart but persist=False"
+                cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
 
             elif param_info.context in ["sighup", "backend", "superuser-backend"]:
                 # SIGHUP and BACKEND params require pg_reload_conf() (global change)
-                # Can't use session-level SET
-                if self.config.persist:
-                    cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
-                    self.logger.info("(ALTER SYSTEM) Applied %s = %s", name, value)
-                else:
-                    self.logger.debug(
-                        "%s requires pg_reload_conf(), skipping in session-only mode",
-                        name,
-                    )
+                if not self.config.persist:
                     return False, f"{name} requires pg_reload_conf() but persist=False"
+                cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
 
             elif (
                 self.config.persist
             ):  # runtime modifiable with persistence (USER/SUPERUSER)
                 cursor.execute(f"ALTER SYSTEM SET {name} = %s", (value,))
-                self.logger.info("(ALTER SYSTEM) Applied %s = %s", name, value)
 
             else:  # runtime modifiable without persistence (USER/SUPERUSER)
                 cursor.execute(f"SET {name} = %s", (value,))
-                self.logger.info("(SET session) Applied %s = %s", name, value)
 
             return True, None
 
@@ -471,17 +466,19 @@ class KnobApplicator:
             return False
 
         if self.config.dry_run:
-            self.logger.info("[DRY RUN] Would reload configuration")
+            self.logger.debug(
+                "  %s[DRY RUN]%s Would reload configuration", COLORS.bold, COLORS.reset
+            )
             return True
 
         cursor = self.connection.cursor()
         try:
             cursor.execute("SELECT pg_reload_conf()")
-            self.logger.info("Reloaded PostgreSQL configuration")
+            self.logger.debug("  ➤ Reloaded PostgreSQL configuration")
             return True
 
         except psycopg2.Error as e:
-            self.logger.error("Failed to reload configuration: %s", e)
+            self.logger.error("  ➤ Failed to reload configuration: %s", e)
             return False
 
         finally:
@@ -543,7 +540,12 @@ class KnobApplicator:
 
             missing = set(param_names) - set(self.param_cache.keys())
             if missing:
-                self.logger.warning("Unknown parameters (will skip): %s", missing)
+                self.logger.warning(
+                    "  %sUnknown parameters (will skip): %s%s",
+                    COLORS.italic,
+                    missing,
+                    COLORS.reset,
+                )
                 for name in missing:
                     result.failed[name] = "Parameter not found in pg_settings"
                     result.failed_count += 1
@@ -558,8 +560,14 @@ class KnobApplicator:
                         if not is_valid:
                             result.failed[name] = error_msg  # type: ignore
                             result.failed_count += 1
-                            self.logger.warning("Validation failed: %s", error_msg)
+                            self.logger.warning(
+                                "  %sValidation failed:%s %s",
+                                COLORS.bold,
+                                error_msg,
+                                COLORS.reset,
+                            )
 
+            self.logger.debug("  Applying knob values...")
             for name, value in knob_config.items():
                 if name in result.failed:
                     continue  # Skip already-failed parameters
@@ -582,7 +590,10 @@ class KnobApplicator:
 
             if result.failed_count > 0 and self.config.rollback_on_error:
                 self.logger.warning(
-                    "Failed to apply %d parameters", result.failed_count
+                    "  %sFailed to apply %d parameters%s",
+                    COLORS.italic,
+                    result.failed_count,
+                    COLORS.reset,
                 )
                 result.success = False
                 result.message = f"{result.failed_count} failures"
@@ -592,8 +603,7 @@ class KnobApplicator:
                     and self.config.auto_reload
                     and result.applied_count > 0
                 ):
-                    if not self._reload_configuration():
-                        self.logger.warning("Configuration applied but reload failed")
+                    self._reload_configuration()
 
                 result.success = result.applied_count > 0
 
@@ -605,7 +615,7 @@ class KnobApplicator:
                 if result.failed_count > 0:
                     result.message += f", {result.failed_count} failed"
                     self.logger.info(
-                        "Partial success: %d applied, %d failed",
+                        " ➤ Partial success: %d applied, %d failed",
                         result.applied_count,
                         result.failed_count,
                     )
@@ -746,12 +756,12 @@ class KnobApplicator:
 
                     if not result:
                         self.logger.warning(
-                            "Parameter '%s' not found in pg_settings", param_name
+                            "  Parameter '%s' not found in pg_settings", param_name
                         )
                         verification[param_name] = False
                         continue
 
-                    current_value_str, unit, vartype = result
+                    current_value_str, _, vartype = result
                     current_value_repr: str
 
                     if isinstance(expected_value, bool):
@@ -795,12 +805,16 @@ class KnobApplicator:
 
                     if not match:
                         mismatches.append(
-                            f"{param_name}: expected={expected_value}, actual={current_value_repr}"
+                            f"    {param_name}: expected={expected_value}, actual={current_value_repr}"
                         )
 
                 except Exception as e:
                     self.logger.warning(
-                        "Failed to verify parameter '%s': %s", param_name, e
+                        "  %sFailed to verify parameter '%s': %s%s",
+                        COLORS.italic,
+                        param_name,
+                        e,
+                        COLORS.reset,
                     )
                     verification[param_name] = False
 
@@ -811,15 +825,17 @@ class KnobApplicator:
 
             if verified_count == total_count:
                 self.logger.debug(
-                    "Configuration verified: %d/%d parameters correct",
+                    " ➤ Configuration verified: %d/%d parameters correct",
                     verified_count,
                     total_count,
                 )
             else:
                 self.logger.warning(
-                    "Configuration mismatch: %d/%d parameters verified",
+                    " %s➤ Configuration mismatch: %d/%d parameters verified%s",
+                    COLORS.italic,
                     verified_count,
                     total_count,
+                    COLORS.reset,
                 )
                 for mismatch in mismatches:
                     self.logger.warning("  %s", mismatch)

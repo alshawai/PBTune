@@ -13,6 +13,7 @@ from src.tuner.core.worker import Worker
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
 from src.utils.types import BenchmarkConfig, TuningMode
 from src.utils.metrics import PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
 from src.evaluation.loader import load_tuning_session
 
 
@@ -374,10 +375,12 @@ class TestObjectiveEvaluation:
             scoring_policy_version = "1.0"
             metric_reference_version = "1.0"
             workload_features = {}
+
             def get_normalization_metadata(self):
                 return {}
-            def compute_detailed_scores(self, metrics):
-                return {"total": 87.5}
+
+            def compute_score(self, metrics, worker_logger=None):
+                return ScoreBreakdown(final_score=87.5)
 
         class DummyConfig:
             metric_config = DummyMetricConfig()
@@ -389,16 +392,19 @@ class TestObjectiveEvaluation:
 
             def evaluate_worker(self, worker, apply_config=True):
                 self.received_worker = worker
+                worker.score_breakdown = ScoreBreakdown(final_score=87.5)
                 return expected_metrics, 87.5, False
 
         orchestrator = DummyOrchestrator()
 
-        cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = evaluate_config(
-            config=config,
-            worker=worker,
-            orchestrator=orchestrator,
-            knob_space=knob_space,
-            previous_config=None,
+        cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
+            evaluate_config(
+                config=config,
+                worker=worker,
+                orchestrator=orchestrator,
+                knob_space=knob_space,
+                previous_config=None,
+            )
         )
 
         assert cost == 12.5
@@ -454,7 +460,7 @@ class TestResultFormat:
                 "wall_clock_seconds": 30.0,
                 "restarted": False,
                 "timestamp": 1234567890.0,
-                "score_breakdown": {"total": 0.5},
+                "score_breakdown": ScoreBreakdown(final_score=0.5),
             },
             {
                 "iteration": 1,
@@ -465,7 +471,7 @@ class TestResultFormat:
                 "wall_clock_seconds": 30.0,
                 "restarted": False,
                 "timestamp": 1234567920.0,
-                "score_breakdown": {"total": 0.6},
+                "score_breakdown": ScoreBreakdown(final_score=0.6),
             },
         ]
 
@@ -474,6 +480,7 @@ class TestResultFormat:
             scoring_policy_version = "1.0"
             metric_reference_version = "1.0"
             workload_features = {}
+
             def get_normalization_metadata(self):
                 return {}
 
@@ -522,6 +529,13 @@ class TestResultFormat:
         assert loaded.best_score == 0.6
         written = json.loads(result_file.read_text(encoding="utf-8"))
         assert written["tuning_session"]["seed"] == 123
+        assert isinstance(written["best_configuration"]["score_breakdown"], dict)
+        assert written["best_configuration"]["score_breakdown"]["final_score"] == 0.6
+        assert isinstance(
+            written["generation_history"][0]["worker_scores"][0]["score_breakdown"],
+            dict,
+        )
+        assert written["generation_history"][0]["worker_scores"][0]["score_breakdown"]["final_score"] == 0.5
 
     def test_result_generation_history(self, tmp_path):
         """Test that generation history is properly formatted."""
@@ -568,6 +582,7 @@ class TestResultFormat:
             scoring_policy_version = "1.0"
             metric_reference_version = "1.0"
             workload_features = {}
+
             def get_normalization_metadata(self):
                 return {}
 
