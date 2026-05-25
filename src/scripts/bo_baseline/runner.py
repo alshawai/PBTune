@@ -318,11 +318,7 @@ class BOBaselineRunner:
             iteration_log: list = []
 
             # Pilot phase size
-            pilot_size = max(
-                self.config.range_update_interval,
-                len(self.knob_space.knobs) + 1,
-            )
-            pilot_size = min(pilot_size, self.config.n_iterations)
+            pilot_size = min(self.config.range_update_interval, self.config.n_iterations)
 
             # For sequential mode (max_workers=1), use the original objective closure
             # For parallel mode (max_workers > 1), we'll use ask-tell
