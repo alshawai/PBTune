@@ -81,6 +81,17 @@ The BO baseline implements this same capability:
 - The `--snapshot-restore-interval` defines how many iterations occur between restorations.
 - **PBT Session Syncing**: If a `--pbt-session` is provided, BO automatically extracts `enable_snapshots` and `snapshot_restore_interval`. It safely scales the interval from PBT's generation-based metric to BO's iteration-based metric by multiplying the PBT interval by the PBT population size, guaranteeing that the exact same number of configuration evaluations occur between restorations in both algorithms.
 
+### Quantization & Read-Back Parity
+
+PostgreSQL silently modifies suggested configurations to fit internal constraints (e.g., rounding `shared_buffers` to the nearest 8kB page). This "hidden resolution" destroys the Bayesian Optimization surrogate model's gradients by creating the illusion of flat performance landscapes (where many different suggested values map to the exact same internal configuration and yield identical performance).
+
+To combat this, the BO loop employs a **Read-Back Abstraction** during `evaluate_config`:
+1. The BO agent suggests a continuous configuration.
+2. The `KnobApplicator` applies the configuration and the workload is benchmarked.
+3. The `KnobApplicator.read_back_knob_state()` utility queries `pg_settings` for the **actually applied** `setting` and `unit` values.
+4. The utility normalizes these raw values back into the `KnobSpace` canonical units and types.
+5. These true, quantized values are merged back into the configuration dictionary *before* it is returned to SMAC3, ensuring the surrogate model trains on accurate data.
+
 ### Parallel BO Evaluation and Resource Equalization
 
 The BO baseline supports parallel evaluation and explicit resource division to mirror the concurrency and hardware constraints of a reference PBT session independently.
