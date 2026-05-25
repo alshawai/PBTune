@@ -673,6 +673,38 @@ def _apply_parameter(
 - **Error handling**: Catches and logs PostgreSQL errors
 - **Context awareness**: Uses ALTER SYSTEM vs SET appropriately
 
+#### `read_back_knob_state()` - Read-Back Abstraction
+
+```python
+def read_back_knob_state(
+    self,
+    knob_names: List[str],
+    knob_space: KnobSpace,
+    connect_timeout: int = 5
+) -> Dict[str, Any]:
+    """
+    Query pg_settings and return the actually applied knob values,
+    with unit conversion and type casting.
+    """
+```
+
+**Purpose**: Solves two critical problems when external optimizers (like BO) need to know the *exact* configuration running inside the database engine:
+
+1. **Quantization trap**: PostgreSQL rounds values to internal block boundaries (e.g., `shared_buffers` is rounded to the nearest 8kB page). This method returns the true quantized value.
+2. **Unit-conversion trap**: `pg_settings` returns raw numeric strings and separate unit strings. This method applies the necessary multipliers and converts the value back to the canonical unit and Python type expected by the `KnobDefinition` (e.g., `KnobType.INTEGER`).
+
+**Usage**:
+```python
+# During evaluation loop
+actual_knobs = applicator.read_back_knob_state(
+    knob_names=list(knob_config.keys()),
+    knob_space=knob_space
+)
+if actual_knobs:
+    # Update the configuration dictionary with true values
+    knob_config.update(actual_knobs)
+```
+
 **Note**: The actual KnobApplicator implementation doesn't have individual parameter rollback—it uses psycopg2's transaction rollback mechanism (see [Rollback Mechanism](#rollback-mechanism) section for details).
 
 ### ApplicationResult

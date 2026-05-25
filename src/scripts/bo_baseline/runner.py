@@ -117,9 +117,13 @@ class BOBaselineRunner:
                 script=self.config.benchmark_config.sysbench_workload,
                 tables=self.config.benchmark_config.sysbench_tables,
                 table_size=self.config.benchmark_config.sysbench_table_size,
+                random_seed=self.config.random_seed,
             )
         elif self.config.benchmark_config.benchmark == "tpch":
-            return TPCHExecutor(scale_factor=self.config.benchmark_config.scale_factor)
+            return TPCHExecutor(
+                scale_factor=self.config.benchmark_config.scale_factor,
+                random_seed=self.config.random_seed,
+            )
         else:
             raise ValueError(
                 f"Unknown benchmark: {self.config.benchmark_config.benchmark}"

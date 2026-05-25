@@ -851,6 +851,218 @@ class KnobApplicator:
 
         return verification
 
+    # ------------------------------------------------------------------
+    # PostgreSQL unit → canonical-value multipliers
+    # ------------------------------------------------------------------
+    # Memory units: value × multiplier = bytes
+    _BYTES_PER_PG_UNIT: Dict[str, int] = {
+        "B": 1,
+        "kB": 1_024,
+        "MB": 1_024 ** 2,
+        "GB": 1_024 ** 3,
+        "TB": 1_024 ** 4,
+        # Block-size aliases used by shared_buffers, wal_buffers, etc.
+        "8kB": 8 * 1_024,
+        "16kB": 16 * 1_024,
+        "32kB": 32 * 1_024,
+        "16MB": 16 * 1_024 ** 2,
+        "32MB": 32 * 1_024 ** 2,
+    }
+    # Time units: value × multiplier = milliseconds
+    _MS_PER_PG_UNIT: Dict[str, int] = {
+        "us": 1,
+        "ms": 1,
+        "s": 1_000,
+        "min": 60_000,
+        "h": 3_600_000,
+        "d": 86_400_000,
+    }
+
+    @staticmethod
+    def _apply_pg_unit(
+        raw_setting: str,
+        pg_unit: Optional[str],
+        knob_unit: Optional[str],
+    ) -> Optional[float]:
+        """
+        Convert a raw ``pg_settings.setting`` value to the knob's canonical unit.
+
+        PostgreSQL stores, e.g., ``shared_buffers`` as a raw page count with
+        unit ``"8kB"``, so the absolute size is ``setting × 8192`` bytes.
+        This method converts that back to the unit the ``KnobDefinition`` uses
+        (also ``"8kB"`` for ``shared_buffers``), yielding the true page-count
+        the engine is actually using — which may differ from what BO requested
+        due to internal rounding (the "hidden resolution" / quantization problem).
+
+        Parameters
+        ----------
+        raw_setting : str
+            The ``setting`` column from ``pg_settings`` (always a string).
+        pg_unit : Optional[str]
+            The ``unit`` column from ``pg_settings`` (may be ``None`` / ``""``).
+        knob_unit : Optional[str]
+            The target unit from ``KnobDefinition.unit``.
+
+        Returns
+        -------
+        Optional[float]
+            Value in the knob's canonical unit, or ``None`` if conversion is
+            not applicable (boolean / enum) or cannot be performed.
+        """
+        if not raw_setting:
+            return None
+        try:
+            numeric = float(raw_setting)
+        except ValueError:
+            return None  # boolean / enum — caller handles by type
+
+        pg_unit_norm = (pg_unit or "").strip()
+        if not pg_unit_norm:
+            return numeric  # dimensionless knob
+
+        bpu = KnobApplicator._BYTES_PER_PG_UNIT
+        mpu = KnobApplicator._MS_PER_PG_UNIT
+
+        if pg_unit_norm in bpu:
+            absolute_bytes = numeric * bpu[pg_unit_norm]
+            knob_unit_norm = (knob_unit or "").strip()
+            divisor = bpu.get(knob_unit_norm, 1)
+            return absolute_bytes / divisor if divisor else absolute_bytes
+
+        if pg_unit_norm in mpu:
+            absolute_ms = numeric * mpu[pg_unit_norm]
+            knob_unit_norm = (knob_unit or "").strip()
+            divisor = mpu.get(knob_unit_norm, 1)
+            return absolute_ms / divisor if divisor else absolute_ms
+
+        return numeric  # unknown unit — return as-is
+
+    def read_back_knob_state(
+        self,
+        knob_names: List[str],
+        knob_space: Any,  # KnobSpace — avoid circular import at module level
+        connect_timeout: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Query ``pg_settings`` and return the **actually applied** knob values,
+        with unit conversion and type casting.
+
+        This solves two problems that corrupt the BO surrogate model:
+
+        1. **Quantization trap** — PostgreSQL rounds values to internal block
+           boundaries (e.g. ``shared_buffers`` to the nearest 8 kB page).
+           The returned value is what the engine *actually uses*.
+
+        2. **Unit-conversion trap** — ``pg_settings.setting`` is a raw integer
+           multiplied by ``unit``.  E.g. ``setting='16384'`` with ``unit='8kB'``
+           means 16 384 × 8 192 bytes ≈ 128 MB.  This method returns the value
+           in the same unit as ``KnobDefinition.unit`` so it can be merged
+           directly into the ``knob_config`` dict fed to SMAC.
+
+        Extends the existing :meth:`get_current_values` with the missing
+        unit-conversion and ``KnobType``-casting layers.
+
+        Parameters
+        ----------
+        knob_names : List[str]
+            Parameter names to read back.  Names absent from ``pg_settings``
+            are silently skipped.
+        knob_space : KnobSpace
+            Used to look up each knob's ``unit`` and ``knob_type``.
+        connect_timeout : int
+            Connection timeout in seconds (default 5).  Keep low so a crashed
+            database does not stall the BO loop.
+
+        Returns
+        -------
+        Dict[str, Any]
+            ``{knob_name: actual_value}`` with values properly typed.
+            Returns an **empty dict** on connection failure or empty input so
+            the caller can safely do ``knob_config.update(actual)``.
+        """
+        from src.tuner.config.knob_space import KnobType  # local to avoid circular
+
+        if not knob_names:
+            return {}
+
+        result: Dict[str, Any] = {}
+        conn = None
+        try:
+            conn = get_connection(self.db_config, connect_timeout=connect_timeout)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT name, setting, unit "
+                    "FROM pg_settings "
+                    "WHERE name = ANY(%s)",
+                    (list(knob_names),),
+                )
+                rows = cur.fetchall()
+
+            for name, raw_setting, pg_unit in rows:
+                knob_def = knob_space.knobs.get(name)
+
+                # Boolean / ENUM: pg_settings stores as plain string ("on"/"off")
+                if knob_def is not None and knob_def.knob_type == KnobType.BOOLEAN:
+                    result[name] = (
+                        isinstance(raw_setting, str)
+                        and raw_setting.lower() in {"on", "true", "yes", "1"}
+                    )
+                    continue
+
+                if knob_def is not None and knob_def.knob_type == KnobType.ENUM:
+                    result[name] = str(raw_setting)
+                    continue
+
+                # Numeric: apply unit conversion
+                knob_unit = knob_def.unit if knob_def is not None else None
+                converted = self._apply_pg_unit(raw_setting, pg_unit, knob_unit)
+                if converted is None:
+                    self.logger.debug(
+                        "read_back_knob_state: cannot convert %r "
+                        "(setting=%r, pg_unit=%r); skipping",
+                        name, raw_setting, pg_unit,
+                    )
+                    continue
+
+                # Cast to the KnobDefinition's Python type
+                try:
+                    if knob_def is not None and knob_def.knob_type == KnobType.INTEGER:
+                        result[name] = int(round(converted))
+                    elif knob_def is not None and knob_def.knob_type == KnobType.REAL:
+                        result[name] = float(converted)
+                    else:
+                        result[name] = converted  # fallback: float
+                except (ValueError, TypeError) as exc:
+                    self.logger.debug(
+                        "read_back_knob_state: type cast failed for %r: %s",
+                        name, exc,
+                    )
+
+        except psycopg2.OperationalError as exc:
+            self.logger.warning(
+                "read_back_knob_state: DB connection failed (timeout=%ds): %s",
+                connect_timeout, exc,
+            )
+            return {}
+        except psycopg2.Error as exc:
+            self.logger.warning("read_back_knob_state: pg_settings query error: %s", exc)
+            return {}
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.warning("read_back_knob_state: unexpected error: %s", exc)
+            return {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # pylint: disable=broad-except
+                    pass
+
+        self.logger.debug(
+            "read_back_knob_state: resolved %d/%d knobs from pg_settings",
+            len(result), len(knob_names),
+        )
+        return result
+
     def __repr__(self) -> str:
         """String representation."""
         return (
@@ -859,3 +1071,4 @@ class KnobApplicator:
             f"validate={self.config.validate}, "
             f"dry_run={self.config.dry_run})"
         )
+
