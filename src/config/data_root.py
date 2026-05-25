@@ -15,9 +15,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context
 
-logger = get_logger("DataRoot")
+
+LOGGER = get_logger("DataRoot")
+COLORS = get_color_context()
 
 
 def resolve_data_root(cli_override: Optional[str] = None) -> Path:
@@ -49,6 +51,11 @@ def resolve_data_root(cli_override: Optional[str] = None) -> Path:
     Path
         Resolved and validated Path object for the data root
     """
+    LOGGER.debug(
+        "Resolving data root directory with CLI override: %s",
+        cli_override,
+    )
+
     default_path = Path("./.instances")
 
     if cli_override is not None:
@@ -79,37 +86,45 @@ def resolve_data_root(cli_override: Optional[str] = None) -> Path:
         try:
             path.mkdir(parents=True, exist_ok=True)
             if source != "default":
-                logger.info(
-                    "Created new data root directory at %s (from %s)", path, source
+                LOGGER.debug(
+                    "  Created new data root directory at %s (from %s)", path, source
                 )
         except OSError as e:
-            logger.error("Failed to create data root directory %s: %s", path, e)
-            logger.warning("Falling back to default %s", default_path.resolve())
+            LOGGER.error("Failed to create data root directory `%s`: %s", path, e)
+            LOGGER.warning(
+                "➤ Falling back to default relative path: `%s`", default_path
+            )
             return default_path.resolve()
 
     # Validate directory
     if not path.is_dir():
-        logger.error("Data root %s exists but is not a directory", path)
-        logger.warning("Falling back to default %s", default_path.resolve())
+        LOGGER.error("Data root `%s` exists but is not a directory", path)
+        LOGGER.warning("➤ Falling back to default relative path: `%s`", default_path)
         return default_path.resolve()
 
     # Validate writability
     if not os.access(path, os.W_OK):
-        logger.error("Data root %s is not writable", path)
-        logger.warning("Falling back to default %s", default_path.resolve())
+        LOGGER.error("Data root `%s` is not writable", path)
+        LOGGER.warning("➤ Falling back to default relative path: `%s`", default_path)
         return default_path.resolve()
 
     if source != "default":
-        logger.info("Using data root: %s (from %s)", path, source)
+        LOGGER.info(
+            "%s➤ Using data root: %s (from %s)%s",
+            COLORS.info,
+            path,
+            source,
+            COLORS.reset,
+        )
 
     return path
 
 
 def _maybe_use_loopback(path: Path, source: str) -> Path:
-    """If *path* is on a non-POSIX filesystem, find and mount a loopback image.
+    """If 'path' is on a non-POSIX filesystem, find and mount a loopback image.
 
-    Returns the mount-point ``/.instances`` subdirectory on success,
-    or the original *path* if loopback is not needed or fails.
+    Returns the mount-point `/.instances` subdirectory on success,
+    or the original 'path' if loopback is not needed or fails.
     """
     try:
         from src.config.loopback import (
@@ -121,6 +136,11 @@ def _maybe_use_loopback(path: Path, source: str) -> Path:
     except ImportError:
         return path
 
+    LOGGER.debug(
+        "  Checking if data root path '%s' (from %s) is on a non-POSIX filesystem...",
+        path,
+        source,
+    )
     # Check the parent directory if path doesn't exist yet
     check_path = path if path.exists() else path.parent
     if not check_path.exists():
@@ -132,7 +152,7 @@ def _maybe_use_loopback(path: Path, source: str) -> Path:
     # Found a non-POSIX filesystem — look for an ext4 image
     image = find_image_file(path)
     if image is None:
-        logger.error(
+        LOGGER.error(
             "Data root '%s' is on a non-POSIX filesystem (exFAT/NTFS) which cannot "
             "host PostgreSQL data directories. To fix this, create a loopback image:\n"
             "    truncate -s 500G %s/%s\n"
@@ -146,21 +166,21 @@ def _maybe_use_loopback(path: Path, source: str) -> Path:
         )
         return path
 
-    logger.info(
-        "Non-POSIX filesystem detected. Mounting loopback image: %s",
+    LOGGER.debug(
+        "    Non-POSIX filesystem detected. Mounting loopback image: %s",
         image,
     )
     mount_point = ensure_mounted(image)
     if mount_point is None:
-        logger.error("Failed to mount loopback image %s", image)
+        LOGGER.error("Failed to mount loopback image %s", image)
         return path
 
     # Use .instances subdirectory inside the mounted ext4 volume
     loopback_data_root = mount_point / ".instances"
     loopback_data_root.mkdir(parents=True, exist_ok=True)
 
-    logger.info(
-        "Redirected data root from non-POSIX '%s' → POSIX '%s' (via %s from %s)",
+    LOGGER.debug(
+        "  ➤ Redirected data root from non-POSIX '%s' → POSIX '%s' (via %s from %s)",
         path,
         loopback_data_root,
         image.name,

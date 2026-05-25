@@ -110,7 +110,7 @@ def load_session(
             metric_config = create_metric_config(workload)
 
     # Compute new scores for all metrics using the config
-    new_scores = [metric_config.compute_score(m) for m in all_metrics]
+    new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
 
     # Initialize arrays
     generations = np.arange(1, n_gens + 1)

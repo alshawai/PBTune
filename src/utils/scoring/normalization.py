@@ -12,9 +12,13 @@ all future reward variance).
 
 from typing import Dict, List, Any, Tuple, Optional
 import numpy as np
+from logging import Logger
 
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, get_color_context, log_section_header
 from src.utils.metrics import PerformanceMetrics
+
+LOGGER = get_logger("MetricNormalizer")
+COLORS = get_color_context()
 
 
 class MetricDirection:
@@ -269,12 +273,12 @@ class QuantileUtilityNormalizer:
         from src.utils.scoring.outlier_filtering import iqr_filter
 
         if not metrics_list:
-            self.logger.debug("fit() called with empty metrics list, skipping")
+            self.logger.debug(
+                "  %s➤ fit() called with empty metrics list, skipping%s",
+                COLORS.italic,
+                COLORS.reset,
+            )
             return
-
-        self.logger.info(
-            "Calibrating normalizer anchors from %d observations", len(metrics_list)
-        )
 
         # Extract flat dictionary of values
         series: Dict[str, list[float]] = {}
@@ -315,12 +319,14 @@ class QuantileUtilityNormalizer:
                 arr = arr_filtered
                 if filter_meta["n_removed"] > 0:
                     self.logger.debug(
-                        "IQR filter for %s: removed %d/%d outliers (bounds: [%.4f, %.4f])",
+                        "  %sIQR filter for %s: removed %d/%d outliers (bounds: [%.4f, %.4f])%s",
+                        COLORS.italic,
                         key,
                         filter_meta["n_removed"],
                         filter_meta["original_size"],
                         filter_meta["lower_bound"],
                         filter_meta["upper_bound"],
+                        COLORS.reset,
                     )
 
             # For latency/error, if all are 0, make it slightly non-zero to avoid div by zero
@@ -338,18 +344,29 @@ class QuantileUtilityNormalizer:
             self._history[key] = list(values[-self.calibration_window :])
             self._out_of_support_counts[key] = 0
 
-            self.logger.debug(
-                "Calibrated anchor for %s: direction=%d, low=%.4f, high=%.4f",
+        log_section_header(
+            self.logger,
+            " %sCalibrating normalizer anchors from %d observations: %s",
+            COLORS.bold,
+            len(metrics_list),
+            COLORS.reset,
+            top_separator=False,
+        )
+        for key, (direction, q_low, q_high) in self.anchors.items():
+            self.logger.info(
+                " %20s: %sdirection=%d, low=%.4f, high=%.4f%s",
                 key,
+                COLORS.sky_blue,
                 direction,
                 q_low,
                 q_high,
+                COLORS.reset,
             )
 
         self._total_samples_since_calibration = 0
         self._is_calibrated = True
         self.logger.info(
-            "Normalizer calibration complete: %d metrics anchored", len(self.anchors)
+            "➤ Normalizer calibration complete: %d metrics anchored", len(self.anchors)
         )
 
     def update(self, metrics: PerformanceMetrics) -> None:
@@ -401,17 +418,21 @@ class QuantileUtilityNormalizer:
             if rate > self.drift_threshold:
                 drifted_metrics.append(metric_name)
                 self.logger.warning(
-                    "Drift detected in %s: out_of_support_rate=%.4f (threshold=%.4f)",
+                    "  %sDrift detected in %s: out_of_support_rate=%.4f (threshold=%.4f)%s",
+                    COLORS.italic,
                     metric_name,
                     rate,
                     self.drift_threshold,
+                    COLORS.reset,
                 )
 
         if drifted_metrics:
             self.logger.info(
-                "Normalizer recalibration needed: %d metrics drifted after %d samples",
+                "%sNormalizer recalibration needed: %d metrics drifted after %d samples%s",
+                COLORS.bold,
                 len(drifted_metrics),
                 self._total_samples_since_calibration,
+                COLORS.reset,
             )
             return True
 
@@ -475,30 +496,45 @@ class QuantileUtilityNormalizer:
         else:  # ZERO_IS_BEST (e.g. deviation from target)
             return 1.0 - normalized
 
-    def score_vector(self, metrics: PerformanceMetrics) -> Dict[str, float]:
-        """
-        Score only metrics that have calibrated anchors.
-        """
+    def score_metrics(
+        self,
+        metrics: PerformanceMetrics,
+        metric_whitelist: Optional[List[str]] = None,
+        worker_logger: Optional[Logger] = None,
+    ) -> Dict[str, float]:
+        """Score a metrics snapshot, using fallback anchors when uncalibrated."""
+        logger = worker_logger or LOGGER
         raw_dict = metrics.to_dict()
-        scores = {}
-        for key, val in raw_dict.items():
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
-                if key in self.NATURALLY_BOUNDED_METRICS:
-                    direction = self._get_metric_direction(key)
-                    clamped = max(0.0, min(1.0, float(val)))
-                    scores[key] = (
-                        clamped
-                        if direction == MetricDirection.HIGHER_IS_BETTER
-                        else 1.0 - clamped
-                    )
-                elif key in self.anchors:  # Only score calibrated metrics
-                    scores[key] = self.score_metric(key, float(val))
+        scores: Dict[str, float] = {}
 
-        self.logger.debug(
-            "Scored metrics vector (%d calibrated): %s",
-            len(scores),
-            {k: f"{v:.4f}" for k, v in scores.items()},
+        for key, val in raw_dict.items():
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                continue
+            if metric_whitelist and key not in metric_whitelist:
+                continue
+
+            if key in self.NATURALLY_BOUNDED_METRICS:
+                direction = self._get_metric_direction(key)
+                clamped = max(0.0, min(1.0, float(val)))
+                scores[key] = (
+                    clamped
+                    if direction == MetricDirection.HIGHER_IS_BETTER
+                    else 1.0 - clamped
+                )
+            elif key in self.anchors or key in self.FALLBACK_ANCHORS:
+                scores[key] = self.score_metric(key, float(val))
+
+        log_section_header(
+            logger,
+            "Scored metrics vector %s(normalized to [0, 1])%s",
+            COLORS.italic,
+            COLORS.reset,
+            level="debug",
+            top_separator=False,
         )
+        for k, v in scores.items():
+            logger.debug("%20s: %.4f", k, v)
+
         return scores
 
     def export_state(self) -> Dict[str, Any]:

@@ -105,8 +105,7 @@ class BOBaselineRunner:
         # Metric config
         workload_type = WorkloadType(config.benchmark_config.workload_type)
         self.metric_config = create_metric_config(
-            workload_type.value,
-            scoring_policy=config.scoring_policy
+            workload_type.value, scoring_policy=config.scoring_policy
         )
 
         self.logger.info(f"BO Baseline Runner initialized for tier: {config.knob_tier}")
@@ -501,14 +500,20 @@ class BOBaselineRunner:
             def evaluate_trial(worker_idx: int, trial_info: TrialInfo):
                 worker = workers[worker_idx]
                 try:
-                    cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
-                        evaluate_config(
-                            trial_info.config,
-                            worker,
-                            orchestrator,
-                            self.knob_space,
-                            previous_configs[worker_idx],
-                        )
+                    (
+                        cost,
+                        knob_config,
+                        metrics,
+                        score,
+                        score_breakdown,
+                        restarted,
+                        wall_time,
+                    ) = evaluate_config(
+                        trial_info.config,
+                        worker,
+                        orchestrator,
+                        self.knob_space,
+                        previous_configs[worker_idx],
                     )
                     previous_configs[worker_idx] = knob_config
 

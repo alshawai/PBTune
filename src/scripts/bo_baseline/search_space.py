@@ -35,6 +35,12 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
     """
     cs = ConfigurationSpace(seed=seed)
 
+    auto_zero_knobs = {
+        "commit_timestamp_buffers",
+        "subtransaction_buffers",
+        "transaction_buffers",
+    }
+
     for knob_def in knob_space.knobs.values():
         name = knob_def.name
 
@@ -53,6 +59,9 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
                 int(knob_def.max_value) if knob_def.max_value is not None else 2**31 - 1
             )
 
+            if name in auto_zero_knobs and min_val == 0:
+                min_val = 1
+
             # For log scale, ensure min > 0
             if knob_def.scale == KnobScale.LOG:
                 min_val = max(min_val, 1)
@@ -61,6 +70,8 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
             default = None
             if knob_def.default is not None:
                 default = int(knob_def.default)
+                if name in auto_zero_knobs and default == 0:
+                    default = 1
                 if default < min_val or default > max_val:
                     default = None
 
@@ -104,7 +115,7 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
         elif knob_def.knob_type == KnobType.BOOLEAN:
             param = Categorical(
                 name,
-                categories=["on", "off"],
+                ["on", "off"],
                 default="on" if knob_def.default else "off",
             )
             cs.add(param)
@@ -121,11 +132,17 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
             ):
                 default = knob_def.default
 
-            param = Categorical(
-                name,
-                categories=knob_def.enum_values,
-                default=default,
-            )
+            if default is None:
+                param = Categorical(
+                    name,
+                    knob_def.enum_values,
+                )
+            else:
+                param = Categorical(
+                    name,
+                    knob_def.enum_values,
+                    default=default,
+                )
             cs.add(param)
 
     return cs

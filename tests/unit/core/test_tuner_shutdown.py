@@ -16,7 +16,7 @@ def _make_tuner(env: MagicMock, cleanup_instances: bool = False) -> PBTTuner:
     """Create a PBTTuner object with minimal state needed for run() tests."""
     tuner = PBTTuner.__new__(PBTTuner)
 
-    tuner.logger = MagicMock()
+    tuner.LOGGER = MagicMock()
     tuner.system_info = {}
     tuner.knob_tier = "minimal"
     tuner.knob_space = {}
@@ -58,7 +58,6 @@ def _make_tuner(env: MagicMock, cleanup_instances: bool = False) -> PBTTuner:
     tuner._prune_unsupported_runtime_knobs = MagicMock()
     tuner.run_generation = MagicMock()
     tuner.save_intermediate_results = MagicMock()
-    tuner._get_stop_reason = MagicMock(return_value="test-stop")
 
     tuner.save_final_results = MagicMock(return_value={"status": "ok"})
     tuner.print_final_summary = MagicMock()
@@ -118,9 +117,15 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     """Recovery failures after connection errors should not escape evaluate_worker."""
     tuner = PBTTuner.__new__(PBTTuner)
     tuner.current_generation = 0
-    tuner._restart_logged_this_gen = False
+    tuner._restarted_this_gen = False
     tuner.restart_count = 0
-    tuner.metric_config = SimpleNamespace(latency_metric="p95")
+    from src.utils.scoring.contracts import ScoreBreakdown
+
+    # metric_config now exposes compute_score() which returns a ScoreBreakdown
+    tuner.metric_config = SimpleNamespace(
+        latency_metric="p95",
+        compute_score=lambda metrics, worker_logger=None: ScoreBreakdown(final_score=0.0),
+    )
     tuner.pbt_config = SimpleNamespace(dead_config_score=0.0, crash_score=0.0)
 
     tuner.orchestrator = MagicMock()
@@ -131,7 +136,7 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     tuner.env = MagicMock()
     tuner.env.recover_instance.side_effect = RuntimeError("docker read timeout")
 
-    worker = SimpleNamespace(worker_id=0)
+    worker = SimpleNamespace(worker_id=0, logger=MagicMock(), port=None)
 
     metrics, score = tuner.evaluate_worker(worker)
 

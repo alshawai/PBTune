@@ -40,11 +40,17 @@ Example:
 
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple, List
+from logging import Logger
 import copy
 
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.metrics import PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
 from src.config.database import DatabaseConfig
+from src.utils.logger import get_logger, get_color_context
+
+LOGGER = get_logger("Worker")
+COLORS = get_color_context()
 
 
 @dataclass
@@ -132,6 +138,7 @@ class Worker:
 
     performance_score: float = 0.0
     metrics: Optional[PerformanceMetrics] = None
+    score_breakdown: Optional[ScoreBreakdown] = None
 
     performance_history: List[PerformanceMetrics] = field(default_factory=list)
 
@@ -145,12 +152,15 @@ class Worker:
     db_config: Optional[DatabaseConfig] = None
     force_restart_next_eval: bool = False
 
+    logger: Logger = field(init=False, repr=False)
+
     def __post_init__(self):
         """Initialize worker with random configuration if none provided."""
         if self.knob_config is None:
             self.knob_config = self.knob_space.sample_random_config(
                 seed=None  # Different seed for each worker ensures diversity
             )
+        self.logger = get_logger("Worker", worker_id=self.worker_id)
 
     def is_ready(self) -> bool:
         """
@@ -215,12 +225,6 @@ class Worker:
         else:
             self.knob_config = copy.deepcopy(other.knob_config)
 
-        # Enforce memory budget validation after mixing configurations
-        if self.knob_config:
-            self.knob_config = self.knob_space.repair_config_dependencies(
-                self.knob_config
-            )
-
         self.parent_id = other.worker_id
         self.generation_created = current_generation
 
@@ -269,6 +273,7 @@ class Worker:
             config=self.knob_config,  # type: ignore
             perturbation_factor=perturbation_factors,
             seed=seed,
+            worker_id=self.worker_id,
             exclude_knobs=exclude_knobs,
         )
 
@@ -282,7 +287,12 @@ class Worker:
                 }
             )
 
-    def update_metrics(self, metrics: PerformanceMetrics, score: float) -> None:
+    def update_metrics(
+        self,
+        metrics: PerformanceMetrics,
+        score: float,
+        score_breakdown: Optional[ScoreBreakdown] = None,
+    ) -> None:
         """
         Update worker's performance after evaluation.
 
@@ -300,6 +310,8 @@ class Worker:
         """
         self.metrics = metrics
         self.performance_score = score
+        if score_breakdown is not None:
+            self.score_breakdown = score_breakdown
         self.step_count += 1
         self.performance_history.append(metrics)
 
@@ -332,6 +344,7 @@ class Worker:
         self.knob_config = self.knob_space.sample_random_config(seed=seed)
         self.performance_score = 0.0
         self.metrics = None
+        self.score_breakdown = None
         self.parent_id = None
         self.force_restart_next_eval = False
 

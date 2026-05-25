@@ -2,9 +2,9 @@
 
 from typing import Final
 
-DEFAULT_SCORING_POLICY: Final[str] = "fixed_v1"
-DEFAULT_SCORING_POLICY_VERSION: Final[str] = "1.0"
-DEFAULT_METRIC_REFERENCE_VERSION: Final[str] = "v1"
+DEFAULT_SCORING_POLICY: Final[str] = "feature_driven_v2"
+DEFAULT_SCORING_POLICY_VERSION: Final[str] = "2.0"
+DEFAULT_METRIC_REFERENCE_VERSION: Final[str] = "v2"
 
 METRIC_DIRECTIONALITY: Final[dict[str, str]] = {
     "latency_p50": "lower_is_better",
