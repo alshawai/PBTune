@@ -54,6 +54,25 @@ def _mock_pg_rows(rows: List[tuple]):
 
 
 # ---------------------------------------------------------------------------
+# get_current_values
+# ---------------------------------------------------------------------------
+
+class TestGetCurrentValues:
+    """Test the raw pg_settings read helper."""
+
+    def test_returns_setting_and_unit_tuple(self):
+        pg_rows = [("shared_buffers", "16384", "8kB")]
+        applicator = _make_applicator()
+
+        with patch(
+            "src.utils.applicator.get_connection", return_value=_mock_pg_rows(pg_rows)
+        ):
+            result = applicator.get_current_values(["shared_buffers"])
+
+        assert result == {"shared_buffers": ("16384", "8kB")}
+
+
+# ---------------------------------------------------------------------------
 # _apply_pg_unit (static helper)
 # ---------------------------------------------------------------------------
 
@@ -367,7 +386,6 @@ class TestReadBackKnobStateEdgeCases:
             result = applicator.read_back_knob_state(
                 knob_names=["shared_buffers"],
                 knob_space=knob_space,
-                connect_timeout=1,
             )
 
         assert result == {}

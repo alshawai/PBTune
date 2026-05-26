@@ -69,7 +69,6 @@ class ComparisonConfig:
     bo_session_path: Optional[Path] = None
     data_dir: Optional[str] = None
     colocate_output: bool = False
-    bo_session_path: Optional[Path] = None
 
 
 @dataclass

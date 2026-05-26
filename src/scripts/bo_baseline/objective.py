@@ -14,7 +14,6 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger("Objective")
 
-
 def evaluate_config(
     config: Configuration,
     worker: Worker,
@@ -105,7 +104,6 @@ def evaluate_config(
             actual_knobs = applicator.read_back_knob_state(
                 knob_names=list(knob_config.keys()),
                 knob_space=knob_space,
-                connect_timeout=3,
             )
             if actual_knobs:
                 knob_config.update(actual_knobs)
@@ -115,9 +113,8 @@ def evaluate_config(
                 )
 
     return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
-
-
 def create_objective(
+
     orchestrator: WorkloadOrchestrator,
     worker: Worker,
     knob_space: KnobSpace,
