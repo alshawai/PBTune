@@ -42,7 +42,6 @@ from src.scripts.bo_baseline.result_writer import (
 
 LOGGER = get_logger("Runner")
 
-
 class BOBaselineRunner:
     """Bayesian Optimization baseline runner for PostgreSQL tuning."""
 
@@ -117,12 +116,10 @@ class BOBaselineRunner:
                 script=self.config.benchmark_config.sysbench_workload,
                 tables=self.config.benchmark_config.sysbench_tables,
                 table_size=self.config.benchmark_config.sysbench_table_size,
-                random_seed=self.config.random_seed,
             )
         elif self.config.benchmark_config.benchmark == "tpch":
             return TPCHExecutor(
                 scale_factor=self.config.benchmark_config.scale_factor,
-                random_seed=self.config.random_seed,
             )
         else:
             raise ValueError(
@@ -296,6 +293,7 @@ class BOBaselineRunner:
                 warmup_duration=self.config.benchmark_config.warmup_duration,
                 measurement_duration=self.config.benchmark_config.evaluation_duration,
                 tuning_mode=self.config.benchmark_config.tuning_mode,
+                random_seed=self.config.random_seed,
             )
             orchestrator = WorkloadOrchestrator(
                 orchestrator_config, workload_executor, self.env
@@ -591,7 +589,6 @@ class BOBaselineRunner:
                     )
                 ranges_frozen = True
 
-
 def main():
     """CLI entry point."""
     import argparse
@@ -821,7 +818,6 @@ def main():
     results = runner.run()
 
     return results
-
 
 if __name__ == "__main__":
     main()
