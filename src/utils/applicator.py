@@ -636,7 +636,7 @@ class KnobApplicator:
 
         return result
 
-    def get_current_values(self, param_names: List[str]) -> Dict[str, Any]:
+    def get_current_values(self, param_names: List[str]) -> Dict[str, tuple[str, str]]:
         """
         Get current values of specified parameters.
 
@@ -647,14 +647,18 @@ class KnobApplicator:
 
         Returns
         -------
-        Dict[str, Any]
-            Dictionary of parameter_name -> current_value
+        Dict[str, tuple[str, str]]
+            Dictionary of parameter_name -> (current_value, unit)
         """
-        if not self.connection:
-            self.connect()
+        if not param_names:
+            return {}
 
-        cursor = self.connection.cursor()  # type: ignore
+        cursor = None
         try:
+            if not self.connection:
+                self.connect()
+
+            cursor = self.connection.cursor()  # type: ignore
             placeholders = ",".join(["%s"] * len(param_names))
             query = f"""
                 SELECT name, setting, unit
@@ -664,13 +668,14 @@ class KnobApplicator:
             cursor.execute(query, param_names)
             rows = cursor.fetchall()
 
-            return {row[0]: row[1] for row in rows}
+            return {row[0]: (row[1], row[2]) for row in rows}
 
         except psycopg2.Error as e:
             self.logger.error("Failed to get current values: %s", e)
             return {}
         finally:
-            cursor.close()
+            if cursor is not None:
+                cursor.close()
 
     def reset_parameter(self, name: str) -> bool:
         """
@@ -941,7 +946,6 @@ class KnobApplicator:
         self,
         knob_names: List[str],
         knob_space: Any,  # KnobSpace — avoid circular import at module level
-        connect_timeout: int = 5,
     ) -> Dict[str, Any]:
         """
         Query ``pg_settings`` and return the **actually applied** knob values,
@@ -969,10 +973,6 @@ class KnobApplicator:
             are silently skipped.
         knob_space : KnobSpace
             Used to look up each knob's ``unit`` and ``knob_type``.
-        connect_timeout : int
-            Connection timeout in seconds (default 5).  Keep low so a crashed
-            database does not stall the BO loop.
-
         Returns
         -------
         Dict[str, Any]
@@ -985,77 +985,50 @@ class KnobApplicator:
         if not knob_names:
             return {}
 
+        current_data = self.get_current_values(knob_names)
+        if not current_data:
+            return {}
+
         result: Dict[str, Any] = {}
-        conn = None
-        try:
-            conn = get_connection(self.db_config, connect_timeout=connect_timeout)
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT name, setting, unit "
-                    "FROM pg_settings "
-                    "WHERE name = ANY(%s)",
-                    (list(knob_names),),
+        for name, (raw_setting, pg_unit) in current_data.items():
+            knob_def = knob_space.knobs.get(name)
+
+            # Boolean / ENUM: pg_settings stores as plain string ("on"/"off")
+            if knob_def is not None and knob_def.knob_type == KnobType.BOOLEAN:
+                result[name] = (
+                    isinstance(raw_setting, str)
+                    and raw_setting.lower() in {"on", "true", "yes", "1"}
                 )
-                rows = cur.fetchall()
+                continue
 
-            for name, raw_setting, pg_unit in rows:
-                knob_def = knob_space.knobs.get(name)
+            if knob_def is not None and knob_def.knob_type == KnobType.ENUM:
+                result[name] = str(raw_setting)
+                continue
 
-                # Boolean / ENUM: pg_settings stores as plain string ("on"/"off")
-                if knob_def is not None and knob_def.knob_type == KnobType.BOOLEAN:
-                    result[name] = (
-                        isinstance(raw_setting, str)
-                        and raw_setting.lower() in {"on", "true", "yes", "1"}
-                    )
-                    continue
+            # Numeric: apply unit conversion
+            knob_unit = knob_def.unit if knob_def is not None else None
+            converted = self._apply_pg_unit(raw_setting, pg_unit, knob_unit)
+            if converted is None:
+                self.logger.debug(
+                    "read_back_knob_state: cannot convert %r "
+                    "(setting=%r, pg_unit=%r); skipping",
+                    name, raw_setting, pg_unit,
+                )
+                continue
 
-                if knob_def is not None and knob_def.knob_type == KnobType.ENUM:
-                    result[name] = str(raw_setting)
-                    continue
-
-                # Numeric: apply unit conversion
-                knob_unit = knob_def.unit if knob_def is not None else None
-                converted = self._apply_pg_unit(raw_setting, pg_unit, knob_unit)
-                if converted is None:
-                    self.logger.debug(
-                        "read_back_knob_state: cannot convert %r "
-                        "(setting=%r, pg_unit=%r); skipping",
-                        name, raw_setting, pg_unit,
-                    )
-                    continue
-
-                # Cast to the KnobDefinition's Python type
-                try:
-                    if knob_def is not None and knob_def.knob_type == KnobType.INTEGER:
-                        result[name] = int(round(converted))
-                    elif knob_def is not None and knob_def.knob_type == KnobType.REAL:
-                        result[name] = float(converted)
-                    else:
-                        result[name] = converted  # fallback: float
-                except (ValueError, TypeError) as exc:
-                    self.logger.debug(
-                        "read_back_knob_state: type cast failed for %r: %s",
-                        name, exc,
-                    )
-
-        except psycopg2.OperationalError as exc:
-            self.logger.warning(
-                "read_back_knob_state: DB connection failed (timeout=%ds): %s",
-                connect_timeout, exc,
-            )
-            return {}
-        except psycopg2.Error as exc:
-            self.logger.warning("read_back_knob_state: pg_settings query error: %s", exc)
-            return {}
-        except Exception as exc:  # pylint: disable=broad-except
-            self.logger.warning("read_back_knob_state: unexpected error: %s", exc)
-            return {}
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+            # Cast to the KnobDefinition's Python type
+            try:
+                if knob_def is not None and knob_def.knob_type == KnobType.INTEGER:
+                    result[name] = int(round(converted))
+                elif knob_def is not None and knob_def.knob_type == KnobType.REAL:
+                    result[name] = float(converted)
+                else:
+                    result[name] = converted  # fallback: float
+            except (ValueError, TypeError) as exc:
+                self.logger.debug(
+                    "read_back_knob_state: type cast failed for %r: %s",
+                    name, exc,
+                )
 
         self.logger.debug(
             "read_back_knob_state: resolved %d/%d knobs from pg_settings",
@@ -1071,4 +1044,3 @@ class KnobApplicator:
             f"validate={self.config.validate}, "
             f"dry_run={self.config.dry_run})"
         )
-

@@ -320,7 +320,6 @@ def main(argv: list[str] | None = None) -> int:
         bo_session_path=args.bo_session,
         data_dir=args.data_dir,
         colocate_output=args.colocate_output,
-        bo_session_path=args.bo_session,
     )
 
     try:

@@ -17,10 +17,7 @@ from src.utils.types import (
     clone_benchmark_config,
 )
 from src.utils.logger import get_logger
-
-
 LOGGER = get_logger("Config")
-
 
 @dataclass
 class BOConfig:
@@ -327,7 +324,6 @@ class BOConfig:
         config.max_workers = config.resource_division if config.batched_bo else 1
 
         return config
-
 
 RAPID_BO_CONFIG = BOConfig(
     n_iterations=40,
