@@ -13,6 +13,7 @@ from src.tuner.core.worker import Worker
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
 from src.utils.types import BenchmarkConfig, TuningMode
 from src.utils.metrics import PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
 from src.evaluation.loader import load_tuning_session
 
 
@@ -76,7 +77,8 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -146,7 +148,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -195,7 +197,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -232,7 +234,7 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -377,8 +379,8 @@ class TestObjectiveEvaluation:
             def get_normalization_metadata(self):
                 return {}
 
-            def compute_detailed_scores(self, metrics):
-                return {"total": 87.5}
+            def compute_score(self, metrics, worker_logger=None):
+                return ScoreBreakdown(final_score=87.5)
 
         class DummyConfig:
             metric_config = DummyMetricConfig()
@@ -390,7 +392,8 @@ class TestObjectiveEvaluation:
 
             def evaluate_worker(self, worker, apply_config=True):
                 self.received_worker = worker
-                return expected_metrics, 87.5, False
+                worker.score_breakdown = ScoreBreakdown(final_score=87.5)
+                return expected_metrics, 87.5, False, {}
 
         orchestrator = DummyOrchestrator()
 
@@ -457,7 +460,7 @@ class TestResultFormat:
                 "wall_clock_seconds": 30.0,
                 "restarted": False,
                 "timestamp": 1234567890.0,
-                "score_breakdown": {"total": 0.5},
+                "score_breakdown": ScoreBreakdown(final_score=0.5),
             },
             {
                 "iteration": 1,
@@ -468,7 +471,7 @@ class TestResultFormat:
                 "wall_clock_seconds": 30.0,
                 "restarted": False,
                 "timestamp": 1234567920.0,
-                "score_breakdown": {"total": 0.6},
+                "score_breakdown": ScoreBreakdown(final_score=0.6),
             },
         ]
 
@@ -526,6 +529,13 @@ class TestResultFormat:
         assert loaded.best_score == 0.6
         written = json.loads(result_file.read_text(encoding="utf-8"))
         assert written["tuning_session"]["seed"] == 123
+        assert isinstance(written["best_configuration"]["score_breakdown"], dict)
+        assert written["best_configuration"]["score_breakdown"]["final_score"] == 0.6
+        assert isinstance(
+            written["generation_history"][0]["worker_scores"][0]["score_breakdown"],
+            dict,
+        )
+        assert written["generation_history"][0]["worker_scores"][0]["score_breakdown"]["final_score"] == 0.5
 
     def test_result_generation_history(self, tmp_path):
         """Test that generation history is properly formatted."""
@@ -659,7 +669,7 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -672,7 +682,7 @@ class TestParallelBOConfiguration:
         assert config.pbt_worker_resources["disk_type"] == "SSD"
 
     def test_bo_config_max_workers_cli_override(self, tmp_path):
-        """Test that --parallel-workers CLI arg overrides PBT-derived value."""
+        """Test that --batched-bo CLI arg overrides PBT-derived value."""
         pbt_session = tmp_path / "pbt_results_test.json"
         pbt_session.write_text(
             json.dumps(
@@ -714,7 +724,7 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=2,
+            batched_bo=True, resource_division=2,
             pbt_session=str(pbt_session),
         )
 
@@ -748,7 +758,7 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            parallel_workers=None,
+            batched_bo=True, resource_division=None,
             pbt_session=None,
         )
 

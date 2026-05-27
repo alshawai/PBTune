@@ -1073,7 +1073,7 @@ class Population:
 
         rescued = self.rescue_dead_workers()
         if rescued > 0:
-            LOGGER.debug("➤ Immediate dead-config rescue recovered %d workers", rescued)
+            LOGGER.info("➤ Immediate dead-config rescue recovered %d workers", rescued)
 
         LOGGER.info("Checking for adaptive normalization updates...")
         self.update_metric_ranges_if_needed()

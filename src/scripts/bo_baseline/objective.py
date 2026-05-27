@@ -13,7 +13,6 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger("Objective")
 
-
 def evaluate_config(
     config: Configuration,
     worker: Worker,
@@ -25,6 +24,13 @@ def evaluate_config(
 ]:
     """
     Evaluate a single configuration on a specific worker instance.
+
+    After the benchmark completes successfully, this function queries
+    ``pg_settings`` to read back the *actually applied* knob values so that
+    PostgreSQL's internal quantization (e.g. rounding ``shared_buffers`` to
+    the nearest 8 kB page) is reflected in the config dict returned to SMAC.
+    Without this step, the surrogate model sees a flat landscape because many
+    nearby suggested values map to the same rounded internal value.
 
     Parameters
     ----------
@@ -43,6 +49,7 @@ def evaluate_config(
     -------
     Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float]
         (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time)
+        ``knob_config`` contains the *true* applied values after read-back.
     """
     t_start = time.time()
 
@@ -63,7 +70,19 @@ def evaluate_config(
     worker.knob_config = knob_config
     worker.force_restart_next_eval = force_restart
 
-    metrics, score, restarted = orchestrator.evaluate_worker(worker, apply_config=True)
+    metrics, score, restarted, actual_db_config = orchestrator.evaluate_worker(
+        worker, apply_config=True
+    )
+
+    # The orchestrator already verified the config and read back the true
+    # DB values.  Merge them into knob_config so the surrogate model sees
+    # the actual quantized values PostgreSQL is using.
+    if actual_db_config:
+        knob_config.update(actual_db_config)
+        LOGGER.debug(
+            "Merged %d actual DB values from evaluate_worker into knob_config",
+            len(actual_db_config),
+        )
 
     wall_time = time.time() - t_start
 
@@ -73,20 +92,24 @@ def evaluate_config(
         score_breakdown = None
     else:
         cost = max(0.0, min(100.0, 100.0 - score))
-        score_breakdown = orchestrator.config.metric_config.compute_detailed_scores(
-            metrics
-        )
+        score_breakdown = worker.score_breakdown
+        if score_breakdown is None:
+            score_breakdown = orchestrator.config.metric_config.compute_score(
+                metrics, worker_logger=worker.logger
+            )
 
     return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
-
-
 def create_objective(
+
     orchestrator: WorkloadOrchestrator,
     worker: Worker,
     knob_space: KnobSpace,
     metric_config: MetricConfig,
     iteration_log: List[Dict],
     pilot_phase_size: int = 10,
+    env: Optional["DatabaseEnvironment"] = None,
+    enable_snapshots: bool = False,
+    snapshot_restore_interval: int = 1,
 ) -> Callable[[Configuration, int], float]:
     """
     Create an objective function for SMAC3 with Pilot+Freeze normalization.
@@ -111,6 +134,12 @@ def create_objective(
         Mutable list for tracking convergence
     pilot_phase_size : int
         Number of initial iterations before freezing normalization ranges
+    env : Optional[DatabaseEnvironment]
+        Database environment for snapshot restoration
+    enable_snapshots : bool
+        Whether to enable snapshot restoration
+    snapshot_restore_interval : int
+        Restore snapshots every N iterations
 
     Returns
     -------
@@ -142,10 +171,29 @@ def create_objective(
             Cost value (100 - score), with penalties for failures
         """
         try:
-            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
-                evaluate_config(
-                    config, worker, orchestrator, knob_space, state["previous_config"]
+            # Handle snapshot restoration before evaluating the config
+            if (
+                enable_snapshots
+                and env is not None
+                and state["iteration_count"] > 0
+                and state["iteration_count"] % snapshot_restore_interval == 0
+            ):
+                LOGGER.info(
+                    "Restoring database snapshot for iteration %d (interval: %d)",
+                    state["iteration_count"],
+                    snapshot_restore_interval,
                 )
+                try:
+                    restored = env.restore_snapshot(worker.worker_id)
+                    if not restored:
+                        LOGGER.error("Snapshot restore failed for worker %d", worker.worker_id)
+                    else:
+                        LOGGER.info("✓ Database snapshot restored successfully")
+                except Exception as e:
+                    LOGGER.error("Failed to restore database from snapshot: %s", e)
+
+            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = evaluate_config(
+                config, worker, orchestrator, knob_space, state["previous_config"]
             )
 
             iteration_entry = {
@@ -172,7 +220,7 @@ def create_objective(
                     if entry["metrics"]
                 ]
                 if all_metrics:
-                    metric_config.expand_ranges_for_metrics(all_metrics)
+                    metric_config.update_ranges(all_metrics)
                     LOGGER.info(
                         "Normalization ranges frozen after %d pilot iterations",
                         state["iteration_count"] + 1,

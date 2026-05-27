@@ -207,7 +207,7 @@ class SysbenchExecutor(BenchmarkExecutor):
         warmup = kwargs.get("warmup", 30.0)
         random_seed = kwargs.get("random_seed", None)
 
-        logger.debug(
+        logger.info(
             "%s Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)%s",
             COLORS.bold,
             duration,
@@ -247,7 +247,7 @@ class SysbenchExecutor(BenchmarkExecutor):
             "%sSysbench metrics extracted:%s",
             COLORS.bold,
             COLORS.reset,
-            "debug",
+            level="debug",
             top_separator=False,
         )
         for metric_name, value in metrics.__dict__.items():

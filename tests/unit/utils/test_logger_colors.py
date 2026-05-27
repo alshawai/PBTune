@@ -2,6 +2,7 @@
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from io import StringIO
 import logging
 import sys
 import types
@@ -235,6 +236,37 @@ def test_formatter_no_color_output_is_plain_text():
         assert "Starting..." in html_output
     finally:
         set_colors_enabled(True)
+
+
+def test_log_section_header_honors_top_separator_in_debug_mode():
+    """Debug section headers should respect top_separator=False and format title args."""
+    logger = logging.getLogger("test.log_section_header")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        _logger_helpers.log_section_header(
+            logger,
+            "%sScored metrics vector (normalized to [0, 1])%s",
+            _logger_helpers.COLORS.italic,
+            _logger_helpers.COLORS.reset,
+            level="debug",
+            top_separator=False,
+        )
+    finally:
+        logger.removeHandler(handler)
+
+    output = [line for line in stream.getvalue().splitlines() if line]
+    assert len(output) == 2
+    assert "Scored metrics vector (normalized to [0, 1])" in output[0]
+    assert "=" in output[1]
 
 
 def test_formatter_preserves_column_alignment_in_no_color_mode():

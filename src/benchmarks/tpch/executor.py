@@ -353,7 +353,7 @@ class TPCHExecutor(BenchmarkExecutor):
                 )
                 conn = get_connection(db_config)
                 conn.autocommit = True
-        logger.debug("  ➤ Warmup complete, starting timed measurement of TPC-H queries")
+        logger.info("  ➤ Warmup complete, starting timed measurement of TPC-H queries")
 
         logger.info(
             " Executing Power Test sequence of %d TPC-H queries...", len(self.queries)
