@@ -87,10 +87,10 @@ PostgreSQL silently modifies suggested configurations to fit internal constraint
 
 To combat this, the BO loop employs a **Read-Back Abstraction** during `evaluate_config`:
 1. The BO agent suggests a continuous configuration.
-2. The `KnobApplicator` applies the configuration and the workload is benchmarked.
-3. The `KnobApplicator.read_back_knob_state()` utility queries `pg_settings` for the **actually applied** `setting` and `unit` values.
-4. The utility normalizes these raw values back into the `KnobSpace` canonical units and types.
-5. These true, quantized values are merged back into the configuration dictionary *before* it is returned to SMAC3, ensuring the surrogate model trains on accurate data.
+2. The orchestrator applies the configuration.
+3. After application (and potential restart), the orchestrator immediately calls `KnobApplicator.verify()`, which queries `pg_settings` for the **actually applied** typed values.
+4. The orchestrator's `evaluate_worker` returns these true, quantized values alongside the performance metrics.
+5. These actual values are merged back into the configuration dictionary *before* it is returned to SMAC3, ensuring the surrogate model trains on the exact data PostgreSQL is running with.
 
 ### Parallel BO Evaluation and Resource Equalization
 

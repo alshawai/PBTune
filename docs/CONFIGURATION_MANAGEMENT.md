@@ -673,36 +673,31 @@ def _apply_parameter(
 - **Error handling**: Catches and logs PostgreSQL errors
 - **Context awareness**: Uses ALTER SYSTEM vs SET appropriately
 
-#### `read_back_knob_state()` - Read-Back Abstraction
+#### `verify()` - Verification and Read-Back Abstraction
 
 ```python
-def read_back_knob_state(
-    self,
-    knob_names: List[str],
-    knob_space: KnobSpace,
-    connect_timeout: int = 5
-) -> Dict[str, Any]:
+def verify(self, expected_config: Dict[str, Any]) -> VerificationResult:
     """
-    Query pg_settings and return the actually applied knob values,
-    with unit conversion and type casting.
+    Verify that expected configuration matches actual PostgreSQL state,
+    and return the exact quantized configuration applied.
     """
 ```
 
-**Purpose**: Solves two critical problems when external optimizers (like BO) need to know the *exact* configuration running inside the database engine:
+**Purpose**: Solves two critical problems when external optimizers (like BO or PBT) need to verify application and know the *exact* configuration running inside the database engine:
 
-1. **Quantization trap**: PostgreSQL rounds values to internal block boundaries (e.g., `shared_buffers` is rounded to the nearest 8kB page). This method returns the true quantized value.
-2. **Unit-conversion trap**: `pg_settings` returns raw numeric strings and separate unit strings. This method applies the necessary multipliers and converts the value back to the canonical unit and Python type expected by the `KnobDefinition` (e.g., `KnobType.INTEGER`).
+1. **Quantization trap**: PostgreSQL rounds values to internal block boundaries (e.g., `shared_buffers` is rounded to the nearest 8kB page). This method captures the true quantized value.
+2. **Unit-conversion trap**: `pg_settings` returns raw numeric strings and separate unit strings. `verify()` relies on PostgreSQL's internal normalization by querying `current_setting(name)` and directly retrieves the properly typed values.
 
 **Usage**:
 ```python
-# During evaluation loop
-actual_knobs = applicator.read_back_knob_state(
-    knob_names=list(knob_config.keys()),
-    knob_space=knob_space
-)
-if actual_knobs:
-    # Update the configuration dictionary with true values
-    knob_config.update(actual_knobs)
+# During evaluation loop (typically inside WorkloadOrchestrator)
+verification = applicator.verify(worker.knob_config)
+
+if not all(verification.matches.values()):
+    logger.warning("Some knobs failed to apply correctly.")
+
+# The true, quantized configuration is now available
+actual_knobs = verification.db_config
 ```
 
 **Note**: The actual KnobApplicator implementation doesn't have individual parameter rollback—it uses psycopg2's transaction rollback mechanism (see [Rollback Mechanism](#rollback-mechanism) section for details).

@@ -560,7 +560,7 @@ class WorkloadOrchestrator:
         apply_config: bool = True,
         generation: Optional[int] = None,
         barriers: Optional[GenerationBarrier] = None,
-    ) -> tuple[PerformanceMetrics, float, bool]:
+    ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any]]:
         """
         Evaluate a Worker's configuration.
 
@@ -592,12 +592,15 @@ class WorkloadOrchestrator:
 
         Returns
         -------
-        tuple[PerformanceMetrics, float, bool]
-            (metrics, score, restart_occurred) tuple
+        tuple[PerformanceMetrics, float, bool, Dict[str, Any]]
+            (metrics, score, restart_occurred, actual_db_config) tuple.
+            ``actual_db_config`` contains the true values currently active
+            in PostgreSQL after apply + optional restart, as read back
+            from ``pg_settings``.
 
         Example
         -------
-        >>> metrics, score, restarted = evaluator.evaluate_worker(worker)
+        >>> metrics, score, restarted, db_cfg = evaluator.evaluate_worker(worker)
         >>> worker.update_metrics(metrics, score)
         """
         if not worker.db_config:
@@ -618,6 +621,7 @@ class WorkloadOrchestrator:
 
         connection = None
         restart_occurred = False
+        actual_db_config: Dict[str, Any] = {}
 
         try:
             worker.logger.debug(" Establishing connection to PostgreSQL...")
@@ -676,18 +680,28 @@ class WorkloadOrchestrator:
             last_completed_barrier = "reconnected"
 
             # ── B5: Verify configuration ─────────────────────────────
-            if apply_config and worker.knob_config and restart_occurred:
-                worker.logger.debug(" Verifying knob configuration after restart...")
+            if apply_config and worker.knob_config:
+                worker.logger.debug(" Verifying knob configuration...")
                 verification = knob_applicator.verify(worker.knob_config)
-                failed_params = [k for k, v in verification.items() if not v]
-                if failed_params:
+                if verification.failed_params:
                     worker.logger.warning(
                         " ➤ Configuration verification failed for %d parameters: %s",
-                        len(failed_params),
-                        failed_params,
+                        len(verification.failed_params),
+                        verification.failed_params,
                     )
                 else:
                     worker.logger.debug(" ➤ All parameters verified.")
+
+                # Save the true applied DB config back to the worker so
+                # downstream consumers (scoring, result writers) see the
+                # actual quantized values PostgreSQL is using.
+                if verification.db_config:
+                    actual_db_config = verification.db_config
+                    worker.knob_config.update(actual_db_config)
+                    worker.logger.debug(
+                        " ➤ Updated worker.knob_config with %d actual DB values",
+                        len(actual_db_config),
+                    )
 
             _barrier("config_verified")
             last_completed_barrier = "config_verified"
@@ -876,7 +890,7 @@ class WorkloadOrchestrator:
                     if next_name:
                         barriers.drain_remaining(next_name, worker_id=worker.worker_id)
                 _barriers_drained = True
-                return metrics, score, restart_occurred
+                return metrics, score, restart_occurred, actual_db_config
 
             # ── B12: Collect system metrics ──────────────────────────
             system_metrics = self.collect_system_metrics(worker_id=worker.worker_id)
@@ -922,7 +936,7 @@ class WorkloadOrchestrator:
 
             worker.logger.info("➤ Evaluated successfully.")
 
-            return metrics, score, restart_occurred
+            return metrics, score, restart_occurred, actual_db_config
 
         except Exception:
             # Top-level safety net: drain all remaining barriers.

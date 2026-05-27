@@ -8,7 +8,6 @@ from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import MetricConfig, PerformanceMetrics
-from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.scripts.bo_baseline.search_space import configspace_to_knobs
 from src.utils.logger import get_logger
 
@@ -71,7 +70,19 @@ def evaluate_config(
     worker.knob_config = knob_config
     worker.force_restart_next_eval = force_restart
 
-    metrics, score, restarted = orchestrator.evaluate_worker(worker, apply_config=True)
+    metrics, score, restarted, actual_db_config = orchestrator.evaluate_worker(
+        worker, apply_config=True
+    )
+
+    # The orchestrator already verified the config and read back the true
+    # DB values.  Merge them into knob_config so the surrogate model sees
+    # the actual quantized values PostgreSQL is using.
+    if actual_db_config:
+        knob_config.update(actual_db_config)
+        LOGGER.debug(
+            "Merged %d actual DB values from evaluate_worker into knob_config",
+            len(actual_db_config),
+        )
 
     wall_time = time.time() - t_start
 
@@ -86,31 +97,6 @@ def evaluate_config(
             score_breakdown = orchestrator.config.metric_config.compute_score(
                 metrics, worker_logger=worker.logger
             )
-
-        # ------------------------------------------------------------------
-        # Read-Back Abstraction: replace suggested values with the true values
-        # PostgreSQL actually applied.  Only attempted when the benchmark ran
-        # successfully (metrics is not None) to avoid hanging on a crashed DB.
-        # Uses KnobApplicator.read_back_knob_state() which handles unit
-        # conversion (e.g. setting='16384' × unit='8kB' → actual page count)
-        # and KnobType casting in a single, tested, re-used code path.
-        # ------------------------------------------------------------------
-        if worker.db_config is not None:
-            applicator = KnobApplicator(
-                db_config=worker.db_config,
-                config=ApplicatorConfig(persist=False, validate=False),
-                worker_id=worker.worker_id,
-            )
-            actual_knobs = applicator.read_back_knob_state(
-                knob_names=list(knob_config.keys()),
-                knob_space=knob_space,
-            )
-            if actual_knobs:
-                knob_config.update(actual_knobs)
-                LOGGER.debug(
-                    "read_back: merged %d true knob values into knob_config",
-                    len(actual_knobs),
-                )
 
     return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
 def create_objective(
