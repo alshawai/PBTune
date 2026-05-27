@@ -949,12 +949,11 @@ class ComparisonRunner:
                     )
 
                 verification = knob_applicator.verify(knobs)
-                failed_params = [k for k, ok in verification.items() if not ok]
-                if failed_params:
+                if verification.failed_params:
                     LOGGER.warning(
                         "Configuration verification failed for %d parameters: %s",
-                        len(failed_params),
-                        failed_params,
+                        len(verification.failed_params),
+                        verification.failed_params,
                     )
 
             if benchmark_name == "tpch":

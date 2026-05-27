@@ -126,6 +126,36 @@ class ParameterInfo:
 
 
 @dataclass
+class VerificationResult:
+    """
+    Result of configuration verification.
+
+    Attributes
+    ----------
+    matches : Dict[str, bool]
+        Per-parameter verification results (True = value matches expected).
+    db_config : Dict[str, Any]
+        The actual values currently active in PostgreSQL, cast to
+        native Python types.  Callers can use this to update their
+        knob_config with the true applied values.
+    """
+
+    matches: Dict[str, bool] = field(default_factory=dict)
+    db_config: Dict[str, Any] = field(default_factory=dict)
+
+    # Convenience helpers
+    @property
+    def all_matched(self) -> bool:
+        """Return True when every parameter matched."""
+        return bool(self.matches) and all(self.matches.values())
+
+    @property
+    def failed_params(self) -> list[str]:
+        """Return the list of parameter names that did NOT match."""
+        return [k for k, v in self.matches.items() if not v]
+
+
+@dataclass
 class ApplicationResult:
     """
     Result of applying configuration changes.
@@ -725,13 +755,15 @@ class KnobApplicator:
     def verify(
         self,
         expected_config: Dict[str, Any],
-    ) -> Dict[str, bool]:
+    ) -> VerificationResult:
         """
         Verify that configuration parameters match expected values.
 
-        Queries `pg_settings` and compares actual values against the supplied
-        expected configuration.  Returns a mapping from parameter name to
-        a boolean indicating whether the value matched.
+        Queries ``pg_settings`` and compares actual values against the supplied
+        expected configuration.  Returns a :class:`VerificationResult` that
+        contains both per-parameter match booleans **and** the actual DB config
+        (typed values) so callers can update their knob_config with the true
+        applied values.
 
         Parameters
         ----------
@@ -740,10 +772,11 @@ class KnobApplicator:
 
         Returns
         -------
-        Dict[str, bool]
-            Per-parameter verification results (True = match).
+        VerificationResult
+            Per-parameter verification results and actual DB values.
         """
         verification: Dict[str, bool] = {}
+        db_config: Dict[str, Any] = {}
         mismatches: list[str] = []
 
         conn = None
@@ -769,10 +802,15 @@ class KnobApplicator:
                     current_value_str, _, vartype = result
                     current_value_repr: str
 
+                    # Cast the raw pg_settings value to a typed Python value
+                    # so db_config contains the actual applied value.
+                    typed_value: Any
+
                     if isinstance(expected_value, bool):
                         current_value = current_value_str.lower() in ("on", "true", "1")
                         match = current_value == expected_value
                         current_value_repr = str(current_value)
+                        typed_value = current_value
                     elif isinstance(expected_value, (int, float)):
                         current_value_num = float(current_value_str)
                         expected_float = float(expected_value)
@@ -782,6 +820,7 @@ class KnobApplicator:
                                 round(expected_float)
                             )
                             current_value_repr = str(int(round(current_value_num)))
+                            typed_value = int(round(current_value_num))
                         else:
                             import math
 
@@ -793,6 +832,7 @@ class KnobApplicator:
                                 abs_tol=abs_tolerance,
                             )
                             current_value_repr = str(current_value_num)
+                            typed_value = current_value_num
                     else:
                         current_value_text = current_value_str
                         # wal_compression enum migration: on -> pglz
@@ -805,8 +845,10 @@ class KnobApplicator:
                         else:
                             match = str(current_value_text) == str(expected_value)
                         current_value_repr = str(current_value_text)
+                        typed_value = str(current_value_text)
 
                     verification[param_name] = match
+                    db_config[param_name] = typed_value
 
                     if not match:
                         mismatches.append(
@@ -854,193 +896,4 @@ class KnobApplicator:
                 except Exception:
                     pass
 
-        return verification
-
-    # ------------------------------------------------------------------
-    # PostgreSQL unit → canonical-value multipliers
-    # ------------------------------------------------------------------
-    # Memory units: value × multiplier = bytes
-    _BYTES_PER_PG_UNIT: Dict[str, int] = {
-        "B": 1,
-        "kB": 1_024,
-        "MB": 1_024 ** 2,
-        "GB": 1_024 ** 3,
-        "TB": 1_024 ** 4,
-        # Block-size aliases used by shared_buffers, wal_buffers, etc.
-        "8kB": 8 * 1_024,
-        "16kB": 16 * 1_024,
-        "32kB": 32 * 1_024,
-        "16MB": 16 * 1_024 ** 2,
-        "32MB": 32 * 1_024 ** 2,
-    }
-    # Time units: value × multiplier = milliseconds
-    _MS_PER_PG_UNIT: Dict[str, int] = {
-        "us": 1,
-        "ms": 1,
-        "s": 1_000,
-        "min": 60_000,
-        "h": 3_600_000,
-        "d": 86_400_000,
-    }
-
-    @staticmethod
-    def _apply_pg_unit(
-        raw_setting: str,
-        pg_unit: Optional[str],
-        knob_unit: Optional[str],
-    ) -> Optional[float]:
-        """
-        Convert a raw ``pg_settings.setting`` value to the knob's canonical unit.
-
-        PostgreSQL stores, e.g., ``shared_buffers`` as a raw page count with
-        unit ``"8kB"``, so the absolute size is ``setting × 8192`` bytes.
-        This method converts that back to the unit the ``KnobDefinition`` uses
-        (also ``"8kB"`` for ``shared_buffers``), yielding the true page-count
-        the engine is actually using — which may differ from what BO requested
-        due to internal rounding (the "hidden resolution" / quantization problem).
-
-        Parameters
-        ----------
-        raw_setting : str
-            The ``setting`` column from ``pg_settings`` (always a string).
-        pg_unit : Optional[str]
-            The ``unit`` column from ``pg_settings`` (may be ``None`` / ``""``).
-        knob_unit : Optional[str]
-            The target unit from ``KnobDefinition.unit``.
-
-        Returns
-        -------
-        Optional[float]
-            Value in the knob's canonical unit, or ``None`` if conversion is
-            not applicable (boolean / enum) or cannot be performed.
-        """
-        if not raw_setting:
-            return None
-        try:
-            numeric = float(raw_setting)
-        except ValueError:
-            return None  # boolean / enum — caller handles by type
-
-        pg_unit_norm = (pg_unit or "").strip()
-        if not pg_unit_norm:
-            return numeric  # dimensionless knob
-
-        bpu = KnobApplicator._BYTES_PER_PG_UNIT
-        mpu = KnobApplicator._MS_PER_PG_UNIT
-
-        if pg_unit_norm in bpu:
-            absolute_bytes = numeric * bpu[pg_unit_norm]
-            knob_unit_norm = (knob_unit or "").strip()
-            divisor = bpu.get(knob_unit_norm, 1)
-            return absolute_bytes / divisor if divisor else absolute_bytes
-
-        if pg_unit_norm in mpu:
-            absolute_ms = numeric * mpu[pg_unit_norm]
-            knob_unit_norm = (knob_unit or "").strip()
-            divisor = mpu.get(knob_unit_norm, 1)
-            return absolute_ms / divisor if divisor else absolute_ms
-
-        return numeric  # unknown unit — return as-is
-
-    def read_back_knob_state(
-        self,
-        knob_names: List[str],
-        knob_space: Any,  # KnobSpace — avoid circular import at module level
-    ) -> Dict[str, Any]:
-        """
-        Query ``pg_settings`` and return the **actually applied** knob values,
-        with unit conversion and type casting.
-
-        This solves two problems that corrupt the BO surrogate model:
-
-        1. **Quantization trap** — PostgreSQL rounds values to internal block
-           boundaries (e.g. ``shared_buffers`` to the nearest 8 kB page).
-           The returned value is what the engine *actually uses*.
-
-        2. **Unit-conversion trap** — ``pg_settings.setting`` is a raw integer
-           multiplied by ``unit``.  E.g. ``setting='16384'`` with ``unit='8kB'``
-           means 16 384 × 8 192 bytes ≈ 128 MB.  This method returns the value
-           in the same unit as ``KnobDefinition.unit`` so it can be merged
-           directly into the ``knob_config`` dict fed to SMAC.
-
-        Extends the existing :meth:`get_current_values` with the missing
-        unit-conversion and ``KnobType``-casting layers.
-
-        Parameters
-        ----------
-        knob_names : List[str]
-            Parameter names to read back.  Names absent from ``pg_settings``
-            are silently skipped.
-        knob_space : KnobSpace
-            Used to look up each knob's ``unit`` and ``knob_type``.
-        Returns
-        -------
-        Dict[str, Any]
-            ``{knob_name: actual_value}`` with values properly typed.
-            Returns an **empty dict** on connection failure or empty input so
-            the caller can safely do ``knob_config.update(actual)``.
-        """
-        from src.tuner.config.knob_space import KnobType  # local to avoid circular
-
-        if not knob_names:
-            return {}
-
-        current_data = self.get_current_values(knob_names)
-        if not current_data:
-            return {}
-
-        result: Dict[str, Any] = {}
-        for name, (raw_setting, pg_unit) in current_data.items():
-            knob_def = knob_space.knobs.get(name)
-
-            # Boolean / ENUM: pg_settings stores as plain string ("on"/"off")
-            if knob_def is not None and knob_def.knob_type == KnobType.BOOLEAN:
-                result[name] = (
-                    isinstance(raw_setting, str)
-                    and raw_setting.lower() in {"on", "true", "yes", "1"}
-                )
-                continue
-
-            if knob_def is not None and knob_def.knob_type == KnobType.ENUM:
-                result[name] = str(raw_setting)
-                continue
-
-            # Numeric: apply unit conversion
-            knob_unit = knob_def.unit if knob_def is not None else None
-            converted = self._apply_pg_unit(raw_setting, pg_unit, knob_unit)
-            if converted is None:
-                self.logger.debug(
-                    "read_back_knob_state: cannot convert %r "
-                    "(setting=%r, pg_unit=%r); skipping",
-                    name, raw_setting, pg_unit,
-                )
-                continue
-
-            # Cast to the KnobDefinition's Python type
-            try:
-                if knob_def is not None and knob_def.knob_type == KnobType.INTEGER:
-                    result[name] = int(round(converted))
-                elif knob_def is not None and knob_def.knob_type == KnobType.REAL:
-                    result[name] = float(converted)
-                else:
-                    result[name] = converted  # fallback: float
-            except (ValueError, TypeError) as exc:
-                self.logger.debug(
-                    "read_back_knob_state: type cast failed for %r: %s",
-                    name, exc,
-                )
-
-        self.logger.debug(
-            "read_back_knob_state: resolved %d/%d knobs from pg_settings",
-            len(result), len(knob_names),
-        )
-        return result
-
-    def __repr__(self) -> str:
-        """String representation."""
-        return (
-            f"KnobApplicator("
-            f"persist={self.config.persist}, "
-            f"validate={self.config.validate}, "
-            f"dry_run={self.config.dry_run})"
-        )
+        return VerificationResult(matches=verification, db_config=db_config)

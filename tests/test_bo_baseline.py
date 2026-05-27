@@ -393,7 +393,7 @@ class TestObjectiveEvaluation:
             def evaluate_worker(self, worker, apply_config=True):
                 self.received_worker = worker
                 worker.score_breakdown = ScoreBreakdown(final_score=87.5)
-                return expected_metrics, 87.5, False
+                return expected_metrics, 87.5, False, {}
 
         orchestrator = DummyOrchestrator()
 
