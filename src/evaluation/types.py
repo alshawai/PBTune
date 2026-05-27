@@ -66,6 +66,7 @@ class ComparisonConfig:
     scoring_policy: Optional[str] = None
     scoring_policy_version: Optional[str] = None
     metric_reference_version: Optional[str] = None
+    bo_session_path: Optional[Path] = None
     data_dir: Optional[str] = None
     colocate_output: bool = False
 
@@ -259,6 +260,57 @@ class ComparisonResult:
     config: ComparisonConfig
     session_data: TuningSessionData
     timestamp: str
+    output_path: Optional[Path] = None
+    log_path: Optional[Path] = None
+    scoring_metadata: Optional[dict[str, Any]] = None
+    session_scoring_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PairwiseResult:
+    """
+    Statistical comparison between two named arms.
+
+    Attributes:
+        arm_a: Baseline arm name (e.g. "default").
+        arm_b: Comparator arm name (e.g. "pbt").
+        statistics: Full Wilcoxon / bootstrap / Holm statistics for this pair.
+    """
+
+    arm_a: str
+    arm_b: str
+    statistics: ComparisonStatistics
+
+
+@dataclass
+class MultiArmComparisonResult:
+    """
+    Complete output of a multi-arm comparative benchmark evaluation.
+
+    Supports 2+ configuration arms evaluated under identical conditions
+    (same seeds, same environment lifecycle per repetition).
+
+    Attributes:
+        runs_by_arm: Mapping from arm name to its list of RunResults.
+        knobs_by_arm: Mapping from arm name to its knob configuration dict.
+        pairwise_statistics: C(k,2) pairwise statistical comparisons.
+        config: The ComparisonConfig used to produce this result.
+        session_data: Parsed metadata from the primary (PBT) tuning session.
+        bo_session_data: Parsed metadata from the BO session (None for 2-way).
+        timestamp: ISO-8601 timestamp when the comparison was run.
+        output_path: Path where the JSON result was saved.
+        log_path: Path where the HTML session log was saved.
+        scoring_metadata: Rescoring provenance and normalization ranges.
+        session_scoring_metadata: Scoring metadata loaded from tuning sessions.
+    """
+
+    runs_by_arm: dict[str, list[RunResult]]
+    knobs_by_arm: dict[str, dict[str, Any]]
+    pairwise_statistics: list[PairwiseResult]
+    config: ComparisonConfig
+    session_data: TuningSessionData
+    bo_session_data: Optional[TuningSessionData] = None
+    timestamp: str = ""
     output_path: Optional[Path] = None
     log_path: Optional[Path] = None
     scoring_metadata: Optional[dict[str, Any]] = None

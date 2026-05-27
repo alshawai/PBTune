@@ -54,10 +54,15 @@ from src.tuner.config import get_knob_space
 from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
 from src.evaluation.loader import load_tuning_session
-from src.evaluation.statistics import compute_comparison_statistics
+from src.evaluation.statistics import (
+    compute_comparison_statistics,
+    compute_pairwise_statistics,
+)
 from src.evaluation.types import (
     ComparisonConfig,
     ComparisonResult,
+    MultiArmComparisonResult,
+    PairwiseResult,
     RunResult,
     TuningSessionData,
     WorkerResources,
@@ -260,6 +265,173 @@ class ComparisonRunner:
         self._print_summary(result)
 
         return result
+
+    def run_multi_arm(self) -> MultiArmComparisonResult:
+        """
+        Execute a multi-arm comparison (e.g. Default vs. PBT vs. BO).
+
+        Loads the primary PBT session and the optional BO session, validates
+        that both sessions are compatible, then runs all arms under identical
+        conditions sharing deterministic seeds per repetition.
+
+        Returns:
+            MultiArmComparisonResult with per-arm runs and pairwise statistics.
+        """
+        pbt_session = load_tuning_session(self.config.tuning_session_path)
+
+        bo_session = None
+        if self.config.bo_session_path:
+            bo_session = load_tuning_session(self.config.bo_session_path)
+            self._validate_session_compatibility(pbt_session, bo_session)
+
+        benchmark = self.config.benchmark or pbt_session.benchmark
+        if benchmark not in {"sysbench", "tpch"}:
+            raise ValueError(
+                f"Unsupported benchmark '{benchmark}'. Expected 'sysbench' or 'tpch'."
+            )
+
+        effective_params = self._resolve_effective_benchmark_params(
+            pbt_session, benchmark
+        )
+        self.config = dataclasses.replace(
+            self.config,
+            benchmark=benchmark,
+            scale_factor=float(effective_params["scale_factor"]),
+            sysbench_duration=int(effective_params["sysbench_duration"]),
+            sysbench_tables=int(effective_params["sysbench_tables"]),
+            sysbench_table_size=int(effective_params["sysbench_table_size"]),
+            sysbench_workload=str(effective_params["sysbench_workload"]),
+            sysbench_warmup_seconds=int(effective_params["sysbench_warmup_seconds"]),
+            tpch_warmup_passes=int(effective_params["tpch_warmup_passes"]),
+        )
+
+        self._validate_docker_prerequisites()
+
+        output_dir = self._resolve_output_dir_for(pbt_session)
+        log_path = self._resolve_log_output_path(output_dir)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._session_log_path = add_html_file_logging(log_path)
+
+        arm_count = 2 + (1 if bo_session else 0)
+        banner = get_evaluation_banner(
+            session_name=self.config.tuning_session_path.name,
+            benchmark=benchmark,
+            repetitions=self.config.repetitions,
+            env_type="Docker" if self.config.use_docker else "bare-metal",
+        )
+        LOGGER.info("\n%s", banner)
+        LOGGER.info("  Mode     : Multi-arm comparison (%d arms)", arm_count)
+        LOGGER.info("  HTML Log : %s", self._session_log_path)
+
+        pbt_knobs = self._resolve_tuned_knobs(pbt_session)
+        arms: dict[str, dict[str, Any]] = {"default": {}, "pbt": pbt_knobs}
+        knobs_by_arm: dict[str, dict[str, Any]] = {"default": {}, "pbt": pbt_knobs}
+
+        if bo_session:
+            bo_knobs = self._resolve_tuned_knobs(bo_session)
+            arms["bo"] = bo_knobs
+            knobs_by_arm["bo"] = bo_knobs
+
+        executor = self._create_executor()
+
+        eval_policy = self.config.scoring_policy or pbt_session.scoring_policy
+        eval_policy_version = (
+            self.config.scoring_policy_version or pbt_session.scoring_policy_version
+        )
+        eval_ref_version = (
+            self.config.metric_reference_version
+            or pbt_session.metric_reference_version
+        )
+
+        LOGGER.info(
+            "Running multi-arm comparisons (%d arms, %d repetitions)...",
+            len(arms),
+            self.config.repetitions,
+        )
+        runs_by_arm = self._run_multi_arm_repetitions(
+            arms=arms,
+            session=pbt_session,
+            executor=executor,
+            scoring_policy=eval_policy,
+            scoring_policy_version=eval_policy_version,
+            metric_reference_version=eval_ref_version,
+        )
+
+        all_runs = sorted(
+            [r for arm_runs in runs_by_arm.values() for r in arm_runs],
+            key=lambda r: (r.run_number, r.order_in_pair, r.config_type),
+        )
+        _, rescored_scores, scoring_metadata = rescore_metrics_globally(
+            [r.metrics for r in all_runs],
+            benchmark=benchmark,
+            padding_factor=0.0,
+            scoring_policy=eval_policy,
+            scoring_policy_version=eval_policy_version,
+            metric_reference_version=eval_ref_version,
+            workload_features=pbt_session.workload_features,
+        )
+        for run, score in zip(all_runs, rescored_scores, strict=True):
+            run.score = score
+
+        LOGGER.info("\n── Pairwise statistical analysis ──")
+        pairwise_results = compute_pairwise_statistics(
+            runs_by_arm, benchmark=benchmark
+        )
+
+        result = MultiArmComparisonResult(
+            runs_by_arm=runs_by_arm,
+            knobs_by_arm=knobs_by_arm,
+            pairwise_statistics=pairwise_results,
+            config=self.config,
+            session_data=pbt_session,
+            bo_session_data=bo_session,
+            timestamp=self.timestamp,
+            log_path=self._session_log_path,
+            scoring_metadata=scoring_metadata,
+            session_scoring_metadata={
+                "pbt": {
+                    "scoring_policy": pbt_session.scoring_policy,
+                    "scoring_policy_version": pbt_session.scoring_policy_version,
+                    "metric_reference_version": pbt_session.metric_reference_version,
+                },
+                **(
+                    {
+                        "bo": {
+                            "scoring_policy": bo_session.scoring_policy,
+                            "scoring_policy_version": bo_session.scoring_policy_version,
+                            "metric_reference_version": bo_session.metric_reference_version,
+                        }
+                    }
+                    if bo_session
+                    else {}
+                ),
+            },
+        )
+
+        output_path = self._save_multi_arm_result(result)
+        result.output_path = output_path
+        self._print_multi_arm_summary(result)
+
+        return result
+
+    @staticmethod
+    def _validate_session_compatibility(
+        primary: TuningSessionData, secondary: TuningSessionData
+    ) -> None:
+        """Verify that two tuning sessions can be evaluated together."""
+        if primary.benchmark != secondary.benchmark:
+            raise ValueError(
+                f"Benchmark mismatch: primary={primary.benchmark}, "
+                f"secondary={secondary.benchmark}. "
+                "Multi-arm comparison requires identical benchmark types."
+            )
+        if primary.workload_type != secondary.workload_type:
+            LOGGER.warning(
+                "Workload type mismatch: primary=%s, secondary=%s. "
+                "Proceeding, but results may not be directly comparable.",
+                primary.workload_type,
+                secondary.workload_type,
+            )
 
     @staticmethod
     def _missing_docker_image_help(image_name: str) -> str:
@@ -631,6 +803,92 @@ class ComparisonRunner:
         )
         return default_runs, tuned_runs
 
+    def _run_multi_arm_repetitions(
+        self,
+        arms: dict[str, dict[str, Any]],
+        session: TuningSessionData,
+        executor: BenchmarkExecutor,
+        scoring_policy: str,
+        scoring_policy_version: str,
+        metric_reference_version: str,
+    ) -> dict[str, list[RunResult]]:
+        """
+        Execute N repetitions across all arms, sharing seeds per repetition.
+
+        For each repetition, every arm is evaluated with the same pair_seed,
+        preserving the paired experimental design for pairwise Wilcoxon tests.
+        """
+        runs_by_arm: dict[str, list[RunResult]] = {name: [] for name in arms}
+        arm_order = sorted(arms.keys())
+        failed_reps = 0
+
+        for run_number in range(1, self.config.repetitions + 1):
+            pair_seed = self.config.pair_seed + run_number - 1
+            LOGGER.info(
+                "[Rep %d/%d] seed=%d, arms=%s",
+                run_number,
+                self.config.repetitions,
+                pair_seed,
+                arm_order,
+            )
+
+            rep_runs: dict[str, RunResult] = {}
+            try:
+                for order, arm_name in enumerate(arm_order, start=1):
+                    run = self._run_single(
+                        config_type=arm_name,
+                        knobs=arms[arm_name],
+                        run_number=run_number,
+                        pair_seed=pair_seed,
+                        order_in_pair=order,
+                        session=session,
+                        executor=executor,
+                        scoring_policy=scoring_policy,
+                        scoring_policy_version=scoring_policy_version,
+                        metric_reference_version=metric_reference_version,
+                    )
+                    rep_runs[arm_name] = run
+            except Exception as exc:
+                failed_reps += 1
+                LOGGER.warning("➤ Repetition %d failed: %s", run_number, exc)
+                if failed_reps > self.config.repetitions // 2:
+                    raise RuntimeError(
+                        "More than half of repetitions failed "
+                        f"({failed_reps}/{self.config.repetitions})."
+                    ) from exc
+                continue
+
+            for arm_name, run in rep_runs.items():
+                runs_by_arm[arm_name].append(run)
+
+            summary_parts = []
+            for arm_name in arm_order:
+                r = rep_runs[arm_name]
+                summary_parts.append(
+                    f"{arm_name}(score={r.score:.2f},tps={r.metrics.throughput:.1f})"
+                )
+            LOGGER.info("➤ Rep %d complete: %s", run_number, " | ".join(summary_parts))
+
+        total_successful = min(len(v) for v in runs_by_arm.values())
+        if total_successful == 0:
+            raise RuntimeError("All multi-arm repetitions failed.")
+
+        lengths = {name: len(runs) for name, runs in runs_by_arm.items()}
+        if len(set(lengths.values())) > 1:
+            raise RuntimeError(
+                f"Arm run-count mismatch: {lengths}. "
+                "All arms must have equal repetition counts."
+            )
+
+        LOGGER.info(
+            "➤ Multi-arm execution complete: %d successful reps / %d requested, "
+            "%d arms.",
+            total_successful,
+            self.config.repetitions,
+            len(arms),
+        )
+        return runs_by_arm
+
     def _run_single(
         self,
         config_type: str,
@@ -691,12 +949,11 @@ class ComparisonRunner:
                     )
 
                 verification = knob_applicator.verify(knobs)
-                failed_params = [k for k, ok in verification.items() if not ok]
-                if failed_params:
+                if verification.failed_params:
                     LOGGER.warning(
                         "Configuration verification failed for %d parameters: %s",
-                        len(failed_params),
-                        failed_params,
+                        len(verification.failed_params),
+                        verification.failed_params,
                     )
 
             if benchmark_name == "tpch":
@@ -925,6 +1182,91 @@ class ComparisonRunner:
             print(f"  Session log written: {result.log_path}")
         print("═" * 68 + "\n")
 
+    def _save_multi_arm_result(self, result: MultiArmComparisonResult) -> Path:
+        """Serialize a MultiArmComparisonResult to JSON and write to disk."""
+        output_dir = self._resolve_output_dir_for(result.session_data)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = output_dir / f"multi_arm_comparison_{result.timestamp}.json"
+        payload = _serialize_multi_arm_result(result)
+
+        with output_path.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, default=str)
+
+        LOGGER.info("Multi-arm results saved to: %s", output_path)
+        return output_path
+
+    def _print_multi_arm_summary(self, result: MultiArmComparisonResult) -> None:
+        """Print a formatted multi-arm comparison summary to stdout."""
+        benchmark_name = result.config.benchmark or result.session_data.benchmark
+        arm_names = sorted(result.runs_by_arm.keys())
+        n_reps = len(next(iter(result.runs_by_arm.values())))
+
+        print("\n" + "═" * 78)
+        print("  MULTI-ARM EVALUATION SUMMARY")
+        print(f"  Arms      : {', '.join(arm_names)}")
+        print(f"  Benchmark : {benchmark_name.upper()}")
+        print(f"  Reps      : {n_reps}")
+        print(
+            f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}"
+        )
+        print("═" * 78)
+
+        import numpy as _np
+
+        header = f"  {'Arm':<12} {'Score':>10} {'Throughput':>12} {'Latency p95':>12}"
+        print(header)
+        print("  " + "─" * 48)
+        for arm_name in arm_names:
+            runs = result.runs_by_arm[arm_name]
+            scores = [r.score for r in runs]
+            tps = [r.metrics.throughput for r in runs]
+            lat = [r.metrics.latency_p95 for r in runs]
+            print(
+                f"  {arm_name:<12} "
+                f"{float(_np.median(scores)):>10.2f} "
+                f"{float(_np.median(tps)):>12.1f} "
+                f"{float(_np.median(lat)):>12.2f}"
+            )
+        print("  " + "─" * 48)
+
+        print("\n  PAIRWISE COMPARISONS (score)")
+        print("  " + "─" * 74)
+        header = (
+            f"  {'Pair':<22} {'Δ%':>9} {'95% CI':>18} "
+            f"{'p (adj)':>9} {'Cohen d':>8} {'Sig':>4}"
+        )
+        print(header)
+        print("  " + "─" * 74)
+
+        for pw in result.pairwise_statistics:
+            score_mc = next(
+                mc
+                for mc in pw.statistics.metrics
+                if mc.metric_name == "score"
+            )
+            label = f"{pw.arm_a} vs {pw.arm_b}"
+            ci_lo, ci_hi = score_mc.improvement_ci
+            star = "✓" if score_mc.significant else " "
+            print(
+                f"  {label:<22} "
+                f"{score_mc.improvement_pct:>+9.1f}% "
+                f"[{ci_lo:>+7.1f}%, {ci_hi:>+7.1f}%] "
+                f"{score_mc.p_value_corrected:>9.4f} "
+                f"{score_mc.cohens_d:>8.2f} "
+                f"{star:>4}"
+            )
+
+        print("  " + "─" * 74)
+        print("  Statistical test: Wilcoxon signed-rank (paired, two-sided)")
+        print(f"  Paired sample size: N={n_reps}")
+
+        if result.output_path:
+            print(f"\n  Results written to : {result.output_path}")
+        if result.log_path:
+            print(f"  Session log written: {result.log_path}")
+        print("═" * 78 + "\n")
+
 
 def _metrics_to_score(
     metrics: PerformanceMetrics,
@@ -1127,6 +1469,166 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
             "scoring_policy": result.session_data.scoring_policy,
             "scoring_policy_version": result.session_data.scoring_policy_version,
             "metric_reference_version": result.session_data.metric_reference_version,
+        },
+        "session_scoring_metadata": result.session_scoring_metadata,
+        "system_info": result.session_data.system_info,
+    }
+
+
+def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, Any]:
+    """Convert MultiArmComparisonResult to a plain JSON-serialisable dict."""
+
+    def _pkg_version(package_name: str) -> str:
+        try:
+            return importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            return "not-installed"
+
+    def _snap(s: PerformanceMetrics) -> dict[str, Any]:
+        return {
+            "latency_p50": s.latency_p50,
+            "latency_p95": s.latency_p95,
+            "latency_p99": s.latency_p99,
+            "throughput": s.throughput,
+            "error_rate": s.error_rate,
+            "memory_utilization": s.memory_utilization,
+            "total_queries": s.total_queries,
+            "total_time": s.total_time,
+        }
+
+    def _run(r: RunResult) -> dict[str, Any]:
+        return {
+            "config_type": r.config_type,
+            "run_number": r.run_number,
+            "pair_seed": r.pair_seed,
+            "order_in_pair": r.order_in_pair,
+            "score": r.score,
+            "duration_seconds": r.duration_seconds,
+            "container_id": r.container_id,
+            "metrics": _snap(r.metrics),
+        }
+
+    def _stat_sum(s) -> dict[str, Any]:
+        return {
+            "mean": s.mean,
+            "std": s.std,
+            "median": s.median,
+            "iqr_lower": s.iqr_lower,
+            "iqr_upper": s.iqr_upper,
+            "values": s.values,
+        }
+
+    def _metric_cmp(mc) -> dict[str, Any]:
+        return {
+            "metric_name": mc.metric_name,
+            "default": _stat_sum(mc.default),
+            "tuned": _stat_sum(mc.tuned),
+            "improvement_pct": mc.improvement_pct,
+            "improvement_ci": list(mc.improvement_ci),
+            "p_value": mc.p_value,
+            "p_value_corrected": mc.p_value_corrected,
+            "cohens_d": mc.cohens_d,
+            "significant": mc.significant,
+            "higher_is_better": mc.higher_is_better,
+            "endpoint_role": mc.endpoint_role,
+            "correction_method": mc.correction_method,
+        }
+
+    def _pairwise(pw: PairwiseResult) -> dict[str, Any]:
+        s = pw.statistics
+        return {
+            "arm_a": pw.arm_a,
+            "arm_b": pw.arm_b,
+            "statistics": {
+                "metrics": [_metric_cmp(mc) for mc in s.metrics],
+                "alpha": s.alpha,
+                "primary_endpoint": s.primary_endpoint,
+                "primary_significant": s.primary_significant,
+                "secondary_endpoints": s.secondary_endpoints,
+                "secondary_correction_method": s.secondary_correction_method,
+                "correction_method": s.correction_method,
+                "n_pairs": s.n_pairs,
+                "power_warning": s.power_warning,
+                "significant_metrics": s.significant_metrics,
+                "overall_improvement_pct": s.overall_improvement_pct,
+                "overall_improvement_ci": list(s.overall_improvement_ci),
+            },
+        }
+
+    wr = result.session_data.worker_resources
+    cfg = result.config
+    benchmark_name = cfg.benchmark or result.session_data.benchmark
+    arm_names = sorted(result.runs_by_arm.keys())
+
+    pairwise_dict: dict[str, dict[str, Any]] = {}
+    for pw in result.pairwise_statistics:
+        key = f"{pw.arm_a}_vs_{pw.arm_b}"
+        pairwise_dict[key] = _pairwise(pw)
+
+    return {
+        "comparison_metadata": {
+            "timestamp": result.timestamp,
+            "mode": "multi_arm",
+            "arms": arm_names,
+            "tuning_session_path": str(cfg.tuning_session_path),
+            "bo_session_path": str(cfg.bo_session_path) if cfg.bo_session_path else None,
+            "evaluation_log_path": str(result.log_path) if result.log_path else None,
+            "benchmark": benchmark_name,
+            "repetitions": cfg.repetitions,
+            "pair_seed_base": cfg.pair_seed,
+            "benchmark_parameters": {
+                "scale_factor": cfg.scale_factor,
+                "sysbench_tables": cfg.sysbench_tables,
+                "sysbench_table_size": cfg.sysbench_table_size,
+                "sysbench_workload": cfg.sysbench_workload,
+                "sysbench_duration": cfg.sysbench_duration,
+                "sysbench_warmup_seconds": cfg.sysbench_warmup_seconds,
+                "tpch_warmup_passes": cfg.tpch_warmup_passes,
+            },
+            "evaluation_environment": "docker" if cfg.use_docker else "bare-metal",
+            "resource_constraints": {
+                "ram_bytes": wr.ram_bytes,
+                "cpu_cores": wr.cpu_cores,
+                "disk_type": wr.disk_type,
+            },
+            "reproducibility": {
+                "python_version": platform.python_version(),
+                "postgres_version": str(
+                    result.session_data.system_info.get("pg_version", "unknown")
+                ),
+                "docker_image": cfg.docker_image if cfg.use_docker else None,
+                "python_package_versions": {
+                    "docker": _pkg_version("docker"),
+                    "psycopg2-binary": _pkg_version("psycopg2-binary"),
+                    "numpy": _pkg_version("numpy"),
+                    "scipy": _pkg_version("scipy"),
+                },
+            },
+        },
+        "knobs_by_arm": result.knobs_by_arm,
+        "runs_by_arm": {
+            arm: [_run(r) for r in runs]
+            for arm, runs in result.runs_by_arm.items()
+        },
+        "pairwise_statistics": pairwise_dict,
+        "scoring_metadata": result.scoring_metadata,
+        "session_info": {
+            "pbt": {
+                "session_id": result.session_data.session_id,
+                "workload_type": result.session_data.workload_type,
+                "best_score_during_tuning": result.session_data.best_score,
+            },
+            **(
+                {
+                    "bo": {
+                        "session_id": result.bo_session_data.session_id,
+                        "workload_type": result.bo_session_data.workload_type,
+                        "best_score_during_tuning": result.bo_session_data.best_score,
+                    }
+                }
+                if result.bo_session_data
+                else {}
+            ),
         },
         "session_scoring_metadata": result.session_scoring_metadata,
         "system_info": result.session_data.system_info,

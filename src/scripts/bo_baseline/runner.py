@@ -42,7 +42,6 @@ from src.scripts.bo_baseline.result_writer import (
 
 LOGGER = get_logger("Runner")
 
-
 class BOBaselineRunner:
     """Bayesian Optimization baseline runner for PostgreSQL tuning."""
 
@@ -87,12 +86,12 @@ class BOBaselineRunner:
             )
         else:
             self.worker_resources = detect_worker_resources(
-                max_parallel_workers=config.max_workers, data_path=self.data_root
+                max_parallel_workers=config.resource_division, data_path=self.data_root
             )
             self.logger.info(
-                f"Dividing host resources for {config.max_workers} parallel workers: "
+                f"Dividing host resources by {config.resource_division}: "
                 f"{self.worker_resources.cpu_cores} cores, "
-                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per worker"
+                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per instance"
             )
 
         # Load knob space
@@ -119,7 +118,9 @@ class BOBaselineRunner:
                 table_size=self.config.benchmark_config.sysbench_table_size,
             )
         elif self.config.benchmark_config.benchmark == "tpch":
-            return TPCHExecutor(scale_factor=self.config.benchmark_config.scale_factor)
+            return TPCHExecutor(
+                scale_factor=self.config.benchmark_config.scale_factor,
+            )
         else:
             raise ValueError(
                 f"Unknown benchmark: {self.config.benchmark_config.benchmark}"
@@ -273,10 +274,11 @@ class BOBaselineRunner:
             )
 
             # Setup N instances
+            num_instances = self.config.max_workers
             self.logger.info(
-                f"Setting up {self.config.max_workers} PostgreSQL instance(s)..."
+                f"Setting up {num_instances} PostgreSQL instance(s)..."
             )
-            self.env.setup_instances(num_workers=self.config.max_workers)
+            self.env.setup_instances(num_workers=num_instances)
 
             # Prune unsupported knobs
             self._prune_unsupported_runtime_knobs()
@@ -291,6 +293,7 @@ class BOBaselineRunner:
                 warmup_duration=self.config.benchmark_config.warmup_duration,
                 measurement_duration=self.config.benchmark_config.evaluation_duration,
                 tuning_mode=self.config.benchmark_config.tuning_mode,
+                random_seed=self.config.random_seed,
             )
             orchestrator = WorkloadOrchestrator(
                 orchestrator_config, workload_executor, self.env
@@ -298,7 +301,7 @@ class BOBaselineRunner:
 
             # Create N workers, each bound to its own instance
             workers = []
-            for i in range(self.config.max_workers):
+            for i in range(num_instances):
                 w = Worker(worker_id=i, knob_space=self.knob_space)
                 w.db_config = self.env.get_db_config(i)
                 workers.append(w)
@@ -313,14 +316,10 @@ class BOBaselineRunner:
             iteration_log: list = []
 
             # Pilot phase size
-            pilot_size = max(
-                self.config.range_update_interval,
-                len(self.knob_space.knobs) + 1,
-            )
-            pilot_size = min(pilot_size, self.config.n_iterations)
+            pilot_size = min(self.config.range_update_interval, self.config.n_iterations)
 
             # For sequential mode (max_workers=1), use the original objective closure
-            # For parallel mode, we'll use ask-tell
+            # For parallel mode (max_workers > 1), we'll use ask-tell
             if self.config.max_workers == 1:
                 objective = create_objective(
                     orchestrator=orchestrator,
@@ -329,6 +328,9 @@ class BOBaselineRunner:
                     metric_config=self.metric_config,
                     iteration_log=iteration_log,
                     pilot_phase_size=pilot_size,
+                    env=self.env,
+                    enable_snapshots=self.config.enable_snapshots,
+                    snapshot_restore_interval=self.config.snapshot_restore_interval,
                 )
             else:
                 objective = None
@@ -464,6 +466,31 @@ class BOBaselineRunner:
         while iteration_count < self.config.n_iterations:
             batch_size = min(n_workers, self.config.n_iterations - iteration_count)
 
+            # Handle snapshot restoration before evaluating batch
+            if (
+                self.config.enable_snapshots
+                and iteration_count > 0
+                and iteration_count % self.config.snapshot_restore_interval == 0
+            ):
+                self.logger.info(
+                    "Restoring database snapshots for iteration %d (interval: %d)",
+                    iteration_count,
+                    self.config.snapshot_restore_interval,
+                )
+                try:
+                    failed_workers = []
+                    for w in workers:
+                        restored = self.env.restore_snapshot(w.worker_id)
+                        if not restored:
+                            self.logger.error("Snapshot restore failed for worker %d", w.worker_id)
+                            failed_workers.append(w.worker_id)
+                    if failed_workers:
+                        self.logger.error("Snapshot restore failed for workers: %s", failed_workers)
+                    else:
+                        self.logger.info("✓ Database snapshots restored successfully")
+                except Exception as e:
+                    self.logger.error("Failed to restore databases from snapshots: %s", e)
+
             # Ask for batch of configs
             trial_infos = [facade.ask() for _ in range(batch_size)]
 
@@ -555,13 +582,12 @@ class BOBaselineRunner:
                     if entry["metrics"]
                 ]
                 if all_metrics:
-                    self.metric_config.expand_ranges_for_metrics(all_metrics)
+                    self.metric_config.update_ranges(all_metrics)
                     self.logger.info(
                         "Normalization ranges frozen after %d pilot iterations",
                         iteration_count,
                     )
                 ranges_frozen = True
-
 
 def main():
     """CLI entry point."""
@@ -755,19 +781,33 @@ def main():
         ),
     )
     parser.add_argument(
-        "--parallel-workers",
+        "--batched-bo",
+        action="store_true",
+        help="Run Bayesian Optimization in parallel using ask-tell mode. If omitted, runs sequentially."
+    )
+    parser.add_argument(
+        "--resource-division",
         type=int,
         default=None,
-        help=(
-            "Number of parallel BO workers (PostgreSQL instances). "
-            "Defaults to 1, or to PBT num_parallel_workers when --pbt-session is used."
-        ),
+        help="Divides host capacity by this number to determine instance resources. If a PBT session is provided, this automatically takes the PBT session's parallel worker count."
     )
     parser.add_argument(
         "--scoring-policy",
         type=str,
         default=None,
         help="Scoring policy to use. Options: 'fixed_v1', 'feature_driven_v2' (default: preset value per workload)",
+    )
+    parser.add_argument(
+        "--enable-snapshots",
+        action="store_true",
+        default=None,
+        help="Enable periodic database snapshot restoration to prevent data drift.",
+    )
+    parser.add_argument(
+        "--snapshot-restore-interval",
+        type=int,
+        default=None,
+        help="Restore snapshots every N iterations.",
     )
 
     args = parser.parse_args()
@@ -778,7 +818,6 @@ def main():
     results = runner.run()
 
     return results
-
 
 if __name__ == "__main__":
     main()

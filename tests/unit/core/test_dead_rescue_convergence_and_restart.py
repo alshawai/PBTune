@@ -187,7 +187,7 @@ def test_evaluate_worker_consumes_force_restart_marker() -> None:
         ),
         patch.object(evaluator, "_vacuum_after_dml", return_value=None),
     ):
-        _metrics, _score, restart_occurred = evaluator.evaluate_worker(
+        _metrics, _score, restart_occurred, _db_config = evaluator.evaluate_worker(
             worker,
             apply_config=True,
             generation=4,

@@ -661,7 +661,7 @@ class PBTTuner:
             )
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
-            metrics, score, restart_occurred = self.orchestrator.evaluate_worker(
+            metrics, score, restart_occurred, _actual_db_config = self.orchestrator.evaluate_worker(
                 worker,
                 apply_config=True,
                 generation=self.current_generation,

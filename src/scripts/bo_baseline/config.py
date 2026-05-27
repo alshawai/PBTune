@@ -17,10 +17,7 @@ from src.utils.types import (
     clone_benchmark_config,
 )
 from src.utils.logger import get_logger
-
-
 LOGGER = get_logger("Config")
-
 
 @dataclass
 class BOConfig:
@@ -60,9 +57,15 @@ class BOConfig:
     pbt_session_path: Optional[Path] = None
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
+    # Snapshot configuration
+    enable_snapshots: bool = False
+    snapshot_restore_interval: int = 1
+
     # Parallel BO configuration
     max_workers: int = 1
+    batched_bo: bool = False
     pbt_worker_resources: Optional[Dict[str, Any]] = None
+    resource_division: int = 1
 
     # Scoring policy
     # Available options:
@@ -188,12 +191,27 @@ class BOConfig:
         if set_max_workers:
             num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
             if num_parallel_workers > 0:
-                self.max_workers = num_parallel_workers
+                self.resource_division = num_parallel_workers
             else:
                 LOGGER.warning(
                     "PBT session is missing positive num_parallel_workers; "
-                    "keeping configured BO parallel worker count"
+                    "keeping configured BO resource division"
                 )
+
+        # Extract snapshot settings
+        if "enable_snapshots" in session:
+            self.enable_snapshots = bool(session["enable_snapshots"])
+        
+        if self.enable_snapshots and "snapshot_restore_interval" in session:
+            # PBT restores every N generations. 
+            # Translate to BO iterations by multiplying by population_size.
+            pbt_interval = int(session["snapshot_restore_interval"])
+            pop_size = int(session.get("population_size", 1))
+            self.snapshot_restore_interval = pbt_interval * pop_size
+            LOGGER.info(
+                f"Extracted PBT snapshot interval ({pbt_interval} gens * {pop_size} pop) "
+                f"-> BO interval: {self.snapshot_restore_interval} iterations"
+            )
 
         # Extract scoring policy from PBT session if present
         if "scoring_policy" in session:
@@ -273,12 +291,21 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
-            max_workers=args.parallel_workers
-            if args.parallel_workers is not None
-            else base_config.max_workers,
+            batched_bo=args.batched_bo
+            if hasattr(args, "batched_bo") and args.batched_bo is not None
+            else base_config.batched_bo,
+            resource_division=args.resource_division
+            if hasattr(args, "resource_division") and args.resource_division is not None
+            else base_config.resource_division,
             scoring_policy=args.scoring_policy
             if hasattr(args, "scoring_policy") and args.scoring_policy is not None
             else base_config.scoring_policy,
+            enable_snapshots=args.enable_snapshots
+            if hasattr(args, "enable_snapshots") and args.enable_snapshots is not None
+            else base_config.enable_snapshots,
+            snapshot_restore_interval=args.snapshot_restore_interval
+            if hasattr(args, "snapshot_restore_interval") and args.snapshot_restore_interval is not None
+            else base_config.snapshot_restore_interval,
         )
 
         if args.pbt_session:
@@ -286,7 +313,7 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
-                    set_max_workers=args.parallel_workers is None,
+                    set_max_workers=not hasattr(args, "resource_division") or args.resource_division is None,
                 )
             except Exception as e:
                 LOGGER.warning(
@@ -294,8 +321,9 @@ class BOConfig:
                     f"Falling back to default or CLI-provided settings."
                 )
 
-        return config
+        config.max_workers = config.resource_division if config.batched_bo else 1
 
+        return config
 
 RAPID_BO_CONFIG = BOConfig(
     n_iterations=40,

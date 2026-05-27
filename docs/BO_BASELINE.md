@@ -72,36 +72,46 @@ The BO runner uses a **Pilot + Freeze** strategy:
 
 Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `PerformanceMetrics` to recompute scores with globally calibrated ranges, so the frozen in-run scores do not affect final comparison validity.
 
+### Snapshot Restoration Parity
+
+To ensure the BO baseline runs on a perfectly level playing field against PBT, the BO runner supports database snapshot restoration. Long tuning campaigns can cause "data drift" (where the database state degrades over time due to accumulating writes or changes). PBT mitigates this by restoring worker instances to a clean baseline snapshot every N generations.
+
+The BO baseline implements this same capability:
+- If `--enable-snapshots` is provided, BO will periodically restore the database instance to the baseline snapshot.
+- The `--snapshot-restore-interval` defines how many iterations occur between restorations.
+- **PBT Session Syncing**: If a `--pbt-session` is provided, BO automatically extracts `enable_snapshots` and `snapshot_restore_interval`. It safely scales the interval from PBT's generation-based metric to BO's iteration-based metric by multiplying the PBT interval by the PBT population size, guaranteeing that the exact same number of configuration evaluations occur between restorations in both algorithms.
+
+### Quantization & Read-Back Parity
+
+PostgreSQL silently modifies suggested configurations to fit internal constraints (e.g., rounding `shared_buffers` to the nearest 8kB page). This "hidden resolution" destroys the Bayesian Optimization surrogate model's gradients by creating the illusion of flat performance landscapes (where many different suggested values map to the exact same internal configuration and yield identical performance).
+
+To combat this, the BO loop employs a **Read-Back Abstraction** during `evaluate_config`:
+1. The BO agent suggests a continuous configuration.
+2. The orchestrator applies the configuration.
+3. After application (and potential restart), the orchestrator immediately calls `KnobApplicator.verify()`, which queries `pg_settings` for the **actually applied** typed values.
+4. The orchestrator's `evaluate_worker` returns these true, quantized values alongside the performance metrics.
+5. These actual values are merged back into the configuration dictionary *before* it is returned to SMAC3, ensuring the surrogate model trains on the exact data PostgreSQL is running with.
+
 ### Parallel BO Evaluation and Resource Equalization
 
-The BO baseline now supports batched parallel evaluation so it can mirror the
-worker count used by a reference PBT session.
+The BO baseline supports parallel evaluation and explicit resource division to mirror the concurrency and hardware constraints of a reference PBT session independently.
 
-- `--parallel-workers N` sets the number of PostgreSQL instances evaluated in
-  parallel.
-- When `--pbt-session` is provided, BO copies `num_parallel_workers` from the
-  reference session unless `--parallel-workers` explicitly overrides it.
-- If BO needs to derive the budget or worker count and the PBT session is
-  missing `population_size`, `total_generations`, or `num_parallel_workers`, BO
-  keeps the default or explicitly supplied CLI value for that setting.
-- If the PBT session includes `worker_resources`, BO uses that per-worker
-  resource slice for knob-range resolution instead of dividing the local host
-  resources.
-- The result JSON records completed `iterations`, `num_parallel_workers`,
-  and `resource_equalization` so downstream comparison tools can confirm parity.
-  BO does not record `population_size` because it is not population-based.
+- `--batched-bo` enables running Bayesian Optimization in parallel using ask-tell mode.
+- `--resource-division N` acts as the denominator for dividing host resources (RAM/CPU) for the database instance(s), ensuring fairness.
+- When `--pbt-session` is provided, BO copies `num_parallel_workers` from the reference session and applies it to `--resource-division`.
+- If BO needs to derive the budget or resource division and the PBT session is missing `population_size`, `total_generations`, or `num_parallel_workers`, BO keeps the default or explicitly supplied CLI value for that setting.
+- If the PBT session includes `worker_resources`, BO uses that per-worker resource slice for knob-range resolution instead of dividing the local host resources via `--resource-division`.
+- The result JSON records completed `iterations`, `num_parallel_workers`, and `resource_equalization` so downstream comparison tools can confirm parity. BO does not record `population_size` because it is not population-based.
 
-In parallel mode, BO uses SMAC3 ask-tell evaluation with a local
-`ThreadPoolExecutor`, which keeps the database environment in the main process
-while evaluating multiple candidates concurrently.
+In parallel mode (`--batched-bo`), BO uses SMAC3 ask-tell evaluation with a local `ThreadPoolExecutor`, which keeps the database environment in the main process while evaluating multiple candidates concurrently.
 
 ### Ask-Tell Execution Model
 
 The runner uses two execution paths:
 
-- **Sequential path (`--parallel-workers 1`)**: uses the standard
+- **Sequential path (default)**: uses the standard
   `facade.optimize()` loop with the objective closure.
-- **Parallel path (`--parallel-workers > 1`)**: uses explicit ask-tell control in
+- **Parallel path (`--batched-bo`)**: uses explicit ask-tell control in
   `runner.py`.
 
 In ask-tell mode, each batch follows this cycle:
@@ -160,13 +170,13 @@ python -m src.scripts.bo_baseline \
 - `--iterations N` - Number of BO iterations. Defaults to `50`, or to `population_size * total_generations` when `--pbt-session` is used.
 - `--seed INT` - Random seed for reproducibility (default: `42`)
 - `--bo-surrogate {rf|gp}` - SMAC Surrogate model: Random Forest (`rf`) or Gaussian Process (`gp`). Default is `rf`.
-- `--parallel-workers INT` - Number of parallel BO workers / PostgreSQL
-  instances. Defaults to `1`, or to the PBT session's `num_parallel_workers` when
-  `--pbt-session` is used.
+- `--resource-division INT` - Denominator for dividing host resources (RAM/CPU) for the database instance (default: `1`).
 - `--scoring-policy STR` - Custom scoring policy to use for metrics evaluation. Available options:
   - `fixed_v1`: Legacy static weights based on workload type (OLTP/OLAP/MIXED).
   - `feature_driven_v2`: Dynamic weights based on workload features and a coefficient matrix, evaluating variance, tail amplification, and DB stats.
   (default: predefined policy per workload).
+- `--enable-snapshots` - Enables periodic database snapshot restoration to prevent data drift.
+- `--snapshot-restore-interval INT` - Restores snapshots every N iterations.
 
 ### Benchmark Options
 - `--benchmark {sysbench|tpch}` - Benchmark type (default: sysbench)
@@ -220,7 +230,11 @@ python -m src.scripts.bo_baseline \
 | `--output-dir` | Root directory for BO result files. | `results` |
 | `--verbose` | Logging verbosity. | `INFO` |
 | `--range-update-interval` | Pilot phase size: initial-design iterations before freezing normalization ranges. | `10` |
+| `--batched-bo` | Run BO in parallel using ask-tell mode. | Sequential execution |
+| `--resource-division` | Divides host resources to constrain the database instance. | `1`, or PBT `num_parallel_workers` |
 | `--scoring-policy` | Specific scoring policy to apply to metric evaluation (`fixed_v1` or `feature_driven_v2`). | Set by metric default |
+| `--enable-snapshots` | Enables periodic database snapshot restoration to prevent data drift. | Disabled, or PBT `enable_snapshots` |
+| `--snapshot-restore-interval` | Number of iterations between snapshot restorations. | `1`, or scaled PBT interval |
 
 ## Output Format
 
@@ -245,6 +259,7 @@ than inferring one from file order.
 When `--pbt-session` is used, `tuning_session` also records:
 - `reference_pbt_session` - Path to the PBT session used as the reference
 - `reference_pbt_knobs` - Knob names copied from `best_configuration.knobs`
+
 - `num_parallel_workers` - Parallel BO worker count used for the run
 - `resource_equalization` - Whether BO used the reference PBT worker resource
   slice

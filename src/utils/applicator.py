@@ -126,6 +126,36 @@ class ParameterInfo:
 
 
 @dataclass
+class VerificationResult:
+    """
+    Result of configuration verification.
+
+    Attributes
+    ----------
+    matches : Dict[str, bool]
+        Per-parameter verification results (True = value matches expected).
+    db_config : Dict[str, Any]
+        The actual values currently active in PostgreSQL, cast to
+        native Python types.  Callers can use this to update their
+        knob_config with the true applied values.
+    """
+
+    matches: Dict[str, bool] = field(default_factory=dict)
+    db_config: Dict[str, Any] = field(default_factory=dict)
+
+    # Convenience helpers
+    @property
+    def all_matched(self) -> bool:
+        """Return True when every parameter matched."""
+        return bool(self.matches) and all(self.matches.values())
+
+    @property
+    def failed_params(self) -> list[str]:
+        """Return the list of parameter names that did NOT match."""
+        return [k for k, v in self.matches.items() if not v]
+
+
+@dataclass
 class ApplicationResult:
     """
     Result of applying configuration changes.
@@ -636,7 +666,7 @@ class KnobApplicator:
 
         return result
 
-    def get_current_values(self, param_names: List[str]) -> Dict[str, Any]:
+    def get_current_values(self, param_names: List[str]) -> Dict[str, tuple[str, str]]:
         """
         Get current values of specified parameters.
 
@@ -647,14 +677,18 @@ class KnobApplicator:
 
         Returns
         -------
-        Dict[str, Any]
-            Dictionary of parameter_name -> current_value
+        Dict[str, tuple[str, str]]
+            Dictionary of parameter_name -> (current_value, unit)
         """
-        if not self.connection:
-            self.connect()
+        if not param_names:
+            return {}
 
-        cursor = self.connection.cursor()  # type: ignore
+        cursor = None
         try:
+            if not self.connection:
+                self.connect()
+
+            cursor = self.connection.cursor()  # type: ignore
             placeholders = ",".join(["%s"] * len(param_names))
             query = f"""
                 SELECT name, setting, unit
@@ -664,13 +698,14 @@ class KnobApplicator:
             cursor.execute(query, param_names)
             rows = cursor.fetchall()
 
-            return {row[0]: row[1] for row in rows}
+            return {row[0]: (row[1], row[2]) for row in rows}
 
         except psycopg2.Error as e:
             self.logger.error("Failed to get current values: %s", e)
             return {}
         finally:
-            cursor.close()
+            if cursor is not None:
+                cursor.close()
 
     def reset_parameter(self, name: str) -> bool:
         """
@@ -720,13 +755,15 @@ class KnobApplicator:
     def verify(
         self,
         expected_config: Dict[str, Any],
-    ) -> Dict[str, bool]:
+    ) -> VerificationResult:
         """
         Verify that configuration parameters match expected values.
 
-        Queries `pg_settings` and compares actual values against the supplied
-        expected configuration.  Returns a mapping from parameter name to
-        a boolean indicating whether the value matched.
+        Queries ``pg_settings`` and compares actual values against the supplied
+        expected configuration.  Returns a :class:`VerificationResult` that
+        contains both per-parameter match booleans **and** the actual DB config
+        (typed values) so callers can update their knob_config with the true
+        applied values.
 
         Parameters
         ----------
@@ -735,10 +772,11 @@ class KnobApplicator:
 
         Returns
         -------
-        Dict[str, bool]
-            Per-parameter verification results (True = match).
+        VerificationResult
+            Per-parameter verification results and actual DB values.
         """
         verification: Dict[str, bool] = {}
+        db_config: Dict[str, Any] = {}
         mismatches: list[str] = []
 
         conn = None
@@ -764,10 +802,15 @@ class KnobApplicator:
                     current_value_str, _, vartype = result
                     current_value_repr: str
 
+                    # Cast the raw pg_settings value to a typed Python value
+                    # so db_config contains the actual applied value.
+                    typed_value: Any
+
                     if isinstance(expected_value, bool):
                         current_value = current_value_str.lower() in ("on", "true", "1")
                         match = current_value == expected_value
                         current_value_repr = str(current_value)
+                        typed_value = current_value
                     elif isinstance(expected_value, (int, float)):
                         current_value_num = float(current_value_str)
                         expected_float = float(expected_value)
@@ -777,6 +820,7 @@ class KnobApplicator:
                                 round(expected_float)
                             )
                             current_value_repr = str(int(round(current_value_num)))
+                            typed_value = int(round(current_value_num))
                         else:
                             import math
 
@@ -788,6 +832,7 @@ class KnobApplicator:
                                 abs_tol=abs_tolerance,
                             )
                             current_value_repr = str(current_value_num)
+                            typed_value = current_value_num
                     else:
                         current_value_text = current_value_str
                         # wal_compression enum migration: on -> pglz
@@ -800,8 +845,10 @@ class KnobApplicator:
                         else:
                             match = str(current_value_text) == str(expected_value)
                         current_value_repr = str(current_value_text)
+                        typed_value = str(current_value_text)
 
                     verification[param_name] = match
+                    db_config[param_name] = typed_value
 
                     if not match:
                         mismatches.append(
@@ -849,13 +896,4 @@ class KnobApplicator:
                 except Exception:
                     pass
 
-        return verification
-
-    def __repr__(self) -> str:
-        """String representation."""
-        return (
-            f"KnobApplicator("
-            f"persist={self.config.persist}, "
-            f"validate={self.config.validate}, "
-            f"dry_run={self.config.dry_run})"
-        )
+        return VerificationResult(matches=verification, db_config=db_config)
