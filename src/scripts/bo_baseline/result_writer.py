@@ -15,6 +15,7 @@ import numpy as np
 
 LOGGER = get_logger("ResultWriter")
 
+
 def convert_numpy_types(obj: Any) -> Any:
     """Recursively convert numpy types to Python native types for JSON serialization."""
     if isinstance(obj, np.bool_):
@@ -33,8 +34,9 @@ def convert_numpy_types(obj: Any) -> Any:
         return convert_numpy_types(obj.to_dict())
     else:
         return obj
-def resolve_bo_output_root(
 
+
+def resolve_bo_output_root(
     output_dir: Path, benchmark_config: BenchmarkConfig, knob_tier: str
 ) -> Path:
     """Resolve the base BO output directory under results."""
@@ -51,6 +53,7 @@ def resolve_bo_output_root(
         / "bo_runs"
         / knob_tier
     )
+
 
 def write_bo_results(
     knob_space: KnobSpace,

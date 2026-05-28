@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
@@ -20,7 +20,7 @@ class _MetricConfigStub:
         self.rescore_calls = 0
         self._normalizer = None
         self.scoring_policy = "fixed_v1"
-        self.workload_type = type('obj', (object,), {'value': 'oltp'})()
+        self.workload_type = type("obj", (object,), {"value": "oltp"})()
         self.latency_metric = "p95"
         self.workload_features = {}
         self.weight_latency = 0.5
@@ -53,14 +53,18 @@ def _make_worker(worker_id: int, throughput: float, score: float) -> Worker:
 def test_finalize_scores_grounds_best_to_current() -> None:
     """When ranges expand, population should rescore workers and ground historical best."""
     metric_config = _MetricConfigStub(expand=True)
-    evaluator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    orchestrator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
 
     population = Population(
         knob_space=MagicMock(),
         config=PopulationConfig(population_size=2, dead_config_threshold=6.0),
-        orchestrator=evaluator,
+        orchestrator=orchestrator,  # type: ignore
     )
     population._ranges_calibrated = True
+    # Provide a no-op feature-weight updater for the test orchestrator
+    population.orchestrator.maybe_update_feature_weights = (  # type: ignore
+        lambda *args, **kwargs: False
+    )
 
     worker_a = _make_worker(worker_id=0, throughput=100.0, score=20.0)
     worker_b = _make_worker(worker_id=1, throughput=80.0, score=18.0)
@@ -71,14 +75,15 @@ def test_finalize_scores_grounds_best_to_current() -> None:
     )
     population.best_overall_score = 50.0
 
-    # Mock create_scoring_engine to return a mock engine that uses the stub's compute_score
+    # Provide a mock scoring engine on the orchestrator so rescoring uses the
+    # stub's compute_score implementation deterministically.
     mock_engine = MagicMock()
-    mock_engine.compute_breakdown = lambda m, worker_logger=None: metric_config.compute_score(
-        m, worker_logger=worker_logger
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: (
+        metric_config.compute_score(m, worker_logger=worker_logger)
     )
+    population.orchestrator.scorer = mock_engine
 
-    with patch("src.tuner.core.population.create_scoring_engine", return_value=mock_engine):
-        population._finalize_scores()
+    population._finalize_scores()
 
     assert metric_config.expand_calls == 1
     assert worker_a.performance_score == 10.0
@@ -90,14 +95,16 @@ def test_finalize_scores_grounds_best_to_current() -> None:
 def test_finalize_scores_overwrites_best_if_worse() -> None:
     """If the rescored historical best is worse than the current best, it should be overwritten."""
     metric_config = _MetricConfigStub(expand=True)
-    evaluator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    orchestrator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
 
     population = Population(
         knob_space=MagicMock(),
         config=PopulationConfig(population_size=2, dead_config_threshold=6.0),
-        orchestrator=evaluator,
+        orchestrator=orchestrator,
     )
     population._ranges_calibrated = True
+    # Provide a no-op feature-weight updater for the test orchestrator
+    population.orchestrator.maybe_update_feature_weights = lambda *args, **kwargs: False
 
     worker_a = _make_worker(worker_id=0, throughput=100.0, score=20.0)
     worker_b = _make_worker(worker_id=1, throughput=80.0, score=18.0)
@@ -109,14 +116,13 @@ def test_finalize_scores_overwrites_best_if_worse() -> None:
     )
     population.best_overall_score = 50.0
 
-    # Mock create_scoring_engine to return a mock engine that uses the stub's compute_score
     mock_engine = MagicMock()
-    mock_engine.compute_breakdown = lambda m, worker_logger=None: metric_config.compute_score(
-        m, worker_logger=worker_logger
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: (
+        metric_config.compute_score(m, worker_logger=worker_logger)
     )
+    population.orchestrator.scorer = mock_engine
 
-    with patch("src.tuner.core.population.create_scoring_engine", return_value=mock_engine):
-        population._finalize_scores()
+    population._finalize_scores()
 
     assert metric_config.expand_calls == 1
     assert worker_a.performance_score == 10.0
@@ -136,6 +142,9 @@ def test_finalize_scores_always_rescores_workers() -> None:
     )
     population._ranges_calibrated = True
     population._features_refined = True
+    # When features are refined, orchestrator.maybe_update_feature_weights
+    # should indicate an update so rescoring proceeds in the test.
+    population.orchestrator.maybe_update_feature_weights = lambda *args, **kwargs: True
 
     worker = _make_worker(worker_id=0, throughput=100.0, score=22.0)
     population.workers = [worker]
@@ -144,14 +153,13 @@ def test_finalize_scores_always_rescores_workers() -> None:
     )
     population.best_overall_score = 30.0
 
-    # Mock create_scoring_engine to return a mock engine that uses the stub's compute_score
     mock_engine = MagicMock()
-    mock_engine.compute_breakdown = lambda m, worker_logger=None: metric_config.compute_score(
-        m, worker_logger=worker_logger
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: (
+        metric_config.compute_score(m, worker_logger=worker_logger)
     )
+    population.orchestrator.scorer = mock_engine
 
-    with patch("src.tuner.core.population.create_scoring_engine", return_value=mock_engine):
-        population._finalize_scores()
+    population._finalize_scores()
 
     assert metric_config.expand_calls == 1
     assert worker.performance_score == 10.0

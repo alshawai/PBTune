@@ -42,6 +42,7 @@ from src.scripts.bo_baseline.result_writer import (
 
 LOGGER = get_logger("Runner")
 
+
 class BOBaselineRunner:
     """Bayesian Optimization baseline runner for PostgreSQL tuning."""
 
@@ -275,9 +276,7 @@ class BOBaselineRunner:
 
             # Setup N instances
             num_instances = self.config.max_workers
-            self.logger.info(
-                f"Setting up {num_instances} PostgreSQL instance(s)..."
-            )
+            self.logger.info(f"Setting up {num_instances} PostgreSQL instance(s)...")
             self.env.setup_instances(num_workers=num_instances)
 
             # Prune unsupported knobs
@@ -316,7 +315,9 @@ class BOBaselineRunner:
             iteration_log: list = []
 
             # Pilot phase size
-            pilot_size = min(self.config.range_update_interval, self.config.n_iterations)
+            pilot_size = min(
+                self.config.range_update_interval, self.config.n_iterations
+            )
 
             # For sequential mode (max_workers=1), use the original objective closure
             # For parallel mode (max_workers > 1), we'll use ask-tell
@@ -482,14 +483,20 @@ class BOBaselineRunner:
                     for w in workers:
                         restored = self.env.restore_snapshot(w.worker_id)
                         if not restored:
-                            self.logger.error("Snapshot restore failed for worker %d", w.worker_id)
+                            self.logger.error(
+                                "Snapshot restore failed for worker %d", w.worker_id
+                            )
                             failed_workers.append(w.worker_id)
                     if failed_workers:
-                        self.logger.error("Snapshot restore failed for workers: %s", failed_workers)
+                        self.logger.error(
+                            "Snapshot restore failed for workers: %s", failed_workers
+                        )
                     else:
                         self.logger.info("✓ Database snapshots restored successfully")
                 except Exception as e:
-                    self.logger.error("Failed to restore databases from snapshots: %s", e)
+                    self.logger.error(
+                        "Failed to restore databases from snapshots: %s", e
+                    )
 
             # Ask for batch of configs
             trial_infos = [facade.ask() for _ in range(batch_size)]
@@ -588,6 +595,7 @@ class BOBaselineRunner:
                         iteration_count,
                     )
                 ranges_frozen = True
+
 
 def main():
     """CLI entry point."""
@@ -783,13 +791,13 @@ def main():
     parser.add_argument(
         "--batched-bo",
         action="store_true",
-        help="Run Bayesian Optimization in parallel using ask-tell mode. If omitted, runs sequentially."
+        help="Run Bayesian Optimization in parallel using ask-tell mode. If omitted, runs sequentially.",
     )
     parser.add_argument(
         "--resource-division",
         type=int,
         default=None,
-        help="Divides host capacity by this number to determine instance resources. If a PBT session is provided, this automatically takes the PBT session's parallel worker count."
+        help="Divides host capacity by this number to determine instance resources. If a PBT session is provided, this automatically takes the PBT session's parallel worker count.",
     )
     parser.add_argument(
         "--scoring-policy",
@@ -818,6 +826,7 @@ def main():
     results = runner.run()
 
     return results
+
 
 if __name__ == "__main__":
     main()

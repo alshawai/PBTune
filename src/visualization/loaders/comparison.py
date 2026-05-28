@@ -119,9 +119,7 @@ def load_multi_arm_comparison(path: Path | str) -> MultiArmComparisonData:
         raise DataLoadError(f"Failed to parse JSON in {path}: {e}") from e
 
     if "runs_by_arm" not in data:
-        raise InvalidSchemaError(
-            f"Missing 'runs_by_arm' in multi-arm report: {path}"
-        )
+        raise InvalidSchemaError(f"Missing 'runs_by_arm' in multi-arm report: {path}")
     if "pairwise_statistics" not in data:
         raise InvalidSchemaError(
             f"Missing 'pairwise_statistics' in multi-arm report: {path}"

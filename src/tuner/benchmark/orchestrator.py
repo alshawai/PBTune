@@ -40,7 +40,6 @@ from psycopg2.extensions import connection as PostgresConnection, register_adapt
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import DatabaseEnvironment
-from src.utils.logger.helpers import log_section_header
 from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
@@ -461,7 +460,13 @@ class WorkloadOrchestrator:
                 metrics["memory_utilization"] = self.env.collect_memory_utilization(wid)
                 metrics["cache_hit_ratio"] = self.env.collect_cache_hit_ratio(wid)
                 break
-            except (RuntimeError, OSError, ValueError, TypeError, AttributeError) as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ) as exc:
                 LOGGER.debug(
                     "System metric collection attempt %d failed for worker %d: %s",
                     attempt + 1,
@@ -926,19 +931,26 @@ class WorkloadOrchestrator:
                         # an average row size (bytes) and multiply by the number
                         # of inserted/updated/deleted rows observed.
                         try:
-                            tup_inserted_delta = tup_inserted_after - tup_inserted_before
+                            tup_inserted_delta = (
+                                tup_inserted_after - tup_inserted_before
+                            )
                             tup_updated_delta = tup_updated_after - tup_updated_before
                             tup_deleted_delta = tup_deleted_after - tup_deleted_before
                         except Exception:
-                            tup_inserted_delta = tup_updated_delta = tup_deleted_delta = 0
+                            tup_inserted_delta = tup_updated_delta = (
+                                tup_deleted_delta
+                            ) = 0
 
                         total_rows_written = max(
-                            0, tup_inserted_delta + tup_updated_delta + tup_deleted_delta
+                            0,
+                            tup_inserted_delta + tup_updated_delta + tup_deleted_delta,
                         )
                         # Conservative average row size in bytes; adjustable later
                         avg_row_bytes = 128
                         io_write_bytes = total_rows_written * avg_row_bytes
-                        metrics.io_write_mb = max(0.0, io_write_bytes / (1024.0 * 1024.0))
+                        metrics.io_write_mb = max(
+                            0.0, io_write_bytes / (1024.0 * 1024.0)
+                        )
 
                         # Diagnostic: if we observed no written rows but the workload
                         # appears to have read/fetched rows or the DB changed, emit a
@@ -1002,10 +1014,16 @@ class WorkloadOrchestrator:
             if "memory_utilization" in system_metrics:
                 metrics.memory_utilization = system_metrics["memory_utilization"]
 
-            metrics.scan_efficiency = MetricInstrumentationEngine.calculate_scan_efficiency(
-                metrics.cache_hit_ratio,
-                rows_examined=metrics.rows_examined if metrics.rows_examined > 0 else None,
-                rows_returned=metrics.rows_returned if metrics.rows_returned > 0 else None,
+            metrics.scan_efficiency = (
+                MetricInstrumentationEngine.calculate_scan_efficiency(
+                    metrics.cache_hit_ratio,
+                    rows_examined=metrics.rows_examined
+                    if metrics.rows_examined > 0
+                    else None,
+                    rows_returned=metrics.rows_returned
+                    if metrics.rows_returned > 0
+                    else None,
+                )
             )
 
             _barrier("system_metrics_collected")
@@ -1035,7 +1053,9 @@ class WorkloadOrchestrator:
 
             worker.logger.info(" Computing performance score...")
             engine = self._get_scoring_engine()
-            score_breakdown = engine.compute_breakdown(metrics, worker_logger=worker.logger)
+            score_breakdown = engine.compute_breakdown(
+                metrics, worker_logger=worker.logger
+            )
             worker.score_breakdown = score_breakdown
             score = score_breakdown.final_score
             _barrier("score_computed")
@@ -1186,7 +1206,9 @@ class WorkloadOrchestrator:
                     + (1 - alpha) * throughput_variance_signal
                 )
                 # Apply 15% soft minimum floor based on the original static prior
-                floor = 0.15 * self._static_feature_priors.get("concurrency_pressure", 0.0)
+                floor = 0.15 * self._static_feature_priors.get(
+                    "concurrency_pressure", 0.0
+                )
                 features["concurrency_pressure"] = max(floor, min(1.0, refined_val))
 
                 refinements["concurrency_pressure"] = (
@@ -1214,7 +1236,9 @@ class WorkloadOrchestrator:
                     + (1 - alpha) * tail_sensitivity_signal
                 )
                 # Apply 15% soft minimum floor based on the original static prior
-                floor = 0.15 * self._static_feature_priors.get("tail_latency_sensitivity", 0.0)
+                floor = 0.15 * self._static_feature_priors.get(
+                    "tail_latency_sensitivity", 0.0
+                )
                 features["tail_latency_sensitivity"] = max(floor, min(1.0, refined_val))
 
                 refinements["tail_latency_sensitivity"] = (
@@ -1274,9 +1298,9 @@ class WorkloadOrchestrator:
         aggregated_metrics.latency_variance = sum(
             m.latency_variance for m in health_metrics
         ) / len(health_metrics)
-        aggregated_metrics.throughput = sum(
-            m.throughput for m in health_metrics
-        ) / len(health_metrics)
+        aggregated_metrics.throughput = sum(m.throughput for m in health_metrics) / len(
+            health_metrics
+        )
         aggregated_metrics.throughput_variance = sum(
             m.throughput_variance for m in health_metrics
         ) / len(health_metrics)

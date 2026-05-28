@@ -210,6 +210,7 @@ class WorkloadFeatureExtractor:
         else:
             try:
                 from src.benchmarks.tpch import QUERIES_DIR
+
                 loaded_queries = []
                 for i in range(1, 23):
                     q_file = QUERIES_DIR / f"{i}.sql"
@@ -229,7 +230,9 @@ class WorkloadFeatureExtractor:
             "sort_intensity": analyzed.get("sort_intensity", 0.80),
             "concurrency_pressure": 0.12,
             "working_set_millions": working_set_millions,
-            "query_mix_entropy": analyzed.get("query_mix_entropy", min(query_count / 22.0, 1.0)),
+            "query_mix_entropy": analyzed.get(
+                "query_mix_entropy", min(query_count / 22.0, 1.0)
+            ),
             "tail_latency_sensitivity": analyzed.get("tail_latency_sensitivity", 0.90),
         }
 

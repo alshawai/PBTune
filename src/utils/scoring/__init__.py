@@ -1,6 +1,6 @@
 """Scoring contracts and constants used by tuning, evaluation, and analysis."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from src.utils.scoring.constants import (
     DEFAULT_METRIC_REFERENCE_VERSION,
@@ -81,7 +81,11 @@ def create_scoring_engine(metric_config: "MetricConfig") -> CompositeScorer:
     engine = CompositeScorer(
         policy_id=getattr(metric_config, "scoring_policy", "fixed_v1"),
         workload_type=getattr(
-            getattr(metric_config, "workload_type", type("obj", (object,), {"value": "oltp"})()),
+            getattr(
+                metric_config,
+                "workload_type",
+                type("obj", (object,), {"value": "oltp"})(),
+            ),
             "value",
             "oltp",
         ).lower(),

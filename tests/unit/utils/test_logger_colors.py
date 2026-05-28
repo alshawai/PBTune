@@ -623,8 +623,12 @@ def test_log_worker_metrics_table_keeps_scan_efficiency_in_primary_section():
         root_logger.setLevel(previous_root_level)
 
     lines = stream.getvalue().splitlines()
-    scan_line = next(index for index, line in enumerate(lines) if "Scan Efficiency" in line)
-    total_queries_line = next(index for index, line in enumerate(lines) if "Total Queries" in line)
+    scan_line = next(
+        index for index, line in enumerate(lines) if "Scan Efficiency" in line
+    )
+    total_queries_line = next(
+        index for index, line in enumerate(lines) if "Total Queries" in line
+    )
 
     assert scan_line < total_queries_line
 

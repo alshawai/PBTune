@@ -1,7 +1,7 @@
 """Objective function wrapper for SMAC3 Bayesian Optimization."""
 
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 from ConfigSpace import Configuration
 
 from src.tuner.config.knob_space import KnobSpace
@@ -12,6 +12,11 @@ from src.scripts.bo_baseline.search_space import configspace_to_knobs
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("Objective")
+
+if TYPE_CHECKING:
+    # Import only for type-checkers to avoid runtime import cycles
+    from src.utils.environments import DatabaseEnvironment
+
 
 def evaluate_config(
     config: Configuration,
@@ -100,8 +105,9 @@ def evaluate_config(
             )
 
     return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
-def create_objective(
 
+
+def create_objective(
     orchestrator: WorkloadOrchestrator,
     worker: Worker,
     knob_space: KnobSpace,
@@ -187,14 +193,18 @@ def create_objective(
                 try:
                     restored = env.restore_snapshot(worker.worker_id)
                     if not restored:
-                        LOGGER.error("Snapshot restore failed for worker %d", worker.worker_id)
+                        LOGGER.error(
+                            "Snapshot restore failed for worker %d", worker.worker_id
+                        )
                     else:
                         LOGGER.info("✓ Database snapshot restored successfully")
                 except Exception as e:
                     LOGGER.error("Failed to restore database from snapshot: %s", e)
 
-            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = evaluate_config(
-                config, worker, orchestrator, knob_space, state["previous_config"]
+            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
+                evaluate_config(
+                    config, worker, orchestrator, knob_space, state["previous_config"]
+                )
             )
 
             iteration_entry = {
