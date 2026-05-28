@@ -339,6 +339,45 @@ def _coerce_metric_mapping(metric_source: Any) -> dict[str, Any]:
     )
 
 
+def _collect_metric_order(metric_payloads: Sequence[Any]) -> list[str]:
+    """Preserve metric ordering based on first appearance across payloads."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for payload in metric_payloads:
+        mapping = _coerce_metric_mapping(payload)
+        for key in mapping:
+            if key not in seen:
+                seen.add(key)
+                ordered.append(key)
+    return ordered
+
+
+def _partition_metric_orders(
+    metric_order: Sequence[str],
+    primary_keys: Sequence[str],
+    *,
+    secondary_start_key: str,
+) -> tuple[list[str], list[str]]:
+    """Partition metrics into primary (scoring) and secondary (operational) rows.
+
+    Primary rows are explicitly keyed by ``primary_keys`` so display does not
+    depend on payload insertion order. Secondary rows begin at
+    ``secondary_start_key`` and include later non-primary metrics.
+    """
+    primary_set = set(primary_keys)
+    present = list(metric_order)
+    primary_order = [key for key in primary_keys if key in present]
+
+    if secondary_start_key in present:
+        start = present.index(secondary_start_key)
+        tail = present[start:]
+    else:
+        tail = []
+
+    secondary_order = [key for key in tail if key not in primary_set]
+    return primary_order, secondary_order
+
+
 def _normalize_metric_label(
     metric_name: str, custom_labels: Mapping[str, str] | None = None
 ) -> str:
@@ -348,6 +387,108 @@ def _normalize_metric_label(
     if metric_name in DEFAULT_WORKER_METRIC_LABELS:
         return DEFAULT_WORKER_METRIC_LABELS[metric_name]
     return metric_name.replace("_", " ").strip().title()
+
+
+def _normalize_feature_label(feature_name: str) -> str:
+    """Return a human-friendly label for a workload feature key."""
+    return feature_name.replace("_", " ").strip().title()
+
+
+FEATURE_ORDER = [
+    "read_ratio",
+    "write_ratio",
+    "concurrency_pressure",
+    "tail_latency_sensitivity",
+    "aggregation_intensity",
+    "join_intensity",
+    "sort_intensity",
+    "olap_complexity",
+    "working_set_millions",
+    "query_mix_entropy",
+]
+
+METRIC_WEIGHT_ORDER = [
+    "latency_p95",
+    "latency_p99",
+    "latency_variance",
+    "tail_amplification",
+    "throughput",
+    "throughput_variance",
+    "scan_efficiency",
+    "memory_pressure",
+    "buffer_miss_rate",
+    "error_rate",
+]
+
+
+def _label_palette(colors: Any) -> tuple[str, ...]:
+    return (
+        colors.cyan,
+        colors.teal,
+        colors.sky_blue,
+        colors.yellow,
+        colors.orange,
+        colors.violet,
+        colors.magenta,
+        colors.lime,
+        colors.blue,
+        colors.purple,
+        colors.red,
+        colors.gray,
+    )
+
+
+def _ordered_keys(order: Sequence[str], mapping: Mapping[str, Any]) -> list[str]:
+    ordered = [key for key in order if key in mapping]
+    ordered.extend(sorted(set(mapping) - set(ordered)))
+    return ordered
+
+
+def _insert_table_break(table: str, *, break_after: int) -> str:
+    """Insert a border line after a fixed number of metric rows."""
+    if break_after <= 0:
+        return table
+
+    sections = table.split("\n\n")
+    updated_sections: list[str] = []
+    for section in sections:
+        lines = section.splitlines()
+        if len(lines) < 6:
+            updated_sections.append(section)
+            continue
+
+        border_line = lines[1]
+        insert_at = 4 + break_after
+        if insert_at < len(lines) - 1:
+            lines.insert(insert_at, border_line)
+
+        updated_sections.append("\n".join(lines))
+
+    return "\n\n".join(updated_sections)
+
+
+def _styled_label(text: str, color: str, colors: Any, *, bold: bool = True) -> str:
+    if not text:
+        return ""
+    if bold:
+        return f"{colors.bold}{color}{text}{colors.reset}"
+    return f"{color}{text}{colors.reset}"
+
+
+def _styled_number(
+    value: float,
+    *,
+    color: str,
+    colors: Any,
+    bold: bool = False,
+    signed: bool = False,
+    precision: int = 4,
+) -> str:
+    sign = "+" if signed else ""
+    formatted = f"{value:{sign}.{precision}f}"
+    if bold:
+        return f"{colors.bold}{color}{formatted}{colors.reset}"
+    return f"{color}{formatted}{colors.reset}"
 
 
 def _render_ascii_table(
@@ -405,6 +546,362 @@ def _render_ascii_table(
     return "\n".join(lines)
 
 
+def _render_ascii_table_with_sections(
+    title: str,
+    worker_headers: Sequence[str],
+    metric_rows_primary: Sequence[str],
+    cell_rows_primary: Sequence[Sequence[str]],
+    metric_rows_secondary: Sequence[str],
+    cell_rows_secondary: Sequence[Sequence[str]],
+) -> str:
+    """Render a single ASCII table with an optional section break."""
+    all_metric_rows = list(metric_rows_primary) + list(metric_rows_secondary)
+    all_cell_rows = list(cell_rows_primary) + list(cell_rows_secondary)
+
+    row_label_width = max(
+        _visible_length("Metric"),
+        max((_visible_length(label) for label in all_metric_rows), default=0),
+    )
+
+    worker_widths: list[int] = []
+    for worker_index, worker_header in enumerate(worker_headers):
+        cell_width = _visible_length(worker_header)
+        for row in all_cell_rows:
+            if worker_index < len(row):
+                cell_width = max(cell_width, _visible_length(row[worker_index]))
+        worker_widths.append(cell_width)
+
+    column_widths = [row_label_width, *worker_widths]
+
+    def _border() -> str:
+        return "+" + "+".join("-" * (width + 2) for width in column_widths) + "+"
+
+    def _row(cells: Sequence[str], alignments: Sequence[str]) -> str:
+        padded_cells = [
+            f" {_pad_cell(str(cell), width, alignment)} "
+            for cell, width, alignment in zip(
+                cells, column_widths, alignments, strict=True
+            )
+        ]
+        return "|" + "|".join(padded_cells) + "|"
+
+    lines = [title, _border()]
+    lines.append(
+        _row(
+            ["Metric", *worker_headers],
+            ["left", *("center" for _ in worker_headers)],
+        )
+    )
+    lines.append(_border())
+
+    for row_label, row_values in zip(metric_rows_primary, cell_rows_primary, strict=True):
+        lines.append(
+            _row(
+                [row_label, *row_values],
+                ["left", *("right" for _ in worker_headers)],
+            )
+        )
+
+    if metric_rows_secondary:
+        lines.append(_border())
+        for row_label, row_values in zip(
+            metric_rows_secondary, cell_rows_secondary, strict=True
+        ):
+            lines.append(
+                _row(
+                    [row_label, *row_values],
+                    ["left", *("right" for _ in worker_headers)],
+                )
+            )
+
+    lines.append(_border())
+    return "\n".join(lines)
+
+
+def _build_worker_headers(
+    worker_labels: Sequence[str],
+    *,
+    start: int,
+    end: int,
+    colors: Any,
+    include_best_worker: bool,
+    best_worker_label: str,
+) -> list[str]:
+    chunk_labels = list(worker_labels[start:end])
+    if include_best_worker:
+        chunk_labels.append(best_worker_label)
+
+    styled_worker_labels = [
+        f"{colors.bold}{ColorPalette.get_worker_color(start + index)}{label}{colors.reset}"
+        for index, label in enumerate(chunk_labels)
+    ]
+
+    if include_best_worker:
+        styled_worker_labels[-1] = (
+            f"{colors.bold}{colors.green}{best_worker_label}{colors.reset}"
+        )
+
+    return styled_worker_labels
+
+
+def _build_worker_rows(
+    ordered_metric_names: Sequence[str],
+    metric_mappings: Sequence[dict[str, Any]],
+    *,
+    metric_labels: Optional[Mapping[str, str]],
+    colors: Any,
+    metric_label_palette: Sequence[str],
+) -> tuple[list[str], list[list[str]]]:
+    metric_rows: list[str] = []
+    cell_rows: list[list[str]] = []
+
+    for metric_index, metric_name in enumerate(ordered_metric_names):
+        metric_color = metric_label_palette[metric_index % len(metric_label_palette)]
+        metric_rows.append(
+            f"{colors.bold}{metric_color}"
+            f"{_normalize_metric_label(metric_name, metric_labels)}{colors.reset}"
+        )
+        row_values: list[str] = []
+        for metric_mapping in metric_mappings:
+            value = metric_mapping.get(metric_name)
+            formatted_value = _format_metric_value(metric_name, value)
+            row_values.append(f"{colors.green}{formatted_value}{colors.reset}")
+        cell_rows.append(row_values)
+
+    return metric_rows, cell_rows
+
+
+def _append_best_worker_values(
+    ordered_metric_names: Sequence[str],
+    cell_rows: list[list[str]],
+    *,
+    best_worker_mapping: dict[str, Any],
+    colors: Any,
+) -> None:
+    for metric_index, metric_name in enumerate(ordered_metric_names):
+        value = best_worker_mapping.get(metric_name)
+        formatted_value = _format_metric_value(metric_name, value)
+        cell_rows[metric_index].append(
+            f"{colors.bold}{colors.green}{formatted_value}{colors.reset}"
+        )
+
+
+def _render_simple_table(
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    alignments: Sequence[str],
+    *,
+    center_width: Optional[int] = None,
+) -> str:
+    """Render a simple ASCII table with explicit column headers."""
+    column_count = len(headers)
+    if column_count == 0:
+        return title
+
+    column_widths = [_visible_length(header) for header in headers]
+    for row in rows:
+        for index in range(column_count):
+            if index < len(row):
+                column_widths[index] = max(
+                    column_widths[index], _visible_length(str(row[index]))
+                )
+
+    def _border() -> str:
+        return "+" + "+".join("-" * (width + 2) for width in column_widths) + "+"
+
+    def _row(cells: Sequence[str]) -> str:
+        padded_cells = [
+            f" {_pad_cell(str(cell), width, alignment)} "
+            for cell, width, alignment in zip(
+                cells, column_widths, alignments, strict=True
+            )
+        ]
+        return "|" + "|".join(padded_cells) + "|"
+
+    lines = [title, _border(), _row(headers), _border()]
+    for row in rows:
+        lines.append(_row(row))
+    lines.append(_border())
+
+    block = "\n".join(lines)
+    return _center_text_block(block, width=center_width)
+
+
+def format_feature_weight_table(
+    features: Mapping[str, float],
+    weights: Mapping[str, float],
+    *,
+    generation: int,
+    center_width: Optional[int] = None,
+) -> str:
+    """Format a combined workload feature + weight table for generation 0."""
+    colors = get_color_context()
+    title = (
+        f"\n{colors.bold}🔹 Workload Features & Metric Weights vectors 🔹"
+        f"{colors.reset}"
+    )
+    headers = [
+        f"{colors.bold}Feature{colors.reset}",
+        f"{colors.bold}Value{colors.reset}",
+        f"{colors.bold}Metric{colors.reset}",
+        f"{colors.bold}Weight{colors.reset}",
+    ]
+
+    label_palette = _label_palette(colors)
+    feature_keys = _ordered_keys(FEATURE_ORDER, features)
+    metric_keys = _ordered_keys(METRIC_WEIGHT_ORDER, weights)
+    row_count = max(len(feature_keys), len(metric_keys))
+    rows: list[list[str]] = []
+
+    for index in range(row_count):
+        feature = feature_keys[index] if index < len(feature_keys) else ""
+        metric = metric_keys[index] if index < len(metric_keys) else ""
+
+        feature_label = _styled_label(
+            _normalize_feature_label(feature),
+            label_palette[index % len(label_palette)],
+            colors,
+        )
+        if feature:
+            feature_value_raw = features[feature]
+            if feature_value_raw < 0:
+                feature_color = colors.red
+            else:
+                feature_color = colors.green
+            feature_value = _styled_number(
+                feature_value_raw,
+                color=feature_color,
+                colors=colors,
+                bold=True,
+            )
+        else:
+            feature_value = ""
+        metric_label = _styled_label(
+            _normalize_metric_label(metric),
+            label_palette[index % len(label_palette)],
+            colors,
+        )
+        weight_value = (
+            _styled_number(
+                weights[metric],
+                color=colors.green,
+                colors=colors,
+                bold=True,
+            )
+            if metric
+            else ""
+        )
+
+        rows.append([feature_label, feature_value, metric_label, weight_value])
+
+    return _render_simple_table(
+        title,
+        headers,
+        rows,
+        ["left", "right", "left", "right"],
+        center_width=center_width,
+    )
+
+
+def format_weight_snapshot_table(
+    weights: Mapping[str, float],
+    deltas: Mapping[str, float],
+    *,
+    generation: int,
+    center_width: Optional[int] = None,
+) -> str:
+    """Format a colored weight snapshot table with deltas."""
+    colors = get_color_context()
+    title = f"\n{colors.bold}🔹 Metric Weights updated 🔹{colors.reset}"
+    headers = [
+        f"{colors.bold}Metric{colors.reset}",
+        f"{colors.bold}Weight{colors.reset}",
+        f"{colors.bold}Delta{colors.reset}",
+    ]
+
+    label_palette = _label_palette(colors)
+    metric_keys = _ordered_keys(METRIC_WEIGHT_ORDER, weights)
+
+    rows: list[list[str]] = []
+    for index, metric in enumerate(metric_keys):
+        weight_value = _styled_number(
+            weights[metric],
+            color="",
+            colors=colors,
+            bold=True,
+        )
+        delta_value = deltas.get(metric, 0.0)
+        if abs(delta_value) <= 1e-8:
+            delta_color = colors.gray
+        elif delta_value > 0:
+            delta_color = colors.lime
+        else:
+            delta_color = colors.red
+        delta_text = _styled_number(
+            delta_value,
+            color=delta_color,
+            colors=colors,
+            signed=True,
+        )
+
+        rows.append(
+            [
+                _styled_label(
+                    _normalize_metric_label(metric),
+                    label_palette[index % len(label_palette)],
+                    colors,
+                ),
+                weight_value,
+                delta_text,
+            ]
+        )
+
+    return _render_simple_table(
+        title,
+        headers,
+        rows,
+        ["left", "right", "right"],
+        center_width=center_width,
+    )
+
+
+def log_feature_weight_table(
+    logger: logging.Logger,
+    features: Mapping[str, float],
+    weights: Mapping[str, float],
+    *,
+    generation: int,
+    center_width: Optional[int] = None,
+) -> None:
+    """Log a combined feature + weight table."""
+    table = format_feature_weight_table(
+        features,
+        weights,
+        generation=generation,
+        center_width=center_width,
+    )
+    logger.info("%s", table)
+
+
+def log_weight_snapshot_table(
+    logger: logging.Logger,
+    weights: Mapping[str, float],
+    deltas: Mapping[str, float],
+    *,
+    generation: int,
+    center_width: Optional[int] = None,
+) -> None:
+    """Log a weight snapshot table with deltas."""
+    table = format_weight_snapshot_table(
+        weights,
+        deltas,
+        generation=generation,
+        center_width=center_width,
+    )
+    logger.info("%s", table)
+
+
 def _center_text_block(text: str, width: Optional[int] = None) -> str:
     """Center a multiline ASCII block within the requested width."""
     lines = text.splitlines()
@@ -423,6 +920,50 @@ def _center_text_block(text: str, width: Optional[int] = None) -> str:
         padding = max(target_width - _visible_length(line), 0)
         centered_lines.append(" " * (padding // 2) + line)
     return "\n".join(centered_lines)
+
+
+def log_section_header(
+    logger: logging.Logger,
+    fmt: str,
+    *fmt_args: Any,
+    top_separator: bool = True,
+    bottom_separator: bool = True,
+    level: str = "info",
+    width: Optional[int] = None,
+) -> None:
+    """Log a formatted section header with optional separators.
+
+    Parameters
+    ----------
+    logger: logging.Logger
+        Logger to emit to
+    fmt: str
+        A format string for the title (ANSI escapes allowed via COLORS)
+    *fmt_args: Any
+        Arguments for the format string
+    top_separator, bottom_separator: bool
+        Whether to print separator lines above/below the title
+    level: str
+        Logging level name to use (e.g., 'info' or 'debug')
+    width: Optional[int]
+        Visible width for the separator; if None will be derived
+    """
+    formatted_title = fmt % fmt_args if fmt_args else fmt
+    # Compute visible length from ANSI-stripped title when width not provided
+    visible_len = width if width is not None else _visible_length(formatted_title)
+    # Ensure at least a minimal separator when title is empty
+    if visible_len <= 0:
+        visible_len = 1
+    sep = "=" * visible_len
+
+    log_fn = getattr(logger, level, logger.info)
+    if top_separator:
+        log_fn("%s%s%s", COLORS.bold, sep, COLORS.reset)
+    if formatted_title:
+        # Emit the title directly (may include ANSI escapes)
+        log_fn(formatted_title)
+    if bottom_separator:
+        log_fn("%s%s%s", COLORS.bold, sep, COLORS.reset)
 
 
 def format_worker_metrics_table(
@@ -473,24 +1014,15 @@ def format_worker_metrics_table(
     else:
         ordered_metric_names = list(metric_order)
 
+    # Ensure Score appears first if present
+    if "score" in ordered_metric_names:
+        ordered_metric_names = ["score"] + [k for k in ordered_metric_names if k != "score"]
+
     if not ordered_metric_names:
         return f"{title}\n(no metrics)"
 
     colors = get_color_context()
-    metric_label_palette = (
-        colors.cyan,
-        colors.teal,
-        colors.sky_blue,
-        colors.yellow,
-        colors.orange,
-        colors.violet,
-        colors.magenta,
-        colors.lime,
-        colors.blue,
-        colors.purple,
-        colors.red,
-        colors.gray,
-    )
+    metric_label_palette = _label_palette(colors)
 
     worker_chunks: list[tuple[int, int]] = [
         (start, min(start + split_threshold, len(worker_labels)))
@@ -501,47 +1033,36 @@ def format_worker_metrics_table(
 
     sections: list[str] = []
     for chunk_index, (start, end) in enumerate(worker_chunks):
-        chunk_worker_labels = list(worker_labels[start:end])
-        chunk_metric_rows: list[str] = []
-        chunk_cell_rows: list[list[str]] = []
-
-        for metric_index, metric_name in enumerate(ordered_metric_names):
-            metric_color = metric_label_palette[
-                metric_index % len(metric_label_palette)
-            ]
-            chunk_metric_rows.append(
-                f"{colors.bold}{metric_color}{_normalize_metric_label(metric_name, metric_labels)}{colors.reset}"
-            )
-            row_values: list[str] = []
-            for metric_mapping in coerced_metrics[start:end]:
-                value = metric_mapping.get(metric_name)
-                formatted_value = _format_metric_value(metric_name, value)
-                row_values.append(f"{colors.green}{formatted_value}{colors.reset}")
-            chunk_cell_rows.append(row_values)
+        chunk_metric_rows, chunk_cell_rows = _build_worker_rows(
+            ordered_metric_names,
+            coerced_metrics[start:end],
+            metric_labels=metric_labels,
+            colors=colors,
+            metric_label_palette=metric_label_palette,
+        )
 
         section_title = title
         if len(worker_chunks) > 1:
             section_title = f"{title} (part {chunk_index + 1}/{len(worker_chunks)})"
 
-        if best_worker_mapping is not None and chunk_index == len(worker_chunks) - 1:
-            chunk_worker_labels.append(best_worker_label)
-
-        styled_worker_labels = [
-            f"{colors.bold}{ColorPalette.get_worker_color(start + index)}{label}{colors.reset}"
-            for index, label in enumerate(chunk_worker_labels)
-        ]
-
-        if best_worker_mapping is not None and chunk_index == len(worker_chunks) - 1:
-            styled_worker_labels[-1] = (
-                f"{colors.bold}{colors.green}{best_worker_label}{colors.reset}"
+        include_best_worker = (
+            best_worker_mapping is not None and chunk_index == len(worker_chunks) - 1
+        )
+        styled_worker_labels = _build_worker_headers(
+            worker_labels,
+            start=start,
+            end=end,
+            colors=colors,
+            include_best_worker=include_best_worker,
+            best_worker_label=best_worker_label,
+        )
+        if include_best_worker and best_worker_mapping is not None:
+            _append_best_worker_values(
+                ordered_metric_names,
+                chunk_cell_rows,
+                best_worker_mapping=best_worker_mapping,
+                colors=colors,
             )
-
-            for metric_index, metric_name in enumerate(ordered_metric_names):
-                value = best_worker_mapping.get(metric_name)
-                formatted_value = _format_metric_value(metric_name, value)
-                chunk_cell_rows[metric_index].append(
-                    f"{colors.bold}{colors.green}{formatted_value}{colors.reset}"
-                )
 
         sections.append(
             _center_text_block(
@@ -572,81 +1093,155 @@ def log_worker_metrics_table(
     center_width: Optional[int] = None,
 ) -> None:
     """Log a formatted worker metrics table at INFO level."""
-    table = format_worker_metrics_table(
-        worker_metrics,
-        worker_labels=worker_labels,
-        metric_order=metric_order,
-        metric_labels=metric_labels,
-        best_worker_metric=best_worker_metric,
-        best_worker_label=best_worker_label,
-        title=title,
-        split_threshold=split_threshold,
-        center_width=center_width,
+    root_level = logging.getLogger().getEffectiveLevel()
+    show_debug_metrics = root_level <= logging.DEBUG
+
+    # Ensure Score is the first metric in the scoring order
+    primary_scoring_order = ["score"] + [
+        k for k in METRIC_WEIGHT_ORDER if k != "score"
+    ]
+    scoring_order = list(primary_scoring_order)
+    # Always show these operational metrics at INFO level for visibility
+    always_show = [
+        "total_queries",
+        "total_time",
+        "rows_examined",
+        "rows_returned",
+        "io_read_mb",
+        "io_write_mb",
+        "cache_hit_ratio",
+    ]
+    for key in always_show:
+        if key not in scoring_order:
+            scoring_order.append(key)
+    if not worker_metrics:
+        logger.info("%s", f"{title}\n(no workers)")
+        return
+
+    if worker_labels is None:
+        worker_labels = [f"Worker-{index}" for index in range(len(worker_metrics))]
+
+    if len(worker_labels) != len(worker_metrics):
+        raise ValueError("worker_labels must match the number of worker metrics")
+
+    if split_threshold < 1:
+        raise ValueError("split_threshold must be at least 1")
+
+    coerced_metrics = [_coerce_metric_mapping(metric) for metric in worker_metrics]
+    best_worker_mapping = (
+        _coerce_metric_mapping(best_worker_metric)
+        if best_worker_metric is not None
+        else None
     )
-    logger.info("%s", table)
 
+    combined_order = _collect_metric_order(worker_metrics)
+    primary_order, secondary_order = _partition_metric_orders(
+        combined_order,
+        primary_scoring_order,
+        secondary_start_key="total_queries",
+    )
 
-def log_section_header(
-    logger: logging.Logger,
-    title: str = "",
-    *fmt_args,
-    width: Optional[int] = None,
-    level: str = "info",
-    top_separator: bool = True,
-    **fmt_kwargs,
-) -> None:
-    """
-    Log a formatted section header.
+    extra_order = [
+        key for key in _collect_metric_order(worker_metrics) if key not in scoring_order
+    ]
+    if not show_debug_metrics or not extra_order:
+        table = format_worker_metrics_table(
+            worker_metrics,
+            worker_labels=worker_labels,
+            metric_order=primary_order,
+            metric_labels=metric_labels,
+            best_worker_metric=best_worker_metric,
+            best_worker_label=best_worker_label,
+            title=title,
+            split_threshold=split_threshold,
+            center_width=center_width,
+        )
+        logger.info("%s", table)
+        return
 
-    Parameters
-    ----------
-    logger : logging.Logger
-        Logger instance
-    level : str
-        Logging level
-    title : str
-        Section title
-    width : int
-        Width of header line
+    colors = get_color_context()
+    metric_label_palette = _label_palette(colors)
+    if not secondary_order:
+        table = format_worker_metrics_table(
+            worker_metrics,
+            worker_labels=worker_labels,
+            metric_order=primary_order,
+            metric_labels=metric_labels,
+            best_worker_metric=best_worker_metric,
+            best_worker_label=best_worker_label,
+            title=title,
+            split_threshold=split_threshold,
+            center_width=center_width,
+        )
+        logger.info("%s", table)
+        return
 
-    Example
-    -------
-    >>> log_section_header(logger, "GENERATION 5")
-    # Output:
-    # ============
-    # GENERATION 5
-    # ============
-    """
-    try:
-        if fmt_args:
-            formatted_title = title % tuple(fmt_args)
-        elif fmt_kwargs:
-            formatted_title = title % fmt_kwargs
-        else:
-            formatted_title = title
-    except Exception:
-        # If formatting fails, fall back to the raw title to avoid crashing the logger
-        formatted_title = title
+    worker_chunks: list[tuple[int, int]] = [
+        (start, min(start + split_threshold, len(worker_labels)))
+        for start in range(0, len(worker_labels), split_threshold)
+    ]
+    if not worker_chunks:
+        worker_chunks = [(0, len(worker_labels))]
 
-    # Compute visible width from ANSI-stripped text when not provided
-    visible_len = len(strip_ansi(formatted_title)) if width is None else width
-    # If caller provided no title and no width, fall back to a sensible default
-    if visible_len == 0:
-        visible_len = 80
+    sections: list[str] = []
+    for chunk_index, (start, end) in enumerate(worker_chunks):
+        include_best_worker = (
+            best_worker_mapping is not None and chunk_index == len(worker_chunks) - 1
+        )
+        styled_worker_labels = _build_worker_headers(
+            worker_labels,
+            start=start,
+            end=end,
+            colors=colors,
+            include_best_worker=include_best_worker,
+            best_worker_label=best_worker_label,
+        )
 
-    sep = "=" * visible_len
-    if level.lower() == "debug":
-        if top_separator:
-            logger.debug("%s%s%s", COLORS.bold, sep, COLORS.reset)
-        if formatted_title:
-            logger.debug(formatted_title)
-        logger.debug("%s%s%s", COLORS.bold, sep, COLORS.reset)
-    else:
-        if top_separator:
-            logger.info("%s%s%s", COLORS.bold, sep, COLORS.reset)
-        if formatted_title:
-            logger.info(formatted_title)
-        logger.info("%s%s%s", COLORS.bold, sep, COLORS.reset)
+        scoring_metric_rows, scoring_cell_rows = _build_worker_rows(
+            primary_order,
+            coerced_metrics[start:end],
+            metric_labels=metric_labels,
+            colors=colors,
+            metric_label_palette=metric_label_palette,
+        )
+        debug_metric_rows, debug_cell_rows = _build_worker_rows(
+            secondary_order,
+            coerced_metrics[start:end],
+            metric_labels=metric_labels,
+            colors=colors,
+            metric_label_palette=metric_label_palette,
+        )
+
+        if include_best_worker and best_worker_mapping is not None:
+            _append_best_worker_values(
+                primary_order,
+                scoring_cell_rows,
+                best_worker_mapping=best_worker_mapping,
+                colors=colors,
+            )
+            _append_best_worker_values(
+                secondary_order,
+                debug_cell_rows,
+                best_worker_mapping=best_worker_mapping,
+                colors=colors,
+            )
+
+        section_title = title
+        if len(worker_chunks) > 1:
+            section_title = f"{title} (part {chunk_index + 1}/{len(worker_chunks)})"
+
+        table = _render_ascii_table_with_sections(
+            section_title,
+            styled_worker_labels,
+            scoring_metric_rows,
+            scoring_cell_rows,
+            debug_metric_rows,
+            debug_cell_rows,
+        )
+        sections.append(_center_text_block(table, width=center_width))
+
+    logger.info("%s", "\n\n".join(sections))
+
 
 
 def log_generation_summary(
@@ -731,31 +1326,55 @@ def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
     logger.info(
         "  Score:              %s%.3f%%%s", COLORS.cyan, best["score"], COLORS.reset
     )
-    logger.info(
-        "  Latency95:          %s%.3f ms%s",
-        COLORS.cyan,
-        best["metrics"]["latency_p95"],
-        COLORS.reset,
-    )
-    logger.info(
-        "  Latency99:          %s%.3f ms%s",
-        COLORS.cyan,
-        best["metrics"]["latency_p99"],
-        COLORS.reset,
-    )
-    logger.info(
-        "  Throughput:         %s%.3f %s%s",
-        COLORS.cyan,
-        best["metrics"]["throughput"],
-        best["metrics"]["throughput_unit"],
-        COLORS.reset,
-    )
-    logger.info(
-        "  Memory Utilization: %s%.1f%%%s",
-        COLORS.cyan,
-        best["metrics"]["memory_utilization"] * 100.0,
-        COLORS.reset,
-    )
+    metrics = best.get("metrics") if isinstance(best.get("metrics"), dict) else {}
+
+    latency_p95 = metrics.get("latency_p95")
+    if latency_p95 is None:
+        logger.info("  Latency95:          %s%s%s", COLORS.orange, "n/a", COLORS.reset)
+    else:
+        logger.info(
+            "  Latency95:          %s%.3f ms%s",
+            COLORS.cyan,
+            latency_p95,
+            COLORS.reset,
+        )
+
+    latency_p99 = metrics.get("latency_p99")
+    if latency_p99 is None:
+        logger.info("  Latency99:          %s%s%s", COLORS.orange, "n/a", COLORS.reset)
+    else:
+        logger.info(
+            "  Latency99:          %s%.3f ms%s",
+            COLORS.cyan,
+            latency_p99,
+            COLORS.reset,
+        )
+
+    throughput = metrics.get("throughput")
+    throughput_unit = metrics.get("throughput_unit") or "TPS"
+    if throughput is None:
+        logger.info("  Throughput:         %s%s%s", COLORS.orange, "n/a", COLORS.reset)
+    else:
+        logger.info(
+            "  Throughput:         %s%.3f %s%s",
+            COLORS.cyan,
+            throughput,
+            throughput_unit,
+            COLORS.reset,
+        )
+
+    memory_utilization = metrics.get("memory_utilization")
+    if memory_utilization is None:
+        logger.info(
+            "  Memory Utilization: %s%s%s", COLORS.orange, "n/a", COLORS.reset
+        )
+    else:
+        logger.info(
+            "  Memory Utilization: %s%.1f%%%s",
+            COLORS.cyan,
+            memory_utilization * 100.0,
+            COLORS.reset,
+        )
 
     logger.info("%sBest Knob Configurations:%s", COLORS.green, COLORS.reset)
     for knob_name, value in sorted(best["knobs"].items()):
