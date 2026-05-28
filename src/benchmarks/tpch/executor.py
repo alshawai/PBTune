@@ -105,12 +105,13 @@ class TPCHExecutor(BenchmarkExecutor):
     def queries(self) -> List[str]:
         """Lazy-load the 22 TPC-H SQL queries from disk."""
         if self._queries is None:
-            self._queries = []
+            queries: List[str] = []
             for i in range(1, 23):
                 qfile = QUERIES_DIR / f"{i}.sql"
                 if not qfile.exists():
                     raise FileNotFoundError(f"TPC-H query file missing: {qfile}")
-                self._queries.append(qfile.read_text())
+                queries.append(qfile.read_text())
+            self._queries = queries
         return self._queries
 
     def prepare(self, db_config: DatabaseConfig) -> None:
@@ -307,7 +308,10 @@ class TPCHExecutor(BenchmarkExecutor):
 
         # Enforce safety timeout to prevent bad configs from hanging indefinitely.
         base_timeout_ms = 300000  # 5 minutes
-        statement_timeout_ms = int(base_timeout_ms * self.scale_factor)
+        min_timeout_ms = 60000  # 60 seconds
+        statement_timeout_ms = max(
+            min_timeout_ms, int(base_timeout_ms * self.scale_factor)
+        )
 
         cursor = conn.cursor()  # type: ignore
         cursor.execute(f"SET statement_timeout = {statement_timeout_ms}")
@@ -319,6 +323,7 @@ class TPCHExecutor(BenchmarkExecutor):
         )
 
         query_indices = list(range(len(self.queries)))
+        run_start = time.time()
 
         if warmup_passes > 0:
             logger.info("  Executing %d cache warming pass(es)", warmup_passes)
@@ -342,7 +347,7 @@ class TPCHExecutor(BenchmarkExecutor):
                             memory_utilization=100.0,
                             error_rate=100.0,
                             total_queries=len(self.queries),
-                            total_time=0.0,
+                            total_time=time.time() - run_start,
                             failure_type="warmup_failed",
                         )
             cursor.close()
