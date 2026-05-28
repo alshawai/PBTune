@@ -399,9 +399,15 @@ class SysbenchExecutor(BenchmarkExecutor):
 
         metrics = PerformanceMetrics()
 
+        transactions_total: int | None = None
+
         tps_match = re.search(r"transactions:\s+\d+\s+\(([\d.]+)\s+per sec\.\)", stdout)
         if tps_match:
             metrics.throughput = float(tps_match.group(1))
+
+        transactions_total_match = re.search(r"transactions:\s+(\d+)", stdout)
+        if transactions_total_match:
+            transactions_total = int(transactions_total_match.group(1))
 
         # Attempt precise extraction via histogram first
         hist_data = SysbenchExecutor._parse_histogram(stdout)
@@ -482,13 +488,22 @@ class SysbenchExecutor(BenchmarkExecutor):
                 metrics.error_rate = error_count / total_txns
 
         # Extract total queries
-        queries_match = re.search(r"queries:\s+(\d+)\s+\(", stdout)
+        queries_match = re.search(r"queries:\s+(\d+)", stdout)
         if queries_match:
             metrics.total_queries = int(queries_match.group(1))
+        elif transactions_total is not None:
+            # Fallback when sysbench doesn't print aggregate query count.
+            metrics.total_queries = transactions_total
 
         # Extract total time
-        time_match = re.search(r"total time:\s+([\d.]+)s", stdout)
+        time_match = re.search(r"total time:\s*([\d.]+)\s*s", stdout)
+        if not time_match:
+            # Some sysbench formats can emit abbreviated spacing/units.
+            time_match = re.search(r"total time\s*:\s*([\d.]+)", stdout)
         if time_match:
             metrics.total_time = float(time_match.group(1))
+        elif transactions_total is not None and metrics.throughput > 0.0:
+            # Conservative fallback from event count when total time is omitted.
+            metrics.total_time = transactions_total / metrics.throughput
 
         return metrics

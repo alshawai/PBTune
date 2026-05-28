@@ -322,6 +322,7 @@ def test_sysbench_parse_output_extracts_latency_p95() -> None:
     assert metrics.latency_p99 == 250.00
     assert metrics.latency_p50 == 80.00
     assert metrics.throughput == 100.00
+    assert metrics.total_time == 100.00
 
 
 def test_sysbench_parse_output_handles_missing_latency_p95() -> None:
@@ -344,3 +345,18 @@ def test_sysbench_parse_output_handles_missing_latency_p95() -> None:
     assert metrics.latency_p95 == 0.0
     assert metrics.latency_p99 == 250.00
     assert metrics.throughput == 100.00
+
+
+def test_sysbench_parse_output_derives_total_time_from_transactions_when_missing() -> None:
+    """Parser should derive total_time from transaction count and TPS when needed."""
+    sysbench_output = """
+    SQL statistics:
+        transactions:                        12000   (120.00 per sec.)
+        ignored errors:                      0       (0.00 per sec.)
+    """
+
+    metrics = SysbenchExecutor._parse_output(sysbench_output)
+
+    assert metrics.throughput == 120.00
+    assert metrics.total_queries == 12000
+    assert metrics.total_time == 100.0
