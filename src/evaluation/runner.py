@@ -41,6 +41,7 @@ from src.utils.environments import EnvironmentFactory, DatabaseEnvironment
 from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
 from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
 from src.utils.metrics import PerformanceMetrics, create_metric_config
+from src.utils.scoring import create_scoring_engine
 from src.config.data_root import resolve_data_root
 from src.utils.rescoring import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import (
@@ -1301,7 +1302,7 @@ def _metrics_to_score(
         workload_features=workload_features,
     )
 
-    return metric_config.compute_score_value(metrics)
+    return create_scoring_engine(metric_config).compute_breakdown(metrics).final_score
 
 
 def _extract_pg_major(pg_version_str: str) -> str:

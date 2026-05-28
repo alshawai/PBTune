@@ -638,6 +638,7 @@ class KnobSpace:
         config: Dict[str, Any],
         worker_id: Optional[int] = None,
         budget_ram_bytes: Optional[int] = None,
+        quiet: bool = False,
     ) -> Dict[str, Any]:
         """
         Repair configuration to satisfy known dependencies and constraints between knobs.
@@ -672,13 +673,14 @@ class KnobSpace:
         wal_level = repaired.get("wal_level")
         if wal_level == "minimal":
             if repaired.get("archive_mode") in {"on", "always"}:
-                worker_logger.debug(
-                    "%s Corrected 'archive_mode' from '%s' to 'off' "
-                    "because wal_level is 'minimal'%s",
-                    COLORS.italic,
-                    repaired["archive_mode"],
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'archive_mode' from '%s' to 'off' "
+                        "because wal_level is 'minimal'%s",
+                        COLORS.italic,
+                        repaired["archive_mode"],
+                        COLORS.reset,
+                    )
                 repaired["archive_mode"] = "off"
 
             max_wal_senders = repaired.get("max_wal_senders")
@@ -686,24 +688,26 @@ class KnobSpace:
                 isinstance(max_wal_senders, (int, np.integer, float, np.floating))
                 and max_wal_senders > 0
             ):
-                worker_logger.debug(
-                    "%s Corrected 'max_wal_senders' from %s to 0 "
-                    "because wal_level is 'minimal'%s",
-                    COLORS.italic,
-                    repaired["max_wal_senders"],
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'max_wal_senders' from %s to 0 "
+                        "because wal_level is 'minimal'%s",
+                        COLORS.italic,
+                        repaired["max_wal_senders"],
+                        COLORS.reset,
+                    )
                 repaired["max_wal_senders"] = 0
 
             summarize_wal = repaired.get("summarize_wal")
             if str(summarize_wal).lower() in {"on", "true", "1"}:
-                worker_logger.debug(
-                    "%s Corrected 'summarize_wal' from '%s' to 'off' "
-                    "because wal_level is 'minimal'%s",
-                    COLORS.italic,
-                    repaired["summarize_wal"],
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'summarize_wal' from '%s' to 'off' "
+                        "because wal_level is 'minimal'%s",
+                        COLORS.italic,
+                        repaired["summarize_wal"],
+                        COLORS.reset,
+                    )
                 repaired["summarize_wal"] = "off"
 
         # Handle huge_pages OS constraints
@@ -711,25 +715,27 @@ class KnobSpace:
         if huge_pages in {"on", "try"}:
             # huge_pages is not supported with sysv shared_memory_type
             if repaired.get("shared_memory_type") == "sysv":
-                worker_logger.debug(
-                    "%s Corrected 'shared_memory_type' from 'sysv' to 'mmap' "
-                    "because huge_pages is '%s'%s",
-                    COLORS.italic,
-                    huge_pages,
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'shared_memory_type' from 'sysv' to 'mmap' "
+                        "because huge_pages is '%s'%s",
+                        COLORS.italic,
+                        huge_pages,
+                        COLORS.reset,
+                    )
                 repaired["shared_memory_type"] = "mmap"
 
             # If huge_pages="on" in standard envs without configured huge pages,
             # the process strictly crashes. Convert "on" to "try" to allow graceful
             # fallback but retain performance if possible.
             if huge_pages == "on":
-                worker_logger.debug(
-                    "%s Corrected 'huge_pages' from 'on' to 'try' "
-                    "to allow graceful OS fallback%s",
-                    COLORS.italic,
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'huge_pages' from 'on' to 'try' "
+                        "to allow graceful OS fallback%s",
+                        COLORS.italic,
+                        COLORS.reset,
+                    )
                 repaired["huge_pages"] = "try"
 
         # Handle max_worker_processes vs max_parallel_workers constraints
@@ -739,14 +745,15 @@ class KnobSpace:
             max_parallel, (int, float, np.number)
         ):
             if max_worker < max_parallel:
-                worker_logger.debug(
-                    "%s Corrected 'max_parallel_workers' from %s to %s "
-                    "because it cannot exceed 'max_worker_processes'%s",
-                    COLORS.italic,
-                    max_parallel,
-                    max_worker,
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'max_parallel_workers' from %s to %s "
+                        "because it cannot exceed 'max_worker_processes'%s",
+                        COLORS.italic,
+                        max_parallel,
+                        max_worker,
+                        COLORS.reset,
+                    )
                 repaired["max_parallel_workers"] = int(max_worker)
 
         # Handle min_wal_size vs max_wal_size constraint
@@ -757,15 +764,16 @@ class KnobSpace:
         ):
             if min_wal > max_wal:
                 new_min_wal = max(1, int(max_wal) // 2)  # Give it a reasonable gap
-                worker_logger.debug(
-                    "%s Corrected 'min_wal_size' from %s to %s "
-                    "because it cannot exceed 'max_wal_size' (%s)%s",
-                    COLORS.italic,
-                    min_wal,
-                    new_min_wal,
-                    max_wal,
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'min_wal_size' from %s to %s "
+                        "because it cannot exceed 'max_wal_size' (%s)%s",
+                        COLORS.italic,
+                        min_wal,
+                        new_min_wal,
+                        max_wal,
+                        COLORS.reset,
+                    )
                 repaired["min_wal_size"] = new_min_wal
 
         # Handle connection slot constraints
@@ -783,15 +791,16 @@ class KnobSpace:
                 new_max = (
                     reserved_total + 10
                 )  # Ensure at least 10 slots for regular users
-                worker_logger.debug(
-                    "%s Corrected 'max_connections' from %s to %s "
-                    "because reserved slots (%s) consumed all capacity%s",
-                    COLORS.italic,
-                    max_conn,
-                    new_max,
-                    reserved_total,
-                    COLORS.reset,
-                )
+                if not quiet:
+                    worker_logger.debug(
+                        "%s Corrected 'max_connections' from %s to %s "
+                        "because reserved slots (%s) consumed all capacity%s",
+                        COLORS.italic,
+                        max_conn,
+                        new_max,
+                        reserved_total,
+                        COLORS.reset,
+                    )
                 repaired["max_connections"] = new_max
 
         # Ensure all modified numerical knobs still strictly conform to their bounds/steps
@@ -812,7 +821,8 @@ class KnobSpace:
         if budget is not None:
             repaired = self._repair_memory_budget(repaired, budget)
 
-        worker_logger.debug("➤ Validated dependencies and constraints.")
+        if not quiet:
+            worker_logger.debug("➤ Validated dependencies and constraints.")
         return repaired
 
     def sample_random_config(self, seed: Optional[int] = None) -> Dict[str, Any]:
@@ -838,7 +848,7 @@ class KnobSpace:
         return self.repair_config_dependencies(config)
 
     def sample_diverse_configs(
-        self, num_samples: int, seed: Optional[int] = None
+        self, num_samples: int, seed: Optional[int] = None, quiet: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Sample diverse configurations using Latin Hypercube Sampling (LHS).
@@ -954,11 +964,14 @@ class KnobSpace:
             for knob_name, _ in categorical_knobs:
                 config[knob_name] = categorical_samples[knob_name][i]
 
-            LOGGER.debug(
-                " ➤ Sampled config for Worker-%d. Attempting to repair dependencies...",
-                i,
+            if not quiet:
+                LOGGER.debug(
+                    " ➤ Sampled config for Worker-%d. Attempting to repair dependencies...",
+                    i,
+                )
+            configs.append(
+                self.repair_config_dependencies(config, worker_id=i, quiet=quiet)
             )
-            configs.append(self.repair_config_dependencies(config, worker_id=i))
 
         return configs
 

@@ -221,7 +221,6 @@ class MetricConfig:
     normalization_metadata: dict[str, Any] = field(default_factory=dict)
 
     _normalizer: Any = field(default=None, init=False, repr=False)
-    _scoring_engine: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         """Validate configuration"""
@@ -347,6 +346,13 @@ class MetricConfig:
             "workload_features": dict(self.workload_features),
             "normalization_metadata": self.get_normalization_metadata(),
         }
+
+    def _ensure_normalizer(self):
+        if self._normalizer is None:
+            from src.utils.scoring.normalization import QuantileUtilityNormalizer
+
+            self._normalizer = QuantileUtilityNormalizer()
+        return self._normalizer
 
     def update_ranges(
         self, historical_metrics: List[PerformanceMetrics], padding_factor: float = 0.2
@@ -491,81 +497,6 @@ class MetricConfig:
 
         return False
 
-    def compute_score(
-        self, metrics: PerformanceMetrics, worker_logger: Optional[Logger] = None
-    ) -> ScoreBreakdown:
-        """Compute a ScoreBreakdown using the unified scoring engine."""
-        from src.utils.scoring.engine import ScoringEngine
-
-        normalizer = self._ensure_normalizer()
-
-        engine = self._scoring_engine
-        if engine is None:
-            engine = ScoringEngine(
-                policy_id=self.scoring_policy,
-                workload_type=self.workload_type.value.lower(),
-                latency_metric=self.latency_metric,
-                features=self.workload_features,
-                normalizer=normalizer,
-                weight_overrides=self._resolve_fixed_v1_overrides(),
-            )
-            self._scoring_engine = engine
-        else:
-            engine.set_normalizer(normalizer)
-            engine.update_context(
-                policy_id=self.scoring_policy,
-                workload_type=self.workload_type.value.lower(),
-                latency_metric=self.latency_metric,
-                features=self.workload_features,
-                weight_overrides=self._resolve_fixed_v1_overrides(),
-            )
-
-        breakdown = engine.compute_breakdown(metrics, worker_logger=worker_logger)
-
-        if self.normalize_by_baseline and self.baseline_metrics is not None:
-            baseline = engine.compute_breakdown(
-                self.baseline_metrics, worker_logger=worker_logger
-            )
-            if baseline.final_score > 0:
-                baseline_scaled = (breakdown.final_score / baseline.final_score) * 100.0
-                breakdown = ScoreBreakdown(
-                    final_score=baseline_scaled,
-                    policy=breakdown.policy,
-                    policy_version=breakdown.policy_version,
-                    reliability_gate=breakdown.reliability_gate,
-                    components=breakdown.components,
-                    metadata={
-                        **breakdown.metadata,
-                        "baseline_score": baseline.final_score,
-                        "baseline_normalized": True,
-                    },
-                )
-
-        return breakdown
-
-    def compute_score_value(
-        self, metrics: PerformanceMetrics, worker_logger: Optional[Logger] = None
-    ) -> float:
-        """Return the legacy scalar score value from ScoreBreakdown."""
-        return self.compute_score(metrics, worker_logger=worker_logger).final_score
-
-    def _ensure_normalizer(self):
-        if self._normalizer is None:
-            from src.utils.scoring.normalization import QuantileUtilityNormalizer
-
-            self._normalizer = QuantileUtilityNormalizer()
-        return self._normalizer
-
-    def _resolve_fixed_v1_overrides(self) -> dict[str, float]:
-        if self.scoring_policy != "fixed_v1":
-            return {}
-
-        return {
-            f"latency_{self.latency_metric}": self.weight_latency,
-            "throughput": self.weight_throughput,
-            "memory_utilization": self.weight_memory,
-            "error_rate": self.weight_error,
-        }
 
 
 # Priorities: Low latency, High throughput

@@ -102,6 +102,28 @@ class TestTailLatencyAmplification:
 class TestScanEfficiency:
     """Test scan efficiency metric computation."""
 
+    def test_row_counters_override_cache_ratio(self):
+        """Row counters should drive scan efficiency when available."""
+        efficiency = MetricInstrumentationEngine.calculate_scan_efficiency(
+            cache_hit_ratio=0.99,
+            rows_examined=1_152_327,
+            rows_returned=1_168_291,
+        )
+
+        assert efficiency == pytest.approx(1_152_327 / 1_168_291)
+        assert efficiency < 1.0
+
+    def test_imbalanced_rows_reduce_scan_efficiency(self):
+        """Large row imbalances should no longer collapse to a perfect score."""
+        efficiency = MetricInstrumentationEngine.calculate_scan_efficiency(
+            cache_hit_ratio=0.99,
+            rows_examined=2_873,
+            rows_returned=48_303_948,
+        )
+
+        assert efficiency == pytest.approx(2_873 / 48_303_948)
+        assert efficiency < 0.01
+
     def test_perfect_cache_hit_ratio(self):
         """Test efficiency with perfect cache hit ratio."""
         metrics = PerformanceMetrics(

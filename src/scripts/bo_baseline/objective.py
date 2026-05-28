@@ -94,7 +94,8 @@ def evaluate_config(
         cost = max(0.0, min(100.0, 100.0 - score))
         score_breakdown = worker.score_breakdown
         if score_breakdown is None:
-            score_breakdown = orchestrator.config.metric_config.compute_score(
+            engine = orchestrator._get_scoring_engine()
+            score_breakdown = engine.compute_breakdown(
                 metrics, worker_logger=worker.logger
             )
 
