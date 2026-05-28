@@ -41,6 +41,7 @@ from src.utils.environments import EnvironmentFactory, DatabaseEnvironment
 from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
 from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
 from src.utils.metrics import PerformanceMetrics, create_metric_config
+from src.utils.scoring import create_scoring_engine
 from src.config.data_root import resolve_data_root
 from src.utils.rescoring import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import (
@@ -339,8 +340,7 @@ class ComparisonRunner:
             self.config.scoring_policy_version or pbt_session.scoring_policy_version
         )
         eval_ref_version = (
-            self.config.metric_reference_version
-            or pbt_session.metric_reference_version
+            self.config.metric_reference_version or pbt_session.metric_reference_version
         )
 
         LOGGER.info(
@@ -374,9 +374,7 @@ class ComparisonRunner:
             run.score = score
 
         LOGGER.info("\n── Pairwise statistical analysis ──")
-        pairwise_results = compute_pairwise_statistics(
-            runs_by_arm, benchmark=benchmark
-        )
+        pairwise_results = compute_pairwise_statistics(runs_by_arm, benchmark=benchmark)
 
         result = MultiArmComparisonResult(
             runs_by_arm=runs_by_arm,
@@ -1207,9 +1205,7 @@ class ComparisonRunner:
         print(f"  Arms      : {', '.join(arm_names)}")
         print(f"  Benchmark : {benchmark_name.upper()}")
         print(f"  Reps      : {n_reps}")
-        print(
-            f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}"
-        )
+        print(f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}")
         print("═" * 78)
 
         import numpy as _np
@@ -1241,9 +1237,7 @@ class ComparisonRunner:
 
         for pw in result.pairwise_statistics:
             score_mc = next(
-                mc
-                for mc in pw.statistics.metrics
-                if mc.metric_name == "score"
+                mc for mc in pw.statistics.metrics if mc.metric_name == "score"
             )
             label = f"{pw.arm_a} vs {pw.arm_b}"
             ci_lo, ci_hi = score_mc.improvement_ci
@@ -1301,7 +1295,7 @@ def _metrics_to_score(
         workload_features=workload_features,
     )
 
-    return metric_config.compute_score_value(metrics)
+    return create_scoring_engine(metric_config).compute_breakdown(metrics).final_score
 
 
 def _extract_pg_major(pg_version_str: str) -> str:
@@ -1571,7 +1565,9 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
             "mode": "multi_arm",
             "arms": arm_names,
             "tuning_session_path": str(cfg.tuning_session_path),
-            "bo_session_path": str(cfg.bo_session_path) if cfg.bo_session_path else None,
+            "bo_session_path": str(cfg.bo_session_path)
+            if cfg.bo_session_path
+            else None,
             "evaluation_log_path": str(result.log_path) if result.log_path else None,
             "benchmark": benchmark_name,
             "repetitions": cfg.repetitions,
@@ -1607,8 +1603,7 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
         },
         "knobs_by_arm": result.knobs_by_arm,
         "runs_by_arm": {
-            arm: [_run(r) for r in runs]
-            for arm, runs in result.runs_by_arm.items()
+            arm: [_run(r) for r in runs] for arm, runs in result.runs_by_arm.items()
         },
         "pairwise_statistics": pairwise_dict,
         "scoring_metadata": result.scoring_metadata,

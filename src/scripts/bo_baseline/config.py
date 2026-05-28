@@ -17,7 +17,9 @@ from src.utils.types import (
     clone_benchmark_config,
 )
 from src.utils.logger import get_logger
+
 LOGGER = get_logger("Config")
+
 
 @dataclass
 class BOConfig:
@@ -201,9 +203,9 @@ class BOConfig:
         # Extract snapshot settings
         if "enable_snapshots" in session:
             self.enable_snapshots = bool(session["enable_snapshots"])
-        
+
         if self.enable_snapshots and "snapshot_restore_interval" in session:
-            # PBT restores every N generations. 
+            # PBT restores every N generations.
             # Translate to BO iterations by multiplying by population_size.
             pbt_interval = int(session["snapshot_restore_interval"])
             pop_size = int(session.get("population_size", 1))
@@ -304,7 +306,8 @@ class BOConfig:
             if hasattr(args, "enable_snapshots") and args.enable_snapshots is not None
             else base_config.enable_snapshots,
             snapshot_restore_interval=args.snapshot_restore_interval
-            if hasattr(args, "snapshot_restore_interval") and args.snapshot_restore_interval is not None
+            if hasattr(args, "snapshot_restore_interval")
+            and args.snapshot_restore_interval is not None
             else base_config.snapshot_restore_interval,
         )
 
@@ -313,7 +316,8 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
-                    set_max_workers=not hasattr(args, "resource_division") or args.resource_division is None,
+                    set_max_workers=not hasattr(args, "resource_division")
+                    or args.resource_division is None,
                 )
             except Exception as e:
                 LOGGER.warning(
@@ -324,6 +328,7 @@ class BOConfig:
         config.max_workers = config.resource_division if config.batched_bo else 1
 
         return config
+
 
 RAPID_BO_CONFIG = BOConfig(
     n_iterations=40,

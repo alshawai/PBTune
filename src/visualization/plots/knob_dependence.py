@@ -149,7 +149,6 @@ def generate_knob_dependence(
     ]
     analysis_df = importance.config_df[analysis_columns]
     column_index = {name: idx for idx, name in enumerate(analysis_columns)}
-    feature_names = list(analysis_columns)
     feature_values = analysis_df.to_numpy()
 
     panels_per_fig = 4
@@ -167,7 +166,9 @@ def generate_knob_dependence(
             )
             axes = np.ravel(axes)
 
-            for idx, (ax, knob) in enumerate(zip(axes, knob_chunk)):
+            for idx in range(len(knob_chunk)):
+                ax = axes[idx]
+                knob = knob_chunk[idx]
                 if knob not in column_index:
                     ax.text(
                         0.5,
@@ -194,9 +195,7 @@ def generate_knob_dependence(
                 )
 
                 short_knob = _shorten_label(knob, max_len=label_max_len)
-                short_interaction = _shorten_label(
-                    interaction, max_len=label_max_len
-                )
+                short_interaction = _shorten_label(interaction, max_len=label_max_len)
                 title = f"{short_knob} (c:{short_interaction})"
                 wrapped_title = textwrap.fill(title, width=26)
                 ax.set_title(wrapped_title, pad=6, fontsize=8)

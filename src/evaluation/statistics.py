@@ -241,11 +241,13 @@ def compute_pairwise_statistics(
             benchmark=benchmark,
             alpha=alpha,
         )
-        results.append(PairwiseResult(
-            arm_a=arm_a,
-            arm_b=arm_b,
-            statistics=stats_for_pair,
-        ))
+        results.append(
+            PairwiseResult(
+                arm_a=arm_a,
+                arm_b=arm_b,
+                statistics=stats_for_pair,
+            )
+        )
 
     LOGGER.info(
         "Computed pairwise statistics for %d pairs across %d arms.",

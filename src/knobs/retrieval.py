@@ -133,7 +133,6 @@ class PostgreSQLKnobRetriever:
         KnobCategory.STATISTICS: [
             "default_statistics_target",
             "track_activities",
-            "track_counts",
             "track_io_timing",
             "track_functions",
         ],

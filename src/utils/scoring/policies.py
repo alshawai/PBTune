@@ -139,7 +139,11 @@ V2_COEFFICIENTS = {
         "tail_latency_sensitivity": 0.8,
     },
     "tail_amplification": {"olap_complexity": 1.5, "tail_latency_sensitivity": 1.0},
-    "throughput": {"concurrency_pressure": -0.4, "write_ratio": -0.3},
+    "throughput": {
+        "concurrency_pressure": -0.4,
+        "write_ratio": -0.3,
+        "olap_complexity": -0.5,
+    },
     "throughput_variance": {"write_ratio": 1.0, "concurrency_pressure": 0.8},
     "error_rate": {"concurrency_pressure": 0.3},
     "memory_pressure": {"working_set_millions": 0.3, "concurrency_pressure": 0.5},

@@ -78,11 +78,9 @@ def _render_heatmap(
 
         if top_k_interactions is not None:
             resolved_top_k = max(1, top_k_interactions)
-            top_labels = [
-                name
-                for name in importance.knob_names
-                if name in labels
-            ][:resolved_top_k]
+            top_labels = [name for name in importance.knob_names if name in labels][
+                :resolved_top_k
+            ]
             index_map = {name: idx for idx, name in enumerate(labels)}
             indices = [index_map[name] for name in top_labels if name in index_map]
             if indices:

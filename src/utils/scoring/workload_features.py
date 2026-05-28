@@ -41,73 +41,16 @@ class WorkloadFeatureExtractor:
         ),
     }
 
-    def extract_sysbench_features(
+    def _analyze_queries(
         self,
-        *,
-        script: str,
-        threads: int,
-        cpu_cores: int,
-        table_size: int,
-        tables: int,
+        queries: list[str],
+        weights: list[float] | None = None,
     ) -> dict[str, float]:
-        """Extract static workload priors for sysbench modes."""
-        mode = script.strip().lower()
-        read_ratio, write_ratio = {
-            "oltp_read_only": (1.0, 0.0),
-            "oltp_read_write": (0.75, 0.25),
-            "oltp_write_only": (0.10, 0.90),
-        }.get(mode, (0.75, 0.25))
+        """Analyze SQL queries to compute structural workload features.
 
-        cpu = max(float(cpu_cores), 1.0)
-        concurrency = max(float(threads), 1.0) / cpu
-        total_rows = float(max(table_size, 1) * max(tables, 1))
-
-        return {
-            "read_ratio": read_ratio,
-            "write_ratio": write_ratio,
-            "olap_complexity": 0.15,
-            "join_intensity": 0.05,
-            "aggregation_intensity": 0.05,
-            "sort_intensity": 0.10,
-            "concurrency_pressure": float(min(concurrency, 8.0) / 8.0),
-            "working_set_millions": total_rows / 1_000_000.0,
-            "query_mix_entropy": 0.50,
-            "tail_latency_sensitivity": 0.55,
-        }
-
-    def extract_tpch_features(
-        self,
-        *,
-        scale_factor: float,
-        warmup_passes: int,
-        query_count: int = 22,
-    ) -> dict[str, float]:
-        """Extract static workload priors for TPC-H workloads."""
-        scale = max(scale_factor, 0.01)
-        warmed = 1.0 if warmup_passes > 0 else 0.0
-
-        return {
-            "read_ratio": 1.0,
-            "write_ratio": 0.0,
-            "olap_complexity": 0.95,
-            "join_intensity": 0.90,
-            "aggregation_intensity": 0.85,
-            "sort_intensity": 0.80,
-            "concurrency_pressure": 0.12,
-            "working_set_millions": scale,
-            "query_mix_entropy": min(query_count / 22.0, 1.0),
-            "tail_latency_sensitivity": 0.90,
-            "cache_warmup_applied": warmed,
-        }
-
-    def extract_template_features(
-        self,
-        *,
-        metadata: TemplateWorkloadMetadata,
-    ) -> dict[str, float]:
-        """Extract feature vector from weighted SQL templates and schema metadata."""
-        queries = metadata.queries
-
+        Returns dict with: read_ratio, write_ratio, olap_complexity, join_intensity,
+        aggregation_intensity, sort_intensity, query_mix_entropy, and tail_latency_sensitivity.
+        """
         if not queries:
             return {
                 "read_ratio": 0.5,
@@ -116,20 +59,18 @@ class WorkloadFeatureExtractor:
                 "join_intensity": 0.0,
                 "aggregation_intensity": 0.0,
                 "sort_intensity": 0.0,
-                "concurrency_pressure": 0.0,
-                "working_set_millions": 0.0,
                 "query_mix_entropy": 0.0,
                 "tail_latency_sensitivity": 0.5,
             }
 
-        weights = np.array(metadata.weights, dtype=float)
-        if len(weights) != len(queries):
-            weights = np.ones(len(queries), dtype=float)
-        weight_sum = float(weights.sum())
+        if weights is None or len(weights) != len(queries):
+            weights = np.ones(len(queries), dtype=float)  # type: ignore
+        weights = np.array(weights, dtype=float)  # type: ignore
+        weight_sum = float(weights.sum())  # type: ignore
         if weight_sum <= 0.0:
-            weights = np.ones(len(queries), dtype=float)
-            weight_sum = float(weights.sum())
-        weights /= weight_sum
+            weights = np.ones(len(queries), dtype=float)  # type: ignore
+            weight_sum = float(weights.sum())  # type: ignore
+        weights /= weight_sum  # type: ignore
 
         op_counts = {
             "select": 0.0,
@@ -146,13 +87,24 @@ class WorkloadFeatureExtractor:
         complexities: list[float] = []
         mix_distribution: list[float] = []
 
-        for query, weight in zip(queries, weights, strict=True):
+        for query, weight in zip(queries, weights, strict=True):  # type: ignore
             query_lower = query.lower()
             local_score = 0.15
             local_hits: dict[str, bool] = {}
 
             for token, pattern in self._SQL_TOKEN_PATTERNS.items():
                 matched = bool(pattern.search(query_lower))
+                if token == "join" and not matched:
+                    # Check for implicit join (comma in the FROM clause)
+                    # Check for implicit join (comma in any FROM clause, including subqueries)
+                    for from_match in re.finditer(
+                        r"\bfrom\b\s+(.*?)(?:\b(where|group\s+by|order\s+by|having|limit|select|union|intersect|except)\b|$)",
+                        query_lower,
+                        re.DOTALL,
+                    ):
+                        if "," in from_match.group(1):
+                            matched = True
+                            break
                 local_hits[token] = matched
                 if matched:
                     op_counts[token] += float(weight)
@@ -181,10 +133,6 @@ class WorkloadFeatureExtractor:
                 entropy += -p * float(np.log2(p))
         entropy /= float(np.log2(max(len(mix_distribution), 2)))
 
-        schema_tables = int(metadata.schema.get("tables", 1))
-        schema_table_size = int(metadata.schema.get("table_size", 100000))
-        total_rows = max(schema_tables * schema_table_size, 0)
-
         return {
             "read_ratio": float(min(max(read_ratio, 0.0), 1.0)),
             "write_ratio": float(min(max(write_ratio, 0.0), 1.0)),
@@ -194,8 +142,6 @@ class WorkloadFeatureExtractor:
                 min(op_counts["aggregate"] + op_counts["group_by"], 1.0)
             ),
             "sort_intensity": float(min(op_counts["order_by"], 1.0)),
-            "concurrency_pressure": float(min(metadata.num_threads / 16.0, 1.0)),
-            "working_set_millions": float(total_rows / 1_000_000.0),
             "query_mix_entropy": float(min(max(entropy, 0.0), 1.0)),
             "tail_latency_sensitivity": float(
                 min(
@@ -207,3 +153,106 @@ class WorkloadFeatureExtractor:
                 )
             ),
         }
+
+    def extract_sysbench_features(
+        self,
+        *,
+        script: str,
+        threads: int,
+        cpu_cores: int,
+        table_size: int,
+        tables: int,
+    ) -> dict[str, float]:
+        """Extract static workload priors for sysbench modes."""
+        mode = script.strip().lower()
+        read_ratio, write_ratio = {
+            "oltp_read_only": (1.0, 0.0),
+            "oltp_read_write": (0.75, 0.25),
+            "oltp_write_only": (0.10, 0.90),
+        }.get(mode, (0.75, 0.25))
+
+        cpu = max(float(cpu_cores), 1.0)
+        concurrency = max(float(threads), 1.0) / cpu
+        total_rows = float(max(table_size, 1) * max(tables, 1))
+
+        return {
+            "read_ratio": read_ratio,
+            "write_ratio": write_ratio,
+            "olap_complexity": 0.05,
+            "join_intensity": 0.0,
+            "aggregation_intensity": 0.05,
+            "sort_intensity": 0.10,
+            "concurrency_pressure": float(min(concurrency, 8.0) / 8.0),
+            "working_set_millions": total_rows / 1_000_000.0,
+            "query_mix_entropy": 0.50,
+            "tail_latency_sensitivity": 0.55,
+        }
+
+    def extract_tpch_features(
+        self,
+        *,
+        scale_factor: float,
+        warmup_passes: int,
+        query_count: int = 22,
+        queries: list[str] | None = None,
+    ) -> dict[str, float]:
+        """Extract static workload priors for TPC-H workloads."""
+        scale = max(scale_factor, 0.01)
+
+        # TPC-H spec: total rows ≈ SF × 8,661,245
+        TPCH_ROWS_PER_SF = 8_661_245
+        working_set_millions = (scale * TPCH_ROWS_PER_SF) / 1_000_000.0
+
+        # Attempt query structure analysis
+        analyzed: dict[str, float] = {}
+        if queries is not None:
+            analyzed = self._analyze_queries(queries)
+        else:
+            try:
+                from src.benchmarks.tpch import QUERIES_DIR
+
+                loaded_queries = []
+                for i in range(1, 23):
+                    q_file = QUERIES_DIR / f"{i}.sql"
+                    if q_file.exists():
+                        loaded_queries.append(q_file.read_text())
+                if loaded_queries:
+                    analyzed = self._analyze_queries(loaded_queries)
+            except Exception as e:
+                LOGGER.warning(f"Failed to dynamically load TPC-H queries: {e}")
+
+        return {
+            "read_ratio": analyzed.get("read_ratio", 1.0),
+            "write_ratio": analyzed.get("write_ratio", 0.0),
+            "olap_complexity": analyzed.get("olap_complexity", 0.95),
+            "join_intensity": analyzed.get("join_intensity", 0.90),
+            "aggregation_intensity": analyzed.get("aggregation_intensity", 0.85),
+            "sort_intensity": analyzed.get("sort_intensity", 0.80),
+            "concurrency_pressure": 0.12,
+            "working_set_millions": working_set_millions,
+            "query_mix_entropy": analyzed.get(
+                "query_mix_entropy", min(query_count / 22.0, 1.0)
+            ),
+            "tail_latency_sensitivity": analyzed.get("tail_latency_sensitivity", 0.90),
+        }
+
+    def extract_template_features(
+        self,
+        *,
+        metadata: TemplateWorkloadMetadata,
+    ) -> dict[str, float]:
+        """Extract feature vector from weighted SQL templates and schema metadata."""
+        queries = metadata.queries
+
+        analyzed = self._analyze_queries(queries, metadata.weights)
+
+        schema_tables = int(metadata.schema.get("tables", 1))
+        schema_table_size = int(metadata.schema.get("table_size", 100000))
+        total_rows = max(schema_tables * schema_table_size, 0)
+
+        # Merge environment metrics
+        analyzed["concurrency_pressure"] = float(min(metadata.num_threads / 16.0, 1.0))
+        analyzed["working_set_millions"] = float(total_rows / 1_000_000.0)
+
+        # Retain template-specific features
+        return analyzed

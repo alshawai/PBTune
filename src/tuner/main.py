@@ -368,6 +368,7 @@ class PBTTuner:
             self.workload_features = self.feature_extractor.extract_tpch_features(
                 scale_factor=scale_factor,
                 warmup_passes=self.pbt_config.benchmark_config.warmup_passes,
+                queries=workload_executor.queries,
             )
             self.snapshot_identifier = f"tpch_sf{scale_factor}"
 
@@ -661,11 +662,13 @@ class PBTTuner:
             )
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
-            metrics, score, restart_occurred, _actual_db_config = self.orchestrator.evaluate_worker(
-                worker,
-                apply_config=True,
-                generation=self.current_generation,
-                barriers=barriers,
+            metrics, score, restart_occurred, _actual_db_config = (
+                self.orchestrator.evaluate_worker(
+                    worker,
+                    apply_config=True,
+                    generation=self.current_generation,
+                    barriers=barriers,
+                )
             )
 
             if restart_occurred and not self._restarted_this_generation:
@@ -779,7 +782,8 @@ class PBTTuner:
             total_time=1.0,
             failure_type=failure_type,
         )
-        worker.score_breakdown = self.metric_config.compute_score(
+        engine = self.orchestrator.scorer
+        worker.score_breakdown = engine.compute_breakdown(
             fallback_metrics, worker_logger=worker_logger
         )
         return fallback_metrics, score
@@ -801,6 +805,8 @@ class PBTTuner:
         log_section_header(
             LOGGER, "%sGENERATION %d%s", COLORS.bold, generation, COLORS.reset
         )
+
+        self.orchestrator.scorer.log_generation_weights(generation=generation)
 
         self.current_generation = generation
         self._restarted_this_generation = False
@@ -825,6 +831,7 @@ class PBTTuner:
                 COLORS.reset,
             )
 
+        engine = self.orchestrator.scorer
         gen_summary = {
             **generation_result.to_dict(),
             "restart_count": self.restart_count,
@@ -845,7 +852,7 @@ class PBTTuner:
                         if w.score_breakdown is not None
                         else (
                             convert_numpy_types(
-                                self.metric_config.compute_score(
+                                engine.compute_breakdown(
                                     w.metrics, worker_logger=w.logger
                                 ).to_dict()
                             )
@@ -1089,7 +1096,7 @@ class PBTTuner:
                 COLORS.reset,
             )
             score_breakdown_payload = convert_numpy_types(
-                self.metric_config.compute_score(metrics).to_dict()
+                self.orchestrator.scorer.compute_breakdown(metrics).to_dict()
             )
 
         scoring_metadata = convert_numpy_types(

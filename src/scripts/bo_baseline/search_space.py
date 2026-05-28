@@ -16,6 +16,7 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger("SearchSpace")
 
+
 def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpace:
     """
     Translate KnobSpace into a ConfigSpace ConfigurationSpace.
@@ -145,8 +146,9 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
             cs.add(param)
 
     return cs
-def configspace_to_knobs(
 
+
+def configspace_to_knobs(
     cs_config: Configuration, knob_space: KnobSpace
 ) -> Dict[str, Any]:
     """

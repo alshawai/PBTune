@@ -10,6 +10,7 @@ from typing import Any
 
 from src.utils.logger import get_logger
 from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
+from src.utils.scoring import create_scoring_engine
 
 
 def workload_for_benchmark(benchmark: str) -> str:
@@ -106,7 +107,8 @@ def rescore_metrics_globally(
             valid_throughput,
         )
 
-    scores = [metric_config.compute_score_value(m) for m in metrics]
+    engine = create_scoring_engine(metric_config)
+    scores = [engine.compute_breakdown(m).final_score for m in metrics]
     logger.info(
         "Rescoring complete: %d scores computed (mean=%.4f, min=%.4f, max=%.4f)",
         len(scores),
