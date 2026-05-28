@@ -594,7 +594,9 @@ def _render_ascii_table_with_sections(
     )
     lines.append(_border())
 
-    for row_label, row_values in zip(metric_rows_primary, cell_rows_primary, strict=True):
+    for row_label, row_values in zip(
+        metric_rows_primary, cell_rows_primary, strict=True
+    ):
         lines.append(
             _row(
                 [row_label, *row_values],
@@ -738,8 +740,7 @@ def format_feature_weight_table(
     """Format a combined workload feature + weight table for generation 0."""
     colors = get_color_context()
     title = (
-        f"\n{colors.bold}🔹 Workload Features & Metric Weights vectors 🔹"
-        f"{colors.reset}"
+        f"\n{colors.bold}🔹 Workload Features & Metric Weights vectors 🔹{colors.reset}"
     )
     headers = [
         f"{colors.bold}Feature{colors.reset}",
@@ -1016,7 +1017,9 @@ def format_worker_metrics_table(
 
     # Ensure Score appears first if present
     if "score" in ordered_metric_names:
-        ordered_metric_names = ["score"] + [k for k in ordered_metric_names if k != "score"]
+        ordered_metric_names = ["score"] + [
+            k for k in ordered_metric_names if k != "score"
+        ]
 
     if not ordered_metric_names:
         return f"{title}\n(no metrics)"
@@ -1097,9 +1100,7 @@ def log_worker_metrics_table(
     show_debug_metrics = root_level <= logging.DEBUG
 
     # Ensure Score is the first metric in the scoring order
-    primary_scoring_order = ["score"] + [
-        k for k in METRIC_WEIGHT_ORDER if k != "score"
-    ]
+    primary_scoring_order = ["score"] + [k for k in METRIC_WEIGHT_ORDER if k != "score"]
     scoring_order = list(primary_scoring_order)
     # Always show these operational metrics at INFO level for visibility
     always_show = [
@@ -1243,7 +1244,6 @@ def log_worker_metrics_table(
     logger.info("%s", "\n\n".join(sections))
 
 
-
 def log_generation_summary(
     logger: logging.Logger,
     elapsed: float,
@@ -1326,7 +1326,8 @@ def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
     logger.info(
         "  Score:              %s%.3f%%%s", COLORS.cyan, best["score"], COLORS.reset
     )
-    metrics = best.get("metrics") if isinstance(best.get("metrics"), dict) else {}
+    raw_metrics = best.get("metrics")
+    metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
 
     latency_p95 = metrics.get("latency_p95")
     if latency_p95 is None:
@@ -1365,9 +1366,7 @@ def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
 
     memory_utilization = metrics.get("memory_utilization")
     if memory_utilization is None:
-        logger.info(
-            "  Memory Utilization: %s%s%s", COLORS.orange, "n/a", COLORS.reset
-        )
+        logger.info("  Memory Utilization: %s%s%s", COLORS.orange, "n/a", COLORS.reset)
     else:
         logger.info(
             "  Memory Utilization: %s%.1f%%%s",

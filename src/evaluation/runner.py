@@ -340,8 +340,7 @@ class ComparisonRunner:
             self.config.scoring_policy_version or pbt_session.scoring_policy_version
         )
         eval_ref_version = (
-            self.config.metric_reference_version
-            or pbt_session.metric_reference_version
+            self.config.metric_reference_version or pbt_session.metric_reference_version
         )
 
         LOGGER.info(
@@ -375,9 +374,7 @@ class ComparisonRunner:
             run.score = score
 
         LOGGER.info("\n── Pairwise statistical analysis ──")
-        pairwise_results = compute_pairwise_statistics(
-            runs_by_arm, benchmark=benchmark
-        )
+        pairwise_results = compute_pairwise_statistics(runs_by_arm, benchmark=benchmark)
 
         result = MultiArmComparisonResult(
             runs_by_arm=runs_by_arm,
@@ -1208,9 +1205,7 @@ class ComparisonRunner:
         print(f"  Arms      : {', '.join(arm_names)}")
         print(f"  Benchmark : {benchmark_name.upper()}")
         print(f"  Reps      : {n_reps}")
-        print(
-            f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}"
-        )
+        print(f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}")
         print("═" * 78)
 
         import numpy as _np
@@ -1242,9 +1237,7 @@ class ComparisonRunner:
 
         for pw in result.pairwise_statistics:
             score_mc = next(
-                mc
-                for mc in pw.statistics.metrics
-                if mc.metric_name == "score"
+                mc for mc in pw.statistics.metrics if mc.metric_name == "score"
             )
             label = f"{pw.arm_a} vs {pw.arm_b}"
             ci_lo, ci_hi = score_mc.improvement_ci
@@ -1572,7 +1565,9 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
             "mode": "multi_arm",
             "arms": arm_names,
             "tuning_session_path": str(cfg.tuning_session_path),
-            "bo_session_path": str(cfg.bo_session_path) if cfg.bo_session_path else None,
+            "bo_session_path": str(cfg.bo_session_path)
+            if cfg.bo_session_path
+            else None,
             "evaluation_log_path": str(result.log_path) if result.log_path else None,
             "benchmark": benchmark_name,
             "repetitions": cfg.repetitions,
@@ -1608,8 +1603,7 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
         },
         "knobs_by_arm": result.knobs_by_arm,
         "runs_by_arm": {
-            arm: [_run(r) for r in runs]
-            for arm, runs in result.runs_by_arm.items()
+            arm: [_run(r) for r in runs] for arm, runs in result.runs_by_arm.items()
         },
         "pairwise_statistics": pairwise_dict,
         "scoring_metadata": result.scoring_metadata,

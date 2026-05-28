@@ -70,7 +70,9 @@ def test_collect_system_metrics_needs_environment_delegation() -> None:
     assert metrics["cache_hit_ratio"] == pytest.approx(0.92)
 
 
-def test_pg_stat_database_snapshot_helper_retries_transient_connection_failure() -> None:
+def test_pg_stat_database_snapshot_helper_retries_transient_connection_failure() -> (
+    None
+):
     """The stats snapshot helper should retry once before giving up."""
     evaluator = _make_workload_orchestrator(worker_memory_budget_bytes=4 * 1024)
 
@@ -86,7 +88,7 @@ def test_pg_stat_database_snapshot_helper_retries_transient_connection_failure()
     )
     evaluator.disconnect = MagicMock()
 
-    snapshot_reader = getattr(evaluator, "_fetch_pg_stat_database_snapshot")
+    snapshot_reader = evaluator._fetch_pg_stat_database_snapshot
     snapshot = snapshot_reader(evaluator.config.db_config)
 
     assert snapshot == (12, 34, 56, 78, 9, 10, 11)

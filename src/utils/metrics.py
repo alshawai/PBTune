@@ -23,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, List
 from enum import Enum
-from logging import Logger
 import numpy as np
 
 
@@ -162,7 +161,7 @@ from src.utils.scoring.constants import (
     DEFAULT_SCORING_POLICY,
     DEFAULT_SCORING_POLICY_VERSION,
 )
-from src.utils.scoring.contracts import NormalizationState, ScoreBreakdown
+from src.utils.scoring.contracts import NormalizationState
 
 
 @dataclass
@@ -496,7 +495,6 @@ class MetricConfig:
             return True
 
         return False
-
 
 
 # Priorities: Low latency, High throughput

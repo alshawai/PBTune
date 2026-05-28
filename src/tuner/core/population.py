@@ -1283,9 +1283,7 @@ class Population:
 
         LOGGER.info(
             "➤ Finalized scores after %s",
-            "feature-weight refresh"
-            if weights_updated
-            else "expanding metric ranges",
+            "feature-weight refresh" if weights_updated else "expanding metric ranges",
         )
         return
 

@@ -347,7 +347,9 @@ def test_sysbench_parse_output_handles_missing_latency_p95() -> None:
     assert metrics.throughput == 100.00
 
 
-def test_sysbench_parse_output_derives_total_time_from_transactions_when_missing() -> None:
+def test_sysbench_parse_output_derives_total_time_from_transactions_when_missing() -> (
+    None
+):
     """Parser should derive total_time from transaction count and TPS when needed."""
     sysbench_output = """
     SQL statistics:

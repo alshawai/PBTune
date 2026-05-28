@@ -662,11 +662,13 @@ class PBTTuner:
             )
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
-            metrics, score, restart_occurred, _actual_db_config = self.orchestrator.evaluate_worker(
-                worker,
-                apply_config=True,
-                generation=self.current_generation,
-                barriers=barriers,
+            metrics, score, restart_occurred, _actual_db_config = (
+                self.orchestrator.evaluate_worker(
+                    worker,
+                    apply_config=True,
+                    generation=self.current_generation,
+                    barriers=barriers,
+                )
             )
 
             if restart_occurred and not self._restarted_this_generation:

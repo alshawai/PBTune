@@ -74,7 +74,9 @@ class CompositeScorer:
         )
         new_features = dict(features) if features is not None else self._features
         new_overrides = (
-            dict(weight_overrides) if weight_overrides is not None else self._weight_overrides
+            dict(weight_overrides)
+            if weight_overrides is not None
+            else self._weight_overrides
         )
 
         new_key = self._make_context_key(
@@ -300,7 +302,6 @@ class CompositeScorer:
             COLORS.reset,
         )
         self._logged_initial_weights = True
-
 
     def _compute_reliability_gate(
         self, metrics: PerformanceMetrics, logger: Logger
