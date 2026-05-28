@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -323,7 +324,9 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     assert log_table.call_count == 1
     args, kwargs = log_table.call_args
     assert len(args[1]) == 2
-    assert kwargs["title"] == "\nGeneration 7 Worker Metrics"
+    # The title may include ANSI color/glyph decorations; assert the
+    # essential substring is present instead of exact equality.
+    assert "Generation 7 Worker Metrics" in kwargs["title"]
     assert kwargs["best_worker_label"] == "Best Worker"
     assert kwargs["best_worker_metric"] is not None
     assert kwargs["best_worker_metric"]["score"] == 99.1234
@@ -348,6 +351,13 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     population.orchestrator.config.metric_config = metric_config
     population._ranges_calibrated = True
     population.current_generation = 5
+
+    # Provide a mock scoring engine so rescoring uses a deterministic final_score
+    mock_engine = MagicMock()
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: SimpleNamespace(
+        final_score=float(getattr(m, "throughput", 0.0) / 10.0)
+    )
+    population.orchestrator.scorer = mock_engine
 
     workers = []
     worker_points = [(240.0, 70.0, 0.12), (230.0, 75.0, 0.13)]

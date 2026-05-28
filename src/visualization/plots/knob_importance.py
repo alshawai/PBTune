@@ -171,9 +171,7 @@ def _manual_beeswarm(
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels(feature_names)
-    ax.set_ylim(
-        -0.5 * label_gap, y_positions[-1] + 0.5 * label_gap
-    )
+    ax.set_ylim(-0.5 * label_gap, y_positions[-1] + 0.5 * label_gap)
     ax.axvline(0.0, color="#6B7280", linestyle="--", linewidth=0.8)
     auto_grid(ax, axis="x")
 

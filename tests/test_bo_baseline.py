@@ -148,7 +148,8 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -197,7 +198,8 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -234,7 +236,8 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -535,7 +538,12 @@ class TestResultFormat:
             written["generation_history"][0]["worker_scores"][0]["score_breakdown"],
             dict,
         )
-        assert written["generation_history"][0]["worker_scores"][0]["score_breakdown"]["final_score"] == 0.5
+        assert (
+            written["generation_history"][0]["worker_scores"][0]["score_breakdown"][
+                "final_score"
+            ]
+            == 0.5
+        )
 
     def test_result_generation_history(self, tmp_path):
         """Test that generation history is properly formatted."""
@@ -669,7 +677,8 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -724,7 +733,8 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=2,
+            batched_bo=True,
+            resource_division=2,
             pbt_session=str(pbt_session),
         )
 
@@ -758,7 +768,8 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=None,
         )
 

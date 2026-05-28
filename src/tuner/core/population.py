@@ -534,10 +534,25 @@ class Population:
             COLORS.reset,
         )
 
-        LOGGER.info("Refining workload features at generation level...")
-        self._features_refined = bool(
-            self.orchestrator.refine_workload_features_from_generation(self.workers)  # type: ignore
-        )
+        healthy_workers = [
+            worker
+            for worker in self.workers
+            if worker.metrics is not None and worker.metrics.failure_type is None
+        ]
+        if not healthy_workers:
+            LOGGER.warning(
+                "Skipping workload feature refinement: %sno healthy workers%s",
+                COLORS.italic,
+                COLORS.reset,
+            )
+            self._features_refined = False
+        else:
+            LOGGER.info("Refining workload features at generation level...")
+            self._features_refined = bool(
+                self.orchestrator.refine_workload_features_from_generation(  # type: ignore
+                    self.workers
+                )
+            )
 
     @staticmethod
     def _config_change_ratio(
@@ -630,6 +645,7 @@ class Population:
             lhs_candidates = self.knob_space.sample_diverse_configs(
                 num_samples=candidate_pool_size,
                 seed=seed_base,
+                quiet=True,
             )
             min_change_ratio = max(0.0, min(1.0, self.config.resample_min_change_ratio))
 
@@ -831,11 +847,18 @@ class Population:
             "throughput_variance": (
                 f"{metrics.throughput_variance:.2f} {metrics.throughput_unit}"
             ),
-            "memory_utilization": f"{metrics.memory_utilization * 100.0:.2f}%",
+            "error_rate": f"{metrics.error_rate * 100.0:.2f}%",
+            "memory_pressure": f"{metrics.memory_pressure * 100.0:.2f}%",
+            "buffer_miss_rate": f"{metrics.buffer_miss_rate * 100.0:.2f}%",
+            "scan_efficiency": f"{metrics.scan_efficiency * 100.0:.1f}%",
+            "total_queries": metrics.total_queries,
+            "total_time": f"{metrics.total_time:.2f}s",
             "io_read_mb": f"{metrics.io_read_mb:.2f} MB",
             "io_write_mb": f"{metrics.io_write_mb:.2f} MB",
-            "scan_efficiency": f"{metrics.scan_efficiency * 100.0:.1f}%",
+            "rows_examined": metrics.rows_examined,
+            "rows_returned": metrics.rows_returned,
             "cache_hit_ratio": f"{metrics.cache_hit_ratio * 100.0:.1f}%",
+            "memory_utilization": f"{metrics.memory_utilization * 100.0:.2f}%",
         }
 
     def _build_worker_metric_payload(self, worker: Worker) -> dict[str, Any] | None:
@@ -875,21 +898,6 @@ class Population:
 
     def _log_generation_worker_metrics_table(self) -> None:
         """Render the finalized generation worker table for both sequential and parallel runs."""
-        metric_order = [
-            "score",
-            "latency_p95",
-            "latency_p99",
-            "latency_variance",
-            "tail_amplification",
-            "throughput",
-            "throughput_variance",
-            "memory_utilization",
-            "io_read_mb",
-            "io_write_mb",
-            "scan_efficiency",
-            "cache_hit_ratio",
-        ]
-
         worker_metric_payloads, worker_labels, best_worker_payload = (
             self._prepare_generation_worker_metrics_table_payloads()
         )
@@ -901,10 +909,12 @@ class Population:
             LOGGER,
             worker_metric_payloads,
             worker_labels=worker_labels,
-            metric_order=metric_order,
             best_worker_metric=best_worker_payload,
             best_worker_label="Best Worker",
-            title=f"\nGeneration {self.current_generation} Worker Metrics",
+            title=(
+                f"\n{COLORS.bold}🔷 Generation {self.current_generation} Worker Metrics 🔷"
+                f"{COLORS.reset}"
+            ),
         )
 
     def record_generation(self) -> GenerationResult:
@@ -1173,13 +1183,13 @@ class Population:
         4. Update historical best config if a current worker is genuinely better
         """
         scored_workers = [w for w in self.workers if w.metrics is not None]
-        best_current = max(scored_workers, key=lambda w: w.performance_score)
-
         if not scored_workers:
             LOGGER.warning(
                 " %sAll workers have malformed metrics.%s", COLORS.warning, COLORS.reset
             )
             return
+
+        best_current = max(scored_workers, key=lambda w: w.performance_score)
 
         LOGGER.debug(
             " Checking for saturation/drift to determine if range expansion is needed..."
@@ -1217,7 +1227,13 @@ class Population:
         if ranges_expanded:
             LOGGER.debug(" ➤ Saturation/drift detected: expanded normalizer ranges")
 
-        if not (ranges_expanded or self._features_refined):
+        weights_updated = self.orchestrator.maybe_update_feature_weights(
+            self.current_generation,
+            force=ranges_expanded,
+            log_every=5,
+        )
+
+        if not (ranges_expanded or weights_updated):
             self._determine_overall_best(best_current)
 
             LOGGER.debug(
@@ -1232,13 +1248,14 @@ class Population:
             COLORS.bold,
             COLORS.reset,
             ranges_expanded,
-            self._features_refined,
+            weights_updated,
         )
         significant_changes = 0
+        engine = self.orchestrator.scorer  # type: ignore
         for worker in self.workers:
             if worker.metrics is not None:
                 old_score = worker.performance_score
-                breakdown = metric_config.compute_score(
+                breakdown = engine.compute_breakdown(
                     worker.metrics, worker_logger=worker.logger
                 )
                 worker.score_breakdown = breakdown
@@ -1250,7 +1267,7 @@ class Population:
 
         if self.best_overall_metrics is not None:
             LOGGER.info(" Rescoring historical best configuration...")
-            self.best_overall_score_breakdown = metric_config.compute_score(
+            self.best_overall_score_breakdown = engine.compute_breakdown(
                 self.best_overall_metrics
             )
             self.best_overall_score = self.best_overall_score_breakdown.final_score
@@ -1261,17 +1278,12 @@ class Population:
             COLORS.reset,
         )
 
-        best_current = max(
-            (w for w in self.workers if w.metrics is not None),
-            key=lambda w: w.performance_score,
-        )
+        best_current = max(scored_workers, key=lambda w: w.performance_score)
         self._determine_overall_best(best_current)
 
         LOGGER.info(
             "➤ Finalized scores after %s",
-            "refining features"
-            if self._features_refined
-            else "expanding metric ranges",
+            "feature-weight refresh" if weights_updated else "expanding metric ranges",
         )
         return
 

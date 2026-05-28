@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.utils.metrics import MetricConfig, PerformanceMetrics
+from src.utils.scoring import create_scoring_engine
 
 
 def _metric(
@@ -38,7 +39,8 @@ def test_compute_score_respects_failure_gate() -> None:
     crashed = _metric(latency_p95=10, throughput=800)
     crashed.failure_type = "EXECUTION_CRASH"
 
-    score = config.compute_score(crashed).final_score
+    engine = create_scoring_engine(config)
+    score = engine.compute_breakdown(crashed).final_score
     assert score == pytest.approx(0.0)
 
 
@@ -69,8 +71,10 @@ def test_feature_driven_policy_responds_to_workload_features() -> None:
     }
     write_heavy.update_ranges(baseline)
 
-    read_score = read_heavy.compute_score(metrics).final_score
-    write_score = write_heavy.compute_score(metrics).final_score
+    read_engine = create_scoring_engine(read_heavy)
+    write_engine = create_scoring_engine(write_heavy)
+    read_score = read_engine.compute_breakdown(metrics).final_score
+    write_score = write_engine.compute_breakdown(metrics).final_score
 
     assert read_score > 0.0
     assert write_score > 0.0

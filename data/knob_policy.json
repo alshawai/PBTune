@@ -200,6 +200,10 @@
       "debug_only",
       "Debug/developer trace option; can generate noisy logs and perturb timing."
     ],
+    "track_counts": [
+      "debug_only",
+      "Disabling stats collection causes errors and prevents collection of important metrics"
+      ],
     "log_min_messages": [
       "benchmark_validity",
       "Low log-level settings (debug*) can flood logs and materially skew benchmark timing."
