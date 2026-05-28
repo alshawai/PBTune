@@ -11,6 +11,7 @@ import numpy as np
 
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
+from src.utils.scoring import create_scoring_engine
 from src.utils.rescoring import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 
@@ -110,7 +111,8 @@ def load_session(
             metric_config = create_metric_config(workload)
 
     # Compute new scores for all metrics using the config
-    new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
+    engine = create_scoring_engine(metric_config)
+    new_scores = [engine.compute_breakdown(m).final_score for m in all_metrics]
 
     # Initialize arrays
     generations = np.arange(1, n_gens + 1)

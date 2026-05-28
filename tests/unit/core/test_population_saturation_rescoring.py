@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
@@ -18,6 +18,15 @@ class _MetricConfigStub:
         self._expand = expand
         self.expand_calls = 0
         self.rescore_calls = 0
+        self._normalizer = None
+        self.scoring_policy = "fixed_v1"
+        self.workload_type = type('obj', (object,), {'value': 'oltp'})()
+        self.latency_metric = "p95"
+        self.workload_features = {}
+        self.weight_latency = 0.5
+        self.weight_throughput = 0.3
+        self.weight_memory = 0.05
+        self.weight_error = 0.15
 
     def expand_ranges_for_metrics(self, _metrics_list, expansion_factor=0.25):
         _ = expansion_factor
@@ -30,10 +39,6 @@ class _MetricConfigStub:
         self.rescore_calls += 1
         final_score = float(metrics.throughput / 10.0)
         return ScoreBreakdown(final_score=final_score)
-
-    def compute_score_value(self, metrics: PerformanceMetrics) -> float:
-        breakdown = self.compute_score(metrics)
-        return breakdown.final_score
 
 
 def _make_worker(worker_id: int, throughput: float, score: float) -> Worker:
@@ -66,7 +71,14 @@ def test_finalize_scores_grounds_best_to_current() -> None:
     )
     population.best_overall_score = 50.0
 
-    population._finalize_scores()
+    # Mock create_scoring_engine to return a mock engine that uses the stub's compute_score
+    mock_engine = MagicMock()
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: metric_config.compute_score(
+        m, worker_logger=worker_logger
+    )
+
+    with patch("src.tuner.core.population.create_scoring_engine", return_value=mock_engine):
+        population._finalize_scores()
 
     assert metric_config.expand_calls == 1
     assert worker_a.performance_score == 10.0
@@ -97,7 +109,14 @@ def test_finalize_scores_overwrites_best_if_worse() -> None:
     )
     population.best_overall_score = 50.0
 
-    population._finalize_scores()
+    # Mock create_scoring_engine to return a mock engine that uses the stub's compute_score
+    mock_engine = MagicMock()
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: metric_config.compute_score(
+        m, worker_logger=worker_logger
+    )
+
+    with patch("src.tuner.core.population.create_scoring_engine", return_value=mock_engine):
+        population._finalize_scores()
 
     assert metric_config.expand_calls == 1
     assert worker_a.performance_score == 10.0
@@ -125,7 +144,14 @@ def test_finalize_scores_always_rescores_workers() -> None:
     )
     population.best_overall_score = 30.0
 
-    population._finalize_scores()
+    # Mock create_scoring_engine to return a mock engine that uses the stub's compute_score
+    mock_engine = MagicMock()
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: metric_config.compute_score(
+        m, worker_logger=worker_logger
+    )
+
+    with patch("src.tuner.core.population.create_scoring_engine", return_value=mock_engine):
+        population._finalize_scores()
 
     assert metric_config.expand_calls == 1
     assert worker.performance_score == 10.0
