@@ -286,6 +286,10 @@ class DatabaseEnvironment(ABC):
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
 
     @abstractmethod
+    def clone_instances(self, source_worker_id: int, target_worker_ids: List[int]) -> bool:
+        """Clone the physical database state from a source worker to multiple target workers."""
+
+    @abstractmethod
     def rebuild_worker_instance(self, worker_id: int) -> bool:
         """Rebuild a worker instance from scratch, in cases like failed snapshot restoration."""
 
