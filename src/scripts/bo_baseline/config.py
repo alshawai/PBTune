@@ -63,9 +63,8 @@ class BOConfig:
     enable_snapshots: bool = False
     snapshot_restore_interval: int = 1
 
-    # Parallel BO configuration
+    # Worker configuration (strictly sequential — single worker)
     max_workers: int = 1
-    batched_bo: bool = False
     pbt_worker_resources: Optional[Dict[str, Any]] = None
     resource_division: int = 1
 
@@ -293,9 +292,6 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
-            batched_bo=args.batched_bo
-            if hasattr(args, "batched_bo") and args.batched_bo is not None
-            else base_config.batched_bo,
             resource_division=args.resource_division
             if hasattr(args, "resource_division") and args.resource_division is not None
             else base_config.resource_division,
@@ -325,7 +321,7 @@ class BOConfig:
                     f"Falling back to default or CLI-provided settings."
                 )
 
-        config.max_workers = config.resource_division if config.batched_bo else 1
+        config.max_workers = 1  # Always sequential
 
         return config
 

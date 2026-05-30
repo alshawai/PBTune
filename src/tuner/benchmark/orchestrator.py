@@ -196,6 +196,17 @@ class WorkloadOrchestrator:
 
         return self._scoring_engine
 
+    def reload_scoring_engine(self) -> None:
+        """
+        Invalidate the cached scoring engine and rebuild it.
+        This is typically called after the metric configuration ranges
+        have been recalibrated (e.g. after a pilot phase).
+        """
+        with self._scoring_engine_lock:
+            self._scoring_engine = None
+        self._get_scoring_engine()
+        LOGGER.info("Rebuilt scoring engine with calibrated normalizer")
+
     @property
     def scorer(self):
         return self._get_scoring_engine()

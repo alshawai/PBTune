@@ -143,6 +143,7 @@ def write_bo_results(
             ).isoformat(),
             "wall_clock_seconds": iteration.get("wall_clock_seconds", 0.0),
             "generation_elapsed_seconds": bo_overhead,
+            "phase": iteration.get("phase", "bo"),
             "worker_scores": [
                 {
                     "worker_id": 0,

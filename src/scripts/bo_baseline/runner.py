@@ -1,16 +1,18 @@
 """Main Bayesian Optimization baseline runner orchestrator."""
 
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from ConfigSpace import Configuration
 from smac import BlackBoxFacade, HyperparameterOptimizationFacade
 from smac.initial_design import SobolInitialDesign
 from smac.random_design import ProbabilityRandomDesign
 from smac.scenario import Scenario
 from smac.runhistory.dataclasses import TrialInfo, TrialValue
+from smac.runhistory.enumerations import StatusType
 
 from src.tuner.config import get_knob_space
 from src.tuner.core.worker import Worker
@@ -33,14 +35,34 @@ from src.config.data_root import resolve_data_root
 from src.database.connection import get_connection
 
 from src.scripts.bo_baseline.config import BOConfig
-from src.scripts.bo_baseline.search_space import build_configspace
-from src.scripts.bo_baseline.objective import create_objective, evaluate_config
+from src.scripts.bo_baseline.search_space import (
+    build_configspace,
+    configspace_to_knobs,
+    knobs_to_configspace,
+)
+from src.scripts.bo_baseline.objective import evaluate_config
 from src.scripts.bo_baseline.result_writer import (
     write_bo_results,
     resolve_bo_output_root,
 )
 
 LOGGER = get_logger("Runner")
+
+
+@dataclass
+class PilotResult:
+    """Container for an un-scored pilot observation.
+
+    Stores both the raw SMAC suggestion and the resolved (DB-quantized)
+    configuration so that Phase 3 can inject ground-truth values into the
+    surrogate model after Phase 2 calibration.
+    """
+
+    raw_config: Configuration       # raw suggestion from smac.ask()
+    resolved_config: Configuration  # actual executed params (valid Configuration)
+    raw_metrics: dict               # PerformanceMetrics.to_dict() output
+    eval_time: float                # wall-clock seconds
+    status: StatusType = field(default=StatusType.SUCCESS)
 
 
 class BOBaselineRunner:
@@ -81,19 +103,22 @@ class BOBaselineRunner:
                 disk_type=str(config.pbt_worker_resources.get("disk_type", "unknown")),
             )
             self.logger.info(
-                "Using PBT-derived per-worker resources: "
-                f"{self.worker_resources.cpu_cores} cores, "
-                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM"
+                "Using PBT-derived per-worker resources: %d cores, %.1f GB RAM",
+                self.worker_resources.cpu_cores,
+                self.worker_resources.ram_bytes / (1024**3),
             )
+            self.logger.debug("PBT-derived worker resources object: %s", self.worker_resources)
         else:
             self.worker_resources = detect_worker_resources(
                 max_parallel_workers=config.resource_division, data_path=self.data_root
             )
             self.logger.info(
-                f"Dividing host resources by {config.resource_division}: "
-                f"{self.worker_resources.cpu_cores} cores, "
-                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per instance"
+                "Dividing host resources by %s: %d cores, %.1f GB RAM per instance",
+                config.resource_division,
+                self.worker_resources.cpu_cores,
+                self.worker_resources.ram_bytes / (1024**3),
             )
+            self.logger.debug("Host-divided worker resources object: %s", self.worker_resources)
 
         # Load knob space
         self.knob_space = get_knob_space(config.knob_tier)
@@ -108,7 +133,7 @@ class BOBaselineRunner:
             workload_type.value, scoring_policy=config.scoring_policy
         )
 
-        self.logger.info(f"BO Baseline Runner initialized for tier: {config.knob_tier}")
+        self.logger.info("BO Baseline Runner initialized for tier: %s", config.knob_tier)
 
     def _create_workload_executor(self):
         """Create appropriate workload executor based on benchmark type."""
@@ -143,14 +168,313 @@ class BOBaselineRunner:
             cursor.execute("SELECT name FROM pg_settings")
             supported_knobs = {str(row[0]) for row in cursor.fetchall()}
             return supported_knobs, server_version
-        except Exception as exc:
-            self.logger.warning(f"Failed to inspect runtime pg_settings: {exc}")
-            return set(self.knob_space.knobs.keys()), "unknown"
-        finally:
-            if cursor is not None:
-                cursor.close()
-            if conn is not None:
-                conn.close()
+        except Exception as e:
+            self.logger.error("BO setup/execution failed: %s", e, exc_info=True)
+            raise
+
+    def _run_sequential_optimization(
+        self,
+        facade,
+        orchestrator: WorkloadOrchestrator,
+        worker: Worker,
+        iteration_log: list,
+        pilot_size: int,
+        sobol_configs: list,
+    ) -> None:
+        """
+        Run sequential BO optimization using a four-phase bootstrapping architecture.
+
+        Phase 1 — Pilot Collection:
+            Iterate the pre-generated Sobol configs (passed in as ``sobol_configs``).
+            Evaluate each to get raw metrics but do NOT score them and do NOT touch
+            the facade.  Accumulate ``PilotResult`` objects.
+
+            Why we do NOT use ``facade.ask()`` here: calling ``ask()`` without a
+            matching ``tell()`` leaves the intensifier with ghost "running" trials.
+            With ``n_workers=1``, SMAC will refuse further asks until those trials
+            are closed, which would block Phase 4 entirely.
+
+        Phase 2 — Calibration:
+            Fit normalization ranges from all successful pilot observations exactly
+            once. Reload the scoring engine so Phases 3 and 4 use frozen ranges.
+
+        Phase 3 — Warm-Start Injection:
+            Re-score each successful pilot result with the frozen engine. Inject
+            via ``facade.tell()`` using the *resolved* config (unsolicited
+            observations — no prior ``ask()`` needed).  This primes the surrogate.
+
+        Phase 4 — BO Loop:
+            Standard ``facade.ask()`` / ``facade.tell()`` for the remaining
+            iterations.  The facade's initial design is empty (``n_configs=0``),
+            so the first ``ask()`` immediately enters BO (acquisition) mode.
+            ``update_ranges()`` is NEVER called again.
+
+        Parameters
+        ----------
+        facade : BlackBoxFacade or HyperparameterOptimizationFacade
+            SMAC facade in ask-tell mode (created with empty initial design)
+        orchestrator : WorkloadOrchestrator
+            Workload orchestrator
+        worker : Worker
+            Worker instance (single — strictly sequential)
+        iteration_log : list
+            Mutable iteration log shared with the caller
+        pilot_size : int
+            Number of pilot configurations (== len(sobol_configs))
+        sobol_configs : list[Configuration]
+            Pre-generated Sobol configurations from
+            ``SobolInitialDesign.select_configurations()``
+        """
+        from src.utils.metrics import PerformanceMetrics
+
+        previous_config = None
+
+        # ── Phase 1: Pilot Collection ─────────────────────────────────────────
+        self.logger.info(
+            "=== Phase 1: Pilot Collection (%d iterations) ===", pilot_size
+        )
+        pilot_results: list[PilotResult] = []
+
+        # Iterate the pre-generated Sobol configs — facade is NOT touched here.
+        for pilot_idx, sobol_config in enumerate(sobol_configs):
+            if (
+                self.config.enable_snapshots
+                and pilot_idx > 0
+                and pilot_idx % self.config.snapshot_restore_interval == 0
+            ):
+                self._restore_snapshot_safe(worker)
+
+            try:
+                (
+                    _cost,       # None — scoring deferred
+                    knob_config,
+                    metrics,
+                    _score,      # None — scoring deferred
+                    _breakdown,  # None — scoring deferred
+                    _restarted,
+                    wall_time,
+                ) = evaluate_config(
+                    sobol_config,
+                    worker,
+                    orchestrator,
+                    self.knob_space,
+                    previous_config,
+                    skip_scoring=True,
+                )
+                previous_config = knob_config
+
+                if metrics is not None:
+                    resolved_cs_config = knobs_to_configspace(
+                        knob_config, self.knob_space, facade.scenario.configspace
+                    )
+                    status = StatusType.SUCCESS
+                else:
+                    resolved_cs_config = sobol_config  # fallback
+                    status = StatusType.CRASHED
+
+                pilot_results.append(PilotResult(
+                    raw_config=sobol_config,
+                    resolved_config=resolved_cs_config,
+                    raw_metrics=metrics.to_dict() if metrics is not None else {},
+                    eval_time=wall_time,
+                    status=status,
+                ))
+
+            except Exception as exc:
+                self.logger.error(
+                    "Pilot iteration %d failed: %s", pilot_idx, exc, exc_info=True
+                )
+                pilot_results.append(PilotResult(
+                    raw_config=sobol_config,
+                    resolved_config=sobol_config,
+                    raw_metrics={},
+                    eval_time=0.0,
+                    status=StatusType.CRASHED,
+                ))
+
+            self.logger.info(
+                "Pilot %d/%d: status=%s, wall_time=%.2fs",
+                pilot_idx + 1,
+                pilot_size,
+                pilot_results[-1].status.name,
+                pilot_results[-1].eval_time,
+            )
+        # facade is untouched — no ghost pending trials.
+
+        # ── Phase 2: Calibration ──────────────────────────────────────────────
+        self.logger.info("=== Phase 2: Calibration ===")
+
+        successful_pilots = [
+            r for r in pilot_results
+            if r.status == StatusType.SUCCESS and r.raw_metrics
+        ]
+
+        if len(successful_pilots) == 0:
+            raise RuntimeError(
+                "Zero pilot evaluations succeeded. Cannot calibrate normalization ranges. "
+                "Check database connectivity and benchmark configuration."
+            )
+        elif len(successful_pilots) < 3:
+            self.logger.warning(
+                "Only %d pilot evaluation(s) succeeded (minimum 3 recommended for reliable normalization). "
+                "Continuing with degraded calibration.", len(successful_pilots)
+            )
+
+        all_metrics = [PerformanceMetrics(**r.raw_metrics) for r in successful_pilots]
+        self.metric_config.update_ranges(all_metrics)
+        self.logger.info(
+            "Normalization ranges frozen from %d pilot observations", len(all_metrics)
+        )
+        try:
+            orchestrator.reload_scoring_engine()
+        except Exception:
+            self.logger.error(
+                "Failed to rebuild scoring engine after calibration", exc_info=True
+            )
+            raise
+
+        # ── Phase 3: Warm-Start Injection ─────────────────────────────────────
+        self.logger.info(
+            "=== Phase 3: Warm-Start Injection (%d observations) ===",
+            len(successful_pilots),
+        )
+        engine = orchestrator._get_scoring_engine()
+
+        for idx, result in enumerate(pilot_results):
+            if result.status != StatusType.SUCCESS or not result.raw_metrics:
+                self.logger.debug("Skipping failed pilot %d during injection", idx)
+                continue
+
+            pilot_metrics = PerformanceMetrics(**result.raw_metrics)
+            score_breakdown = engine.compute_breakdown(
+                pilot_metrics, worker_logger=worker.logger
+            )
+            score = score_breakdown.final_score
+            cost = max(0.0, min(100.0, 100.0 - score))
+
+            facade.tell(
+                TrialInfo(config=result.resolved_config, seed=self.config.random_seed),
+                TrialValue(cost=cost, time=result.eval_time, status=result.status),
+            )
+            self.logger.debug(
+                "Injected pilot %d: score=%.2f, cost=%.2f", idx, score, cost
+            )
+
+            iteration_log.append({
+                "iteration": idx,
+                "config": configspace_to_knobs(
+                    result.resolved_config, self.knob_space
+                ),
+                "metrics": result.raw_metrics,
+                "score": score,
+                "score_breakdown": score_breakdown,
+                "cost": cost,
+                "wall_clock_seconds": result.eval_time,
+                "restarted": False,
+                "timestamp": time.time(),
+                "phase": "pilot",
+            })
+
+        incumbents = facade.intensifier.get_incumbents()
+        assert len(incumbents) > 0, (
+            "No incumbent found after pilot injection. "
+            "Verify that StatusType and Configuration identity are correct."
+        )
+        self.logger.info(
+            "Phase 3 complete: %d incumbent(s), %d observations injected",
+            len(incumbents),
+            len(successful_pilots),
+        )
+
+        # ── Phase 4: BO Optimization Loop ─────────────────────────────────────
+        remaining = self.config.n_iterations - pilot_size
+        self.logger.info("=== Phase 4: BO Loop (%d iterations) ===", remaining)
+        # update_ranges() is NEVER called again — scoring engine stays frozen.
+
+        for bo_idx in range(remaining):
+            iteration_count = pilot_size + bo_idx
+
+            if (
+                self.config.enable_snapshots
+                and iteration_count > 0
+                and iteration_count % self.config.snapshot_restore_interval == 0
+            ):
+                self._restore_snapshot_safe(worker)
+
+            trial_info = facade.ask()
+
+            try:
+                (
+                    cost,
+                    knob_config,
+                    metrics,
+                    score,
+                    score_breakdown,
+                    restarted,
+                    wall_time,
+                ) = evaluate_config(
+                    trial_info.config,
+                    worker,
+                    orchestrator,
+                    self.knob_space,
+                    previous_config,
+                )
+                previous_config = knob_config
+            except Exception as exc:
+                self.logger.error("Error evaluating config: %s", exc, exc_info=True)
+                cost, wall_time, knob_config, metrics, score, score_breakdown, restarted = (
+                    100.0, 0.0, {}, None, 0.0, None, False
+                )
+
+            facade.tell(
+                trial_info,
+                TrialValue(cost=cost, time=wall_time, status=StatusType.SUCCESS),
+            )
+
+            # Inject repaired (DB-quantized) config via facade.tell() if it differs
+            original_knob_config = configspace_to_knobs(
+                trial_info.config, self.knob_space
+            )
+            if knob_config != original_knob_config:
+                try:
+                    repaired_cs_config = knobs_to_configspace(
+                        knob_config, self.knob_space, facade.scenario.configspace
+                    )
+                    facade.tell(
+                        TrialInfo(
+                            config=repaired_cs_config, seed=self.config.random_seed
+                        ),
+                        TrialValue(
+                            cost=cost, time=wall_time, status=StatusType.SUCCESS
+                        ),
+                    )
+                    self.logger.debug(
+                        "Injected repaired config via facade.tell() (quantized values differ)"
+                    )
+                except Exception as exc:
+                    self.logger.warning("Failed to inject repaired config: %s", exc)
+
+            iteration_log.append({
+                "iteration": iteration_count,
+                "config": knob_config,
+                "metrics": metrics.to_dict() if metrics is not None else {},
+                "score": score if score is not None else 0.0,
+                "score_breakdown": score_breakdown,
+                "cost": cost,
+                "wall_clock_seconds": wall_time,
+                "restarted": restarted,
+                "timestamp": time.time(),
+                "phase": "bo",
+            })
+
+            self.logger.info(
+                "Iteration %d/%d [BO]: score=%.2f, cost=%.2f, wall_time=%.2fs",
+                iteration_count + 1,
+                self.config.n_iterations,
+                score or 0.0,
+                cost,
+                wall_time,
+            )
 
     def _prune_unsupported_runtime_knobs(self) -> None:
         """Prune knobs unavailable on runtime PostgreSQL."""
@@ -160,8 +484,9 @@ class BOBaselineRunner:
 
         if not unsupported_knobs:
             self.logger.info(
-                f"✓ Runtime knob compatibility check passed against PostgreSQL {server_version} "
-                f"({len(configured_knobs)} knobs)"
+                "✓ Runtime knob compatibility check passed against PostgreSQL %s (%d knobs)",
+                server_version,
+                len(configured_knobs),
             )
             return
 
@@ -171,8 +496,11 @@ class BOBaselineRunner:
         preview = unsupported_knobs[:20]
         suffix = " ..." if len(unsupported_knobs) > len(preview) else ""
         self.logger.warning(
-            f"Pruned {len(unsupported_knobs)} unsupported knobs for PostgreSQL {server_version}: "
-            f"{', '.join(preview)}{suffix}"
+            "Pruned %d unsupported knobs for PostgreSQL %s: %s%s",
+            len(unsupported_knobs),
+            server_version,
+            ", ".join(preview),
+            suffix,
         )
 
         if len(self.knob_space) == 0:
@@ -181,7 +509,7 @@ class BOBaselineRunner:
             )
 
         self.logger.info(
-            f"✓ Continuing with {len(self.knob_space)} runtime-compatible knobs"
+            "✓ Continuing with %d runtime-compatible knobs", len(self.knob_space)
         )
 
     def _apply_pbt_knob_filter(self) -> None:
@@ -240,7 +568,7 @@ class BOBaselineRunner:
 
     def run(self) -> Dict[str, Any]:
         """
-        Run Bayesian Optimization tuning with parallel evaluation.
+        Run Bayesian Optimization tuning (strictly sequential).
 
         Returns
         -------
@@ -255,6 +583,7 @@ class BOBaselineRunner:
             # Create workload executor
             self.logger.info("Creating workload executor...")
             workload_executor = self._create_workload_executor()
+            self.logger.debug("Workload executor initialized: %s", type(workload_executor).__name__)
 
             # Create environment with N instances
             self.logger.info("Setting up database environment...")
@@ -273,10 +602,11 @@ class BOBaselineRunner:
                 image_name=self.config.docker_image,
                 force_recreate_baseline=self.config.force_recreate_baseline,
             )
+            self.logger.debug("Database environment created: %s", type(self.env).__name__)
 
-            # Setup N instances
-            num_instances = self.config.max_workers
-            self.logger.info(f"Setting up {num_instances} PostgreSQL instance(s)...")
+            # Single worker bound to the single PostgreSQL instance
+            num_instances = 1
+            self.logger.info("Setting up 1 PostgreSQL instance...")
             self.env.setup_instances(num_workers=num_instances)
 
             # Prune unsupported knobs
@@ -297,19 +627,18 @@ class BOBaselineRunner:
             orchestrator = WorkloadOrchestrator(
                 orchestrator_config, workload_executor, self.env
             )
+            self.logger.debug("Orchestrator configuration: %s", orchestrator_config)
 
-            # Create N workers, each bound to its own instance
-            workers = []
-            for i in range(num_instances):
-                w = Worker(worker_id=i, knob_space=self.knob_space)
-                w.db_config = self.env.get_db_config(i)
-                workers.append(w)
+            # Single worker
+            worker = Worker(worker_id=0, knob_space=self.knob_space)
+            worker.db_config = self.env.get_db_config(0)
 
             # Build ConfigSpace
             self.logger.info("Building ConfigSpace...")
             configspace = build_configspace(
                 self.knob_space, seed=self.config.random_seed
             )
+            self.logger.debug("ConfigSpace initialized with %d dimensions", len(configspace.get_hyperparameters()))
 
             # Create iteration log
             iteration_log: list = []
@@ -319,26 +648,45 @@ class BOBaselineRunner:
                 self.config.range_update_interval, self.config.n_iterations
             )
 
-            # For sequential mode (max_workers=1), use the original objective closure
-            # For parallel mode (max_workers > 1), we'll use ask-tell
-            if self.config.max_workers == 1:
-                objective = create_objective(
-                    orchestrator=orchestrator,
-                    worker=workers[0],
-                    knob_space=self.knob_space,
-                    metric_config=self.metric_config,
-                    iteration_log=iteration_log,
-                    pilot_phase_size=pilot_size,
-                    env=self.env,
-                    enable_snapshots=self.config.enable_snapshots,
-                    snapshot_restore_interval=self.config.snapshot_restore_interval,
-                )
-            else:
-                objective = None
-
-            # Create SMAC scenario with n_workers=1 (we handle parallelism manually)
+            # Pre-generate Sobol configs BEFORE creating the facade.
+            #
+            # Why: calling facade.ask() in Phase 1 (without a matching tell()) leaves
+            # SMAC's intensifier with ghost "running" trials.  With n_workers=1, SMAC
+            # refuses to issue new asks until those trials are closed, which would block
+            # Phase 4 entirely.  Generating configs directly from SobolInitialDesign
+            # bypasses the ask-tell loop so the facade stays clean until Phase 3.
             self.logger.info(
-                f"Creating SMAC scenario with {self.config.n_iterations} iterations..."
+                "Pre-generating %d Sobol pilot configurations...", pilot_size
+            )
+            # Temporary scenario used only for Sobol generation (same seed/space).
+            _sobol_scenario = Scenario(
+                configspace=configspace,
+                n_trials=pilot_size,
+                seed=self.config.random_seed,
+                deterministic=False,
+                n_workers=1,
+                output_directory=self._build_smac_output_root() / "_sobol_gen",
+            )
+            _sobol_design = SobolInitialDesign(
+                scenario=_sobol_scenario,
+                n_configs=pilot_size,
+                max_ratio=1.0,  # Prevent SMAC from limiting pilot to 25% of n_trials
+            )
+            sobol_configs = _sobol_design.select_configurations()
+            self.logger.info(
+                "Generated %d Sobol configs for pilot phase", len(sobol_configs)
+            )
+
+            # Since we use ask-tell loops, provide a dummy objective to satisfy
+            # the Facade constructor (it should never be called directly).
+            def objective(config, seed=0):
+                raise NotImplementedError(
+                    "Objective should not be called directly in ask-tell mode"
+                )
+
+            # Create SMAC scenario (full budget; n_trials covers pilot + BO)
+            self.logger.info(
+                "Creating SMAC scenario with %d iterations...", self.config.n_iterations
             )
             scenario = Scenario(
                 configspace=configspace,
@@ -352,30 +700,32 @@ class BOBaselineRunner:
                 ),
             )
 
-            # Sobol initial design
-            initial_design = SobolInitialDesign(
-                scenario=scenario,
-                n_configs=pilot_size,
-            )
+            # The facade is created with an EMPTY initial design (n_configs=0).
+            # The pilot observations are injected via facade.tell() in Phase 3,
+            # which primes the surrogate.  Phase 4's first ask() therefore enters
+            # BO (acquisition) mode immediately — no duplicate Sobol suggestions.
+            empty_design = SobolInitialDesign(scenario=scenario, n_configs=0)
 
             # Select facade based on surrogate arg
             num_knobs = len(self.knob_space.knobs)
             if self.config.bo_surrogate.lower() == "gp":
                 self.logger.info(
-                    f"Using BlackBoxFacade (GP) for {num_knobs} knobs, "
-                    f"pilot_size={pilot_size}"
+                    "Using BlackBoxFacade (GP) for %d knobs, pilot_size=%d",
+                    num_knobs,
+                    pilot_size,
                 )
                 facade = BlackBoxFacade(
                     scenario,
                     objective,
-                    initial_design=initial_design,
+                    initial_design=empty_design,
                     logging_level=False,
                 )
                 bo_surrogate = "gp"
             else:
                 self.logger.info(
-                    f"Using HyperparameterOptimizationFacade (RF) for {num_knobs} knobs, "
-                    f"pilot_size={pilot_size}"
+                    "Using HyperparameterOptimizationFacade (RF) for %d knobs, pilot_size=%d",
+                    num_knobs,
+                    pilot_size,
                 )
                 random_design = ProbabilityRandomDesign(
                     probability=0.2, seed=self.config.random_seed
@@ -383,7 +733,7 @@ class BOBaselineRunner:
                 facade = HyperparameterOptimizationFacade(
                     scenario,
                     objective,
-                    initial_design=initial_design,
+                    initial_design=empty_design,
                     random_design=random_design,
                     logging_level=False,
                 )
@@ -392,14 +742,9 @@ class BOBaselineRunner:
             # Run optimization
             self.logger.info("Starting Bayesian Optimization...")
             try:
-                if self.config.max_workers == 1:
-                    # Sequential mode: use standard facade.optimize()
-                    facade.optimize()
-                else:
-                    # Parallel mode: ask-tell loop with ThreadPoolExecutor
-                    self._run_parallel_optimization(
-                        facade, orchestrator, workers, iteration_log, pilot_size
-                    )
+                self._run_sequential_optimization(
+                    facade, orchestrator, worker, iteration_log, pilot_size, sobol_configs
+                )
             except KeyboardInterrupt:
                 self.logger.warning("Optimization interrupted by user")
 
@@ -419,9 +764,9 @@ class BOBaselineRunner:
                 bo_surrogate=bo_surrogate,
             )
 
-            self.logger.info(f"BO tuning completed in {total_time:.2f} seconds")
+            self.logger.info("BO tuning completed in %.2f seconds", total_time)
             self.logger.info(
-                f"Best score: {results['best_configuration']['score']:.4f}"
+                "Best score: %.4f", results["best_configuration"]["score"]
             )
 
             return results
@@ -433,169 +778,23 @@ class BOBaselineRunner:
                 try:
                     self.env.cleanup()
                 except Exception as e:
-                    self.logger.warning(f"Error during cleanup: {e}")
+                    self.logger.warning("Error during cleanup: %s", e)
 
-    def _run_parallel_optimization(
-        self,
-        facade,
-        orchestrator: WorkloadOrchestrator,
-        workers: list,
-        iteration_log: list,
-        pilot_size: int,
-    ) -> None:
-        """
-        Run parallel BO optimization using ask-tell + ThreadPoolExecutor.
-
-        Parameters
-        ----------
-        facade : BlackBoxFacade or HyperparameterOptimizationFacade
-            SMAC facade in ask-tell mode
-        orchestrator : WorkloadOrchestrator
-            Workload orchestrator
-        workers : list
-            List of Worker instances
-        iteration_log : list
-            Mutable iteration log
-        pilot_size : int
-            Pilot phase size for normalization freezing
-        """
-        n_workers = len(workers)
-        iteration_count = 0
-        previous_configs: List[Optional[Dict[str, Any]]] = [None] * n_workers
-        ranges_frozen = False
-
-        while iteration_count < self.config.n_iterations:
-            batch_size = min(n_workers, self.config.n_iterations - iteration_count)
-
-            # Handle snapshot restoration before evaluating batch
-            if (
-                self.config.enable_snapshots
-                and iteration_count > 0
-                and iteration_count % self.config.snapshot_restore_interval == 0
-            ):
-                self.logger.info(
-                    "Restoring database snapshots for iteration %d (interval: %d)",
-                    iteration_count,
-                    self.config.snapshot_restore_interval,
+    def _restore_snapshot_safe(self, worker: Worker) -> None:
+        """Attempt snapshot restoration with error handling."""
+        self.logger.info(
+            "Restoring database snapshot for worker %d...", worker.worker_id
+        )
+        try:
+            restored = self.env.restore_snapshot(worker.worker_id)
+            if not restored:
+                self.logger.error(
+                    "Snapshot restore failed for worker %d", worker.worker_id
                 )
-                try:
-                    failed_workers = []
-                    for w in workers:
-                        restored = self.env.restore_snapshot(w.worker_id)
-                        if not restored:
-                            self.logger.error(
-                                "Snapshot restore failed for worker %d", w.worker_id
-                            )
-                            failed_workers.append(w.worker_id)
-                    if failed_workers:
-                        self.logger.error(
-                            "Snapshot restore failed for workers: %s", failed_workers
-                        )
-                    else:
-                        self.logger.info("✓ Database snapshots restored successfully")
-                except Exception as e:
-                    self.logger.error(
-                        "Failed to restore databases from snapshots: %s", e
-                    )
-
-            # Ask for batch of configs
-            trial_infos = [facade.ask() for _ in range(batch_size)]
-
-            # Evaluate batch in parallel
-            def evaluate_trial(worker_idx: int, trial_info: TrialInfo):
-                worker = workers[worker_idx]
-                try:
-                    (
-                        cost,
-                        knob_config,
-                        metrics,
-                        score,
-                        score_breakdown,
-                        restarted,
-                        wall_time,
-                    ) = evaluate_config(
-                        trial_info.config,
-                        worker,
-                        orchestrator,
-                        self.knob_space,
-                        previous_configs[worker_idx],
-                    )
-                    previous_configs[worker_idx] = knob_config
-
-                    return (
-                        trial_info,
-                        cost,
-                        wall_time,
-                        knob_config,
-                        metrics,
-                        score,
-                        score_breakdown,
-                        restarted,
-                    )
-                except Exception as e:
-                    self.logger.error(
-                        f"Error evaluating config on worker {worker_idx}: {e}",
-                        exc_info=True,
-                    )
-                    return trial_info, 100.0, 0.0, {}, None, 0.0, None, False
-
-            with ThreadPoolExecutor(max_workers=batch_size) as executor:
-                futures = {
-                    executor.submit(evaluate_trial, i, info): i
-                    for i, info in enumerate(trial_infos)
-                }
-
-                for future in as_completed(futures):
-                    (
-                        trial_info,
-                        cost,
-                        wall_time,
-                        knob_config,
-                        metrics,
-                        score,
-                        score_breakdown,
-                        restarted,
-                    ) = future.result()
-
-                    # Tell SMAC the result
-                    facade.tell(
-                        trial_info,
-                        TrialValue(cost=cost, time=wall_time),
-                    )
-
-                    # Log iteration
-                    iteration_entry = {
-                        "iteration": iteration_count,
-                        "config": knob_config,
-                        "metrics": metrics.to_dict() if metrics is not None else {},
-                        "score": score if score is not None else 0.0,
-                        "score_breakdown": score_breakdown,
-                        "cost": cost,
-                        "wall_clock_seconds": wall_time,
-                        "restarted": restarted,
-                        "timestamp": time.time(),
-                    }
-                    iteration_log.append(iteration_entry)
-
-                    iteration_count += 1
-
-            # Pilot+Freeze: calibrate ranges exactly once after pilot phase
-            if not ranges_frozen and iteration_count >= pilot_size:
-                from src.utils.metrics import PerformanceMetrics
-
-                all_metrics = [
-                    PerformanceMetrics(**entry["metrics"])
-                    for entry in iteration_log
-                    if entry["metrics"]
-                ]
-                if all_metrics:
-                    self.metric_config.update_ranges(all_metrics)
-                    self.logger.info(
-                        "Normalization ranges frozen after %d pilot iterations",
-                        iteration_count,
-                    )
-                ranges_frozen = True
-
+            else:
+                self.logger.info("✓ Database snapshot restored successfully")
+        except Exception as exc:
+            self.logger.error("Failed to restore database from snapshot: %s", exc)
 
 def main():
     """CLI entry point."""
@@ -787,11 +986,6 @@ def main():
             "Pilot phase size: number of Sobol initial-design iterations before "
             "freezing normalization ranges (default: preset value)"
         ),
-    )
-    parser.add_argument(
-        "--batched-bo",
-        action="store_true",
-        help="Run Bayesian Optimization in parallel using ask-tell mode. If omitted, runs sequentially.",
     )
     parser.add_argument(
         "--resource-division",

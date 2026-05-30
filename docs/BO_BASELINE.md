@@ -60,75 +60,23 @@ Both facades use:
 - `deterministic=False` — database benchmarks have inherent measurement variance; this forces SMAC to re-evaluate incumbents and prevents overconfidence.
 - `SobolInitialDesign` — quasi-random initial points for uniform pilot-phase coverage of the search space.
 
-### Pilot + Freeze Normalization
+### Four-Phase Bootstrapping Architecture
 
-The scoring function (`feature_driven_v2`) requires normalization ranges (e.g., max TPS, min latency). Dynamically updating these ranges mid-run corrupts the surrogate model's training signal because historical cost values become stale.
+The runner uses a strictly sequential, four-phase execution pipeline to ensure robust training data for the surrogate model without shifting targets or flattened landscapes:
 
-The BO runner uses a **Pilot + Freeze** strategy:
+1. **Phase 1 (Pilot Collection)**: The runner pre-generates a set of configurations using SMAC's `SobolInitialDesign`. It evaluates each configuration to collect raw metrics, but *bypasses scoring* and *does not* interact with the SMAC facade.
+2. **Phase 2 (Calibration)**: The `metric_config` calibrates its normalization bounds using the raw metrics from all successful pilot evaluations exactly once. The scoring engine is reloaded and its ranges are frozen permanently.
+3. **Phase 3 (Warm-Start Injection)**: The pilot configurations are re-scored using the frozen engine. The runner then injects these results into the SMAC surrogate model as unsolicited observations (using `facade.tell()`). Crucially, it injects the *resolved* configurations (engine-quantized values), priming the surrogate with ground-truth data.
+4. **Phase 4 (BO Loop)**: The runner enters the standard `facade.ask()` / `facade.tell()` loop for the remaining iterations. Because the surrogate is already primed, the first `ask()` immediately enters Bayesian Optimization mode. If PostgreSQL further quantizes suggested values during this phase, both the original and resolved configurations are logged to maintain intensifier and surrogate integrity.
 
-1. **Pilot Phase** (first N iterations, controlled by `--range-update-interval`): SMAC's Sobol initial design evaluates diverse configurations using default fallback ranges. Raw metrics are recorded.
-2. **Freeze Event** (exactly once, at the end of the pilot): `metric_config.expand_ranges_for_metrics()` calibrates normalization bounds from all pilot observations.
-3. **Frozen Phase** (remaining iterations): Normalization bounds are locked. The surrogate model trains on a stable cost surface.
+### Resource Equalization
 
-Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `PerformanceMetrics` to recompute scores with globally calibrated ranges, so the frozen in-run scores do not affect final comparison validity.
+While BO runs strictly sequentially, it can equalize hardware resources against a reference PBT session:
 
-### Snapshot Restoration Parity
-
-To ensure the BO baseline runs on a perfectly level playing field against PBT, the BO runner supports database snapshot restoration. Long tuning campaigns can cause "data drift" (where the database state degrades over time due to accumulating writes or changes). PBT mitigates this by restoring worker instances to a clean baseline snapshot every N generations.
-
-The BO baseline implements this same capability:
-- If `--enable-snapshots` is provided, BO will periodically restore the database instance to the baseline snapshot.
-- The `--snapshot-restore-interval` defines how many iterations occur between restorations.
-- **PBT Session Syncing**: If a `--pbt-session` is provided, BO automatically extracts `enable_snapshots` and `snapshot_restore_interval`. It safely scales the interval from PBT's generation-based metric to BO's iteration-based metric by multiplying the PBT interval by the PBT population size, guaranteeing that the exact same number of configuration evaluations occur between restorations in both algorithms.
-
-### Quantization & Read-Back Parity
-
-PostgreSQL silently modifies suggested configurations to fit internal constraints (e.g., rounding `shared_buffers` to the nearest 8kB page). This "hidden resolution" destroys the Bayesian Optimization surrogate model's gradients by creating the illusion of flat performance landscapes (where many different suggested values map to the exact same internal configuration and yield identical performance).
-
-To combat this, the BO loop employs a **Read-Back Abstraction** during `evaluate_config`:
-1. The BO agent suggests a continuous configuration.
-2. The orchestrator applies the configuration.
-3. After application (and potential restart), the orchestrator immediately calls `KnobApplicator.verify()`, which queries `pg_settings` for the **actually applied** typed values.
-4. The orchestrator's `evaluate_worker` returns these true, quantized values alongside the performance metrics.
-5. These actual values are merged back into the configuration dictionary *before* it is returned to SMAC3, ensuring the surrogate model trains on the exact data PostgreSQL is running with.
-
-### Parallel BO Evaluation and Resource Equalization
-
-The BO baseline supports parallel evaluation and explicit resource division to mirror the concurrency and hardware constraints of a reference PBT session independently.
-
-- `--batched-bo` enables running Bayesian Optimization in parallel using ask-tell mode.
-- `--resource-division N` acts as the denominator for dividing host resources (RAM/CPU) for the database instance(s), ensuring fairness.
+- `--resource-division N` acts as the denominator for dividing host resources (RAM/CPU) for the database instance, ensuring fairness.
 - When `--pbt-session` is provided, BO copies `num_parallel_workers` from the reference session and applies it to `--resource-division`.
-- If BO needs to derive the budget or resource division and the PBT session is missing `population_size`, `total_generations`, or `num_parallel_workers`, BO keeps the default or explicitly supplied CLI value for that setting.
 - If the PBT session includes `worker_resources`, BO uses that per-worker resource slice for knob-range resolution instead of dividing the local host resources via `--resource-division`.
-- The result JSON records completed `iterations`, `num_parallel_workers`, and `resource_equalization` so downstream comparison tools can confirm parity. BO does not record `population_size` because it is not population-based.
-
-In parallel mode (`--batched-bo`), BO uses SMAC3 ask-tell evaluation with a local `ThreadPoolExecutor`, which keeps the database environment in the main process while evaluating multiple candidates concurrently.
-
-### Ask-Tell Execution Model
-
-The runner uses two execution paths:
-
-- **Sequential path (default)**: uses the standard
-  `facade.optimize()` loop with the objective closure.
-- **Parallel path (`--batched-bo`)**: uses explicit ask-tell control in
-  `runner.py`.
-
-In ask-tell mode, each batch follows this cycle:
-
-1. `ask()` requests one `TrialInfo` per worker for the current batch.
-2. Configurations are evaluated concurrently using `ThreadPoolExecutor`.
-3. Each completed trial is returned to SMAC via
-   `tell(trial_info, TrialValue(...))`.
-4. After each batch, the surrogate is updated before the next `ask()` calls.
-
-This design is intentional:
-
-- The SMAC `Scenario` keeps `n_workers=1` to avoid Dask process workers.
-- Parallelism is handled in-process via threads, which avoids pickling issues
-  with environment objects such as Docker clients.
-- Worker-local previous configuration state is tracked independently, so
-  restart detection is isolated per BO worker.
+- The result JSON records completed `iterations`, `num_parallel_workers`, and `resource_equalization` so downstream comparison tools can confirm parity.
 
 ## Configuration Options
 
@@ -230,7 +178,6 @@ python -m src.scripts.bo_baseline \
 | `--output-dir` | Root directory for BO result files. | `results` |
 | `--verbose` | Logging verbosity. | `INFO` |
 | `--range-update-interval` | Pilot phase size: initial-design iterations before freezing normalization ranges. | `10` |
-| `--batched-bo` | Run BO in parallel using ask-tell mode. | Sequential execution |
 | `--resource-division` | Divides host resources to constrain the database instance. | `1`, or PBT `num_parallel_workers` |
 | `--scoring-policy` | Specific scoring policy to apply to metric evaluation (`fixed_v1` or `feature_driven_v2`). | Set by metric default |
 | `--enable-snapshots` | Enables periodic database snapshot restoration to prevent data drift. | Disabled, or PBT `enable_snapshots` |
@@ -285,7 +232,7 @@ python -m src.evaluation \
 
 ## Normalization Strategy
 
-During tuning, BO uses a **Pilot + Freeze** approach: the first N iterations (Sobol initial design) run with default fallback ranges, then `metric_config.expand_ranges_for_metrics()` is called exactly once to calibrate bounds from pilot observations. Ranges are frozen for the remainder of the run to preserve surrogate model integrity.
+During tuning, BO uses the 4-phase Bootstrapping approach: the first N iterations (Sobol initial design) collect raw metrics without scoring. `metric_config.update_ranges()` is called exactly once to calibrate bounds from these pilot observations. Ranges are frozen for the remainder of the run to preserve surrogate model integrity.
 
 PBT uses rolling adaptive normalization (expanding ranges every generation). This difference is intentional — BO requires a stable cost surface for its surrogate, while PBT's population-based approach is robust to shifting targets.
 

@@ -9,6 +9,17 @@ from ConfigSpace import (
     Categorical,
     Constant,
     Configuration,
+    NotEqualsCondition,
+    ForbiddenAndConjunction,
+    ForbiddenEqualsClause,
+    ForbiddenInClause,
+    ForbiddenLessThanRelation,
+    ForbiddenGreaterThanRelation,
+)
+from ConfigSpace.hyperparameters import (
+    IntegerHyperparameter,
+    FloatHyperparameter,
+    CategoricalHyperparameter,
 )
 
 from src.tuner.config.knob_space import KnobSpace, KnobType, KnobScale
@@ -145,7 +156,41 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
                 )
             cs.add(param)
 
+    _add_configspace_constraints(cs)
+
     return cs
+
+
+def _add_configspace_constraints(cs: ConfigurationSpace) -> None:
+    """
+    Add logical constraints to the ConfigSpace.
+    
+    These prevent SMAC from sampling invalid or conflicting configurations
+    that would otherwise just be repaired, reducing wasted evaluations.
+    """
+    # 1. wal_level=minimal deactivates certain WAL features
+    if "wal_level" in cs:
+        if "archive_mode" in cs:
+            cs.add(NotEqualsCondition(cs["archive_mode"], cs["wal_level"], "minimal"))
+        if "max_wal_senders" in cs:
+            cs.add(NotEqualsCondition(cs["max_wal_senders"], cs["wal_level"], "minimal"))
+        if "summarize_wal" in cs:
+            cs.add(NotEqualsCondition(cs["summarize_wal"], cs["wal_level"], "minimal"))
+
+    # 2. huge_pages=on|try is incompatible with shared_memory_type=sysv
+    if "huge_pages" in cs and "shared_memory_type" in cs:
+        cs.add(ForbiddenAndConjunction(
+            ForbiddenInClause(cs["huge_pages"], ["on", "try"]),
+            ForbiddenEqualsClause(cs["shared_memory_type"], "sysv"),
+        ))
+
+    # 3. max_worker_processes must be >= max_parallel_workers
+    if "max_worker_processes" in cs and "max_parallel_workers" in cs:
+        cs.add(ForbiddenLessThanRelation(cs["max_worker_processes"], cs["max_parallel_workers"]))
+
+    # 4. min_wal_size must be <= max_wal_size
+    if "min_wal_size" in cs and "max_wal_size" in cs:
+        cs.add(ForbiddenGreaterThanRelation(cs["min_wal_size"], cs["max_wal_size"]))
 
 
 def configspace_to_knobs(
@@ -187,3 +232,50 @@ def configspace_to_knobs(
             config_dict[name] = value
 
     return config_dict
+
+
+def knobs_to_configspace(
+    knob_config: Dict[str, Any],
+    knob_space: KnobSpace,
+    configspace: ConfigurationSpace,
+) -> Configuration:
+    """
+    Convert a knob config dict back to a ConfigSpace Configuration.
+    
+    Values are clamped to ConfigSpace bounds and inactive hyperparameters
+    (those deactivated by Conditions) are omitted, so the Configuration
+    is always valid w.r.t. the defined constraints.
+
+    Parameters
+    ----------
+    knob_config : Dict[str, Any]
+        Repaired/quantized knob configuration dictionary
+    knob_space : KnobSpace
+        The knob space
+    configspace : ConfigurationSpace
+        The ConfigSpace definition to validate against
+
+    Returns
+    -------
+    Configuration
+        Valid ConfigSpace configuration
+    """
+    values = {}
+    for hp in list(configspace.values()):
+        name = hp.name
+        if name not in knob_config:
+            continue
+        val = knob_config[name]
+        
+        # Clamp to CS bounds for numeric types
+        if isinstance(hp, IntegerHyperparameter):
+            val = int(max(hp.lower, min(hp.upper, int(val))))
+        elif isinstance(hp, FloatHyperparameter):
+            val = float(max(hp.lower, min(hp.upper, float(val))))
+        elif isinstance(hp, CategoricalHyperparameter):
+            if val not in hp.choices:
+                val = hp.default_value  # fallback
+        values[name] = val
+
+    # allow_inactive_with_values=True handles conditional HPs gracefully
+    return Configuration(configspace, values=values, allow_inactive_with_values=True)
