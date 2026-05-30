@@ -118,12 +118,6 @@ class PBTConfig:
         advances until all workers have completed the current step.
         This ensures fair resource sharing during measurement.
         Default: True
-
-    barrier_timeout_seconds : float
-        Maximum seconds each barrier will wait for all workers to arrive
-        before raising BrokenBarrierError and degrading gracefully.
-        Should accommodate Docker worst-case restart latency (~70 s).
-        Default: 120.0
     """
 
     population_size: int = 4
@@ -146,7 +140,6 @@ class PBTConfig:
     metric_reference_version: Optional[str] = None
     scoring_calibration_evals: int = 5
     synchronize_workers: bool = True
-    barrier_timeout_seconds: float = 120.0
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -191,9 +184,6 @@ class PBTConfig:
         if self.scoring_calibration_evals < 1:
             raise ValueError("scoring_calibration_evals must be at least 1")
 
-        if self.barrier_timeout_seconds <= 0:
-            raise ValueError("barrier_timeout_seconds must be positive")
-
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -230,7 +220,6 @@ class PBTConfig:
             "metric_reference_version": self.metric_reference_version,
             "scoring_calibration_evals": self.scoring_calibration_evals,
             "synchronize_workers": self.synchronize_workers,
-            "barrier_timeout_seconds": self.barrier_timeout_seconds,
         }
 
     def __repr__(self) -> str:
@@ -253,8 +242,7 @@ class PBTConfig:
             f"  scoring_policy_version={self.scoring_policy_version},\n"
             f"  metric_reference_version={self.metric_reference_version},\n"
             f"  scoring_calibration_evals={self.scoring_calibration_evals},\n"
-            f"  synchronize_workers={self.synchronize_workers},\n"
-            f"  barrier_timeout_seconds={self.barrier_timeout_seconds}\n"
+            f"  synchronize_workers={self.synchronize_workers}\n"
             f")"
         )
 
