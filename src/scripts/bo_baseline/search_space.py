@@ -269,9 +269,9 @@ def knobs_to_configspace(
         
         # Clamp to CS bounds for numeric types
         if isinstance(hp, IntegerHyperparameter):
-            val = int(max(hp.lower, min(hp.upper, int(val))))
+            val = max(hp.lower, min(hp.upper, int(val)))
         elif isinstance(hp, FloatHyperparameter):
-            val = float(max(hp.lower, min(hp.upper, float(val))))
+            val = max(hp.lower, min(hp.upper, float(val)))
         elif isinstance(hp, CategoricalHyperparameter):
             if val not in hp.choices:
                 val = hp.default_value  # fallback

@@ -114,6 +114,16 @@ python -m src.evaluation \
     --scoring-policy feature_driven_v2
 ```
 
+### Baseline Recreation Override
+
+By default, the evaluation runner caches the baseline configuration's snapshot across identical benchmarks to save time. If you suspect baseline state corruption or need to force a fresh baseline evaluation:
+
+```bash
+python -m src.evaluation \
+    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --force-recreate-baseline
+```
+
 Available policies:
 - `fixed_v1` — legacy static weights (default for historical sessions)
 - `feature_driven_v2` — dynamic workload-feature-conditioned weights
@@ -141,6 +151,12 @@ session JSON, with a fallback to the tier segment in the session path
 tier is `unknown`.
 
 Override this with `--output-dir <path>` when needed.
+
+## Console Output
+
+During execution, the runner outputs progress and timing logs to the console. Once the multi-arm evaluation completes, it presents two key summaries:
+1. **Multi-Arm Evaluation Summary**: Displays the overall score, throughput, and latency for each arm (Baseline, PBT, BO, etc.) using `Median ± Standard Deviation` format to capture variance across repetitions.
+2. **Pairwise Comparisons**: Provides detailed statistical testing against the baseline, reporting percentage improvement (Δ%), adjusted p-values, Cohen's d effect sizes, and indicating statistical significance with a `✓`. Metric values here also use the `Median ± Standard Deviation` format.
 
 ## Reproducibility Checklist
 

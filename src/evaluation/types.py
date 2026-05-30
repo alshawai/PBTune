@@ -69,6 +69,7 @@ class ComparisonConfig:
     bo_session_path: Optional[Path] = None
     data_dir: Optional[str] = None
     colocate_output: bool = False
+    force_recreate_baseline: bool = False
 
 
 @dataclass
