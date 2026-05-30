@@ -1016,6 +1016,10 @@ class KnobSpace:
                 perturbed[knob_name] = value
                 continue
 
+            if knob_name not in self.knobs:
+                perturbed[knob_name] = value
+                continue
+
             knob_def = self.knobs[knob_name]
 
             if knob_def.knob_type == KnobType.INTEGER:
