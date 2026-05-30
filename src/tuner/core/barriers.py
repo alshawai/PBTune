@@ -34,7 +34,7 @@ Each barrier corresponds to a discrete sub-step inside
 
 Usage
 -----
->>> barriers = GenerationBarrier(num_workers=4, timeout=120.0)
+>>> barriers = GenerationBarrier(num_workers=4)
 >>> # Inside each worker thread:
 >>> barriers.wait("connected")  # blocks until all 4 threads arrive
 >>> barriers.wait("config_applied")
@@ -42,15 +42,19 @@ Usage
 Graceful Degradation
 --------------------
 If **any** worker thread crashes, its barrier slots are never filled, which
-would deadlock the remaining threads. Two safeguards prevent this:
+would deadlock the remaining threads. Three safeguards prevent this:
 
-1. ``timeout`` — every ``barrier.wait()`` call has a deadline. On timeout,
-   ``BrokenBarrierError`` is raised, the internal ``_broken`` flag is set,
-   and **all subsequent** ``wait()`` calls become instant no-ops.
-
-2. ``drain_remaining(start_from)`` — when a worker catches an exception, it
+1. ``drain_remaining(start_from)`` — when a worker catches an exception, it
    calls this method to release all barriers it hasn't reached yet, so the
    other threads can proceed.
+
+2. ``abort()`` — called from the population layer when a worker is confirmed
+   dead/stuck. Instantly breaks all barriers (``BrokenBarrierError`` on
+   all waiters), and marks subsequent ``wait()`` calls as no-ops.
+
+3. No per-barrier timeout — barriers wait indefinitely because legitimate
+   queries (e.g. 5-min OLAP analytics) can take arbitrarily long.  The
+   dead-worker cases are handled by (1) and (2) above, not timeouts.
 """
 
 from __future__ import annotations
@@ -93,32 +97,35 @@ class GenerationBarrier:
     ----------
     num_workers : int
         Number of worker threads that must arrive at each barrier.
-    timeout : float
-        Maximum seconds to wait at any single barrier before raising
-        ``BrokenBarrierError``.  Default 120 s accommodates Docker
-        restart worst-case (~70 s) with headroom.
     enabled : bool
         When ``False``, all ``wait()`` calls are instant no-ops.
         Used for sequential evaluation or ``--no-sync`` mode.
+
+    Notes
+    -----
+    Barriers wait **indefinitely** (no timeout).  If a worker dies, its
+    exception handler calls ``drain_remaining()`` to unblock peers.  If
+    a worker is truly stuck (thread hung), the population layer calls
+    ``abort()`` to break all barriers instantly.  A per-barrier timeout
+    would cause false positives on legitimately slow queries (e.g. 5-min
+    OLAP analytics).
     """
 
     def __init__(
         self,
         num_workers: int,
-        timeout: float = 120.0,
         enabled: bool = True,
     ) -> None:
         self._num_workers = num_workers
-        self._timeout = timeout
         self._enabled = enabled
         self._broken = False
 
-        # Build one threading.Barrier per sub-step.
+        # Build one threading.Barrier per sub-step (no timeout).
         self._barriers: Dict[str, threading.Barrier] = {}
         if self._enabled:
             for name in BARRIER_NAMES:
                 self._barriers[name] = threading.Barrier(
-                    parties=num_workers, timeout=timeout
+                    parties=num_workers
                 )
 
         # Index lookup for drain_remaining().
@@ -280,7 +287,7 @@ class GenerationBarrier:
         if self._enabled:
             for name in BARRIER_NAMES:
                 self._barriers[name] = threading.Barrier(
-                    parties=self._num_workers, timeout=self._timeout
+                    parties=self._num_workers
                 )
 
     def next_barrier_name(self, current: str) -> Optional[str]:
@@ -295,6 +302,5 @@ class GenerationBarrier:
             "enabled" if self.enabled else ("broken" if self._broken else "disabled")
         )
         return (
-            f"GenerationBarrier(workers={self._num_workers}, "
-            f"timeout={self._timeout}s, status={status})"
+            f"GenerationBarrier(workers={self._num_workers}, status={status})"
         )
