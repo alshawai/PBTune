@@ -370,6 +370,62 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self._wait_for_ready(worker_id)
         return True
 
+    def clone_instances(self, source_worker_id: int, target_worker_ids: List[int]) -> bool:
+        """Clone the physical database state from a source worker to multiple target workers using Rsync."""
+        if not target_worker_ids:
+            return True
+
+        source_data_dir = self.instances[source_worker_id].data_dir
+        
+        # Stop source to ensure consistency
+        self.stop_instance(source_worker_id, mode="immediate")
+        
+        # Stop all targets
+        for target_id in target_worker_ids:
+            self.stop_instance(target_id, mode="immediate")
+
+        success = True
+        try:
+            for target_id in target_worker_ids:
+                target_data_dir = self.instances[target_id].data_dir
+                try:
+                    subprocess.run(
+                        [
+                            "rsync",
+                            "-a",
+                            "--delete",
+                            "--exclude",
+                            "postgresql.conf",
+                            str(source_data_dir) + "/",
+                            str(target_data_dir) + "/",
+                        ],
+                        check=True,
+                    )
+                    
+                    # Clean auto.conf just like restore_snapshot
+                    auto_conf = target_data_dir / "postgresql.auto.conf"
+                    if auto_conf.exists():
+                        auto_conf.unlink()
+                        
+                except subprocess.CalledProcessError as e:
+                    logger.error("Failed to clone instance %d to %d: %s", source_worker_id, target_id, e)
+                    success = False
+        finally:
+            # Always restart source
+            self.start_instance(source_worker_id)
+            self._wait_for_ready(source_worker_id)
+            
+            # Restart all targets
+            for target_id in target_worker_ids:
+                self.start_instance(target_id)
+                try:
+                    self._wait_for_ready(target_id)
+                except RuntimeError as e:
+                    logger.error("Target %d failed to restart after clone: %s", target_id, e)
+                    success = False
+                    
+        return success
+
     def rebuild_worker_instance(self, worker_id: int) -> bool:
         """Rebuild a worker instance from scratch."""
         self.stop_instance(worker_id)

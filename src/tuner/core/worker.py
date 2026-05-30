@@ -150,7 +150,7 @@ class Worker:
 
     port: Optional[int] = None
     db_config: Optional[DatabaseConfig] = None
-    force_restart_next_eval: bool = False
+    force_restart_next_eval: bool = True
 
     logger: Logger = field(init=False, repr=False)
 

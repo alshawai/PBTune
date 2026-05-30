@@ -13,7 +13,7 @@ from src.visualization.types import ExportFormat
 from src.visualization.exceptions import FigureRegistryError
 from src.utils.logger import get_logger, setup_logging
 
-LOGGER = get_logger("VisualizationCLI")
+LOGGER = get_logger("Visualizer")
 
 # Ensure all plots are discovered and registered
 import src.visualization.plots  # noqa
