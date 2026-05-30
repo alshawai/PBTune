@@ -820,7 +820,6 @@ class PBTTuner:
             require_ready=True,
             max_workers=self.pbt_config.num_parallel_workers,
             synchronize_workers=self.pbt_config.synchronize_workers,
-            barrier_timeout=self.pbt_config.barrier_timeout_seconds,
         )
         gen_elapsed_time = time.time() - gen_start_time
 
