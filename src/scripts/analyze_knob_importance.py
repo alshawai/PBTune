@@ -21,7 +21,7 @@ from src.analysis.tier_generator import TierResult, generate_tiers
 from src.utils.logger import get_logger
 from src.utils.logger.setup import setup_logging
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger("Analyzer")
 
 
 def parse_args() -> argparse.Namespace:
