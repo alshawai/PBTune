@@ -313,7 +313,7 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     population.record_generation = MagicMock(return_value=MagicMock(num_exploited=0))
 
     with patch("src.tuner.core.population.log_worker_metrics_table") as log_table:
-        with patch("src.tuner.core.population.execute_exploit_explore", return_value=0):
+        with patch("src.tuner.core.population.execute_exploit_explore", return_value=[]):
             population.train_generation(
                 _evaluate,
                 parallel=False,

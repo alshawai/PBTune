@@ -1213,6 +1213,131 @@ class DockerEnvironment(DatabaseEnvironment):
             LOGGER.error("Failed to restore snapshot to %s: %s", container_name, e)
             return False
 
+    def clone_instances(self, source_worker_id: int, target_worker_ids: List[int]) -> bool:
+        """Clone the physical database state from a source worker to multiple target workers."""
+        if not target_worker_ids:
+            return True
+
+        source_container_name = self._container_name(source_worker_id)
+        source_port = self._worker_port(source_worker_id)
+        source_pgdata = self._worker_host_pgdata_dir(source_worker_id)
+
+        try:
+            # 1. Checkpoint source to flush WAL (minimize recovery on targets)
+            self._checkpoint_instance(source_worker_id)
+
+            # 2. Stop source cleanly
+            source_container = self.client.containers.get(source_container_name)
+            source_container.reload()
+            if source_container.status == "running":
+                source_container.stop(timeout=45)
+
+            # 3. Stop and prepare targets
+            target_volumes = {}
+            for target_id in target_worker_ids:
+                # Stop and remove current target container
+                if not self._remove_worker_container(
+                    worker_id=target_id,
+                    purpose="instance clone",
+                    timeout=self._restore_api_timeout,
+                ):
+                    return False
+
+                target_pgdata = self._worker_host_pgdata_dir(target_id)
+                self._force_remove_host_dir(target_pgdata)
+                target_pgdata.mkdir(parents=True, exist_ok=True)
+                os.chmod(target_pgdata, 0o777)
+                
+                target_volumes[self._docker_bind_path(target_pgdata)] = {
+                    "bind": f"/dest_{target_id}",
+                    "mode": "rw",
+                }
+
+            # 4. Copy data using a throwaway container
+            # Build the copy command for all targets
+            copy_commands = ["set -euo pipefail"]
+            for target_id in target_worker_ids:
+                copy_commands.append(f"cp -R /source/. /dest_{target_id}/")
+            
+            volumes = {
+                self._docker_bind_path(source_pgdata): {
+                    "bind": "/source",
+                    "mode": "ro",
+                }
+            }
+            volumes.update(target_volumes)
+
+            with self._with_timeout(self._snapshot_timeout):
+                copy_container = self.client.containers.run(
+                    self.image_name,
+                    user="999:999",  # postgres user
+                    entrypoint=["bash", "-lc"],
+                    command=["; ".join(copy_commands)],
+                    volumes=volumes,
+                    detach=True,
+                )
+                result = copy_container.wait()
+                if result.get("StatusCode", 1) != 0:
+                    raise docker_errors.DockerException(
+                        f"Clone copy failed with exit code {result.get('StatusCode')}: "
+                        f"{copy_container.logs().decode('utf-8', errors='replace')}"
+                    )
+                copy_container.remove(force=True)
+
+            # 5. Start source container back up
+            source_container.start()
+            self._wait_for_ready(
+                source_container_name,
+                source_port,
+                timeout=self._ready_timeout,
+                context="clone-post-start",
+            )
+            if source_worker_id in self.instances:
+                self.instances[source_worker_id].running = True
+
+            # 6. Recreate and Start target containers
+            success = True
+            for target_id in target_worker_ids:
+                target_pgdata = self._worker_host_pgdata_dir(target_id)
+                target_container_name = self._container_name(target_id)
+                target_port = self._worker_port(target_id)
+                
+                vols = {
+                    self._docker_bind_path(target_pgdata): {
+                        "bind": "/pgdata/data",
+                        "mode": "rw",
+                    }
+                }
+                launched, _ = self._launch_worker_container(
+                    image_name=self.image_name,
+                    worker_id=target_id,
+                    action_label="creating cloned worker",
+                    volumes=vols,
+                    timeout=self._restore_api_timeout,
+                )
+                if not launched:
+                    success = False
+                    continue
+
+                try:
+                    self._wait_for_ready(
+                        target_container_name,
+                        target_port,
+                        timeout=self._restore_ready_timeout,
+                        context="clone-restore",
+                    )
+                    if target_id in self.instances:
+                        self.instances[target_id].running = True
+                except RuntimeError as e:
+                    LOGGER.error("Failed to wait for cloned target %d: %s", target_id, e)
+                    success = False
+                    
+            return success
+
+        except (docker_errors.DockerException, RuntimeError) as e:
+            LOGGER.error("Failed to clone instances from %d: %s", source_worker_id, e)
+            return False
+
     def get_db_config(self, worker_id: int) -> DatabaseConfig:
         """Get the runtime connection configuration for a defined worker."""
         port = self.base_port + worker_id

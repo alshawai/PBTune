@@ -19,7 +19,8 @@ def _make_tuner(env: MagicMock, cleanup_instances: bool = False) -> PBTTuner:
     tuner.LOGGER = MagicMock()
     tuner.system_info = {}
     tuner.knob_tier = "minimal"
-    tuner.knob_space = {}
+    tuner.knob_space = MagicMock()
+    tuner.full_knob_space = MagicMock()
     tuner.workload_type = SimpleNamespace(value="oltp")
     tuner.output_dir = Path("results")
 
