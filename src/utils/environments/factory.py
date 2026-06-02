@@ -102,6 +102,7 @@ class EnvironmentFactory:
                     schema_provider=schema_provider,
                     cpu_cores=cpu_cores,
                     ram_bytes=ram_bytes,
+                    worker_resources=worker_resources,
                     image_name=resolved_image_name,
                     base_port=base_port,
                     base_dir=base_dir,

@@ -13,6 +13,7 @@ import signal
 import time
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
 from typing import List, Dict
 import psycopg2
@@ -68,8 +69,62 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self.base_dir,
         )
 
+    def _worker_root_dir(self, worker_id: int) -> Path:
+        """Return the root directory that groups all files for a worker."""
+        return self.base_dir / self._get_instance_subpath() / f"worker_{worker_id}"
+
+    def _resolve_worker_data_dir(self, worker_id: int, force_recreate: bool) -> Path:
+        """Choose the PGDATA directory for a worker.
+
+        Bare-metal historically stored clusters directly under the worker root.
+        New runs prefer a dedicated ``pgdata`` subdirectory so the layout matches
+        the Docker backend and stale root-level files do not block initialization.
+        """
+        worker_root = self._worker_root_dir(worker_id)
+        nested_pgdata = worker_root / "pgdata"
+
+        if not force_recreate:
+            if (nested_pgdata / "PG_VERSION").exists():
+                return nested_pgdata
+            if (worker_root / "PG_VERSION").exists():
+                return worker_root
+
+        return nested_pgdata
+
+    def _prepare_worker_data_dir(self, worker_id: int, force_recreate: bool) -> Path:
+        """Ensure the worker PGDATA directory exists and is writable."""
+        worker_root = self._worker_root_dir(worker_id)
+        data_dir = self._resolve_worker_data_dir(worker_id, force_recreate)
+        worker_root.mkdir(parents=True, exist_ok=True)
+
+        if force_recreate and data_dir.exists():
+            try:
+                shutil.rmtree(data_dir)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to remove existing PGDATA directory for worker %d at %s: %s. "
+                    "Using a fresh directory instead.",
+                    worker_id,
+                    data_dir,
+                    exc,
+                )
+                data_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f"worker_{worker_id}_pgdata_", dir=str(worker_root)
+                    )
+                )
+            else:
+                data_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            data_dir.mkdir(parents=True, exist_ok=True)
+
+        return data_dir
+
     def setup_instances(
-        self, num_workers: int, force_recreate: bool = False
+        self,
+        num_workers: int,
+        force_recreate: bool = False,
+        num_parallel_workers: int = 1,
     ) -> List[InstanceConfig]:
         """Set up N database instances on the bare metal host."""
         if num_workers <= 0:
@@ -86,9 +141,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
 
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
-            data_dir = (
-                self.base_dir / self._get_instance_subpath() / f"worker_{worker_id}"
-            )
+            data_dir = self._prepare_worker_data_dir(worker_id, force_recreate)
 
             # --- Phase 1: Clean up any pre-existing state ---
             # Do NOT use `pg_ctl stop -w` here — it blocks indefinitely if the
@@ -128,11 +181,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self._kill_stale_port_holder(port)
 
             # --- Phase 2: Ensure data directory is ready ---
-            if force_recreate and data_dir.exists():
-                shutil.rmtree(data_dir, ignore_errors=True)
-
             if not (data_dir / "PG_VERSION").exists():
-                data_dir.parent.mkdir(parents=True, exist_ok=True)
                 logger.info(
                     "Initializing new database cluster for worker %d at %s...",
                     worker_id,
@@ -151,6 +200,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     ],
                     check=True,
                     capture_output=True,
+                    text=True,
                 )
 
                 # Overwrite postgresql.conf to ensure the correct port is bound natively
@@ -370,16 +420,18 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self._wait_for_ready(worker_id)
         return True
 
-    def clone_instances(self, source_worker_id: int, target_worker_ids: List[int]) -> bool:
+    def clone_instances(
+        self, source_worker_id: int, target_worker_ids: List[int]
+    ) -> bool:
         """Clone the physical database state from a source worker to multiple target workers using Rsync."""
         if not target_worker_ids:
             return True
 
         source_data_dir = self.instances[source_worker_id].data_dir
-        
+
         # Stop source to ensure consistency
         self.stop_instance(source_worker_id, mode="immediate")
-        
+
         # Stop all targets
         for target_id in target_worker_ids:
             self.stop_instance(target_id, mode="immediate")
@@ -401,29 +453,36 @@ class BareMetalEnvironment(DatabaseEnvironment):
                         ],
                         check=True,
                     )
-                    
+
                     # Clean auto.conf just like restore_snapshot
                     auto_conf = target_data_dir / "postgresql.auto.conf"
                     if auto_conf.exists():
                         auto_conf.unlink()
-                        
+
                 except subprocess.CalledProcessError as e:
-                    logger.error("Failed to clone instance %d to %d: %s", source_worker_id, target_id, e)
+                    logger.error(
+                        "Failed to clone instance %d to %d: %s",
+                        source_worker_id,
+                        target_id,
+                        e,
+                    )
                     success = False
         finally:
             # Always restart source
             self.start_instance(source_worker_id)
             self._wait_for_ready(source_worker_id)
-            
+
             # Restart all targets
             for target_id in target_worker_ids:
                 self.start_instance(target_id)
                 try:
                     self._wait_for_ready(target_id)
                 except RuntimeError as e:
-                    logger.error("Target %d failed to restart after clone: %s", target_id, e)
+                    logger.error(
+                        "Target %d failed to restart after clone: %s", target_id, e
+                    )
                     success = False
-                    
+
         return success
 
     def rebuild_worker_instance(self, worker_id: int) -> bool:
