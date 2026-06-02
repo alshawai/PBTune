@@ -416,9 +416,7 @@ class Population:
                 len(self.workers),
                 COLORS.reset,
             )
-            disabled_barriers = GenerationBarrier(
-                num_workers=1, enabled=False
-            )
+            disabled_barriers = GenerationBarrier(num_workers=1, enabled=False)
 
             for worker in self.workers:
                 try:
@@ -507,9 +505,7 @@ class Population:
                                 "PopulationWorker",
                                 worker_id=worker.worker_id,
                             )
-                            worker_logger.error(
-                                "Error evaluating: %s", e
-                            )
+                            worker_logger.error("Error evaluating: %s", e)
                             # Abort barriers so remaining threads unblock
                             batch_barriers.abort()
                             raise
@@ -693,7 +689,9 @@ class Population:
         # If alive workers exist, we defer their rescue to execute_exploit_explore.
         # execute_exploit_explore will correctly pair them with an *elite* worker,
         # perturb the configuration, and physically clone the database.
-        LOGGER.debug(" ➤ Deferring dead worker rescue to execute_exploit_explore for elite config and perturbation.")
+        LOGGER.debug(
+            " ➤ Deferring dead worker rescue to execute_exploit_explore for elite config and perturbation."
+        )
         return 0
 
     def update_metric_ranges_if_needed(self) -> None:
@@ -1060,7 +1058,7 @@ class Population:
                 if source_id not in clones_by_source:
                     clones_by_source[source_id] = []
                 clones_by_source[source_id].append(target_id)
-                
+
             for source_id, target_ids in clones_by_source.items():
                 LOGGER.info(
                     " ➤ Physically cloning database from elite worker %d to %d poor workers...",

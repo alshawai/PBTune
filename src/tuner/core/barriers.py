@@ -124,9 +124,7 @@ class GenerationBarrier:
         self._barriers: Dict[str, threading.Barrier] = {}
         if self._enabled:
             for name in BARRIER_NAMES:
-                self._barriers[name] = threading.Barrier(
-                    parties=num_workers
-                )
+                self._barriers[name] = threading.Barrier(parties=num_workers)
 
         # Index lookup for drain_remaining().
         self._name_to_index: Dict[str, int] = {
@@ -286,9 +284,7 @@ class GenerationBarrier:
             # Recreate a fresh barrier to avoid leftover state.
         if self._enabled:
             for name in BARRIER_NAMES:
-                self._barriers[name] = threading.Barrier(
-                    parties=self._num_workers
-                )
+                self._barriers[name] = threading.Barrier(parties=self._num_workers)
 
     def next_barrier_name(self, current: str) -> Optional[str]:
         """Return the barrier name after *current*, or ``None`` if last."""
@@ -301,6 +297,4 @@ class GenerationBarrier:
         status = (
             "enabled" if self.enabled else ("broken" if self._broken else "disabled")
         )
-        return (
-            f"GenerationBarrier(workers={self._num_workers}, status={status})"
-        )
+        return f"GenerationBarrier(workers={self._num_workers}, status={status})"

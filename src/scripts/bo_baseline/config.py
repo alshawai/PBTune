@@ -60,7 +60,7 @@ class BOConfig:
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
     # Snapshot configuration
-    enable_snapshots: bool = False
+    enable_snapshots: bool = True
     snapshot_restore_interval: int = 1
 
     # Parallel BO configuration
@@ -331,28 +331,28 @@ class BOConfig:
 
 
 RAPID_BO_CONFIG = BOConfig(
-    n_iterations=40,
-    range_update_interval=10,
+    n_iterations=10,
+    range_update_interval=5,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
 )
 STANDARD_BO_CONFIG = BOConfig(
-    n_iterations=120,
+    n_iterations=80,
     range_update_interval=10,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
 )
 THOROUGH_BO_CONFIG = BOConfig(
     n_iterations=400,
-    range_update_interval=15,
+    range_update_interval=20,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
 )
 RESEARCH_BO_CONFIG = BOConfig(
-    n_iterations=1600,
-    range_update_interval=20,
+    n_iterations=1200,
+    range_update_interval=40,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
 )
 EXTREME_BO_CONFIG = BOConfig(
     n_iterations=3200,
-    range_update_interval=25,
+    range_update_interval=80,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
 )
 

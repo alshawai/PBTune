@@ -277,7 +277,9 @@ class BOBaselineRunner:
             # Setup N instances
             num_instances = self.config.max_workers
             self.logger.info(f"Setting up {num_instances} PostgreSQL instance(s)...")
-            self.env.setup_instances(num_workers=num_instances)
+            self.env.setup_instances(
+                num_workers=num_instances, num_parallel_workers=num_instances
+            )
 
             # Prune unsupported knobs
             self._prune_unsupported_runtime_knobs()

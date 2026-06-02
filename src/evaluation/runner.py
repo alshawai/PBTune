@@ -915,7 +915,9 @@ class ComparisonRunner:
         env = self._build_environment(executor, session.worker_resources)
 
         try:
-            env.setup_instances(num_workers=1, force_recreate=True)
+            env.setup_instances(
+                num_workers=1, force_recreate=True, num_parallel_workers=1
+            )
             active_config = env.get_db_config(worker_id=0)
 
             if knobs:
