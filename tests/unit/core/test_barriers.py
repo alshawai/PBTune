@@ -341,9 +341,7 @@ class TestHybridModeBatching:
         ]
 
         for batch in batches:
-            batch_barriers = GenerationBarrier(
-                num_workers=len(batch)
-            )
+            batch_barriers = GenerationBarrier(num_workers=len(batch))
 
             def worker_fn(wid: int, barriers=batch_barriers):
                 for name in BARRIER_NAMES:

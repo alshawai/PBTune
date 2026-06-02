@@ -952,6 +952,7 @@ class PBTTuner:
                 instances = self.env.setup_instances(
                     num_workers=self.pbt_config.population_size,
                     force_recreate=self.force_recreate_instances,
+                    num_parallel_workers=self.pbt_config.num_parallel_workers,
                 )
 
                 LOGGER.info("Verifying instance accessibility and configurations...")
@@ -985,7 +986,7 @@ class PBTTuner:
                     population_size=self.pbt_config.population_size,
                     seed=42,
                 )
-                
+
                 num_lhs = self.pbt_config.population_size - len(warm_configs)
                 if num_lhs > 0:
                     lhs_configs = self.full_knob_space.sample_diverse_configs(
@@ -1333,7 +1334,9 @@ class PBTTuner:
                     raw_abs = None
                     if resources is not None:
                         if knob.resource_type == "ram":
-                            bytes_per_unit = self.full_knob_space._get_bytes_per_unit(knob)
+                            bytes_per_unit = self.full_knob_space._get_bytes_per_unit(
+                                knob
+                            )
                             raw_abs = (knob_val * resources.ram_bytes) / bytes_per_unit
                         elif knob.resource_type == "cpu":
                             raw_abs = knob_val * resources.cpu_cores

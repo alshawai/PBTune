@@ -118,8 +118,8 @@ def clone_benchmark_config(config: BenchmarkConfig) -> BenchmarkConfig:
 
 
 RAPID_BENCHMARK_CONFIG = BenchmarkConfig(
-    evaluation_duration=15.0,
-    warmup_duration=10.0,
+    evaluation_duration=10.0,
+    warmup_duration=5.0,
     scale_factor=0.01,
     sysbench_tables=2,
     sysbench_table_size=10000,
@@ -136,28 +136,28 @@ STANDARD_BENCHMARK_CONFIG = BenchmarkConfig(
 )
 
 THOROUGH_BENCHMARK_CONFIG = BenchmarkConfig(
-    evaluation_duration=45.0,
+    evaluation_duration=120.0,
     warmup_duration=60.0,
     scale_factor=1.0,
-    sysbench_tables=20,
-    sysbench_table_size=200000,
+    sysbench_tables=150,
+    sysbench_table_size=100000,
     warmup_passes=1,
 )
 
 RESEARCH_BENCHMARK_CONFIG = BenchmarkConfig(
-    evaluation_duration=60.0,
-    warmup_duration=60.0,
-    scale_factor=1.0,
-    sysbench_tables=50,
-    sysbench_table_size=500000,
-    warmup_passes=2,
+    evaluation_duration=120.0,
+    warmup_duration=90.0,
+    scale_factor=10.0,
+    sysbench_tables=150,
+    sysbench_table_size=100000,
+    warmup_passes=1,
 )
 
 EXTREME_BENCHMARK_CONFIG = BenchmarkConfig(
-    evaluation_duration=300.0,
+    evaluation_duration=180.0,
     warmup_duration=120.0,
     scale_factor=10.0,
-    sysbench_tables=100,
-    sysbench_table_size=1000000,
-    warmup_passes=2,
+    sysbench_tables=200,
+    sysbench_table_size=100000,
+    warmup_passes=1,
 )

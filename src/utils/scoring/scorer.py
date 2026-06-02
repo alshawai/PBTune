@@ -282,11 +282,13 @@ class CompositeScorer:
                 removed_weight = self._weights.pop("throughput_variance")
                 if "throughput_variance" in self._metrics:
                     self._metrics.remove("throughput_variance")
-                
+
                 remaining_sum = sum(self._weights.values())
                 if remaining_sum > 0:
                     for m in self._weights:
-                        self._weights[m] += (self._weights[m] / remaining_sum) * removed_weight
+                        self._weights[m] += (
+                            self._weights[m] / remaining_sum
+                        ) * removed_weight
 
         self._context_key = self._make_context_key(
             self._policy_id,

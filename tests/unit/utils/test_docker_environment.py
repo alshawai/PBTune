@@ -84,7 +84,10 @@ def test_worker_cpu_budget_prefers_worker_resources() -> None:
     assert env._worker_cpu_budget() == 2
 
 
-def test_worker_cpuset_cpus_uses_budget_only() -> None:
+from unittest.mock import MagicMock, patch
+
+@patch("os.cpu_count", return_value=4)
+def test_worker_cpuset_cpus_uses_budget_only(mock_cpu_count: MagicMock) -> None:
     """Cpuset slices should be derived from the budget and parallel batch position.
 
     Workers cycle through the same CPU slices across sequential batches.
