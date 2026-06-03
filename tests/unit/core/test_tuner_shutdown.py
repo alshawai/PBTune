@@ -28,6 +28,7 @@ def _make_tuner(env: MagicMock, cleanup_instances: bool = False) -> PBTTuner:
         population_size=1,
         num_generations=0,
         enable_snapshots=False,
+        num_parallel_workers=1,
     )
     tuner.force_recreate_instances = False
     tuner.cleanup_instances = cleanup_instances
