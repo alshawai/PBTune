@@ -247,22 +247,20 @@ class PBTConfig:
         )
 
 
-# Strategy: Short evaluations, few warmup, quick iterations
 RAPID_CONFIG = PBTConfig(
-    population_size=4,
-    num_generations=10,
+    population_size=2,
+    num_generations=5,
     exploit_quantile=0.25,
     ready_interval=1,
-    num_parallel_workers=4,
+    num_parallel_workers=2,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
     snapshot_restore_interval=10,  # Infrequent snapshotting for speed
     verbose=True,
 )
 
-# Strategy: Moderate evaluations, balanced accuracy vs speed
 STANDARD_CONFIG = PBTConfig(
     population_size=4,
-    num_generations=30,
+    num_generations=20,
     exploit_quantile=0.2,
     ready_interval=2,
     num_parallel_workers=4,
@@ -271,7 +269,6 @@ STANDARD_CONFIG = PBTConfig(
     verbose=True,
 )
 
-# Strategy: Longer evaluations for accuracy, more exploration
 THOROUGH_CONFIG = PBTConfig(
     population_size=8,
     num_generations=50,
@@ -283,20 +280,17 @@ THOROUGH_CONFIG = PBTConfig(
     verbose=True,
 )
 
-# Strategy: Production-grade measurements, extensive exploration
 RESEARCH_CONFIG = PBTConfig(
-    population_size=16,
+    population_size=12,
     num_generations=100,
     exploit_quantile=0.2,
-    ready_interval=5,
-    num_parallel_workers=16,
+    ready_interval=4,
+    num_parallel_workers=12,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
-    enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True,
 )
 
-# Strategy: Heavy-duty benchmark requirements (>10GB analytical scaling)
 EXTREME_CONFIG = PBTConfig(
     population_size=16,
     num_generations=200,
@@ -304,7 +298,6 @@ EXTREME_CONFIG = PBTConfig(
     ready_interval=10,
     num_parallel_workers=16,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
-    enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True,
 )

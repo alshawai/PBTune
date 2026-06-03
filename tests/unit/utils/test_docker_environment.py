@@ -15,6 +15,7 @@ import requests
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import InstanceConfig
 from src.utils.environments.docker import DockerEnvironment
+from src.utils.hardware_info import WorkerResources
 
 
 class _DummySchemaProvider:
@@ -43,6 +44,7 @@ def _make_environment() -> DockerEnvironment:
     env.schema_provider = _DummySchemaProvider()
     env.cpu_cores = 1.0
     env.ram_bytes = 256 * 1024 * 1024
+    env.worker_resources = None
     env.image_name = "postgres:18"
     env.network_name = "pbt-network"
     env.base_port = 5440
@@ -58,6 +60,7 @@ def _make_environment() -> DockerEnvironment:
     env._ready_timeout = 60
     env._restore_ready_timeout = 180
     env._restore_api_timeout = 180
+    env._num_parallel_workers = 1  # Default: sequential execution
     env._wait_for_ready = MagicMock()
     env._checkpoint_instance = MagicMock()
 
@@ -66,6 +69,47 @@ def _make_environment() -> DockerEnvironment:
     env.client.volumes = MagicMock()
 
     return env
+
+
+def test_worker_cpu_budget_prefers_worker_resources() -> None:
+    """Cpuset sizing should use the canonical per-worker budget when available."""
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+    )
+    env.cpu_cores = 1.0
+
+    assert env._worker_cpu_budget() == 2
+
+
+from unittest.mock import MagicMock, patch
+
+@patch("os.cpu_count", return_value=4)
+def test_worker_cpuset_cpus_uses_budget_only(mock_cpu_count: MagicMock) -> None:
+    """Cpuset slices should be derived from the budget and parallel batch position.
+
+    Workers cycle through the same CPU slices across sequential batches.
+    Example: 4 workers, 2 parallel, 2 CPUs per worker on 4-CPU host:
+    - Batch 1 (workers 0-1): [0,1], [2,3]
+    - Batch 2 (workers 2-3): [0,1], [2,3] (cycles)
+    """
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+    )
+    env._num_parallel_workers = 2
+
+    # Batch 1: workers 0-1 (parallel)
+    assert env._worker_cpuset_cpus(worker_id=0, num_workers=4) == "0,1"
+    assert env._worker_cpuset_cpus(worker_id=1, num_workers=4) == "2,3"
+
+    # Batch 2: workers 2-3 (sequential to batch 1, so they cycle back to same CPUs)
+    assert env._worker_cpuset_cpus(worker_id=2, num_workers=4) == "0,1"
+    assert env._worker_cpuset_cpus(worker_id=3, num_workers=4) == "2,3"
 
 
 def test_restore_snapshot_returns_false_when_image_missing() -> None:
@@ -291,7 +335,7 @@ def test_setup_instances_uses_absolute_bind_paths_for_relative_base_dir() -> Non
     env.snapshot_exists = MagicMock(return_value=True)
     env.create_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     worker_run_call = next(
         call
@@ -316,7 +360,7 @@ def test_setup_instances_reuses_existing_snapshot_without_recommit() -> None:
     env.snapshot_exists = MagicMock(return_value=True)
     env.create_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     first_get_call = env.client.containers.get.call_args_list[0]
     assert first_get_call.args[0] == "eval-worker-0"
@@ -339,7 +383,7 @@ def test_setup_instances_recreates_worker0_when_baseline_snapshot_missing() -> N
     env.snapshot_exists = MagicMock(return_value=False)
     env.create_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     existing_container.remove.assert_called_once_with(force=True)
     env.client.containers.run.assert_called_once()
@@ -363,7 +407,7 @@ def test_setup_instances_raises_when_baseline_snapshot_creation_fails() -> None:
         RuntimeError,
         match="Failed to create baseline Docker snapshot for worker 0",
     ):
-        env.setup_instances(num_workers=1, force_recreate=False)
+        env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     env.create_snapshot.assert_called_once_with(worker_id=0)
 
@@ -383,7 +427,7 @@ def test_setup_instances_force_recreate_baseline_removes_snapshot_once() -> None
     env.create_snapshot = MagicMock()
     env._remove_baseline_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     env._remove_baseline_snapshot.assert_called_once()
 
@@ -397,7 +441,7 @@ def test_setup_instances_tracks_worker_before_ready_wait() -> None:
     env._wait_for_ready = MagicMock(side_effect=RuntimeError("readiness failed"))
 
     with pytest.raises(RuntimeError, match="readiness failed"):
-        env.setup_instances(num_workers=1, force_recreate=False)
+        env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     assert 0 in env.instances
     assert env.instances[0].running is True

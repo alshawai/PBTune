@@ -45,7 +45,9 @@ class _DummyEnvironment(DatabaseEnvironment):
     def restore_snapshot(self, worker_id: int) -> bool:
         return False
 
-    def clone_instances(self, source_worker_id: int, target_worker_ids: list[int]) -> bool:
+    def clone_instances(
+        self, source_worker_id: int, target_worker_ids: list[int]
+    ) -> bool:
         return True
 
     def get_db_config(self, worker_id: int) -> DatabaseConfig:
