@@ -31,6 +31,7 @@ class BOConfig:
 
     # Knob Space
     knob_tier: str = "core"  # minimal, core, standard, extensive
+    knob_source: str = "expert"  # expert, data_driven
 
     # Benchmark/workload configuration
     benchmark_config: BenchmarkConfig = field(
@@ -110,6 +111,7 @@ class BOConfig:
 
         self.pbt_session_path = path
         self.knob_tier = str(session.get("knob_tier", self.knob_tier))
+        self.knob_source = str(session.get("knob_source", self.knob_source))
         benchmark = str(session.get("benchmark_name", self.benchmark_config.benchmark))
         workload_type = str(
             session.get("workload_type", self.benchmark_config.workload_type)
@@ -274,6 +276,7 @@ class BOConfig:
             else base_config.n_iterations,
             random_seed=args.seed if args.seed is not None else base_config.random_seed,
             knob_tier=args.tier or base_config.knob_tier,
+            knob_source=args.knob_source or base_config.knob_source,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
             docker_image=args.docker_image,
@@ -326,6 +329,10 @@ class BOConfig:
                 )
 
         config.max_workers = config.resource_division if config.batched_bo else 1
+
+        # Explicit CLI overrides session / defaults
+        if getattr(args, "knob_source", None) is not None:
+            config.knob_source = args.knob_source
 
         return config
 

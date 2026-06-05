@@ -207,6 +207,7 @@ class PBTTuner:
         workload_type: WorkloadType = WorkloadType.OLTP,
         workload_file: Optional[str] = None,
         random_seed: Optional[int] = None,
+        knob_source: str = "expert",
         **kwargs,
     ):
         """
@@ -277,8 +278,31 @@ class PBTTuner:
 
         self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
 
-        LOGGER.info("Loading knob space: %s", knob_tier.capitalize())
-        self.knob_space = get_knob_space(knob_tier)
+        self.knob_source = knob_source
+
+        # Resolve granular workload type
+        if benchmark == "sysbench":
+            resolved_workload_type = (
+                self.pbt_config.benchmark_config.sysbench_workload
+                if self.pbt_config and self.pbt_config.benchmark_config
+                else "oltp_read_write"
+            )
+        elif benchmark == "tpch":
+            resolved_workload_type = "olap"
+        else:
+            resolved_workload_type = kwargs.get("workload") or workload_type.value
+
+        LOGGER.info(
+            "Loading knob space: %s (source: %s, workload: %s)",
+            knob_tier.capitalize(),
+            self.knob_source,
+            resolved_workload_type,
+        )
+        self.knob_space = get_knob_space(
+            knob_tier,
+            knob_source=self.knob_source,
+            workload_type=resolved_workload_type,
+        )
 
         self.full_knob_space = self.knob_space
         if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
@@ -1176,6 +1200,7 @@ class PBTTuner:
         results = {
             "tuning_session": {
                 "knob_tier": self.knob_tier,
+                "knob_source": self.knob_source,
                 "num_knobs": len(self.full_knob_space),
                 "workload_type": self.workload_type.value,
                 "benchmark_name": self.benchmark_name,
@@ -1435,6 +1460,14 @@ on your hardware, configuration, and workload/benchmark.
         default="minimal",
         choices=["minimal", "core", "standard", "extensive"],
         help="Knob space tier (default: minimal)",
+    )
+
+    config_group.add_argument(
+        "--knob-source",
+        type=str,
+        default="expert",
+        choices=["expert", "data_driven"],
+        help="Knob source to use (default: expert)",
     )
 
     config_group.add_argument(
@@ -1857,6 +1890,7 @@ def main():
             workload_type=workload_type,
             workload_file=args.workload_file,
             random_seed=args.random_seed,
+            knob_source=args.knob_source,
             force_recreate_instances=args.force_recreate_instances,
             force_recreate_baseline=args.force_recreate_baseline,
             cleanup_instances=args.cleanup_instances,

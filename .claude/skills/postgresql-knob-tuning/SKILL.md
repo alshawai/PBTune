@@ -23,10 +23,10 @@ PostgreSQL parameters have three contexts that determine how they take effect:
 
 | Tier | Count | Use Case | CSV File |
 |------|-------|----------|----------|
-| `minimal` | 5 | Quick testing, debugging | `data/tuner_knobs/minimal_knobs.csv` |
-| `core` | 10 | Standard tuning | `data/tuner_knobs/core_knobs.csv` |
-| `standard` | 20 | Comprehensive tuning | `data/tuner_knobs/standard_knobs.csv` |
-| `extensive` | 40+ | Research-grade full analysis | `data/tuner_knobs/extensive_knobs.csv` |
+| `minimal` | 5 | Quick testing, debugging | `data/expert_defined_knobs/minimal_knobs.csv` |
+| `core` | 10 | Standard tuning | `data/expert_defined_knobs/core_knobs.csv` |
+| `standard` | 20 | Comprehensive tuning | `data/expert_defined_knobs/standard_knobs.csv` |
+| `extensive` | 40+ | Research-grade full analysis | `data/expert_defined_knobs/extensive_knobs.csv` |
 
 ## Hardware-Relative Fractional Representation
 

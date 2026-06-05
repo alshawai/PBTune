@@ -699,3 +699,53 @@ def test_load_pbt_results_coerces_worker_resources_dict(mock_get_knob_space, tmp
     assert resolved_resources.cpu_cores == 2
     assert resolved_resources.disk_type == "SSD"
     assert _.knob_bounds["shared_buffers"] == (10.0, 20.0)
+
+
+def test_sysbench_workload_promotion():
+    """Test that sysbench workload is promoted to workload_type in metadata."""
+    from src.analysis.data_loader import _build_session_metadata
+    from pathlib import Path
+
+    file_path = Path("mock_session.json")
+    session_meta = {
+        "workload_type": "oltp",
+        "benchmark_name": "sysbench",
+        "sysbench_workload": "oltp_read_write",
+        "some_other_field": 42,
+    }
+    data = {}
+
+    metadata = _build_session_metadata(
+        file_path=file_path,
+        session_meta=session_meta,
+        data=data,
+        default_workload_type="oltp",
+    )
+
+    assert metadata["workload_type"] == "oltp_read_write"
+    assert metadata["benchmark_name"] == "sysbench"
+    assert metadata["some_other_field"] == 42
+
+
+def test_sysbench_workload_no_promotion_for_non_sysbench():
+    """Test that sysbench workload is NOT promoted for non-sysbench benchmarks."""
+    from src.analysis.data_loader import _build_session_metadata
+    from pathlib import Path
+
+    file_path = Path("mock_session.json")
+    session_meta = {
+        "workload_type": "olap",
+        "benchmark_name": "tpch",
+        "sysbench_workload": "oltp_read_write",
+    }
+    data = {}
+
+    metadata = _build_session_metadata(
+        file_path=file_path,
+        session_meta=session_meta,
+        data=data,
+        default_workload_type="olap",
+    )
+
+    assert metadata["workload_type"] == "olap"
+    assert metadata["benchmark_name"] == "tpch"

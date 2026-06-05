@@ -95,8 +95,22 @@ class BOBaselineRunner:
                 f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM per instance"
             )
 
+        # Resolve granular workload type
+        if config.benchmark_config.benchmark == "sysbench":
+            resolved_workload_type = (
+                config.benchmark_config.sysbench_workload or "oltp_read_write"
+            )
+        elif config.benchmark_config.benchmark == "tpch":
+            resolved_workload_type = "olap"
+        else:
+            resolved_workload_type = config.benchmark_config.workload_type
+
         # Load knob space
-        self.knob_space = get_knob_space(config.knob_tier)
+        self.knob_space = get_knob_space(
+            config.knob_tier,
+            knob_source=config.knob_source,
+            workload_type=resolved_workload_type,
+        )
         self.knob_space.resolve_hardware_ranges(self.worker_resources)
 
         # Database config
@@ -629,6 +643,12 @@ def main():
         "--tier",
         choices=["minimal", "core", "standard", "extensive"],
         help="Knob space tier. Optional when --pbt-session is provided.",
+    )
+    parser.add_argument(
+        "--knob-source",
+        choices=["expert", "data_driven"],
+        default=None,
+        help="Knob source to use (expert, data_driven) (default: loaded from PBT session or expert)",
     )
     parser.add_argument(
         "--pbt-session",

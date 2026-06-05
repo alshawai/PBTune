@@ -175,7 +175,7 @@ def _extract_knob_bounds(
     bounds: dict[str, tuple[float, float]] = {}
     parsed_resources = _coerce_worker_resources(worker_resources)
     try:
-        space = get_knob_space(tier)
+        space = get_knob_space(tier, knob_source="expert")
         if parsed_resources is not None:
             space.resolve_hardware_ranges(parsed_resources)
     except Exception as e:
@@ -227,6 +227,15 @@ def _build_session_metadata(
         "system_info": data.get("system_info", {}),
         "worker_resources": data.get("worker_resources", {}),
     }
+    # Promote to granular sysbench workload when available.
+    # The tuner writes the coarse WorkloadType enum ("oltp") as workload_type,
+    # but the granular sysbench mode (e.g. "oltp_read_write") is stored separately
+    # under "sysbench_workload" in the tuning_session metadata.
+    if metadata["benchmark_name"] == "sysbench" and session_meta.get(
+        "sysbench_workload"
+    ):
+        metadata["workload_type"] = session_meta["sysbench_workload"]
+
     # Preserve all additional session_meta fields (e.g., sysbench_workload, scale_factor)
     for key, value in session_meta.items():
         if key not in {"workload_type", "benchmark_name"}:
@@ -242,6 +251,18 @@ def _build_session_metadata(
             metadata[scoring_key] = data[scoring_key]
 
     return metadata
+
+
+def _to_coarse_workload(workload: str) -> str:
+    """Normalize a granular workload type to a coarse workload type ('oltp', 'olap', or 'mixed')."""
+    workload_lower = workload.lower()
+    if "oltp" in workload_lower:
+        return "oltp"
+    if "olap" in workload_lower or "tpch" in workload_lower:
+        return "olap"
+    if "mixed" in workload_lower:
+        return "mixed"
+    return "oltp"  # Fallback default
 
 
 def load_pbt_results(
@@ -371,7 +392,9 @@ def load_pbt_results(
             config_df=pd.DataFrame(),
             scores=pd.Series(dtype=float),
             metadata=metadata_list,
-            metric_config=create_metric_config(default_workload_type),
+            metric_config=create_metric_config(
+                _to_coarse_workload(default_workload_type)
+            ),
             knob_bounds={},
             n_observations=0,
         )
@@ -392,7 +415,7 @@ def load_pbt_results(
 
     global_metric_config, global_scores, rescoring_metadata = rescore_metrics_globally(
         valid_metrics,
-        workload=workload,
+        workload=_to_coarse_workload(workload),
         padding_factor=0.0,
         scoring_policy=scoring_policy,
         scoring_policy_version=scoring_policy_version,

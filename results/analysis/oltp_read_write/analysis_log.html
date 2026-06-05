@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>PBT Tuning Log - 2026-06-05 05:24:42</title>
+        <style>
+            :root {
+                --bg-color: #1e1e1e;
+                --text-color: #d4d4d4;
+                --border-color: #3498db;
+                --info-color: #2ecc71;
+                --warning-color: #f39c12;
+                --error-color: #e74c3c;
+                --debug-color: #1abc9c;
+                --muted-color: #7f8c8d;
+            }
+
+            body {
+                background-color: var(--bg-color);
+                color: var(--text-color);
+                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                font-size: 13px;
+                padding: 20px;
+                line-height: 1.6;
+                margin: 0;
+            }
+
+            .header {
+                border-bottom: 2px solid var(--border-color);
+                padding-bottom: 20px;
+                margin-bottom: 20px;
+            }
+
+            .header h2 {
+                color: var(--border-color);
+                margin: 0 0 10px 0;
+            }
+
+            .header p {
+                color: var(--muted-color);
+                margin: 5px 0;
+            }
+
+            .logs {
+                max-width: 100%;
+                overflow-x: auto;
+            }
+
+            .log-line {
+                margin: 2px 0;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                padding: 2px 0;
+            }
+
+            .log-line:hover {
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+
+            .level-info { color: var(--info-color); font-weight: bold; }
+            .level-warning { color: var(--warning-color); font-weight: bold; }
+            .level-error { color: var(--error-color); font-weight: bold; }
+            .level-debug { color: var(--debug-color); font-weight: bold; }
+
+            .footer {
+                border-top: 2px solid var(--border-color);
+                padding-top: 20px;
+                margin-top: 20px;
+                color: var(--muted-color);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h2>🔧 PBT PostgreSQL Tuning Log</h2>
+            <p>Generated: 2026-06-05 05:24:42</p>
+        </div>
+        <div class="logs">
+    <div class="log-line"><span style="color: #2ecc71">2026-06-05 05:24:42</span> - <span style="color: #2ecc71; font-weight: bold">  INFO </span> - <span style="color: #7b61ff; font-weight: bold">Analyzer            </span> - Running fANOVA/SHAP for 3cores_6GB_SSD...</div>
+<div class="log-line"><span style="color: #f39c12">2026-06-05 05:24:44</span> - <span style="color: #f39c12; font-weight: bold">WARNING</span> - <span style="color: #d8596e; font-weight: bold">fanova.fanova.fANOVA</span> - Note that fANOVA expects data to be ordered like the return of ConfigSpace&#x27;s &#x27;get_hyperparameters&#x27;-method. We recommend to use labeled pandas dataframes to avoid any problems.</div>
+<div class="log-line"><span style="color: #f39c12">2026-06-05 05:24:51</span> - <span style="color: #f39c12; font-weight: bold">WARNING</span> - <span style="color: #d88959; font-weight: bold">Importance          </span> - Low correlation between fANOVA and SHAP importance rankings: ρ = 0.638</div>
+<div class="log-line"><span style="color: #2ecc71">2026-06-05 05:25:30</span> - <span style="color: #2ecc71; font-weight: bold">  INFO </span> - <span style="color: #7b61ff; font-weight: bold">Analyzer            </span> - Running tier generation for 3cores_6GB_SSD...</div>
+<div class="log-line"><span style="color: #2ecc71">2026-06-05 05:25:30</span> - <span style="color: #2ecc71; font-weight: bold">  INFO </span> - <span style="color: #7b61ff; font-weight: bold">Analyzer            </span> - Saved results to results/analysis/oltp_read_write/importance_results.json</div>
+<div class="log-line"><span style="color: #2ecc71">2026-06-05 05:25:30</span> - <span style="color: #2ecc71; font-weight: bold">  INFO </span> - <span style="color: #596ed8; font-weight: bold">analysis.tier_generator</span> - Exported data-driven tiers to data/data_driven_knobs/oltp_read_write/data_driven_tiers.json</div>
+    </div>
+        <div class="footer">
+            <p>End of log - Total runtime: 48.6s</p>
+        </div>
+    </body>
+    </html>
