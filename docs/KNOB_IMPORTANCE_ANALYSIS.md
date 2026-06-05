@@ -85,8 +85,8 @@ anchors so importance estimates are comparable across workers and sessions.
 
 Jenks Natural Breaks is applied as a one-dimensional optimization over the
 importance distribution to produce discrete tier boundaries. The silhouette
-score selects the best number of tiers. If the silhouette is weak or unstable,
-expert-defined tiers are used as a fallback.
+score selects the best number of tiers for scientific analysis and reporting.
+However, to ensure compatibility with the tuner's canonical 4-tier system (`minimal`, `core`, `standard`, `extensive`), the exported `data_driven_tiers.json` is generated using a second Jenks pass that projects the importances onto canonical tiers and saves them to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json`. If the silhouette or data splits are weak, expert-defined tiers remain the fallback.
 
 ## Conservative Hardware Safety Rule
 
@@ -113,7 +113,8 @@ importance changes with these features.
 2. Knobs are fractional-normalized to a common scale.
 3. The aggregated dataset trains a Random Forest surrogate.
 4. fANOVA and TreeSHAP compute global importance.
-5. Jenks Natural Breaks converts importance to tiers.
+5. Jenks Natural Breaks converts importance to tiers (optimal k for analysis).
+6. A second pass projects the importances onto canonical tiers and exports them to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json` via `--export-tiers`.
 
 ## References
 

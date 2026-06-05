@@ -102,6 +102,7 @@ class TuningSessionData:
     workload_type: str
     session_id: str
     sysbench_workload: Optional[str] = None
+    knob_source: str = "expert"
     scoring_policy: str = "fixed_v1"
     scoring_policy_version: str = "1.0"
     metric_reference_version: str = "v1"

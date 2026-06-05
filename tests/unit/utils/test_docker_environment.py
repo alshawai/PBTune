@@ -86,6 +86,7 @@ def test_worker_cpu_budget_prefers_worker_resources() -> None:
 
 from unittest.mock import MagicMock, patch
 
+
 @patch("os.cpu_count", return_value=4)
 def test_worker_cpuset_cpus_uses_budget_only(mock_cpu_count: MagicMock) -> None:
     """Cpuset slices should be derived from the budget and parallel batch position.
