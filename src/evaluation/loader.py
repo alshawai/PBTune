@@ -184,6 +184,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
     )
 
     score_breakdown = score_breakdown_from_dict(scoring_metadata["score_breakdown"])
+    knob_source = str(ts_meta.get("knob_source", "expert"))
 
     return TuningSessionData(
         best_knobs=best_knobs,
@@ -194,6 +195,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         benchmark=benchmark,
         workload_type=workload_type,
         sysbench_workload=sysbench_workload,
+        knob_source=knob_source,
         session_id=session_id,
         scoring_policy=scoring_metadata["scoring_policy"],
         scoring_policy_version=scoring_metadata["scoring_policy_version"],

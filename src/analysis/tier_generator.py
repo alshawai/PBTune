@@ -374,6 +374,155 @@ def generate_tiers(
     )
 
 
+def export_data_driven_tiers(
+    marginal_importances: dict[str, float],
+    workload_label: str,
+    output_path: Path | None = None,
+    source_results: str = "",
+) -> TierResult:
+    """Export importance scores as a data_driven_tiers.json file.
+
+    Runs Jenks Natural Breaks to find the optimal number of tiers (k),
+    then projects/maps the optimal tiers onto the canonical 4-tier
+    system [minimal, core, standard, extensive] expected by the tuner.
+
+    This ensures the exported file is always compatible with the
+    downstream tuner, knob_loader, and evaluation modules.
+
+    The default output path is ``data/data_driven_knobs/{workload_label}/data_driven_tiers.json``
+    so that results for different workloads never overwrite each other.
+
+    Args:
+        marginal_importances: Mapping of knob name to fANOVA importance score.
+        workload_label: Granular workload type (e.g. "oltp_read_write").
+        output_path: Where to write the data_driven_tiers.json file.  When
+            ``None`` (default), the path is resolved to
+            ``data/data_driven_knobs/{workload_label}/data_driven_tiers.json``.
+        source_results: Source results directory for metadata provenance.
+
+    Returns:
+        The TierResult produced by the optimal Jenks pass.
+    """
+    from datetime import datetime, timezone
+
+    # Resolve default workload-specific path when not explicitly provided
+    if output_path is None:
+        output_path = (
+            Path("data")
+            / "data_driven_knobs"
+            / workload_label
+            / "data_driven_tiers.json"
+        )
+
+    # Run the standard/optimal Jenks clustering pass
+    tier_result = generate_tiers(
+        marginal_importances=marginal_importances,
+        workload_label=workload_label,
+    )
+
+    # Project optimal assignments to canonical assignments
+    canonical_assignments: dict[str, list[str]] = {
+        "minimal": [],
+        "core": [],
+        "standard": [],
+        "extensive": [],
+    }
+
+    opt_k = tier_result.optimal_k
+
+    for knob, opt_tier in tier_result.tier_assignments.items():
+        canonical_tier = "extensive"  # default fallback
+
+        if opt_k == 4:
+            if opt_tier == "minimal":
+                canonical_tier = "minimal"
+            elif opt_tier == "core":
+                canonical_tier = "core"
+            elif opt_tier == "standard":
+                canonical_tier = "standard"
+            elif opt_tier == "extensive":
+                canonical_tier = "extensive"
+        elif opt_k == 3:
+            if opt_tier == "minimal":
+                canonical_tier = "minimal"
+            elif opt_tier == "standard":
+                canonical_tier = "core"
+            elif opt_tier == "extensive":
+                canonical_tier = "extensive"
+        elif opt_k == 2:
+            if opt_tier == "tier_1":
+                canonical_tier = "minimal"
+            elif opt_tier == "tier_2":
+                canonical_tier = "extensive"
+        elif opt_k == 1:
+            if opt_tier == "tier_1":
+                canonical_tier = "minimal"
+        elif opt_k == 5:
+            if opt_tier == "tier_1":
+                canonical_tier = "minimal"
+            elif opt_tier == "tier_2":
+                canonical_tier = "core"
+            elif opt_tier in ("tier_3", "tier_4"):
+                canonical_tier = "standard"
+            elif opt_tier == "tier_5":
+                canonical_tier = "extensive"
+        elif opt_k == 6:
+            if opt_tier == "tier_1":
+                canonical_tier = "minimal"
+            elif opt_tier == "tier_2":
+                canonical_tier = "core"
+            elif opt_tier in ("tier_3", "tier_4", "tier_5"):
+                canonical_tier = "standard"
+            elif opt_tier == "tier_6":
+                canonical_tier = "extensive"
+        else:
+            # General fallback projection logic if opt_k is outside 1-6
+            # Map optimal tiers to canonical based on fractional index
+            opt_names = get_tier_names(opt_k)
+            try:
+                idx = opt_names.index(opt_tier)
+                fraction = idx / (opt_k - 1) if opt_k > 1 else 0.0
+                if fraction < 0.25:
+                    canonical_tier = "minimal"
+                elif fraction < 0.5:
+                    canonical_tier = "core"
+                elif fraction < 0.75:
+                    canonical_tier = "standard"
+                else:
+                    canonical_tier = "extensive"
+            except ValueError:
+                canonical_tier = "extensive"
+
+        canonical_assignments[canonical_tier].append(knob)
+
+    # Build output with canonical tier order; extensive = null (all knobs)
+    canonical_order = ["minimal", "core", "standard", "extensive"]
+    tiers: dict[str, list[str] | None] = {}
+    for tier_name in canonical_order:
+        if tier_name == "extensive":
+            tiers[tier_name] = None
+        else:
+            tiers[tier_name] = sorted(canonical_assignments[tier_name])
+
+    payload = {
+        "metadata": {
+            "workload_type": workload_label,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "optimal_k": tier_result.optimal_k,
+            "source_results": source_results,
+        },
+        "tiers": tiers,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+
+    logger.info("Exported data-driven tiers to %s", output_path)
+    return tier_result
+
+
 def load_importances_csv(csv_path: Path) -> dict[str, float]:
     """Load marginal importances from a CSV file.
 

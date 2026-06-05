@@ -1600,7 +1600,7 @@ tests/integration/test_cross_dbms.py
 | 20 | `src/tuner/main.py` | Accept `--dbms`, use adapter factory, DBMS-aware paths | R9 |
 | 21 | `src/scripts/setup_database.py` | Use adapter for DDL | R9 |
 | 22 | `src/scripts/cleanup_instances.py` | Use adapter | R9 |
-| 23 | `src/scripts/analyze_knobs.py` | Use adapter for retrieval | R9 |
+| 23 | `src/scripts/analyze_knob_importance.py` | Use adapter for retrieval | R9 |
 | 24 | `requirements.txt` | Add `mysql-connector-python` | R2 |
 | 25 | `README.md` | Document MySQL support | R11 |
 | 26 | `docs/ENVIRONMENT_SETUP.md` | Add MySQL setup | R11 |
