@@ -169,7 +169,7 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component
 │   └── CONFIGURATION_MANAGEMENT.md         # KnobSpace, KnobApplicator
 ├── data/                         # JSON Knob metadata/policy files (and gitignored CSV exports)
 │   ├── postgresql_knobs.csv      # PostgreSQL knob definitions
-│   └── tuner_knobs/              # Tiered knob selections (minimal, core, standard)
+│   └── expert_defined_knobs/     # Tiered expert knob selections (minimal, core, standard)
 ├── results/                      # Optimization results (JSON + HTML logs)
 ├── workloads/                    # Workload definitions (OLTP, OLAP, custom)
 ├── notebooks/                    # Jupyter notebooks for analysis

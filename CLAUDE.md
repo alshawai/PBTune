@@ -77,7 +77,7 @@ python -m src.scripts.setup_database
 python -m src.scripts.cleanup_instances
 
 # Analyze knob metadata
-python -m src.scripts.analyze_knobs
+python -m src.scripts.analyze_knob_importance
 ```
 
 ## Architecture Overview

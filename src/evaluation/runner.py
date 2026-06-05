@@ -684,8 +684,19 @@ class ComparisonRunner:
             )
             return dict(session.best_knobs)
 
+        if session.benchmark == "sysbench":
+            resolved_workload_type = session.sysbench_workload or "oltp_read_write"
+        elif session.benchmark == "tpch":
+            resolved_workload_type = "olap"
+        else:
+            resolved_workload_type = session.workload_type
+
         try:
-            knob_space = get_knob_space(tier)
+            knob_space = get_knob_space(
+                tier,
+                knob_source=session.knob_source,
+                workload_type=resolved_workload_type,
+            )
         except Exception as exc:
             LOGGER.warning(
                 "Failed to load knob space for tier '%s': %s. Applying stored knob values as-is.",

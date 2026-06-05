@@ -72,26 +72,11 @@ are validated.
 
 ### Future State: Data-Driven Tiers
 1. Run fANOVA importance analysis → sorted importance scores
-2. Apply silhouette score across k = 2..6 to find optimal number of tiers
-3. Apply Jenks Natural Breaks on importance scores for optimal boundaries
-4. **Key insight:** Tier sizes are NOT fixed — data determines both the
-   number of tiers and the membership cutoffs
+2. Apply silhouette score across k = 2..6 to find the optimal number of tiers for scientific analysis reporting.
+3. Apply Jenks Natural Breaks with optimal k on the final importances for export.
+4. **Canonical Projection:** Regardless of optimal k, the final export projects the data-driven tiers onto the 4 canonical names (`minimal`, `core`, `standard`, `extensive`) expected by the tuner.
+5. Export to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json` via `--export-tiers [PATH]` option on the CLI.  Each workload writes to its own subdirectory, so runs for different workloads never overwrite each other.
 
-```python
-from jenkspy import JenksNaturalBreaks
-from sklearn.metrics import silhouette_score
-
-# Find optimal k
-best_k = max(range(2, 7), key=lambda k: silhouette_score(
-    importance_scores.reshape(-1, 1),
-    JenksNaturalBreaks(k).fit(importance_scores).labels_
-))
-
-# Apply Jenks with optimal k
-jnb = JenksNaturalBreaks(best_k)
-jnb.fit(importance_scores)
-tier_labels = jnb.labels_
-```
 
 ## Two-Dimensional Analysis Architecture
 
@@ -124,6 +109,7 @@ it gets tier-1. This prevents accidentally excluding important knobs.
 
 | Component | File |
 |-----------|------|
-| Analysis script | `src/scripts/analyze_knobs.py` (existing, basic) |
+| Analysis script | `src/scripts/analyze_knob_importance.py` (full pipeline) |
 | Knob metadata | `src/knobs/knob_metadata.py` |
-| Tier CSVs | `data/tuner_knobs/{tier}_knobs.csv` |
+| Tier CSVs | `data/expert_defined_knobs/{tier}_knobs.csv` or `data/data_driven_knobs/{workload_type}/{tier}_knobs.csv` |
+| Tier export bridge | Run analysis script with `--export-tiers` to generate `data/data_driven_knobs/{workload_type}/data_driven_tiers.json` |
