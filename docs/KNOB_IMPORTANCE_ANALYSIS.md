@@ -1,9 +1,112 @@
+# Knob Importance Analysis
+
 ## Overview
 
 This document describes the knob importance analysis workflow used to derive
 stable, hardware-aware tuning tiers. The approach combines fANOVA variance
 attribution with TreeSHAP explanations and uses Jenks Natural Breaks to
 translate continuous importance into discrete tiers.
+
+> Last reviewed: 2026-06-07. See also: [Documentation Index](./README.md), [Configuration Management](./CONFIGURATION_MANAGEMENT.md), [Visualization](./VISUALIZATION.md).
+
+## Data Flow
+
+```text
+results/{workload}/pbt_runs/extensive/tuning_sessions/
+    pbt_results_*.json
+                │
+                ▼  data_loader.load_sessions(...)
+                │  • parse session JSON (fixed_v1 + feature_driven_v2)
+                │  • rescore raw PerformanceMetrics with global anchors
+                │  • encode categorical knobs
+                │  • resolve hardware-relative bounds when WorkerResources is present
+                ▼
+        (X, y)  ←  X: per-evaluation knob configurations (fractional or absolute)
+                    y: rescored composite scores
+                │
+                ▼  importance.fit_random_forest(X, y)
+                │  • Random Forest surrogate (default 256 trees)
+                │  • report R²
+                ▼
+        forest, X, y
+                │
+                ├──► importance.run_fanova(forest, X, y)
+                │       • per-knob variance attribution
+                │       • pairwise interaction terms
+                │
+                ├──► importance.run_treeshap(forest, X)
+                │       • global SHAP importance (mean |φ_i|)
+                │       • SHAP dependence values for plotting
+                │
+                ├──► importance.fanova_shap_rank_correlation(...)
+                │       • Spearman ρ as a method-agreement diagnostic
+                │
+                ▼
+        ImportanceReport (per workload)
+                │
+                ├──► hardware_validator.compute_kendall_tau(reports_per_hardware)
+                │       • per-knob ranking stability across machines
+                │       • combined RF with hardware features (ram_bytes, cpu_cores, disk_type)
+                │
+                ▼
+        tier_generator.assign_tiers(importances)
+                │  • Jenks Natural Breaks (silhouette-selected k)
+                │  • second pass projects onto canonical 4 tiers
+                │  • conservative across hardware: final_tier = max(tier_per_hardware)
+                ▼
+        data/data_driven_knobs/{workload}/
+            data_driven_tiers.json
+            minimal_knobs.csv
+            core_knobs.csv
+            standard_knobs.csv
+            extensive_knobs.csv
+                │
+                ▼  load_data_driven_tiers() in src/knobs/knob_metadata.py
+                ▼  get_knob_space(tier, source="data_driven", workload=...)
+                ▼
+        Next PBT/BO session uses the data-driven tiers
+```
+
+The pipeline is invoked end-to-end by [`python -m src.scripts.analyze_knob_importance`](../src/scripts/analyze_knob_importance.py). Use `--export-tiers` to write the `data_driven_*` artifacts; without it the script only prints diagnostics and saves the importance JSON for visualization.
+
+## `data_driven_tiers.json` Schema
+
+```json
+{
+  "workload_label": "oltp_read_write",
+  "generated_at": "2026-05-30T18:42:11Z",
+  "expert_tiers_baseline": {
+    "minimal":  ["shared_buffers", "effective_cache_size", ...],
+    "core":     [...],
+    "standard": [...],
+    "extensive": [...]
+  },
+  "data_driven_tiers": {
+    "minimal":  ["shared_buffers", "work_mem", ...],
+    "core":     [...],
+    "standard": [...],
+    "extensive": [...]
+  },
+  "agreement_with_expert": {
+    "minimal":  0.83,
+    "core":     0.71,
+    "standard": 0.65,
+    "extensive": 0.92
+  },
+  "importance_per_knob": {
+    "shared_buffers": { "fanova": 0.214, "shap": 0.198, "rank": 1 },
+    ...
+  },
+  "tier_breaks": {
+    "method": "jenks",
+    "k_selected": 4,
+    "silhouette": 0.41,
+    "fallback": null
+  }
+}
+```
+
+The `agreement_with_expert` block reports the fraction of expert-tier members that survived into the data-driven tier of the same name. Low agreement on a tier is a signal that the expert categorisation may benefit from review for that workload — not that the data-driven tier is automatically correct. The conservative hardware safety rule is applied before this comparison.
 
 ## fANOVA Setup and Dependencies
 
@@ -93,7 +196,7 @@ However, to ensure compatibility with the tuner's canonical 4-tier system (`mini
 The final tier for each knob uses the most conservative assignment across
 hardware profiles:
 
-```
+```text
 final_tier = max(tier_per_hardware)
 ```
 
