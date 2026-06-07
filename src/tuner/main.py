@@ -101,6 +101,7 @@ from src.utils.hardware_info import (
     get_system_info,
     log_system_info,
     detect_worker_resources,
+    resolve_manual_worker_resources,
 )
 from src.utils.types import TuningMode
 
@@ -207,6 +208,7 @@ class PBTTuner:
         workload_type: WorkloadType = WorkloadType.OLTP,
         workload_file: Optional[str] = None,
         random_seed: Optional[int] = None,
+        knob_source: str = "expert",
         **kwargs,
     ):
         """
@@ -277,13 +279,34 @@ class PBTTuner:
 
         self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
 
-        LOGGER.info("Loading knob space: %s", knob_tier.capitalize())
-        self.knob_space = get_knob_space(knob_tier)
+        self.knob_source = knob_source
 
-        if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
-            LOGGER.info(
-                "Creating ONLINE knob view by filtering out `restart-required` knobs..."
+        # Resolve granular workload type
+        if benchmark == "sysbench":
+            resolved_workload_type = (
+                self.pbt_config.benchmark_config.sysbench_workload
+                if self.pbt_config and self.pbt_config.benchmark_config
+                else "oltp_read_write"
             )
+        elif benchmark == "tpch":
+            resolved_workload_type = "olap"
+        else:
+            resolved_workload_type = kwargs.get("workload") or workload_type.value
+
+        LOGGER.info(
+            "Loading knob space: %s (source: %s, workload: %s)",
+            knob_tier.capitalize(),
+            self.knob_source,
+            resolved_workload_type,
+        )
+        self.knob_space = get_knob_space(
+            knob_tier,
+            knob_source=self.knob_source,
+            workload_type=resolved_workload_type,
+        )
+
+        self.full_knob_space = self.knob_space
+        if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
             self.knob_space = self.knob_space.create_online_view()
 
         LOGGER.info(
@@ -292,15 +315,28 @@ class PBTTuner:
             self.pbt_config.num_parallel_workers,
             COLORS.reset,
         )
-        self.worker_resources = detect_worker_resources(
-            self.pbt_config.num_parallel_workers,
-            data_path=self.data_root,
-        )
+        
+        worker_ram_str = kwargs.get("worker_ram")
+        worker_cpus = kwargs.get("worker_cpus")
+
+        if worker_ram_str is not None or worker_cpus is not None:
+            self.worker_resources = resolve_manual_worker_resources(
+                worker_ram=worker_ram_str,
+                worker_cpus=worker_cpus,
+                num_workers=self.pbt_config.num_parallel_workers,
+                data_path=self.data_root,
+            )
+        else:
+            self.worker_resources = detect_worker_resources(
+                self.pbt_config.num_parallel_workers,
+                data_path=self.data_root,
+            )
 
         LOGGER.info(
             "Resolving hardware-relative knob ranges based on detected worker resources..."
         )
-        self.knob_space.resolve_hardware_ranges(self.worker_resources)
+        self.full_knob_space.resolve_hardware_ranges(self.worker_resources)
+        self.knob_space.worker_resources = self.worker_resources
         self.db_config = get_db_config()
 
         self.metric_config = create_metric_config(
@@ -818,7 +854,6 @@ class PBTTuner:
             require_ready=True,
             max_workers=self.pbt_config.num_parallel_workers,
             synchronize_workers=self.pbt_config.synchronize_workers,
-            barrier_timeout=self.pbt_config.barrier_timeout_seconds,
         )
         gen_elapsed_time = time.time() - gen_start_time
 
@@ -951,6 +986,7 @@ class PBTTuner:
                 instances = self.env.setup_instances(
                     num_workers=self.pbt_config.population_size,
                     force_recreate=self.force_recreate_instances,
+                    num_parallel_workers=self.pbt_config.num_parallel_workers,
                 )
 
                 LOGGER.info("Verifying instance accessibility and configurations...")
@@ -984,6 +1020,14 @@ class PBTTuner:
                     population_size=self.pbt_config.population_size,
                     seed=42,
                 )
+
+                num_lhs = self.pbt_config.population_size - len(warm_configs)
+                if num_lhs > 0:
+                    lhs_configs = self.full_knob_space.sample_diverse_configs(
+                        num_samples=num_lhs, seed=self.random_seed
+                    )
+                    warm_configs.extend(lhs_configs)
+
                 LOGGER.info(
                     "Initializing %d workers configurations",
                     self.pbt_config.population_size,
@@ -996,7 +1040,12 @@ class PBTTuner:
                     "Initializing %d workers configurations",
                     self.pbt_config.population_size,
                 )
-                self.population.initialize(random_seed=self.random_seed)
+                initial_configs = self.full_knob_space.sample_diverse_configs(
+                    num_samples=self.pbt_config.population_size, seed=self.random_seed
+                )
+                self.population.initialize(
+                    initial_configs=initial_configs, random_seed=self.random_seed
+                )
 
             LOGGER.info("Assigning instance configurations to workers...")
             self.population.setup_worker_instances(
@@ -1129,7 +1178,7 @@ class PBTTuner:
             "generation": generation,
             "best_score": float(self.best_score) if self.best_score else 0.0,
             "best_config": convert_numpy_types(
-                self.knob_space.config_to_fractions(self.best_config)
+                self.full_knob_space.config_to_fractions(self.best_config)
                 if self.best_config
                 else {}
             ),
@@ -1150,7 +1199,7 @@ class PBTTuner:
     def save_final_results(self, total_time: float) -> Dict[str, Any]:
         """Save final tuning results"""
         best_metrics = self.population.best_overall_metrics
-        worker_resources = self.knob_space.worker_resources
+        worker_resources = self.worker_resources
 
         LOGGER.debug(" Building scoring payload for final results...")
         scoring_payload = self._build_scoring_payload(
@@ -1161,7 +1210,8 @@ class PBTTuner:
         results = {
             "tuning_session": {
                 "knob_tier": self.knob_tier,
-                "num_knobs": len(self.knob_space),
+                "knob_source": self.knob_source,
+                "num_knobs": len(self.full_knob_space),
                 "workload_type": self.workload_type.value,
                 "benchmark_name": self.benchmark_name,
                 "tpch_scale_factor": self.pbt_config.benchmark_config.scale_factor,
@@ -1190,7 +1240,7 @@ class PBTTuner:
             "best_configuration": {
                 "score": float(self.best_score) if self.best_score else 0.0,
                 "knobs": convert_numpy_types(
-                    self.knob_space.config_to_fractions(self.best_config)
+                    self.full_knob_space.config_to_fractions(self.best_config)
                     if self.best_config
                     else {}
                 ),
@@ -1237,7 +1287,7 @@ class PBTTuner:
         with open(best_config_file, "w", encoding="utf-8") as f:
             json.dump(
                 convert_numpy_types(
-                    self.knob_space.config_to_fractions(self.best_config)
+                    self.full_knob_space.config_to_fractions(self.best_config)
                     if self.best_config
                     else {}
                 ),
@@ -1308,18 +1358,20 @@ class PBTTuner:
             best_config_frac = warm_start_data
 
         for knob_name, knob_val in best_config_frac.items():
-            if knob_name in self.knob_space.knobs:
-                knob = self.knob_space.knobs[knob_name]
+            if knob_name in self.full_knob_space.knobs:
+                knob = self.full_knob_space.knobs[knob_name]
                 if knob.hardware_relative and knob.resource_type != "disk_type":
                     # Compute the RAW (unclamped) absolute value to detect
                     # whether the fraction is actually an absolute value.
                     # We cannot use fractions_to_config() because it clamps
                     # via normalize_value(), silently hiding overflows.
-                    resources = self.knob_space.worker_resources
+                    resources = self.full_knob_space.worker_resources
                     raw_abs = None
                     if resources is not None:
                         if knob.resource_type == "ram":
-                            bytes_per_unit = self.knob_space._get_bytes_per_unit(knob)
+                            bytes_per_unit = self.full_knob_space._get_bytes_per_unit(
+                                knob
+                            )
                             raw_abs = (knob_val * resources.ram_bytes) / bytes_per_unit
                         elif knob.resource_type == "cpu":
                             raw_abs = knob_val * resources.cpu_cores
@@ -1333,32 +1385,32 @@ class PBTTuner:
                                 f"which exceeds max {knob.max_value}."
                             )
 
-        base_config = self.knob_space.fractions_to_config(best_config_frac)
+        base_config = self.full_knob_space.fractions_to_config(best_config_frac)
 
-        missing_knobs = [k for k in self.knob_space.knobs if k not in base_config]
+        missing_knobs = [k for k in self.full_knob_space.knobs if k not in base_config]
         if missing_knobs:
             LOGGER.warning(
                 " Warm-start config missing knobs, filling in with random values: %s",
                 missing_knobs,
             )
-            template = self.knob_space.sample_random_config(seed=seed)
+            template = self.full_knob_space.sample_random_config(seed=seed)
             for k in missing_knobs:
                 base_config[k] = template[k]
 
-        dropped_knobs = [k for k in base_config if k not in self.knob_space.knobs]
+        dropped_knobs = [k for k in base_config if k not in self.full_knob_space.knobs]
         if dropped_knobs:
             LOGGER.warning(" Warm-start config dropping extra knobs: %s", dropped_knobs)
             for k in dropped_knobs:
                 del base_config[k]
 
-        is_valid, errors = self.knob_space.validate_config(base_config)
+        is_valid, errors = self.full_knob_space.validate_config(base_config)
         if not is_valid:
             LOGGER.warning(
                 " Warm-start base config validation issues: %s. "
                 "Attempting to repair dependencies.",
                 errors,
             )
-        base_config = self.knob_space.repair_config_dependencies(
+        base_config = self.full_knob_space.repair_config_dependencies(
             base_config, worker_id=0
         )
 
@@ -1368,7 +1420,7 @@ class PBTTuner:
         factors = self._compute_warm_start_perturbation_factors(num_warm_start - 1)
 
         for i, (f_min, f_max) in enumerate(factors):
-            perturbed = self.knob_space.perturb_config(
+            perturbed = self.full_knob_space.perturb_config(
                 base_config,
                 perturbation_factor=(f_min, f_max),
                 seed=seed + i,
@@ -1421,6 +1473,14 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     config_group.add_argument(
+        "--knob-source",
+        type=str,
+        default="expert",
+        choices=["expert", "data_driven"],
+        help="Knob source to use (default: expert)",
+    )
+
+    config_group.add_argument(
         "--warm-start",
         type=str,
         metavar="PATH",
@@ -1454,6 +1514,27 @@ on your hardware, configuration, and workload/benchmark.
         "--parallel-workers",
         type=int,
         help="Number of parallel workers (overrides config)",
+    )
+
+    config_group.add_argument(
+        "--worker-ram",
+        type=str,
+        default=None,
+        help=(
+            "RAM to allocate per worker (e.g., '3G', '512M', '1073741824'). "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical RAM."
+        ),
+    )
+    config_group.add_argument(
+        "--worker-cpus",
+        type=int,
+        default=None,
+        help=(
+            "CPU cores to allocate per worker. "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical CPU cores."
+        ),
     )
 
     config_group.add_argument(
@@ -1840,6 +1921,7 @@ def main():
             workload_type=workload_type,
             workload_file=args.workload_file,
             random_seed=args.random_seed,
+            knob_source=args.knob_source,
             force_recreate_instances=args.force_recreate_instances,
             force_recreate_baseline=args.force_recreate_baseline,
             cleanup_instances=args.cleanup_instances,
@@ -1854,6 +1936,8 @@ def main():
             disable_early_stopping=args.disable_early_stopping,
             ablation_variable=args.ablation_variable,
             ablation_value=args.ablation_value,
+            worker_ram=args.worker_ram,
+            worker_cpus=args.worker_cpus,
         )
 
         tuner.run()

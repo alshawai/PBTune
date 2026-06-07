@@ -17,11 +17,15 @@ from src.analysis.hardware_validator import (
     build_hardware_profile_key,
 )
 from src.analysis.importance import ImportanceResult, analyze_knob_importance
-from src.analysis.tier_generator import TierResult, generate_tiers
+from src.analysis.tier_generator import (
+    TierResult,
+    generate_tiers,
+    export_data_driven_tiers,
+)
 from src.utils.logger import get_logger
 from src.utils.logger.setup import setup_logging
 
-LOGGER = get_logger(__name__)
+LOGGER = get_logger("Analyzer")
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Where to save plots, reports, and logs. Default: results/{workload}/analysis/",
+        default=None,
+        help="Where to save plots, reports, and logs. Default: results/analysis/{workload_type}/",
     )
     parser.add_argument(
         "--workload-label",
@@ -78,6 +83,21 @@ def parse_args() -> argparse.Namespace:
         "--hardware-validation",
         action="store_true",
         help="Enable cross-hardware validation",
+    )
+    parser.add_argument(
+        "--export-tiers",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Export final tier assignments to a data_driven_tiers.json file "
+            "consumable by preprocess_knobs.py and the tuner. "
+            "Uses the canonical 4-tier system [minimal, core, standard, extensive]. "
+            "Default path when flag is present without a value: "
+            "data/data_driven_knobs/{workload_type}/data_driven_tiers.json"
+        ),
+        nargs="?",
+        const=Path("auto"),
     )
     parser.add_argument(
         "--compare",
@@ -159,7 +179,7 @@ def _resolve_workload_and_output_dir(
     if output_dir:
         out_dir = output_dir
     else:
-        out_dir = Path(f"results/{actual_workload}/analysis/")
+        out_dir = Path(f"results/analysis/{actual_workload}/")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     return actual_workload, out_dir
@@ -243,6 +263,11 @@ def _group_files_by_hardware(
             if idx == 0:
                 session_meta = data.get("tuning_session", {})
                 first_workload = session_meta.get("workload_type", "unknown")
+                # Promote to sysbench granular workload if available
+                if session_meta.get(
+                    "benchmark_name"
+                ) == "sysbench" and session_meta.get("sysbench_workload"):
+                    first_workload = session_meta.get("sysbench_workload")
 
             wr = data.get("worker_resources", {})
             if not wr:
@@ -272,7 +297,7 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
         args.workload_label if args.workload_label != "auto" else auto_workload
     )
 
-    temp_out_dir = args.output_dir or Path(f"results/{initial_workload}/analysis/")
+    temp_out_dir = args.output_dir or Path(f"results/analysis/{initial_workload}/")
     temp_out_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(verbosity="INFO", output_file=temp_out_dir / "analysis_log.html")
 
@@ -291,6 +316,7 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
     # Keep track of the final resolved paths for the combined model output
     final_actual_workload = initial_workload
     final_base_out_dir = temp_out_dir
+    hw_val_res = None
 
     for hw_key, (file_paths, wr) in groups.items():
         LOGGER.info(
@@ -411,6 +437,30 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
             LOGGER.error(
                 "Failed to merge hardware validation into main results: %s", exc
             )
+
+    if args.export_tiers:
+        if hw_val_res and hw_val_res.combined_importances:
+            export_importances = hw_val_res.combined_importances.marginal_importances
+        elif profile_results:
+            export_importances = profile_results[0][0].marginal_importances
+        else:
+            LOGGER.error("No importance results available to export.")
+            return
+
+        # Resolve the output path:
+        # - Path("auto") means the flag was given without an explicit path →
+        #   let export_data_driven_tiers() derive the workload-specific default.
+        # - Any other Path means the user specified an explicit destination.
+        explicit_path: Path | None = (
+            None if args.export_tiers == Path("auto") else args.export_tiers
+        )
+
+        export_data_driven_tiers(
+            marginal_importances=export_importances,
+            workload_label=final_actual_workload,
+            output_path=explicit_path,
+            source_results=str(args.results_dir),
+        )
 
 
 def main() -> None:

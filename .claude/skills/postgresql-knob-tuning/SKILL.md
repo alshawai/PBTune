@@ -23,10 +23,10 @@ PostgreSQL parameters have three contexts that determine how they take effect:
 
 | Tier | Count | Use Case | CSV File |
 |------|-------|----------|----------|
-| `minimal` | 5 | Quick testing, debugging | `data/tuner_knobs/minimal_knobs.csv` |
-| `core` | 10 | Standard tuning | `data/tuner_knobs/core_knobs.csv` |
-| `standard` | 20 | Comprehensive tuning | `data/tuner_knobs/standard_knobs.csv` |
-| `extensive` | 40+ | Research-grade full analysis | `data/tuner_knobs/extensive_knobs.csv` |
+| `minimal` | 5 | Quick testing, debugging | `data/expert_defined_knobs/minimal_knobs.csv` |
+| `core` | 10 | Standard tuning | `data/expert_defined_knobs/core_knobs.csv` |
+| `standard` | 20 | Comprehensive tuning | `data/expert_defined_knobs/standard_knobs.csv` |
+| `extensive` | 40+ | Research-grade full analysis | `data/expert_defined_knobs/extensive_knobs.csv` |
 
 ## Hardware-Relative Fractional Representation
 
@@ -37,7 +37,7 @@ Examples:
 - `work_mem = 0.02` → 2% of detected RAM
 - `max_parallel_workers = 0.5` → 50% of detected CPU cores
 
-Fractions are stored in population state and only resolved to absolute values at runtime for the current hardware. This enables transfer learning and warm-start portability.
+Fractions are stored in population state and only resolved to absolute values at runtime against the `WorkerResources` for the given worker. These resources are either auto-detected from host limits (divided by number of parallel workers) or manually allocated (e.g., via `--worker-ram` and `--worker-cpus`). This enables transfer learning and warm-start portability.
 
 ### Cross-Knob Aggregate Validation
 After sampling, perturbation, or exploit copy, validate:

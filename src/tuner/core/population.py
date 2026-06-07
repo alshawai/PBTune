@@ -367,7 +367,6 @@ class Population:
         parallel: bool = True,
         max_workers: Optional[int] = None,
         synchronize_workers: bool = False,
-        barrier_timeout: float = 120.0,
     ) -> None:
         """
         Evaluate all workers in the current generation.
@@ -393,8 +392,6 @@ class Population:
         synchronize_workers : bool, default=False
             When True and parallel, insert threading.Barrier sync points
             between every sub-step so workers advance in lockstep.
-        barrier_timeout : float, default=120.0
-            Timeout in seconds for each barrier wait.
 
         Example
         -------
@@ -419,9 +416,7 @@ class Population:
                 len(self.workers),
                 COLORS.reset,
             )
-            disabled_barriers = GenerationBarrier(
-                num_workers=1, timeout=barrier_timeout, enabled=False
-            )
+            disabled_barriers = GenerationBarrier(num_workers=1, enabled=False)
 
             for worker in self.workers:
                 try:
@@ -465,7 +460,6 @@ class Population:
                 # Create batch-local barriers sized to this batch.
                 batch_barriers = GenerationBarrier(
                     num_workers=len(batch),
-                    timeout=barrier_timeout,
                     enabled=use_barriers,
                 )
                 if use_barriers and len(batches) > 1:
@@ -487,45 +481,34 @@ class Population:
                         for worker in batch
                     }
 
-                    # Use a generous timeout to detect stuck workers
-                    # (barrier_timeout * num_barriers + headroom).
-                    collection_timeout = (barrier_timeout * len(batch)) + 60.0
-                    completed_futures = set()
-
-                    try:
-                        for future in as_completed(
-                            future_to_worker, timeout=collection_timeout
-                        ):
-                            completed_futures.add(future)
-                            worker = future_to_worker[future]
-                            try:
-                                metrics, score = future.result()
-                                worker.update_metrics(metrics, score)
-                            except Exception as e:
-                                worker.logger.error("Error evaluating: %s", e)
-                                batch_barriers.abort()  # Abort barriers so remaining threads unblock
-                                raise
-                    except TimeoutError:
-                        # as_completed raised TimeoutError — some futures
-                        # never completed within the generous deadline.
-                        pass
-
-                    # Check for stuck workers that never completed
-                    stuck_futures = set(future_to_worker.keys()) - completed_futures
-                    if stuck_futures:
-                        batch_barriers.abort()
-                        for future in stuck_futures:
-                            stuck_worker = future_to_worker[future]
+                    # Collect results as they complete.
+                    # No timeout — barriers wait indefinitely for peers.
+                    # Dead workers call drain_remaining() from their
+                    # exception handlers; truly stuck workers are handled
+                    # by abort() if needed.
+                    for future in as_completed(future_to_worker):
+                        worker = future_to_worker[future]
+                        try:
+                            metrics, score = future.result()
+                            worker.update_metrics(metrics, score)
                             worker_logger = get_logger(
                                 "PopulationWorker",
-                                worker_id=stuck_worker.worker_id,
+                                worker_id=worker.worker_id,
                             )
-                            worker_logger.error(
-                                "Worker stuck — did not complete within %.0fs; "
-                                "aborting barriers and continuing",
-                                collection_timeout,
+                            worker_logger.debug(
+                                "score=%.4f, step_count=%s",
+                                score,
+                                worker.step_count,
                             )
-                            future.cancel()
+                        except Exception as e:
+                            worker_logger = get_logger(
+                                "PopulationWorker",
+                                worker_id=worker.worker_id,
+                            )
+                            worker_logger.error("Error evaluating: %s", e)
+                            # Abort barriers so remaining threads unblock
+                            batch_barriers.abort()
+                            raise
 
         LOGGER.info(
             "%s➤ Evaluation of %d workers is completed.%s",
@@ -703,49 +686,13 @@ class Population:
 
             return resampled
 
-        alive_workers = sorted(
-            alive_workers, key=lambda worker: worker.performance_score, reverse=True
+        # If alive workers exist, we defer their rescue to execute_exploit_explore.
+        # execute_exploit_explore will correctly pair them with an *elite* worker,
+        # perturb the configuration, and physically clone the database.
+        LOGGER.debug(
+            " ➤ Deferring dead worker rescue to execute_exploit_explore for elite config and perturbation."
         )
-
-        rescued = 0
-        for index, dead_worker in enumerate(dead_workers):
-            donor = alive_workers[index % len(alive_workers)]
-            dead_logger = get_logger("WorkerRescuer", worker_id=dead_worker.worker_id)
-
-            dead_logger.warning(
-                " Triggering immediate rescue: exploit [Worker-%d] (score=%.3f)",
-                donor.worker_id,
-                donor.performance_score,
-            )
-
-            dead_worker.clone_from(donor, self.current_generation)
-            dead_worker.force_restart_next_eval = True
-
-            if self.env is not None:
-                recovered = False
-                try:
-                    recovered = self.env.recover_instance(dead_worker.worker_id)
-                except (ConnectionError, RuntimeError, OSError) as exc:
-                    dead_logger.error(
-                        " ➤ Instance recovery raised an unexpected error during immediate rescue: %s",
-                        exc,
-                        exc_info=True,
-                    )
-
-                if not recovered:
-                    dead_logger.error(
-                        " ➤ Instance recovery failed during immediate rescue"
-                    )
-                    continue
-
-                rescued += 1
-                dead_logger.debug(
-                    " ➤ Instance recovered. Will be re-evaluated in next generation."
-                )
-            else:
-                rescued += 1  # If no env, just count as rescued
-
-        return rescued
+        return 0
 
     def update_metric_ranges_if_needed(self) -> None:
         """
@@ -975,7 +922,6 @@ class Population:
         require_ready: bool = True,
         max_workers: Optional[int] = None,
         synchronize_workers: bool = False,
-        barrier_timeout: float = 120.0,
     ) -> GenerationResult:
         """
         Execute one complete PBT generation.
@@ -1001,8 +947,6 @@ class Population:
         synchronize_workers : bool, default=False
             When True and parallel, insert lockstep barriers between every
             sub-step of worker evaluation for experimental fairness.
-        barrier_timeout : float, default=120.0
-            Timeout per barrier in seconds.
 
         Returns
         -------
@@ -1078,7 +1022,6 @@ class Population:
             parallel=parallel,
             max_workers=max_workers,
             synchronize_workers=synchronize_workers,
-            barrier_timeout=barrier_timeout,
         )
 
         rescued = self.rescue_dead_workers()
@@ -1097,7 +1040,7 @@ class Population:
         result = self.record_generation()
 
         LOGGER.info("Performing evolution step...")
-        num_exploited = execute_exploit_explore(
+        pairs_exploited = execute_exploit_explore(
             workers=self.workers,
             exploit_quantile=self.config.exploit_quantile,
             perturbation_factors=self.config.perturbation_factors,
@@ -1107,7 +1050,24 @@ class Population:
             exclude_knobs=None,
         )
 
-        result.num_exploited = num_exploited
+        if self.env is not None and pairs_exploited:
+            clones_by_source = {}
+            for poor_idx, elite_idx in pairs_exploited:
+                source_id = self.workers[elite_idx].worker_id
+                target_id = self.workers[poor_idx].worker_id
+                if source_id not in clones_by_source:
+                    clones_by_source[source_id] = []
+                clones_by_source[source_id].append(target_id)
+
+            for source_id, target_ids in clones_by_source.items():
+                LOGGER.info(
+                    " ➤ Physically cloning database from elite worker %d to %d poor workers...",
+                    source_id,
+                    len(target_ids),
+                )
+                self.env.clone_instances(source_id, target_ids)
+
+        result.num_exploited = len(pairs_exploited)
         self.current_generation += 1
 
         return result

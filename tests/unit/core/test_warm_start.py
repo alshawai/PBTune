@@ -41,7 +41,7 @@ def patch_pbttuner_knob_loader(monkeypatch, request):
 
     monkeypatch.setattr(
         "src.tuner.main.get_knob_space",
-        lambda _tier: mock_knob_space,
+        lambda tier, *args, **kwargs: mock_knob_space,
     )
     monkeypatch.setattr(
         "src.tuner.main.detect_worker_resources",

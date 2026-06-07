@@ -27,6 +27,7 @@ from src.utils.metrics import WorkloadType, create_metric_config
 from src.utils.hardware_info import (
     get_system_info,
     detect_worker_resources,
+    resolve_manual_worker_resources,
     WorkerResources,
 )
 from src.utils.logger import setup_logging, get_logger, log_section_header
@@ -95,7 +96,7 @@ class BOBaselineRunner:
         # Collect system info
         self.system_info = get_system_info(data_path=self.data_root)
 
-        # Resource equalization: use PBT-derived resources if available, else divide host resources
+        # Resource equalization: PBT-derived > manual CLI override > auto detection
         if config.pbt_worker_resources:
             self.worker_resources = WorkerResources(
                 ram_bytes=int(config.pbt_worker_resources.get("ram_bytes", 0)),
@@ -109,6 +110,18 @@ class BOBaselineRunner:
             )
             self.logger.debug(
                 "PBT-derived worker resources object: %s", self.worker_resources
+            )
+        elif config.worker_ram is not None or config.worker_cpus is not None:
+            self.worker_resources = resolve_manual_worker_resources(
+                worker_ram=config.worker_ram,
+                worker_cpus=config.worker_cpus,
+                num_workers=config.resource_division,
+                data_path=self.data_root,
+            )
+            self.logger.info(
+                "Using manual per-worker resources: "
+                f"{self.worker_resources.cpu_cores} cores, "
+                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM"
             )
         else:
             self.worker_resources = detect_worker_resources(
@@ -124,8 +137,22 @@ class BOBaselineRunner:
                 "Host-divided worker resources object: %s", self.worker_resources
             )
 
+        # Resolve granular workload type
+        if config.benchmark_config.benchmark == "sysbench":
+            resolved_workload_type = (
+                config.benchmark_config.sysbench_workload or "oltp_read_write"
+            )
+        elif config.benchmark_config.benchmark == "tpch":
+            resolved_workload_type = "olap"
+        else:
+            resolved_workload_type = config.benchmark_config.workload_type
+
         # Load knob space
-        self.knob_space = get_knob_space(config.knob_tier)
+        self.knob_space = get_knob_space(
+            config.knob_tier,
+            knob_source=config.knob_source,
+            workload_type=resolved_workload_type,
+        )
         self.knob_space.resolve_hardware_ranges(self.worker_resources)
 
         # Database config
@@ -703,7 +730,9 @@ class BOBaselineRunner:
             # Single worker bound to the single PostgreSQL instance
             num_instances = 1
             self.logger.info("Setting up 1 PostgreSQL instance...")
-            self.env.setup_instances(num_workers=num_instances)
+            self.env.setup_instances(
+                num_workers=num_instances, num_parallel_workers=num_instances
+            )
 
             # Prune unsupported knobs
             self._prune_unsupported_runtime_knobs()
@@ -973,6 +1002,12 @@ def main():
         help="Knob space tier. Optional when --pbt-session is provided.",
     )
     parser.add_argument(
+        "--knob-source",
+        choices=["expert", "data_driven"],
+        default=None,
+        help="Knob source to use (expert, data_driven) (default: loaded from PBT session or expert)",
+    )
+    parser.add_argument(
         "--pbt-session",
         type=str,
         help=(
@@ -1137,6 +1172,26 @@ def main():
         type=int,
         default=None,
         help="Divides host capacity by this number to determine instance resources. If a PBT session is provided, this automatically takes the PBT session's parallel worker count.",
+    )
+    parser.add_argument(
+        "--worker-ram",
+        type=str,
+        default=None,
+        help=(
+            "RAM to allocate per worker (e.g., '3G', '512M', '1073741824'). "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical RAM."
+        ),
+    )
+    parser.add_argument(
+        "--worker-cpus",
+        type=int,
+        default=None,
+        help=(
+            "CPU cores to allocate per worker. "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical CPU cores."
+        ),
     )
     parser.add_argument(
         "--scoring-policy",

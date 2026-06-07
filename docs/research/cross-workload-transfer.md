@@ -2,7 +2,7 @@
 
 > **Status:** Future work
 > **Date:** March 2026
-> **See also:** [HARDWARE_AWARE_NORMALIZATION.md](./HARDWARE_AWARE_NORMALIZATION.md) · [COMPETITIVE_ANALYSIS.md](./COMPETITIVE_ANALYSIS.md)
+> **See also:** [HARDWARE_AWARE_NORMALIZATION.md](../architecture/hardware-aware-normalization.md) · [COMPETITIVE_ANALYSIS.md](competitive-analysis.md)
 
 ---
 

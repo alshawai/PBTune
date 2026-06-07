@@ -382,13 +382,19 @@ class KnobSpace:
 
         filtered_count = len(self.knobs) - len(runtime_knobs)
         if filtered_count > 0:
-            LOGGER.debug(
-                "➤ Created ONLINE knob view: %s%d%s runtime knobs %s(filtered %d knob(s))%s",
+            LOGGER.info(
+                "➤ Created ONLINE knob view by filtering %d `restart-required` knob(s):"
+                " %s%d%s runtime knobs remain",
+                filtered_count,
                 COLORS.bold,
                 len(runtime_knobs),
                 COLORS.reset,
-                COLORS.italic,
-                filtered_count,
+            )
+        else:
+            LOGGER.info(
+                "➤ ONLINE knob view active: all %s%d%s knobs are runtime-safe (0 filtered)",
+                COLORS.bold,
+                len(runtime_knobs),
                 COLORS.reset,
             )
 
@@ -1068,6 +1074,10 @@ class KnobSpace:
 
         for knob_name, value in config.items():
             if knob_name in exclude_set:
+                perturbed[knob_name] = value
+                continue
+
+            if knob_name not in self.knobs:
                 perturbed[knob_name] = value
                 continue
 

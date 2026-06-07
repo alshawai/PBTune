@@ -234,7 +234,10 @@ class DatabaseEnvironment(ABC):
 
     @abstractmethod
     def setup_instances(
-        self, num_workers: int, force_recreate: bool = False
+        self,
+        num_workers: int,
+        force_recreate: bool = False,
+        num_parallel_workers: int = 1,
     ) -> List[InstanceConfig]:
         """Set up infrastructure for N database instances."""
 
@@ -284,6 +287,12 @@ class DatabaseEnvironment(ABC):
         self, worker_id: int, snapshot_id: str = "", quiet: bool = False
     ) -> bool:
         """Restore a targeted worker's data directory/volume from the baseline snapshot."""
+
+    @abstractmethod
+    def clone_instances(
+        self, source_worker_id: int, target_worker_ids: List[int]
+    ) -> bool:
+        """Clone the physical database state from a source worker to multiple target workers."""
 
     @abstractmethod
     def rebuild_worker_instance(self, worker_id: int) -> bool:

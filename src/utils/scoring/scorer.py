@@ -134,6 +134,9 @@ class CompositeScorer:
         total = 0.0
 
         for metric in self._metrics:
+            if metric == "error_rate":
+                continue
+
             weight = self._weights.get(metric, 0.0)
             if weight == 0.0:
                 continue
@@ -159,6 +162,11 @@ class CompositeScorer:
                 )
             )
 
+        error_weight = self._weights.get("error_rate", 0.0)
+        normalization_factor = 1.0 - error_weight
+        if normalization_factor > 0:
+            total /= normalization_factor
+
         breakdown = ScoreBreakdown(
             final_score=total * 100.0,
             policy=self._policy.policy_id,
@@ -168,6 +176,7 @@ class CompositeScorer:
             metadata={
                 "weights": dict(self._weights),
                 "missing_utilities": missing_utilities,
+                "error_rate_threshold": max(0.001, 0.15 - error_weight),
             },
         )
 
@@ -266,6 +275,21 @@ class CompositeScorer:
                 if key not in self._metrics:
                     self._metrics.append(key)
 
+        # Detect single-threaded workloads and remove throughput_variance
+        # as it mathematically guarantees zero variance and dilutes scoring.
+        if self._features.get("concurrency_pressure", 1.0) < 0.15:
+            if "throughput_variance" in self._weights:
+                removed_weight = self._weights.pop("throughput_variance")
+                if "throughput_variance" in self._metrics:
+                    self._metrics.remove("throughput_variance")
+
+                remaining_sum = sum(self._weights.values())
+                if remaining_sum > 0:
+                    for m in self._weights:
+                        self._weights[m] += (
+                            self._weights[m] / remaining_sum
+                        ) * removed_weight
+
         self._context_key = self._make_context_key(
             self._policy_id,
             self._workload_type,
@@ -315,18 +339,29 @@ class CompositeScorer:
             )
             return 0.0
 
-        if metrics.error_rate >= self._fatal_error_threshold:
+        error_weight = self._weights.get("error_rate", 0.0)
+        dynamic_threshold = max(0.001, 0.15 - error_weight)
+
+        logger.debug(
+            "  %sError rate reliability threshold set to %.4f (weight=%.4f)%s",
+            COLORS.italic,
+            dynamic_threshold,
+            error_weight,
+            COLORS.reset,
+        )
+
+        if metrics.error_rate >= dynamic_threshold:
             logger.warning(
                 "  %sReliability gate = 0.0 (error_rate=%.4f >= threshold=%.4f)%s",
                 COLORS.italic,
                 metrics.error_rate,
-                self._fatal_error_threshold,
+                dynamic_threshold,
                 COLORS.reset,
             )
             return 0.0
 
         if metrics.error_rate > 0:
-            gate = 1.0 - (metrics.error_rate / self._fatal_error_threshold)
+            gate = 1.0 - (metrics.error_rate / dynamic_threshold)
             logger.debug(
                 "  %sReliability gate = %.4f (error_rate=%.4f, linear decay)%s",
                 COLORS.italic,

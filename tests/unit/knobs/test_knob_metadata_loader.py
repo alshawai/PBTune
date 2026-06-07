@@ -167,7 +167,9 @@ def test_get_knobs_by_tier_returns_data_driven_tiers(tmp_path: Path):
         "work_mem",
     ]
     assert module.get_knobs_by_tier("standard", source="data_driven") == [
-        "bgwriter_delay"
+        "shared_buffers",
+        "work_mem",
+        "bgwriter_delay",
     ]
     assert module.get_knobs_by_tier("extensive", source="data_driven") == []
 

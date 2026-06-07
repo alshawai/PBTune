@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-03-13
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](../README.md)
 
 ## Your Novel Approach: Population-Based Training (PBT)
 

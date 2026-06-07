@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-03-13
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](../README.md)
 
 ## Database Configuration
 
@@ -45,7 +45,7 @@ pip install -r requirements.txt
 - **pandas**: Data processing for knob retrieval
 - **python-dotenv**: Environment variable management
 
-**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](./PERFORMANCE_EVALUATION.md#system-monitoring-with-psutil) for details.
+**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](../architecture/performance-evaluation.md#system-monitoring-with-psutil) for details.
 
 #### Sysbench (required for OLTP benchmarking)
 
@@ -122,13 +122,13 @@ If you're running a Python script and changes to `.env` aren't being picked up:
 After setting up your environment, explore the system documentation:
 
 ### Core System Documentation
-- **[PostgreSQL Connection and Knobs](./POSTGRESQL_CONNECTION_AND_KNOBS.md)**: Database connection management and knob retrieval system
-- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)**: Worker, Evolution, and Population classes for population-based training
-- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)**: Evaluator, metrics collection, and scoring system
-- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)**: KnobSpace and KnobApplicator for safe configuration handling
+- **[PostgreSQL Connection and Knobs](../architecture/postgresql-connection-and-knobs.md)**: Database connection management and knob retrieval system
+- **[PBT Core Components](../architecture/pbt-core.md)**: Worker, Evolution, and Population classes for population-based training
+- **[Performance Evaluation](../architecture/performance-evaluation.md)**: Evaluator, metrics collection, and scoring system
+- **[Configuration Management](../architecture/configuration-management.md)**: KnobSpace and KnobApplicator for safe configuration handling
 
 ### Quick Start
 1. Set up environment (this guide)
-2. Understand database connection  [PostgreSQL Connection](./POSTGRESQL_CONNECTION_AND_KNOBS.md)
-3. Learn PBT algorithm  [PBT Core Components](./PBT_CORE_COMPONENTS.md)
+2. Understand database connection  [PostgreSQL Connection](../architecture/postgresql-connection-and-knobs.md)
+3. Learn PBT algorithm  [PBT Core Components](../architecture/pbt-core.md)
 4. Run end-to-end tuning

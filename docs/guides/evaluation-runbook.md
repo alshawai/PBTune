@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-04-17
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](../README.md)
 
 This runbook defines the canonical workflow for reproducing comparative
 `default vs tuned` evaluation results from a saved tuning session.

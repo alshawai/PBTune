@@ -4,7 +4,7 @@ This document records the inclusion/exclusion design decision for every knob in 
 It avoids implementation-centric framing and instead classifies knobs by **optimization scope**: performance optimization vs.
 semantics, security, topology, observability, and infrastructure policy.
 
-See also: [`data/knob_policy.json`](../data/knob_policy.json) (policy data) and [`src/knobs/policy.py`](../src/knobs/policy.py) (runtime loader and enforcement).
+See also: [`data/knob_policy.json`](../../data/knob_policy.json) (policy data) and [`src/knobs/policy.py`](../../src/knobs/policy.py) (runtime loader and enforcement).
 
 ---
 
@@ -67,7 +67,7 @@ conditional), and the conditions under which a knob in that category could be re
 | `stability`                    | JIT compilation parameters (`jit` and family). JIT shows known instability in benchmark workloads in this environment: intermittent degradation and crashes under certain query patterns make benchmark scores unreliable.                                 | **Conditional** | Can be re-enabled on PostgreSQL builds and environments where JIT is validated stable for the target workload (e.g., PG16+ OLAP with controlled query patterns).                                                                                         |
 | `os_alignment`                 | `max_stack_depth` must not exceed the OS `ulimit -s` stack size limit. The tuner cannot safely determine the correct OS-safe upper bound at runtime without reading `/proc/1/limits` or equivalent.                                                        | **Conditional** | Re-enable by adding OS stack limit discovery to the evaluator and clamping `max_stack_depth` at each worker startup.                                                                                                                                     |
 | `storage_safety`               | `allow_in_place_tablespaces`: enables tablespace creation in the PostgreSQL data directory path. Toggling in a tuning loop risks tablespace layout side effects.                                                                                           | **Conditional** | Can be re-enabled in controlled environments where tablespace layout is pre-fixed and verified.                                                                                                                                                          |
-| `uncurated_intmax_sentinel`    | Numeric parameters whose PostgreSQL-native maximum is ≥ 2,000,000,000 (INT_MAX class) without curated metadata in [`data/knob_metadata.json`](../data/knob_metadata.json) defining practical bounds. The unbounded upper limit makes random search unsafe. | **Conditional** | Add a metadata entry in [`data/knob_metadata.json`](../data/knob_metadata.json) with practical `tuning_min`/`tuning_max` bounds and an `impact_tier`. The parameter is automatically promoted to the appropriate tier CSV on the next preprocessing run. |
+| `uncurated_intmax_sentinel`    | Numeric parameters whose PostgreSQL-native maximum is ≥ 2,000,000,000 (INT_MAX class) without curated metadata in [`data/knob_metadata.json`](../../data/knob_metadata.json) defining practical bounds. The unbounded upper limit makes random search unsafe. | **Conditional** | Add a metadata entry in [`data/knob_metadata.json`](../../data/knob_metadata.json) with practical `tuning_min`/`tuning_max` bounds and an `impact_tier`. The parameter is automatically promoted to the appropriate tier CSV on the next preprocessing run. |
 
 ### Sub-categories within `domain_scope_non_performance`
 
@@ -117,7 +117,7 @@ the already-annotated dataframe.
 
 1. Look up the knob name as it appears in `pg_settings.name`.
 2. Select the appropriate `reason_code` from the table in §2.
-3. Add an entry to `AUTOTUNING_SOURCE_EXCLUSIONS` in [`data/knob_policy.json`](../data/knob_policy.json):
+3. Add an entry to `AUTOTUNING_SOURCE_EXCLUSIONS` in [`data/knob_policy.json`](../../data/knob_policy.json):
 
    ```json
    "AUTOTUNING_SOURCE_EXCLUSIONS": {
@@ -140,10 +140,10 @@ the already-annotated dataframe.
 
 ### Removing an exclusion (re-admitting a knob)
 
-1. Find the knob entry in `AUTOTUNING_SOURCE_EXCLUSIONS` inside [`data/knob_policy.json`](../data/knob_policy.json).
+1. Find the knob entry in `AUTOTUNING_SOURCE_EXCLUSIONS` inside [`data/knob_policy.json`](../../data/knob_policy.json).
 2. Verify all re-enable conditions for its `reason_code` (§2) are satisfied.
 3. Delete the entry from `AUTOTUNING_SOURCE_EXCLUSIONS`.
-4. If the knob's native max is ≥ 2,000,000,000, also add a metadata entry in [`data/knob_metadata.json`](../data/knob_metadata.json) (see below).
+4. If the knob's native max is ≥ 2,000,000,000, also add a metadata entry in [`data/knob_metadata.json`](../../data/knob_metadata.json) (see below).
 5. Run the preprocessing pipeline and confirm the knob appears in the expected tier CSV.
 6. Update the inventory row to `Include` and set the appropriate Reason Code.
 7. Run the unit tests: `pytest tests/unit/knobs/`.
@@ -154,7 +154,7 @@ The most common re-admission path. Most INT_MAX-sentinel knobs are excluded pure
 an `AUTOTUNING_SOURCE_EXCLUSIONS` entry. To promote one:
 
 1. Research practical operating bounds in the PostgreSQL documentation and community tuning guides.
-2. Add a knob metadata entry in [`data/knob_metadata.json`](../data/knob_metadata.json):
+2. Add a knob metadata entry in [`data/knob_metadata.json`](../../data/knob_metadata.json):
 
    ```json
    "knob_name": {
@@ -176,7 +176,7 @@ an `AUTOTUNING_SOURCE_EXCLUSIONS` entry. To promote one:
 
 If a knob's exclusion reason is reclassified (e.g., `stability` → `benchmark_validity`):
 
-1. Update the `AUTOTUNING_SOURCE_EXCLUSIONS` entry in [`data/knob_policy.json`](../data/knob_policy.json).
+1. Update the `AUTOTUNING_SOURCE_EXCLUSIONS` entry in [`data/knob_policy.json`](../../data/knob_policy.json).
 2. Update the knob's row in the inventory table below.
 3. Run the pipeline and unit tests.
 
@@ -184,7 +184,7 @@ If a knob's exclusion reason is reclassified (e.g., `stability` → `benchmark_v
 
 When upgrading to a new PostgreSQL minor or major version, run the preprocessing pipeline and inspect the log output
 for any new knobs appearing without a policy exclusion annotation that may represent out-of-scope parameters. Add
-entries to `AUTOTUNING_SOURCE_EXCLUSIONS` in [`data/knob_policy.json`](../data/knob_policy.json) as needed before merging.
+entries to `AUTOTUNING_SOURCE_EXCLUSIONS` in [`data/knob_policy.json`](../../data/knob_policy.json) as needed before merging.
 
 ---
 

@@ -1,0 +1,38 @@
+{
+  "metadata": {
+    "workload_type": "oltp_read_write",
+    "generated_at": "2026-06-05T02:25:30.764652+00:00",
+    "optimal_k": 3,
+    "source_results": "results"
+  },
+  "tiers": {
+    "minimal": [
+      "cursor_tuple_fraction",
+      "io_combine_limit",
+      "log_duration",
+      "maintenance_io_concurrency"
+    ],
+    "core": [
+      "autovacuum_vacuum_cost_delay",
+      "bgwriter_lru_multiplier",
+      "checkpoint_flush_after",
+      "checkpoint_timeout",
+      "commit_delay",
+      "cpu_index_tuple_cost",
+      "cpu_tuple_cost",
+      "geqo_seed",
+      "geqo_selection_bias",
+      "hash_mem_multiplier",
+      "log_statement",
+      "min_parallel_table_scan_size",
+      "min_wal_size",
+      "serializable_buffers",
+      "shared_buffers",
+      "vacuum_cost_page_dirty",
+      "vacuum_cost_page_miss",
+      "vacuum_freeze_min_age"
+    ],
+    "standard": [],
+    "extensive": null
+  }
+}
