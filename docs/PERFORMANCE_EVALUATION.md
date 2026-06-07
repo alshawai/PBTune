@@ -1,801 +1,323 @@
 # Performance Evaluation System
 
-> Last reviewed: 2026-04-17
+> Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](./README.md), [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md), [Generation Barriers](./GENERATION_BARRIERS.md)
 
 ## Overview
 
-This document explains the **Performance Evaluation System** that measures how well PostgreSQL configurations perform under workload. The evaluation system consists of three main components:
+The performance evaluation system is PBT's **fitness function**: it converts a candidate PostgreSQL configuration into a single scalar score that drives evolution. It is composed of three layers:
 
-1. **Evaluator**: Executes workloads and orchestrates metric collection
-2. **PerformanceMetrics**: Structured measurements (latency, throughput, resource usage)
-3. **Scoring System**: Converts raw metrics into a single performance score for optimization
+1. **[`PerformanceMetrics`](../src/utils/metrics.py)** — typed record of raw measurements collected from a single evaluation window (latency, throughput, variance, memory, scan efficiency, error rate, …).
+2. **Scoring-v2 pipeline** — `WorkloadFeatures` → `QuantileUtilityNormalizer` → `FeatureDrivenWeightModel` → `CompositeScorer` → `ScoreBreakdown`. The math and policies are documented in [FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md).
+3. **[`WorkloadOrchestrator`](../src/tuner/benchmark/orchestrator.py)** — the runtime that applies a configuration, drives a benchmark executor, captures metrics, and emits a `ScoreBreakdown`. It is the component PBT's [`Population`](../src/tuner/core/population.py) calls during each generation.
 
-This system serves as the **fitness function** for Population Based Training—it's how PBT determines which configurations are "good" and which are "poor."
+The previous evaluator at `src/tuner/evaluator/evaluator.py` has been retired; all evaluation logic now lives under [src/tuner/benchmark/](../src/tuner/benchmark/) and the scoring layer under [src/utils/scoring/](../src/utils/scoring/).
 
 ---
 
 ## Table of Contents
 
-1. [Architecture Overview](#architecture-overview)
-2. [Component 1: PerformanceMetrics](#component-1-performancemetrics)
-3. [Component 2: Metric Scoring](#component-2-metric-scoring)
-4. [Component 3: Evaluator](#component-3-evaluator)
-5. [System Monitoring with psutil](#system-monitoring-with-psutil)
+1. [Architecture](#architecture)
+2. [PerformanceMetrics](#performancemetrics)
+3. [Scoring Integration](#scoring-integration)
+4. [WorkloadOrchestrator](#workloadorchestrator)
+5. [System Monitoring](#system-monitoring)
 6. [Workload Types and Optimization Goals](#workload-types-and-optimization-goals)
 7. [Design Decisions](#design-decisions)
 8. [Related Documentation](#related-documentation)
 
 ---
 
-## Architecture Overview
+## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                      PBT Training Loop                      │
 │                (see PBT_CORE_COMPONENTS.md)                 │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-           evaluate_fn(worker)  │ 
-                                ▼
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            │ Population.evaluate_generation()
+                            │ → orchestrator.evaluate_worker(worker)
+                            ▼
                 ┌──────────────────────────────┐
-                │           Evaluator          │
-                │        (Orchestrator)        │
-                └───────────────┬──────────────┘
-                                │
-                ┌───────────────┼───────────────┐
-                │               │               │
-                ▼               ▼               ▼
-            ┌──────────┐   ┌──────────┐   ┌──────────┐
-            │  Apply   │   │   Run    │   │ Collect  │
-            │  Config  │   │ Workload │   │ Metrics  │
-            └──────────┘   └──────────┘   └──────────┘
-                │               │               │
-                ▼               ▼               ▼
-         KnobApplicator    PostgreSQL    psutil + pg_stat
-                │               │               │
-                └───────────────┼───────────────┘
-                                │
-                                ▼
-                    ┌─────────────────────┐
-                    │ PerformanceMetrics  │
-                    │  (Structured Data)  │
-                    └──────────┬──────────┘
+                │     WorkloadOrchestrator     │
+                │ (per-worker, lockstep B1–B17)│
+                └──────────────┬───────────────┘
+                               │
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+        ▼                      ▼                      ▼
+┌────────────────┐    ┌────────────────┐    ┌────────────────┐
+│ KnobApplicator │    │  BenchmarkExec │    │   Metric       │
+│  apply+verify  │    │  (Sysbench /   │    │ Instrumentation│
+│                │    │   TPC-H /      │    │ (pg_stat_*,    │
+│                │    │   Workload)    │    │  psutil)       │
+└────────┬───────┘    └────────┬───────┘    └────────┬───────┘
+         │                     │                     │
+         └─────────────────────┼─────────────────────┘
                                │
                                ▼
-                    ┌─────────────────────┐
-                    │  compute_score()    │
-                    │  (Composite Score)  │
-                    └──────────┬──────────┘
+                  ┌──────────────────────────┐
+                  │   PerformanceMetrics     │
+                  │   (raw measurement)      │
+                  └────────────┬─────────────┘
                                │
                                ▼
-                       Single float value
-                       (higher = better)
+                  ┌──────────────────────────┐
+                  │   CompositeScorer        │
+                  │  G × Σ(w_i · u_i)        │
+                  │  (see FEATURE_DRIVEN_*)  │
+                  └────────────┬─────────────┘
                                │
                                ▼
-                     Back to PBT Population
-                      for exploit/explore
+                  ┌──────────────────────────┐
+                  │     ScoreBreakdown       │
+                  │  score ∈ [0, 1]          │
+                  │  + per-metric components │
+                  └────────────┬─────────────┘
+                               │
+                               ▼
+                       back to Population
+                     (exploit / explore step)
 ```
 
-### Data Flow
-
-1. **PBT** requests evaluation of a worker's configuration
-2. **Evaluator** applies the configuration to PostgreSQL
-3. **Evaluator** executes workload (SYSBENCH, TPC-H, etc.)
-4. **Metrics Collection** gathers performance data (latency, throughput, resources)
-5. **Scoring** converts metrics → single composite score
-6. **PBT** uses score to rank workers and drive evolution
+The orchestrator is invoked from `Population.evaluate_generation()`, runs **per-worker on its own thread** (one per `WorkerResources` slice), and synchronises with the rest of the generation through the lockstep [`GenerationBarrier`](./GENERATION_BARRIERS.md) so every worker's measurement window experiences the same level of contention.
 
 ---
 
-## Component 1: PerformanceMetrics
+## PerformanceMetrics
 
 **Location**: [src/utils/metrics.py](../src/utils/metrics.py)
 
-### Purpose
+`PerformanceMetrics` is the canonical raw-measurement record. It is the **input** to scoring and the **output** of every benchmark executor. The dataclass is intentionally a superset of what any single scoring policy needs — the active policy selects which fields it consumes.
 
-The `PerformanceMetrics` dataclass is a **structured container** for all performance measurements collected during workload execution. It captures:
-- **Latency**: Response time percentiles (p50, p95, p99)
-- **Throughput**: Queries/transactions per second
-- **Resources**: CPU, memory, disk I/O
-- **Quality**: Error rate, cache hit ratio
-
-### Why a Structured Metrics Class?
-
-**Without structure**:
-```python
-# Metrics as loose dictionary - fragile, no type safety
-metrics = {
-    "latency": 45.3,  # p50? p95? p99? Units?
-    "throughput": 1234,  # TPS or QPS?
-    "memory_utilization": 0.67  # Percentage or fraction?
-}
-```
-
-**With PerformanceMetrics**:
-```python
-# Clear, type-safe, self-documenting
-metrics = PerformanceMetrics(
-    latency_p50=38.2,      # Milliseconds, median
-    latency_p95=45.3,      # Milliseconds, 95th percentile
-    latency_p99=52.1,      # Milliseconds, 99th percentile
-    throughput=1234.5,     # Queries per second
-    memory_utilization=0.82,
-    io_read_mb=125.4,
-    io_write_mb=43.2,
-    cache_hit_ratio=0.95,
-    error_rate=0.001
-)
-```
-
-### Metric Categories
-
-#### Latency Metrics
-
-```python
-latency_p50: float  # Median (50th percentile)
-latency_p95: float  # 95th percentile (typical SLA target)
-latency_p99: float  # 99th percentile (tail latency)
-```
-
-**Why percentiles?**
-- **Mean is misleading**: A few slow queries can skew average
-- **p95/p99 capture tail latency**: Critical for user experience
-- **p50 shows typical case**: Good for overall performance assessment
-
-**Example**:
-```
-100 queries: [10ms, 12ms, 11ms, ..., 95ms, 102ms, 250ms]
-Mean: 25ms (skewed by outliers)
-p50: 12ms (typical query)
-p95: 95ms (most queries faster than this)
-p99: 250ms (worst-case for 99% of queries)
-```
-
-#### Throughput Metrics
-
-```python
-throughput: float        # Queries/second or TPS
-total_queries: int       # Total executed
-total_time: float        # Duration in seconds
-error_rate: float        # Failed queries (0.0 to 1.0)
-```
-
-**Throughput calculation**:
-```python
-throughput = total_queries / total_time
-```
-
-**Why track errors separately?**
-- High throughput with high error rate is misleading
-- Error rate used as penalty in scoring function
-
-#### Resource Utilization Metrics
-
-```python
-memory_utilization: float   # Memory usage (0.0 to 1.0)
-io_read_mb: float           # MB read from disk
-io_write_mb: float          # MB written to disk
-cache_hit_ratio: float      # Buffer cache hits (0.0 to 1.0)
-```
-
-**Why track resources?**
-- **Efficiency**: High performance at low resource cost is better
-- **Scalability**: Resource-efficient configs scale better
-- **Real-world constraints**: Production systems have resource limits
-
-### Methods
-
-#### `to_dict()`
-Converts metrics to dictionary for logging/serialization:
-
-```python
-def to_dict(self) -> Dict[str, float]:
-    return {
-        'latency_p50': self.latency_p50,
-        'latency_p95': self.latency_p95,
-        # ... all other fields
-    }
-```
-
-#### `from_dict(data)`
-Creates PerformanceMetrics from dictionary (deserialization):
-
-```python
-@staticmethod
-def from_dict(data: Dict[str, float]) -> PerformanceMetrics:
-    return PerformanceMetrics(**data)
-```
-
-Useful for loading metrics from checkpoints or logs.
-
----
-
-## Component 2: Metric Scoring
-
-**Location**: [src/utils/metrics.py](../src/utils/metrics.py)
-
-### Purpose
-
-The scoring system converts **multiple raw metrics** into a **single composite score** that PBT can optimize. This is the **fitness function** that drives evolution. The canonical scoring-v2 design is documented in [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md).
-
-### Why Composite Scoring?
-
-**Challenge**: PostgreSQL has ~350 knobs affecting different performance aspects:
-- `shared_buffers` affects cache hit ratio
-- `work_mem` affects sort/join performance
-- `max_parallel_workers` affects query parallelism
-
-**Problem**: Optimizing one metric often degrades others
-- Increase `work_mem` → better query performance, but higher memory usage
-- Increase `shared_buffers` → better cache hits, but less memory for other processes
-
-**Solution**: Policy-driven composite scoring captures trade-offs using normalized components:
-```
-score = 100 × G × Σ(w_i × u_i)
-```
-
-### MetricConfig and Scoring Policies
+### Fields
 
 ```python
 @dataclass
-class MetricConfig:
-    """
-    Configuration for metric scoring.
-    Policy metadata determines how weights are derived.
-    """
+class PerformanceMetrics:
+    # Latency
+    latency_p50: float = 0.0
+    latency_p95: float = 0.0
+    latency_p99: float = 0.0
+    latency_unit: str = "ms"
+    latency_variance: float = 0.0
+    tail_amplification: float = 0.0      # p99 / p50 ratio
+
+    # Throughput
+    throughput: float = 0.0
+    throughput_unit: str = "TPS"          # or "QphH" for TPC-H
+    throughput_variance: float = 0.0
+
+    # Volume
+    total_queries: int = 0
+    total_time: float = 0.0
+
+    # Memory
+    memory_utilization: float = 0.0       # PostgreSQL RSS / worker budget
+    memory_pressure: float = 0.0          # derived pressure signal
+
+    # I/O
+    io_read_mb: float = 0.0
+    io_write_mb: float = 0.0
+
+    # Cache / scan
+    cache_hit_ratio: float = 0.0
+    buffer_miss_rate: float = 0.0
+    scan_efficiency: float = 0.0
+    rows_examined: int = 0
+    rows_returned: int = 0
+
+    # Reliability
+    error_rate: float = 0.0
+    failure_type: Optional[str] = None
+```
+
+### Why so many fields?
+
+The scoring layer's [`FeatureDrivenWeightModel`](../src/utils/scoring/weights.py) computes weights from **workload features** (read/write mix, OLAP complexity, tail sensitivity, etc.). Different workloads emphasise different fields:
+
+- A Sysbench `oltp_read_write` run weighs `throughput`, `latency_p95`, and `error_rate` heavily.
+- A TPC-H run shifts weight toward `latency_p99`, `tail_amplification`, `scan_efficiency`, and `buffer_miss_rate`.
+- The `memory_pressure` and `memory_utilization` fields act as resource regularisers across both.
+
+Keeping all fields populated by every executor lets the scorer reuse one schema across benchmarks without per-workload metric tables.
+
+### Serialisation
+
+```python
+metrics.to_dict()                         # dict[str, float | str | int | None]
+```
+
+Used by session writers, the BO baseline, the post-hoc evaluation suite, and the analysis pipeline. No `from_dict` is provided — deserialisation goes through the session loaders in [src/evaluation/loader.py](../src/evaluation/loader.py) and [src/visualization/loaders/](../src/visualization/loaders/), which handle policy/version migration.
+
+---
+
+## Scoring Integration
+
+The orchestrator never imports the scoring math directly; it delegates to the `CompositeScorer` configured on the [`MetricConfig`](../src/utils/metrics.py) attached to its `WorkloadOrchestratorConfig`. The contract is:
+
+```python
+score_breakdown: ScoreBreakdown = scorer.score(metrics, workload_features)
+final_score: float = score_breakdown.score      # ∈ [0, 1]
+```
+
+`ScoreBreakdown` (see [`src/utils/scoring/contracts.py`](../src/utils/scoring/contracts.py)) carries the resolved weights, per-metric utilities, reliability gate value, and the policy / metric reference version. Sessions persist this breakdown so post-hoc tools can rescore consistently.
+
+The score is bounded by `[0, 1]`. The legacy `× 100.0` scaling factor used in the old policy is no longer part of the pipeline — comparisons, dashboards, and the BO baseline all read fractional scores from `ScoreBreakdown.score`.
+
+For the math, the floor-constrained softmax over feature-conditioned logits, and the reliability gate, see [FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md).
+
+---
+
+## WorkloadOrchestrator
+
+**Location**: [src/tuner/benchmark/orchestrator.py](../src/tuner/benchmark/orchestrator.py)
+
+`WorkloadOrchestrator` replaces the older `Evaluator`. Its responsibility is to take a single worker's knob configuration and return a `(PerformanceMetrics, ScoreBreakdown)` pair.
+
+### `WorkloadOrchestratorConfig`
+
+```python
+@dataclass
+class WorkloadOrchestratorConfig:
     workload_type: WorkloadType
-    
-    # Compatibility policy weights or policy-derived weights (sum to 1.0)
-    weight_latency: float = 0.5
-    weight_throughput: float = 0.3
-    weight_memory: float = 0.05
-    weight_error: float = 0.05
-
-    # Latency percentile by workload objective
-    latency_metric: str = "p95"  # or "p99" for OLAP
-
-    # Scoring policy metadata persisted in session artifacts
-    scoring_policy: str = "fixed_v1"
-    scoring_policy_version: str = "1.0"
-    workload_features: dict[str, float] = field(default_factory=dict)
-
-    # Adaptive normalization ranges
-    latency_min: float = 1.0
-    latency_max: float = 1000.0
-    throughput_min: float = 1.0
-    throughput_max: float = 10000.0
+    metric_config: MetricConfig
+    db_config: DatabaseConfig
+    warmup_duration: float = 30.0
+    measurement_duration: float = 60.0
+    cooldown_duration: float = 5.0
+    tuning_mode: TuningMode = TuningMode.ONLINE
+    adaptive_restart_interval: int = 10
+    random_seed: Optional[int] = None
+    warmup_passes: int = 0
+    vacuum_analyze_timeout_seconds: float = 45.0
+    worker_memory_budget_bytes: Optional[int] = None
 ```
 
-**Policy behavior**:
-- `fixed_v1` keeps the legacy workload-specific weights for backward compatibility.
-- `feature_driven_v2` derives active weights from workload features while enforcing minimum floors and bounded outputs.
-- Both policies normalize metric values into utilities before aggregation.
+Notable fields beyond the obvious timing knobs:
 
-### Composite Scoring Function
+- **`tuning_mode`** — `ONLINE` (default) applies via `pg_reload_conf()` and restarts only when needed; `OFFLINE` restarts unconditionally to mirror an academic batch tuner; `ADAPTIVE` applies the CDBTune-inspired batched-restart policy from [`src/tuner/benchmark/restart_policy.py`](../src/tuner/benchmark/restart_policy.py).
+- **`adaptive_restart_interval`** — generation interval at which `ADAPTIVE` mode forces a restart even if no `postmaster`-context knob changed.
+- **`worker_memory_budget_bytes`** — the per-worker RAM slice used to normalise PostgreSQL's RSS into `memory_utilization`. Set from `WorkerResources` when running multiple workers on one host; falls back to total host RAM when unset.
+- **`vacuum_analyze_timeout_seconds`** — bounds the post-measurement `VACUUM ANALYZE` so a stuck maintenance pass cannot stall a whole generation.
 
-The implementation uses a single `compute_score()` path with workload-specific
-`MetricConfig`, not separate `compute_oltp_score()`/`compute_olap_score()`
-functions. The scorer applies a reliability gate before aggregation and uses
-the same policy metadata during tuning, rescoring, and evaluation.
+### `evaluate_worker(worker)` flow
 
-```python
-def compute_score(metrics: PerformanceMetrics) -> float:
-    latency = getattr(metrics, f"latency_{self.latency_metric}")
+Each call passes through 17 barrier-synchronised sub-steps (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)):
 
-    latency_norm = normalize_low_is_better(latency, latency_min, latency_max)
-    throughput_norm = normalize_high_is_better(
-        metrics.throughput,
-        throughput_min,
-        throughput_max,
-    )
-    memory_norm = 1.0 - clamp(metrics.memory_utilization, 0.0, 1.0)
-    error_norm = 1.0 - clamp(metrics.error_rate, 0.0, 1.0)
-
-    score_01 = G * (
-        weight_latency * latency_norm
-        + weight_throughput * throughput_norm
-        + weight_memory * memory_norm
-        + weight_error * error_norm
-    )
-    return max(0.0, score_01) * 100.0
+```text
+B1  connect                  TCP connection established
+B2  apply config             ALTER SYSTEM + pg_reload_conf
+B3  restart (or skip)        based on tuning mode and restart_policy
+B4  reconnect                post-restart re-connection
+B5  verify config            applicator.verify() — returns the actually
+                             quantised knob values from current_setting()
+B6  capture pre-stats        pg_stat_database snapshot
+B7  benchmark ready          schema validate / prepare
+B8  warmup                   executor warmup phase
+B9  measurement              timed window — the only window scored
+B10 capture post-stats       pg_stat_database snapshot
+B11 compute I/O delta        from the two pg_stat snapshots
+B12 system metrics           memory_utilization, cache_hit_ratio via
+                             metric_instrumentation
+B13 memory pressure          derived signal
+B14 reliability gate         classify failure / degradation
+B15 vacuum analyze           post-DML safety pass, bounded by timeout
+B16 score                    composite scorer → ScoreBreakdown
+B17 disconnect               clean teardown
 ```
 
-### Adaptive Range Calibration
+The return value is `(PerformanceMetrics, ScoreBreakdown)`. The breakdown is what `Worker.update_metrics()` stores and what gets serialised into session JSON.
 
-For post-hoc rescoring and mid-run adaptation, normalization ranges are
-calibrated from observed data via the robust normalizer-backed path:
+### Read-back: why `verify()` matters
 
-- Uses robust percentile anchors instead of fragile raw min/max
-- Tracks out-of-support drift and recalibrates from retained history when needed
-- Enables fair score comparability across hardware/workload regimes
+PostgreSQL silently rounds values to internal block boundaries (e.g. `shared_buffers` rounds to the nearest 8 kB page). The orchestrator calls `KnobApplicator.verify()` at B5 and merges the **actually-applied** quantised values back into the worker's config. This:
 
-### Usage in Evaluation/PBT
+- gives the BO baseline correct surrogate-model gradients (no spurious flat regions),
+- gives PBT honest lineage tracking for warm-start serialisation,
+- ensures session JSON reflects what PostgreSQL is really running with.
 
-```python
-metric_config = create_metric_config(workload, scoring_policy="feature_driven_v2")
-score = metric_config.compute_score(metrics)
-```
+See [CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md#verifying-applied-config) for the verify contract.
 
 ---
 
-## Component 3: Evaluator
+## System Monitoring
 
-**Location**: [src/tuner/evaluator/evaluator.py](../src/tuner/evaluator/evaluator.py)
+**Location**: [src/utils/metric_instrumentation.py](../src/utils/metric_instrumentation.py)
 
-### Purpose
+System-level metrics (`memory_utilization`, `memory_pressure`, `cache_hit_ratio`, `buffer_miss_rate`, `scan_efficiency`, `io_read_mb`, `io_write_mb`) are collected from two sources:
 
-The **Evaluator class** orchestrates the entire evaluation process:
-1. Apply configuration to PostgreSQL
-2. Execute workload
-3. Collect performance metrics
-4. Compute composite score
+1. **PostgreSQL itself** — `pg_stat_database`, `pg_stat_bgwriter`, `pg_stat_user_tables`. Captured at B6 (pre) and B10 (post) and deltaed.
+2. **Process telemetry** — the PostgreSQL process RSS via `psutil`, normalised against `worker_memory_budget_bytes`. CPU stats are not part of the score (they vary too much with co-located workers); the budget-relative RSS is the stable memory signal.
 
-It serves as the **bridge** between PBT's Population and PostgreSQL database.
-
-### EvaluatorConfig
-
-```python
-@dataclass
-class EvaluatorConfig:
-    workload_type: WorkloadType           # OLTP, OLAP, MIXED
-    metric_config: MetricConfig           # Scoring weights
-    connection_params: Dict[str, Any]     # DB connection
-    warmup_queries: int = 100             # Queries before measurement
-    measurement_duration: float = 60.0    # Measurement window (seconds)
-    cooldown_duration: float = 5.0        # Wait after config change
-```
-
-**Why warmup?**
-- Database caches (buffer pool) need to warm up
-- First queries after config change may be atypical
-- Warmup ensures steady-state measurement
-
-**Why cooldown?**
-- Some config changes require PostgreSQL to stabilize
-- Connection pooling needs to adjust
-- Background processes (autovacuum) need to settle
-
-### Evaluation Flow
-
-```python
-def evaluate(
-    self,
-    knob_config: Dict[str, Any],
-    worker_id: Optional[int] = None
-) -> tuple[PerformanceMetrics, float]:
-    """
-    Main evaluation method.
-    
-    Flow:
-    1. Apply configuration to PostgreSQL
-    2. Wait cooldown period
-    3. Execute warmup queries
-    4. Measure performance during measurement window
-    5. Collect metrics
-    6. Compute score
-    """
-    
-    logger.info(f"Applying configuration (worker {worker_id})...")
-    self._apply_configuration(knob_config)
-    
-    logger.info(f"Cooldown period ({self.config.cooldown_duration}s)...")
-    time.sleep(self.config.cooldown_duration)
-    
-    logger.info(f"Executing workload...")
-    metrics = self._execute_workload()
-    
-    score = compute_score(metrics, self.config.metric_config)
-    
-    logger.info(f"Evaluation complete: score={score:.4f}")
-    
-    return metrics, score
-```
-
-### Configuration Application
-
-```python
-def _apply_configuration(self, knob_config: Dict[str, Any]):
-    """
-    Apply knob configuration to PostgreSQL.
-    
-    Uses KnobApplicator for safe, validated application.
-    See CONFIGURATION_MANAGEMENT.md for details.
-    """
-    from src.tuner.utils.applicator import KnobApplicator, ApplicatorConfig
-    
-    applicator_config = ApplicatorConfig(
-        persist=False,        # Don't save to postgresql.conf
-        auto_reload=True,     # Reload configs that need it
-        validate=True,        # Validate against pg_settings
-        rollback_on_error=True  # Rollback if any param fails
-    )
-    
-    applicator = KnobApplicator(applicator_config)
-    
-    try:
-        result = applicator.apply(knob_config)
-        if not result.success:
-            logger.error(f"Config application failed: {result.message}")
-            raise RuntimeError(f"Failed to apply config: {result.failed}")
-    finally:
-        applicator.disconnect()
-```
-
-### Workload Execution
-
-The Evaluator uses a **Strategy Pattern** to support different workload types:
-
-```python
-class WorkloadExecutor(ABC):
-    """Abstract base for workload-specific executors."""
-    
-    @abstractmethod
-    def execute(
-        self,
-        connection: PostgresConnection,
-        duration: float,
-        warmup: int = 0
-    ) -> PerformanceMetrics:
-        """Execute workload and return metrics."""
-```
-
-#### SYSBENCH OLTP Executor
-
-```python
-class SysbenchOLTPExecutor(WorkloadExecutor):
-    """
-    SYSBENCH OLTP workload:
-    - Point selects (SELECT ... WHERE id = ?)
-    - Range selects (SELECT ... WHERE id BETWEEN ? AND ?)
-    - Updates (UPDATE ... SET ... WHERE id = ?)
-    - Inserts
-    - Deletes
-    """
-    
-    def execute(self, connection, duration, warmup=0):
-        for _ in range(warmup):
-            self._execute_random_query(connection)
-        
-        start_time = time.time()
-        queries = []
-        
-        process = psutil.Process()
-        cpu_start = process.cpu_percent()
-        mem_start = process.memory_percent()
-        
-        while time.time() - start_time < duration:
-            query_start = time.time()
-            self._execute_random_query(connection)
-            query_time = (time.time() - query_start) * 1000  # Convert to ms
-            queries.append(query_time)
-        
-        cpu_end = process.cpu_percent()
-        mem_end = process.memory_percent()
-        
-        metrics = self._compute_metrics(
-            queries,
-            duration,
-            cpu=(cpu_start + cpu_end) / 2,
-            mem=(mem_start + mem_end) / 2
-        )
-        
-        return metrics
-```
-
-#### Custom Query Executor
-
-```python
-class CustomQueryExecutor(WorkloadExecutor):
-    """
-    Execute user-defined SQL queries.
-    Useful for application-specific workloads.
-    """
-    
-    def __init__(self, queries: List[str]):
-        self.queries = queries
-    
-    def execute(self, connection, duration, warmup=0):
-        # Similar structure to SYSBENCH
-        # But executes user-provided queries
-        pass
-```
-
----
-
-## System Monitoring with psutil
-
-**Why psutil?** Initially, we approximated system metrics using database statistics. However, this proved **inaccurate** for actual resource usage.
-
-### The Problem with Approximations
-
-**Initial approach** (approximated):
-```python
-# BAD: Approximations based on database stats
-cpu_util = 0.5 + random.uniform(-0.1, 0.1)  # Guess!
-memory_util = 0.7 + random.uniform(-0.1, 0.1)  # Guess!
-```
-
-**Problems**:
-1. **Not real usage**: Just random numbers, no correlation with actual system state
-2. **Misleading for PBT**: Evolution driven by fake signals
-3. **No validation**: Can't verify if config actually reduced CPU/memory
-
-### The Solution: psutil Integration
-
-**psutil** is a Python library for retrieving system and process information:
-
-```python
-import psutil
-
-# System-wide metrics
-cpu_percent = psutil.cpu_percent(interval=1.0)
-memory_info = psutil.virtual_memory()
-memory_percent = memory_info.percent
-
-# Process-specific metrics
-process = psutil.Process()
-process_cpu = process.cpu_percent()
-process_memory = process.memory_percent()
-
-# I/O metrics
-io_counters = psutil.disk_io_counters()
-io_read_mb = io_counters.read_bytes / (1024 * 1024)
-io_write_mb = io_counters.write_bytes / (1024 * 1024)
-```
-
-### Integration in Evaluator
-
-```python
-def _collect_system_metrics(self) -> Dict[str, float]:
-    """
-    Collect system metrics using psutil.
-    
-    Returns actual CPU, memory, and I/O usage.
-    """
-    # CPU utilization (system-wide)
-    cpu_util = psutil.cpu_percent(interval=0.5) / 100.0
-    
-    # Memory utilization (system-wide)
-    memory_info = psutil.virtual_memory()
-    memory_util = memory_info.percent / 100.0
-    
-    # Disk I/O (system-wide)
-    io_counters = psutil.disk_io_counters()
-    io_read_mb = io_counters.read_bytes / (1024 * 1024)
-    io_write_mb = io_counters.write_bytes / (1024 * 1024)
-    
-    return {
-        'cpu_utilization': cpu_util,
-        'memory_utilization': memory_util,
-        'io_read_mb': io_read_mb,
-        'io_write_mb': io_write_mb
-    }
-```
-
-### Why This Matters for PBT
-
-**With psutil**, PBT can optimize for **real resource efficiency**:
-
-```
-Configuration A:
-  shared_buffers = 256MB
-  work_mem = 4MB
-  → CPU: 75%, Memory: 60%, Score: 0.82
-
-Configuration B:
-  shared_buffers = 512MB
-  work_mem = 16MB
-  → CPU: 65%, Memory: 70%, Score: 0.86
-
-PBT decision: Config B better (higher score, lower CPU despite higher memory)
-```
-
-**Without psutil**, these would be random/approximated, leading to **false optimization signals**.
-
-### Requirement
-
-psutil must be installed (already in `requirements.txt`):
-```bash
-pip install psutil
-```
-
-See [ENVIRONMENT_SETUP.md](./ENVIRONMENT_SETUP.md) for installation instructions.
+The CPU subset isolation and worker memory budgets are configured by [`EnvironmentFactory`](../src/utils/environments/factory.py) — see [ENVIRONMENT_BACKENDS.md](./ENVIRONMENT_BACKENDS.md).
 
 ---
 
 ## Workload Types and Optimization Goals
 
-### OLTP (Online Transaction Processing)
+| Workload | Latency emphasis | Throughput emphasis | Memory regularisation | Notes |
+| --- | --- | --- | --- | --- |
+| **OLTP** (Sysbench) | `latency_p95` | TPS, high weight | medium | `feature_driven_v2` raises weights on `latency_variance` for `oltp_write_only` |
+| **OLAP** (TPC-H) | `latency_p99`, `tail_amplification` | QphH, lower weight | high (large sorts) | scan efficiency + buffer miss rate matter |
+| **MIXED** / template workloads | derived from workload features | derived | derived | features extracted from the workload JSON / SQL text |
 
-**Characteristics**:
-- Short, simple queries (point selects, updates)
-- High concurrency (many simultaneous transactions)
-- Low latency critical (user-facing applications)
-
-**Optimization Goals**:
-1. **Minimize latency** (p95 < 100ms typical target)
-2. **Maximize throughput** (TPS as high as possible)
-3. **Resource efficiency** (low CPU/memory per transaction)
-
-**Typical Workloads**:
-- SYSBENCH OLTP
-- TPC-C
-- Web application queries
-
-**Key PostgreSQL Knobs**:
-- `shared_buffers`: Cache for frequently accessed data
-- `work_mem`: Sort/hash operations
-- `max_connections`: Concurrent connections
-- `checkpoint_completion_target`: Write smoothing
-
-### OLAP (Online Analytical Processing)
-
-**Characteristics**:
-- Complex, long-running queries (aggregations, joins)
-- Low concurrency (few simultaneous queries)
-- Query execution time critical
-
-**Optimization Goals**:
-1. **Minimize query execution time**
-2. **Efficient memory usage** (large sorts/joins)
-3. **Good cache utilization** (scan large datasets)
-
-**Typical Workloads**:
-- TPC-H
-- Business intelligence queries
-- Data warehouse analytics
-
-**Key PostgreSQL Knobs**:
-- `work_mem`: Large sorts/joins
-- `maintenance_work_mem`: Index creation
-- `effective_cache_size`: Query planner hint
-- `max_parallel_workers_per_gather`: Parallelism
-
-### Mixed Workload
-
-**Characteristics**:
-- Combination of OLTP and OLAP queries
-- Variable query complexity
-- Competing optimization goals
-
-**Optimization Goals**:
-- **Balance** latency and throughput
-- Handle diverse query patterns
-- Resource efficiency across workload spectrum
-
-**Challenge**: Configurations optimal for one workload type may degrade the other.
+There are **no** workload-specific scoring functions any more. A single `CompositeScorer` instance handles all three; what differs is the workload feature vector fed to `FeatureDrivenWeightModel`. Legacy sessions tagged with `fixed_v1` still resolve through the compatibility branch in [`policies.py`](../src/utils/scoring/policies.py).
 
 ---
 
 ## Design Decisions
 
-### 1. Structured PerformanceMetrics Dataclass
+### 1. Single orchestrator, no per-workload subclasses
 
-**Decision**: Use typed dataclass instead of dictionary.
+The orchestrator stays workload-agnostic. Workload-specific logic lives in [`BenchmarkExecutor`](../src/benchmarks/executor.py) implementations ([`SysbenchExecutor`](../src/benchmarks/sysbench/executor.py), [`TPCHExecutor`](../src/benchmarks/tpch/executor.py), [`WorkloadExecutor`](../src/tuner/benchmark/workload.py)). This keeps the scoring contract and the barrier sequence shared across benchmarks.
 
-**Why?**
-- **Type safety**: IDE autocomplete, type checking
-- **Self-documenting**: Field names clarify meaning/units
-- **Validation**: Can add validation in `__post_init__`
-- **Serialization**: Easy to/from dictionary for checkpointing
+### 2. Score in `[0, 1]`, not `[0, 100]`
 
-### 2. Workload-Specific Scoring Functions
+The previous `× 100.0` scaling factor existed only to make logs more readable. It now leaks into post-hoc analysis and BO cost transforms in confusing ways, so the score is kept in `[0, 1]` and any human-facing rounding happens at the display layer.
 
-**Decision**: Separate scoring functions for OLTP, OLAP, MIXED.
+### 3. Read-back at B5
 
-**Why?**
-- **Different optimization goals**: OLTP prioritizes latency, OLAP prioritizes query time
-- **Appropriate weights**: MetricConfig can be customized per workload
-- **Clarity**: Explicit about what each workload optimizes
-- **Flexibility**: Easy to add new workload types
+The verify-and-merge pattern means the configuration **stored in the session** is the configuration PostgreSQL is **actually running**, not the configuration the optimiser **suggested**. This is the only sound foundation for cross-session comparison.
 
-### 3. psutil for System Monitoring
+### 4. Lockstep barriers around the measurement window
 
-**Decision**: Use psutil instead of approximations.
+Without barriers, workers that finished restarting early would run their measurement window with less contention than workers still restarting. The barriers (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)) force every measurement window to overlap, eliminating that bias.
 
-**Why?**
-- **Accuracy**: Real system metrics vs random guesses
-- **Validation**: Can verify config changes affect resources
-- **Trust**: PBT optimization driven by actual performance
-- **Cross-platform**: psutil works on Windows, Linux, macOS
+### 5. Reliability gate is multiplicative, not additive
 
-**Trade-off**: Adds dependency, but psutil is stable and widely used.
+A configuration that fails should not be ranked by accident on its non-failing dimensions. The gate `G ∈ [0, 1]` multiplies the weighted utility sum, so any unbounded `error_rate` or fatal `failure_type` collapses the score regardless of how good the latency/throughput numbers looked.
 
-### 4. Warmup and Cooldown Periods
+### 6. Single source of metric semantics
 
-**Decision**: Include warmup and cooldown in evaluation flow.
-
-**Why?**
-- **Steady state**: Avoid measuring transient effects
-- **Fair comparison**: All configs measured under similar conditions
-- **Stability**: Allow PostgreSQL to adjust to new settings
-
-**Typical values**:
-- Warmup: 100 queries or 10-30 seconds
-- Cooldown: 5-10 seconds
-
-### 5. Strategy Pattern for Workload Executors
-
-**Decision**: Abstract `WorkloadExecutor` base class with concrete implementations.
-
-**Why?**
-- **Extensibility**: Easy to add new workload types
-- **Separation of concerns**: Evaluator orchestrates, Executor implements workload
-- **Testability**: Can mock WorkloadExecutor for unit tests
-- **Reusability**: Executors can be used outside Evaluator
-
-### 6. Composite Scoring Function
-
-**Decision**: Single score = weighted sum of multiple metrics.
-
-**Why?**
-- **PBT requirement**: Needs single value to rank workers
-- **Multi-objective optimization**: Captures trade-offs (latency vs throughput vs resources)
-- **Tunable**: Weights can be adjusted for different priorities
-- **Interpretable**: Easy to understand contribution of each metric
-
-### 7. Error Rate Penalty
-
-**Decision**: Multiply score by (1 - error_rate × penalty).
-
-**Why?**
-- **Correctness first**: Configurations that cause errors should be heavily penalized
-- **Proportional**: Small error rates → small penalty, high error rates → large penalty
-- **Tunable**: `error_penalty` multiplier can be adjusted (default 10.0)
-
-**Example**:
-```
-Score before penalty: 0.85
-Error rate: 0.05 (5% of queries failed)
-Error penalty: 10.0
-
-Final score: 0.85 × (1 - 0.05 × 10) = 0.85 × 0.5 = 0.425
-```
+[`src/utils/scoring/constants.py`](../src/utils/scoring/constants.py) holds the canonical metric IDs, directionality (higher-is-better vs lower-is-better), and version constants. Adding or renaming a metric is a one-place change.
 
 ---
 
 ## Related Documentation
 
-### Prerequisites
+### Scoring layer
 
-- **[Environment Setup](./ENVIRONMENT_SETUP.md)**: Install psutil and other dependencies
-- **[PostgreSQL Connection](./POSTGRESQL_CONNECTION_AND_KNOBS.md)**: Database connection management
+- **[FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md)** — policies, weight model, normaliser, reliability gate.
+- **[METRICS_VALIDATION.md](./METRICS_VALIDATION.md)** — academic validation of the multi-objective formulation.
 
-### Related Components
+### Surrounding components
 
-- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)**: Worker, Evolution, Population classes that use the Evaluator
-- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)**: KnobApplicator used by Evaluator to apply configs
+- **[CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md)** — `KnobSpace`, `KnobApplicator`, `verify()`.
+- **[PBT_CORE_COMPONENTS.md](./PBT_CORE_COMPONENTS.md)** — how `Population` drives the orchestrator each generation.
+- **[GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)** — the B1–B17 lockstep barriers.
+- **[WORKLOAD_ORCHESTRATOR.md](./WORKLOAD_ORCHESTRATOR.md)** — orchestrator internals, restart policy, executor selection.
+- **[ENVIRONMENT_BACKENDS.md](./ENVIRONMENT_BACKENDS.md)** — Docker vs bare-metal, CPU subsets, per-worker memory budgets.
+- **[BENCHMARKING.md](./BENCHMARKING.md)** — dual-evaluation strategy (external C-binaries vs JSON templates).
 
-### Integration
+### File locations
 
-The Evaluator is called by the Population during training:
-
-```python
-# From Population.evaluate_generation()
-def evaluate_fn(worker: Worker) -> tuple[PerformanceMetrics, float]:
-    return evaluator.evaluate(worker.knob_config, worker.worker_id)
-
-population.evaluate_generation(evaluate_fn, parallel=True)
-```
-
-See [PBT_CORE_COMPONENTS.md](./PBT_CORE_COMPONENTS.md) for complete integration details.
-
----
-
-## Summary
-
-The Performance Evaluation System provides the **fitness function** for PBT optimization:
-
-1. **PerformanceMetrics**: Structured container for all performance measurements
-2. **Scoring System**: Converts multiple metrics → single composite score (workload-dependent)
-3. **Evaluator**: Orchestrates config application, workload execution, metric collection
-4. **psutil Integration**: Accurate system monitoring (CPU, memory, I/O)
-
-**Key Insight**: The scoring function is **workload-dependent**—OLTP prioritizes low latency and high throughput, OLAP prioritizes query execution time and resource efficiency. PBT uses these scores to evolve configurations toward better performance.
-
-**File Locations**:
-- Metrics and scoring: [src/utils/metrics.py](../src/utils/metrics.py)
-- Evaluator: [src/tuner/evaluator/evaluator.py](../src/tuner/evaluator/evaluator.py)
-- Evaluation tests: [tests/unit/evaluation/test_evaluate_tuning.py](../tests/unit/evaluation/test_evaluate_tuning.py)
+- `PerformanceMetrics`, `MetricConfig`, `WorkloadType`: [src/utils/metrics.py](../src/utils/metrics.py)
+- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../src/tuner/benchmark/orchestrator.py)
+- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../src/tuner/benchmark/workload.py)
+- `should_restart`: [src/tuner/benchmark/restart_policy.py](../src/tuner/benchmark/restart_policy.py)
+- `CompositeScorer`, `ScoreBreakdown`: [src/utils/scoring/scorer.py](../src/utils/scoring/scorer.py), [src/utils/scoring/contracts.py](../src/utils/scoring/contracts.py)
+- Metric instrumentation: [src/utils/metric_instrumentation.py](../src/utils/metric_instrumentation.py)
+- Tests: [tests/unit/core/](../tests/unit/core/), [tests/unit/scoring/](../tests/unit/scoring/), [tests/unit/utils/test_metric_instrumentation.py](../tests/unit/utils/test_metric_instrumentation.py)
