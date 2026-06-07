@@ -167,3 +167,148 @@ def test_system_info_dict_keys(_mock_pg_version):
     assert isinstance(sys_info, dict)
     for key in expected_keys:
         assert key in sys_info
+
+
+import pytest
+from src.utils.hardware_info import parse_ram_value, resolve_manual_worker_resources
+
+
+def test_parse_ram_value():
+    assert parse_ram_value("3G") == 3221225472
+    assert parse_ram_value("512M") == 536870912
+    assert parse_ram_value("1024K") == 1048576
+    assert parse_ram_value("3221225472") == 3221225472
+    assert parse_ram_value("5GB") == 5368709120
+    assert parse_ram_value("10 MB") == 10485760
+    assert parse_ram_value("5") == 5
+    with pytest.raises(ValueError):
+        parse_ram_value("invalid")
+
+
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_valid(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    class MockMem:
+        total = 16 * 1024**3
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    wr = resolve_manual_worker_resources(worker_ram="2G", worker_cpus=1, num_workers=4)
+    assert wr.ram_bytes == 2 * 1024**3
+    assert wr.cpu_cores == 1
+    assert wr.disk_type == "SSD"
+
+
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_exceeds_ram(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    class MockMem:
+        total = 16 * 1024**3
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    # 5G * 4 = 20G > 16G -> Fallback
+    wr = resolve_manual_worker_resources(worker_ram="5G", worker_cpus=2, num_workers=4)
+    expected_auto_ram = int((16 * 1024**3 * 0.8) / 4)
+    assert wr.ram_bytes == expected_auto_ram
+
+
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_exceeds_cpu(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    class MockMem:
+        total = 16 * 1024**3
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    # 3 CPUs * 4 = 12 CPUs > 8 CPUs -> Fallback
+    wr = resolve_manual_worker_resources(worker_ram="2G", worker_cpus=3, num_workers=4)
+    expected_auto_cpu = max(1, int((8 * 0.8) / 4))
+    assert wr.cpu_cores == expected_auto_cpu
+
+
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_partial_override(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    class MockMem:
+        total = 16 * 1024**3
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    wr = resolve_manual_worker_resources(worker_ram="2G", worker_cpus=None, num_workers=4)
+    expected_auto_cpu = max(1, int((8 * 0.8) / 4))
+    assert wr.ram_bytes == 2 * 1024**3
+    assert wr.cpu_cores == expected_auto_cpu
+
+
+@patch("src.utils.hardware_info.detect_disk_type_for_path", return_value="HDD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_disk_type_always_inferred(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    class MockMem:
+        total = 16 * 1024**3
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    from pathlib import Path
+    wr = resolve_manual_worker_resources(worker_ram="2G", worker_cpus=1, num_workers=4, data_path=Path("/tmp/data"))
+    assert wr.disk_type == "HDD"
