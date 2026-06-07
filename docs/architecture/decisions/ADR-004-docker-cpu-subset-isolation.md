@@ -16,7 +16,7 @@ Docker is the only available mechanism in this codebase that gives us kernel-lev
 
 ## Decision
 
-When the [`DockerEnvironment` backend](../../ENVIRONMENT_BACKENDS.md#dockerenvironment) creates per-worker containers, it sets `--cpuset-cpus` to a contiguous range of physical cores derived from `worker_resources.cpu_cores` and the host CPU count. Each worker's container can run only on the cores assigned to it; the kernel scheduler will not migrate threads outside the cpuset.
+When the [`DockerEnvironment` backend](../environment-backends.md#dockerenvironment) creates per-worker containers, it sets `--cpuset-cpus` to a contiguous range of physical cores derived from `worker_resources.cpu_cores` and the host CPU count. Each worker's container can run only on the cores assigned to it; the kernel scheduler will not migrate threads outside the cpuset.
 
 The algorithm:
 
@@ -66,6 +66,6 @@ Trade-offs:
 
 The factory continues to accept `use_docker=False` and `--no-docker` for users who explicitly opt out. Both paths log an isolation warning and tag the resulting comparison JSON's `evaluation_environment` field as `bare-metal-fallback`. The post-hoc evaluation suite's reproducibility checklist already surfaces this field — reviewers can filter on it.
 
-Sessions tuned before Docker isolation was available still load through the existing scoring-policy compatibility branch. Their session JSON does not record `worker_resources` per worker; the analysis pipeline treats them as host-resource sessions when computing data-driven tier importances. Hardware-validation results that mix Docker-isolated and bare-metal sessions should be interpreted carefully — the [hardware-aware Kendall's τ stability metric](../../KNOB_IMPORTANCE_ANALYSIS.md) becomes harder to interpret when one of the "hardware profiles" is "no isolation at all."
+Sessions tuned before Docker isolation was available still load through the existing scoring-policy compatibility branch. Their session JSON does not record `worker_resources` per worker; the analysis pipeline treats them as host-resource sessions when computing data-driven tier importances. Hardware-validation results that mix Docker-isolated and bare-metal sessions should be interpreted carefully — the [hardware-aware Kendall's τ stability metric](../knob-importance-analysis.md) becomes harder to interpret when one of the "hardware profiles" is "no isolation at all."
 
-See [ENVIRONMENT_BACKENDS.md](../../ENVIRONMENT_BACKENDS.md) and [HARDWARE_AWARE_NORMALIZATION.md §7](../../HARDWARE_AWARE_NORMALIZATION.md#7-docker-cpu-subset-enforcement) for the implementation details, and [tests/unit/utils/test_docker_environment.py](../../../tests/unit/utils/test_docker_environment.py) for the cpuset derivation tests.
+See [environment-backends](../environment-backends.md) and [hardware-aware-normalization §7](../hardware-aware-normalization.md#7-docker-cpu-subset-enforcement) for the implementation details, and [tests/unit/utils/test_docker_environment.py](../../../tests/unit/utils/test_docker_environment.py) for the cpuset derivation tests.

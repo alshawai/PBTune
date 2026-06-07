@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Performance Evaluation](./PERFORMANCE_EVALUATION.md), [Metrics Validation](./METRICS_VALIDATION.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)
+See also: [Documentation Index](../README.md), [Performance Evaluation](performance-evaluation.md), [Metrics Validation](../reference/metrics-validation.md), [Workload Orchestrator](workload-orchestrator.md)
 
 ## Overview
 
@@ -156,20 +156,20 @@ from src.utils.scoring import create_scoring_engine
 scorer: CompositeScorer = create_scoring_engine(metric_config)
 ```
 
-`create_scoring_engine(metric_config)` lives in [src/utils/scoring/__init__.py](../src/utils/scoring/__init__.py) and is the only place that wires the four scoring layers together. Given a `MetricConfig`, it:
+`create_scoring_engine(metric_config)` lives in [src/utils/scoring/__init__.py](../../src/utils/scoring/__init__.py) and is the only place that wires the four scoring layers together. Given a `MetricConfig`, it:
 
 1. Reuses an existing `QuantileUtilityNormalizer` from `metric_config._normalizer` if one was attached (e.g. by post-hoc rescoring); otherwise constructs a fresh normalizer.
 2. For `fixed_v1`, builds a per-metric weight override dict from `metric_config.weight_latency` / `weight_throughput` / `weight_memory` / `weight_error` so legacy sessions remain bit-identical.
 3. For `feature_driven_v2`, lets `FeatureDrivenWeightModel` derive weights at scoring time from the workload features.
 4. Returns a `CompositeScorer` configured with the resolved `policy_id`, workload type, normalizer, and weight overrides.
 
-The orchestrator constructs the engine __lazily under a lock__ so the first per-worker thread to call `evaluate_worker` doesn't race with peers building their own engine — see [WORKLOAD_ORCHESTRATOR.md §Lazy thread-safe scoring engine](./WORKLOAD_ORCHESTRATOR.md#3-lazy-thread-safe-scoring-engine). Every subsequent worker thread shares the same engine.
+The orchestrator constructs the engine __lazily under a lock__ so the first per-worker thread to call `evaluate_worker` doesn't race with peers building their own engine — see [WORKLOAD_ORCHESTRATOR.md §Lazy thread-safe scoring engine](workload-orchestrator.md#3-lazy-thread-safe-scoring-engine). Every subsequent worker thread shares the same engine.
 
 The post-hoc evaluation suite uses the same factory: when `--scoring-policy feature_driven_v2` overrides a session originally tagged `fixed_v1`, the suite calls `create_scoring_engine` with a re-tagged `MetricConfig`, then rescores the persisted raw `PerformanceMetrics`.
 
 ## Outlier Filtering
 
-__Location__: [src/utils/scoring/outlier_filtering.py](../src/utils/scoring/outlier_filtering.py)
+__Location__: [src/utils/scoring/outlier_filtering.py](../../src/utils/scoring/outlier_filtering.py)
 
 Calibrating the normalizer's quantile anchors against raw observations is sensitive to extreme outliers — a single hung query producing a 600-second latency would push the 95th-percentile anchor far above the typical operating range and collapse score variance for the next dozen generations.
 
@@ -181,13 +181,13 @@ Calibrating the normalizer's quantile anchors against raw observations is sensit
 
 The filter returns a `(filtered_array, metadata_dict)` pair where the metadata records `n_removed`, `original_size`, the bounds used, and a `fallback_used` flag. When the input has fewer than 4 observations or `IQR == 0`, the filter falls back to the unfiltered values rather than producing degenerate bounds; both cases are surfaced in the metadata so post-hoc analysis can audit when calibration was unfiltered.
 
-The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../src/utils/rescoring.py) used by the [PBT vs BO comparison script](./PBT_VS_BO_COMPARISON.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
+The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/utils/rescoring.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
 
 ## Source References
 
-- [Scoring policies](../src/utils/scoring/policies.py)
-- [Weight model](../src/utils/scoring/weights.py)
-- [Workload features](../src/utils/scoring/workload_features.py)
-- [Composite scorer](../src/utils/scoring/scorer.py)
-- [Utility normalization](../src/utils/scoring/normalization.py)
-- [Typed scoring contracts](../src/utils/scoring/contracts.py)
+- [Scoring policies](../../src/utils/scoring/policies.py)
+- [Weight model](../../src/utils/scoring/weights.py)
+- [Workload features](../../src/utils/scoring/workload_features.py)
+- [Composite scorer](../../src/utils/scoring/scorer.py)
+- [Utility normalization](../../src/utils/scoring/normalization.py)
+- [Typed scoring contracts](../../src/utils/scoring/contracts.py)

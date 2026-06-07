@@ -86,9 +86,9 @@ Our implementation extends vanilla PBT with database-specific adaptations:
 - **Feature-Driven Scoring**: Workload features drive composite metric weighting through scoring-v2, with `fixed_v1` retained for compatibility
 - **Intelligent Restarts**: CDBTune-inspired batched restarts (every 10 generations) balance configuration changes vs. overhead
 
-See [`docs/FEATURE_DRIVEN_SCORING.md`](./docs/FEATURE_DRIVEN_SCORING.md) for the scoring model, policy metadata, and migration notes.
+See [`docs/architecture/feature-driven-scoring.md`](./docs/architecture/feature-driven-scoring.md) for the scoring model, policy metadata, and migration notes.
 
-See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed algorithm description.
+See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for detailed algorithm description.
 
 ---
 
@@ -144,7 +144,7 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed 
 | **Knob Space**            | Search space definition, sampling, perturbation, hardware-aware ranges   | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py)           |
 | **Scoring (v2)**          | Feature-driven composite score with reliability gate                     | [`src/utils/scoring/`](src/utils/scoring/)                                   |
 
-See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component interaction details.
+See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for component interaction details.
 
 ---
 
@@ -255,7 +255,7 @@ DB_PORT=5432
 DB_NAME=test_dataset
 ```
 
-See [`docs/ENVIRONMENT_SETUP.md`](./docs/ENVIRONMENT_SETUP.md) for detailed setup instructions.
+See [`docs/getting-started/setup.md`](./docs/getting-started/setup.md) for detailed setup instructions.
 
 ### Step 4: Initialize Database Schema
 
@@ -446,7 +446,7 @@ This framework intentionally supports a two-pronged benchmarking methodology:
 - **Academic Baselines**: For scientifically rigorous evaluations without Python overhead, use external C-binaries (e.g. `--benchmark sysbench`).
 - **Custom Prototyping**: For tuning proprietary application databases, use the internal JSON-based query templates.
 
-For full architectural details on this design, please read the [Benchmarking Documentation](./docs/BENCHMARKING.md).
+For full architectural details on this design, please read the [Benchmarking Documentation](./docs/reference/benchmarking.md).
 
 ### Custom Workloads
 
@@ -489,16 +489,16 @@ Comprehensive documentation available in [`docs/`](./docs/):
 
 ### Core System Components
 
-- **[PBT Core Components](./docs/PBT_CORE_COMPONENTS.md)** - Worker, Evolution, Population, lockstep generation barriers
-- **[Feature-Driven Scoring](./docs/FEATURE_DRIVEN_SCORING.md)** - Scoring-v2 policies, workload features, normalization, and reliability gate
-- **[Performance Evaluation](./docs/PERFORMANCE_EVALUATION.md)** - WorkloadOrchestrator, PerformanceMetrics, scoring integration
-- **[Configuration Management](./docs/CONFIGURATION_MANAGEMENT.md)** - KnobSpace, tier CSVs, KnobApplicator, verify() read-back
+- **[PBT Core Components](./docs/architecture/pbt-core.md)** - Worker, Evolution, Population, lockstep generation barriers
+- **[Feature-Driven Scoring](./docs/architecture/feature-driven-scoring.md)** - Scoring-v2 policies, workload features, normalization, and reliability gate
+- **[Performance Evaluation](./docs/architecture/performance-evaluation.md)** - WorkloadOrchestrator, PerformanceMetrics, scoring integration
+- **[Configuration Management](./docs/architecture/configuration-management.md)** - KnobSpace, tier CSVs, KnobApplicator, verify() read-back
 
 ### Technical Details
 
-- **[PostgreSQL Connection and Knobs](./docs/POSTGRESQL_CONNECTION_AND_KNOBS.md)** - Database connection, knob retrieval, tuning metadata, policy filter
-- **[Environment Setup](./docs/ENVIRONMENT_SETUP.md)** - Installation, configuration, troubleshooting
-- **[Evaluation Reproducibility Runbook](./docs/EVALUATION_RUNBOOK.md)** - Canonical comparative-evaluation commands, outputs, and reproducibility checks
+- **[PostgreSQL Connection and Knobs](./docs/architecture/postgresql-connection-and-knobs.md)** - Database connection, knob retrieval, tuning metadata, policy filter
+- **[Environment Setup](./docs/getting-started/setup.md)** - Installation, configuration, troubleshooting
+- **[Evaluation Reproducibility Runbook](./docs/guides/evaluation-runbook.md)** - Canonical comparative-evaluation commands, outputs, and reproducibility checks
 
 ---
 
@@ -530,9 +530,9 @@ This work builds upon several research directions:
 
 See the curated analysis and references in:
 
-- [`docs/ALGORITHM_COMPARISON.md`](./docs/ALGORITHM_COMPARISON.md)
-- [`docs/COMPETITIVE_ANALYSIS.md`](./docs/COMPETITIVE_ANALYSIS.md)
-- [`docs/BENCHMARKING.md`](./docs/BENCHMARKING.md)
+- [`docs/research/algorithm-comparison.md`](./docs/research/algorithm-comparison.md)
+- [`docs/research/competitive-analysis.md`](./docs/research/competitive-analysis.md)
+- [`docs/reference/benchmarking.md`](./docs/reference/benchmarking.md)
 
 - Auto DBMS Tuner (5 papers)
 - Reinforcement Learning for DB tuning (4 papers)

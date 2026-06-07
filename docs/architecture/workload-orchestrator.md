@@ -2,17 +2,17 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Performance Evaluation](./PERFORMANCE_EVALUATION.md), [Generation Barriers](./GENERATION_BARRIERS.md), [Environment Backends](./ENVIRONMENT_BACKENDS.md), [Configuration Management](./CONFIGURATION_MANAGEMENT.md), [Benchmarking](./BENCHMARKING.md)
+See also: [Documentation Index](../README.md), [Performance Evaluation](performance-evaluation.md), [Generation Barriers](generation-barriers.md), [Environment Backends](environment-backends.md), [Configuration Management](configuration-management.md), [Benchmarking](../reference/benchmarking.md)
 
 ## Overview
 
 The `WorkloadOrchestrator` is the per-worker evaluation engine. Given a `Worker`, it applies the worker's configuration to PostgreSQL, executes the configured benchmark, captures metrics, and returns a `(PerformanceMetrics, ScoreBreakdown)` pair. It replaces the previous `Evaluator` class — every reference to `src/tuner/evaluator/evaluator.py` in older docs/code is obsolete.
 
-The orchestrator package lives at [src/tuner/benchmark/](../src/tuner/benchmark/) and consists of three focused modules:
+The orchestrator package lives at [src/tuner/benchmark/](../../src/tuner/benchmark/) and consists of three focused modules:
 
-- **[orchestrator.py](../src/tuner/benchmark/orchestrator.py)** — `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`. Drives the B1–B17 lockstep flow.
-- **[restart_policy.py](../src/tuner/benchmark/restart_policy.py)** — Pure decision function `should_restart()`. The CDBTune-inspired adaptive batching lives here.
-- **[workload.py](../src/tuner/benchmark/workload.py)** — `WorkloadExecutor` for SQL-template workloads + `WorkloadFileLoader` for JSON/YAML workload files.
+- **[orchestrator.py](../../src/tuner/benchmark/orchestrator.py)** — `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`. Drives the B1–B17 lockstep flow.
+- **[restart_policy.py](../../src/tuner/benchmark/restart_policy.py)** — Pure decision function `should_restart()`. The CDBTune-inspired adaptive batching lives here.
+- **[workload.py](../../src/tuner/benchmark/workload.py)** — `WorkloadExecutor` for SQL-template workloads + `WorkloadFileLoader` for JSON/YAML workload files.
 
 This split — *policy* vs. *mechanism* vs. *workload-specific execution* — is what lets the orchestrator stay benchmark-agnostic while the same plumbing handles Sysbench, TPC-H, and arbitrary user workloads.
 
@@ -74,7 +74,7 @@ This split — *policy* vs. *mechanism* vs. *workload-specific execution* — is
                             └────────────────────────┘
 ```
 
-The orchestrator is constructed once per session by [`src/tuner/main.py`](../src/tuner/main.py) and passed into the population. Every worker thread shares the same orchestrator instance — its scoring engine is built lazily under a lock so multiple threads don't race during the first call.
+The orchestrator is constructed once per session by [`src/tuner/main.py`](../../src/tuner/main.py) and passed into the population. Every worker thread shares the same orchestrator instance — its scoring engine is built lazily under a lock so multiple threads don't race during the first call.
 
 ---
 
@@ -102,7 +102,7 @@ Field-by-field:
 | Field | Purpose |
 | --- | --- |
 | `workload_type` | `OLTP` / `OLAP` / `MIXED`. Drives default metric weights and the workload-feature extractor. |
-| `metric_config` | The active scoring policy and floors. See [FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md). |
+| `metric_config` | The active scoring policy and floors. See [FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md). |
 | `db_config` | Base PostgreSQL credentials. The environment substitutes `host` / `port` per worker. |
 | `warmup_duration` | Seconds spent in B8 warmup before measurement. Default 30. |
 | `measurement_duration` | Seconds in the timed measurement window (B9). The only window that contributes to the score. Default 60. |
@@ -126,7 +126,7 @@ Public entry point:
 metrics, score_breakdown = orchestrator.evaluate_worker(worker)
 ```
 
-The body is a sequence of 17 sub-steps, each ending with `barriers.wait(name, worker_id)` (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md) for the full table). Annotated:
+The body is a sequence of 17 sub-steps, each ending with `barriers.wait(name, worker_id)` (see [GENERATION_BARRIERS.md](generation-barriers.md) for the full table). Annotated:
 
 ```text
 B1  connect()                            # psycopg2 connection, retry on "starting up" / "recovering"
@@ -156,13 +156,13 @@ Two non-obvious details:
 
 ### Read-back at B5
 
-`applicator.verify()` runs `current_setting(name)` for each knob in `worker.knob_config` and returns the **actually quantised** values PostgreSQL is using. The orchestrator merges these back into `worker.knob_config` so the session JSON reflects what the database is really running with — see [CONFIGURATION_MANAGEMENT.md §Verifying applied config](./CONFIGURATION_MANAGEMENT.md#verifying-applied-config). This step is cheap and is what makes BO surrogate-model gradients honest in the BO baseline that uses the same orchestrator.
+`applicator.verify()` runs `current_setting(name)` for each knob in `worker.knob_config` and returns the **actually quantised** values PostgreSQL is using. The orchestrator merges these back into `worker.knob_config` so the session JSON reflects what the database is really running with — see [CONFIGURATION_MANAGEMENT.md §Verifying applied config](configuration-management.md#verifying-applied-config). This step is cheap and is what makes BO surrogate-model gradients honest in the BO baseline that uses the same orchestrator.
 
 ---
 
 ## Restart policy and tuning modes
 
-**Location**: [src/tuner/benchmark/restart_policy.py](../src/tuner/benchmark/restart_policy.py)
+**Location**: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
 
 ```python
 def should_restart(
@@ -205,11 +205,11 @@ The orchestrator accepts any object that satisfies a small contract — `prepare
 
 | Executor | Where | Workloads | Notes |
 | --- | --- | --- | --- |
-| **`SysbenchExecutor`** | [src/benchmarks/sysbench/executor.py](../src/benchmarks/sysbench/executor.py) | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | Wraps the `sysbench` C-binary (1.1.0+). The score's TPS/latency metrics come from sysbench's own output. |
-| **`TPCHExecutor`** | [src/benchmarks/tpch/executor.py](../src/benchmarks/tpch/executor.py) | TPC-H 22-query power test | Uses `dbgen` for data generation, `psycopg2.copy_expert()` for bulk load, raw psycopg2 for query execution. Scale factor configurable. |
-| **`WorkloadExecutor`** | [src/tuner/benchmark/workload.py](../src/tuner/benchmark/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
+| **`SysbenchExecutor`** | [src/benchmarks/sysbench/executor.py](../../src/benchmarks/sysbench/executor.py) | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | Wraps the `sysbench` C-binary (1.1.0+). The score's TPS/latency metrics come from sysbench's own output. |
+| **`TPCHExecutor`** | [src/benchmarks/tpch/executor.py](../../src/benchmarks/tpch/executor.py) | TPC-H 22-query power test | Uses `dbgen` for data generation, `psycopg2.copy_expert()` for bulk load, raw psycopg2 for query execution. Scale factor configurable. |
+| **`WorkloadExecutor`** | [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
 
-Selection is decided in [`src/tuner/main.py`](../src/tuner/main.py) based on CLI flags:
+Selection is decided in [`src/tuner/main.py`](../../src/tuner/main.py) based on CLI flags:
 
 ```text
 --benchmark sysbench    → SysbenchExecutor      (CLI: --sysbench-workload, --sysbench-tables, etc.)
@@ -218,13 +218,13 @@ Selection is decided in [`src/tuner/main.py`](../src/tuner/main.py) based on CLI
 (default)               → built-in OLTP / OLAP / MIXED template via WorkloadExecutor
 ```
 
-The full strategy comparison — when to use external C-binaries vs internal templates and why — is in [BENCHMARKING.md](./BENCHMARKING.md).
+The full strategy comparison — when to use external C-binaries vs internal templates and why — is in [BENCHMARKING.md](../reference/benchmarking.md).
 
 ---
 
 ## Template workloads
 
-**Location**: [src/tuner/benchmark/workload.py](../src/tuner/benchmark/workload.py)
+**Location**: [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py)
 
 `WorkloadExecutor` is the engine behind both the built-in OLTP/OLAP/MIXED templates and any user-supplied JSON/YAML workload file.
 
@@ -254,7 +254,7 @@ The `schema` block is optional; without it the executor logs a warning and defau
 | `{table}` | Random table name from `sbtest1…sbtest{num_tables}` |
 | `{table2}` | Different random table for cross-table joins |
 
-`WorkloadFileLoader.load_from_file(path)` returns a fully constructed `WorkloadExecutor`; `extract_workload_template_metadata(path)` returns `TemplateWorkloadMetadata` used by the workload-feature extractor (see [FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md)).
+`WorkloadFileLoader.load_from_file(path)` returns a fully constructed `WorkloadExecutor`; `extract_workload_template_metadata(path)` returns `TemplateWorkloadMetadata` used by the workload-feature extractor (see [FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md)).
 
 ### Concurrent execution
 
@@ -262,7 +262,7 @@ The `schema` block is optional; without it the executor logs a warning and defau
 
 ### Real-database workloads
 
-For tuning against a real production replica (see [BENCHMARKING.md §Tuning Against a Real Database Snapshot](./BENCHMARKING.md#tuning-against-a-real-database-snapshot)), the workload file omits both the `schema` block and the placeholders — `WorkloadExecutor` natively supports raw unparameterised SQL. The orchestrator's apply / measure / score pipeline is unchanged; the schema is whatever `pg_basebackup` cloned from the source database.
+For tuning against a real production replica (see [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot)), the workload file omits both the `schema` block and the placeholders — `WorkloadExecutor` natively supports raw unparameterised SQL. The orchestrator's apply / measure / score pipeline is unchanged; the schema is whatever `pg_basebackup` cloned from the source database.
 
 ---
 
@@ -272,7 +272,7 @@ Three classes of failure can interrupt an evaluation. The orchestrator handles e
 
 ### 1. PostgreSQL apply / restart errors
 
-Caught at B2–B4. The orchestrator marks the worker's metrics with a `failure_type` (`"apply_failed"`, `"restart_failed"`, `"reconnect_failed"`), drains the remaining barriers via [`barriers.drain_remaining`](./GENERATION_BARRIERS.md#drain_remainingstart_from-worker_id), and propagates the exception. The reliability gate `G` collapses to 0, the population's score-finalisation logic records the failure in session JSON, and `rescue_dead_workers()` may pick up the worker on the next generation boundary.
+Caught at B2–B4. The orchestrator marks the worker's metrics with a `failure_type` (`"apply_failed"`, `"restart_failed"`, `"reconnect_failed"`), drains the remaining barriers via [`barriers.drain_remaining`](generation-barriers.md#drain_remainingstart_from-worker_id), and propagates the exception. The reliability gate `G` collapses to 0, the population's score-finalisation logic records the failure in session JSON, and `rescue_dead_workers()` may pick up the worker on the next generation boundary.
 
 ### 2. Workload execution errors
 
@@ -280,7 +280,7 @@ Caught at B7–B9. Same pattern: tag `failure_type`, drain remaining barriers, p
 
 ### 3. Dead-instance detection
 
-The population's separate health-check thread polls `environment.is_alive(worker_id)`. If a worker's PostgreSQL is unresponsive, the population calls [`barriers.abort()`](./GENERATION_BARRIERS.md#abort) — the running orchestrator's next `wait()` raises `BrokenBarrierError`, every per-worker thread exits cleanly, and the recovery ladder runs (`recover_instance` → `rebuild_worker_instance` → dead-worker rescue).
+The population's separate health-check thread polls `environment.is_alive(worker_id)`. If a worker's PostgreSQL is unresponsive, the population calls [`barriers.abort()`](generation-barriers.md#abort) — the running orchestrator's next `wait()` raises `BrokenBarrierError`, every per-worker thread exits cleanly, and the recovery ladder runs (`recover_instance` → `rebuild_worker_instance` → dead-worker rescue).
 
 The orchestrator also surfaces the read-back values from `applicator.verify()` to the population layer regardless of whether the evaluation completed. This lets the BO baseline correctly attribute the actually-quantised configuration even to runs that crashed mid-measurement.
 
@@ -316,18 +316,18 @@ The retry loop knows about PostgreSQL-specific recovery messages (`"starting up"
 
 ## Related documentation
 
-- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)** — `PerformanceMetrics`, `MetricConfig`, scoring integration.
-- **[Generation Barriers](./GENERATION_BARRIERS.md)** — the B1–B17 lockstep mechanism.
-- **[Environment Backends](./ENVIRONMENT_BACKENDS.md)** — Docker / bare-metal lifecycle.
-- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)** — `KnobApplicator.apply` / `verify`.
-- **[Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md)** — the scoring engine constructed at B16.
-- **[Benchmarking](./BENCHMARKING.md)** — dual-evaluation strategy and SchemaProvider protocol.
-- **[BO Baseline](./BO_BASELINE.md)** — uses the same orchestrator with a different driver.
+- **[Performance Evaluation](performance-evaluation.md)** — `PerformanceMetrics`, `MetricConfig`, scoring integration.
+- **[Generation Barriers](generation-barriers.md)** — the B1–B17 lockstep mechanism.
+- **[Environment Backends](environment-backends.md)** — Docker / bare-metal lifecycle.
+- **[Configuration Management](configuration-management.md)** — `KnobApplicator.apply` / `verify`.
+- **[Feature-Driven Scoring](feature-driven-scoring.md)** — the scoring engine constructed at B16.
+- **[Benchmarking](../reference/benchmarking.md)** — dual-evaluation strategy and SchemaProvider protocol.
+- **[BO Baseline](../guides/bo-baseline.md)** — uses the same orchestrator with a different driver.
 
 ### File locations
 
-- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../src/tuner/benchmark/orchestrator.py)
-- `should_restart`: [src/tuner/benchmark/restart_policy.py](../src/tuner/benchmark/restart_policy.py)
-- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../src/tuner/benchmark/workload.py)
-- `TuningMode`: [src/utils/types.py](../src/utils/types.py)
-- Tests: [tests/unit/core/test_restart_policy.py](../tests/unit/core/test_restart_policy.py), [tests/unit/core/test_evaluator_fault_injection.py](../tests/unit/core/test_evaluator_fault_injection.py), [tests/unit/core/test_evaluator_memory_normalization.py](../tests/unit/core/test_evaluator_memory_normalization.py)
+- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
+- `should_restart`: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
+- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py)
+- `TuningMode`: [src/utils/types.py](../../src/utils/types.py)
+- Tests: [tests/unit/core/test_restart_policy.py](../../tests/unit/core/test_restart_policy.py), [tests/unit/core/test_evaluator_fault_injection.py](../../tests/unit/core/test_evaluator_fault_injection.py), [tests/unit/core/test_evaluator_memory_normalization.py](../../tests/unit/core/test_evaluator_memory_normalization.py)

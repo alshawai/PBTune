@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Generation Barriers](./GENERATION_BARRIERS.md), [Performance Evaluation](./PERFORMANCE_EVALUATION.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)
+See also: [Documentation Index](../README.md), [Generation Barriers](generation-barriers.md), [Performance Evaluation](performance-evaluation.md), [Workload Orchestrator](workload-orchestrator.md)
 
 ## Overview
 
@@ -12,7 +12,7 @@ This document explains the three core classes that implement Population-Based Tr
 
 **What this implementation adds beyond vanilla PBT:**
 
-- **Lockstep generation barriers** so every worker's measurement window experiences identical contention from other workers (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)).
+- **Lockstep generation barriers** so every worker's measurement window experiences identical contention from other workers (see [GENERATION_BARRIERS.md](generation-barriers.md)).
 - **Physical instance cloning during exploit** so an exploited worker takes over the elite's data directory + buffer state, not just the knob values.
 - **Per-worker resource slices** (`WorkerResources`) so the population can run safely on a single host with bounded RAM/CPU budgets.
 - **Dead-worker rescue** so a single crashed evaluation doesn't block the generation indefinitely.
@@ -81,7 +81,7 @@ This document explains the three core classes that implement Population-Based Tr
 
 ## Worker
 
-**Location**: [src/tuner/core/worker.py](../src/tuner/core/worker.py)
+**Location**: [src/tuner/core/worker.py](../../src/tuner/core/worker.py)
 
 A `Worker` represents a single member of the population. It encapsulates:
 
@@ -131,15 +131,15 @@ Why this matters:
 - A copied configuration without the underlying database state is "cold" — its buffer cache, page cache, and OS-level state are all empty. The next evaluation includes a long warmup tail that has nothing to do with knob quality.
 - With cloning, the exploit inherits the elite's warmed-up state and its first measured generation reflects the configuration honestly.
 
-The clone path is implemented per environment backend — see [`bare_metal.py`](../src/utils/environments/bare_metal.py) and [`docker.py`](../src/utils/environments/docker.py).
+The clone path is implemented per environment backend — see [`bare_metal.py`](../../src/utils/environments/bare_metal.py) and [`docker.py`](../../src/utils/environments/docker.py).
 
 ---
 
 ## Evolution
 
-**Location**: [src/tuner/core/evolution.py](../src/tuner/core/evolution.py)
+**Location**: [src/tuner/core/evolution.py](../../src/tuner/core/evolution.py)
 
-A module of stateless functions implementing the algorithmic core of PBT. Keeping these as functions (not methods on `Population`) makes them independently testable — see [tests/unit/core/](../tests/unit/core/).
+A module of stateless functions implementing the algorithmic core of PBT. Keeping these as functions (not methods on `Population`) makes them independently testable — see [tests/unit/core/](../../tests/unit/core/).
 
 ### Public functions
 
@@ -185,7 +185,7 @@ The main entry point called once per generation by `Population.train_generation(
 
 ## Population
 
-**Location**: [src/tuner/core/population.py](../src/tuner/core/population.py)
+**Location**: [src/tuner/core/population.py](../../src/tuner/core/population.py)
 
 The orchestrator. Holds the worker pool, the evaluator, the environment factory, the barriers, and the policy/normalisation state.
 
@@ -212,7 +212,7 @@ The fields beyond the textbook PBT parameters:
 
 - **`enable_snapshots` / `snapshot_restore_interval`** — periodic baseline-snapshot restoration to prevent data drift. Implemented per environment backend.
 - **`num_parallel_workers`** — how many workers run concurrently on this host. The orchestrator uses this to slice `WorkerResources`.
-- **`worker_resources`** — per-worker resource slice (RAM, CPU cores, disk type). Detected at session start by [`detect_worker_resources()`](../src/utils/hardware_info.py).
+- **`worker_resources`** — per-worker resource slice (RAM, CPU cores, disk type). Detected at session start by [`detect_worker_resources()`](../../src/utils/hardware_info.py).
 
 ### `GenerationResult`
 
@@ -248,13 +248,13 @@ class GenerationResult:
 
 ### Score finalisation
 
-`_finalize_scores()` runs once at session end and rescores every persisted `PerformanceMetrics` against the *final* normalisation anchors. This is what makes pre- and post-calibration generations comparable in the saved session JSON. The same rescoring helper is used by the post-hoc evaluation suite — see [src/utils/rescoring.py](../src/utils/rescoring.py).
+`_finalize_scores()` runs once at session end and rescores every persisted `PerformanceMetrics` against the *final* normalisation anchors. This is what makes pre- and post-calibration generations comparable in the saved session JSON. The same rescoring helper is used by the post-hoc evaluation suite — see [src/utils/rescoring.py](../../src/utils/rescoring.py).
 
 ---
 
 ## Lockstep generation flow
 
-Every generation goes through a strict lockstep sequence enforced by the [`GenerationBarrier`](../src/tuner/core/barriers.py). Each worker thread waits at every barrier point until **all** workers have arrived — guaranteeing measurement-window overlap.
+Every generation goes through a strict lockstep sequence enforced by the [`GenerationBarrier`](../../src/tuner/core/barriers.py). Each worker thread waits at every barrier point until **all** workers have arrived — guaranteeing measurement-window overlap.
 
 ```text
 Generation N
@@ -299,7 +299,7 @@ Two graceful-degradation paths handle stuck/crashed workers without deadlocking:
 
 There is **no per-barrier timeout** — legitimate workloads (e.g. 5-minute OLAP queries) need to wait indefinitely. The dead-worker case is the only thing barriers need to escape from, and `drain_remaining` / `abort` cover it.
 
-Full barrier table and rationale: [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md).
+Full barrier table and rationale: [GENERATION_BARRIERS.md](generation-barriers.md).
 
 ---
 
@@ -331,7 +331,7 @@ After generation N evaluations:
   Generation N+1: evaluate with the new configs
 ```
 
-Booleans and enums are perturbed differently — booleans flip with a configurable probability, enums probabilistically jump to a neighbour. Numeric knobs on a log scale are perturbed in log space. See [CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md#sampling-perturbation-and-dependency-repair).
+Booleans and enums are perturbed differently — booleans flip with a configurable probability, enums probabilistically jump to a neighbour. Numeric knobs on a log scale are perturbed in log space. See [CONFIGURATION_MANAGEMENT.md](configuration-management.md#sampling-perturbation-and-dependency-repair).
 
 ---
 
@@ -372,7 +372,7 @@ Evolution is stateless — `truncation_selection`, `perturb`, `check_convergence
 
 ### 2. Lockstep barriers around the measurement window
 
-Without barriers, a worker that finished restarting early would measure under lower contention than a worker still restarting. The barriers force every measurement window to overlap, eliminating that bias. See [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md) for the full rationale and the abort/drain semantics.
+Without barriers, a worker that finished restarting early would measure under lower contention than a worker still restarting. The barriers force every measurement window to overlap, eliminating that bias. See [GENERATION_BARRIERS.md](generation-barriers.md) for the full rationale and the abort/drain semantics.
 
 ### 3. Physical instance cloning during exploit
 
@@ -398,18 +398,18 @@ Max generations is a hard ceiling. Early-stopping patience saves time on plateau
 
 ## Related documentation
 
-- **[Generation Barriers](./GENERATION_BARRIERS.md)** — the B1–B17 lockstep mechanism in detail.
-- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)** — the `WorkloadOrchestrator` and the `PerformanceMetrics` contract.
-- **[Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)** — orchestrator internals, restart policy, executor selection.
-- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)** — `KnobSpace`, `KnobApplicator`, perturbation, repair.
-- **[Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md)** — `WorkerResources` and warm-start.
-- **[Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md)** — the scoring math and policies.
-- **[Environment Backends](./ENVIRONMENT_BACKENDS.md)** — Docker vs bare-metal, instance cloning, snapshot management.
+- **[Generation Barriers](generation-barriers.md)** — the B1–B17 lockstep mechanism in detail.
+- **[Performance Evaluation](performance-evaluation.md)** — the `WorkloadOrchestrator` and the `PerformanceMetrics` contract.
+- **[Workload Orchestrator](workload-orchestrator.md)** — orchestrator internals, restart policy, executor selection.
+- **[Configuration Management](configuration-management.md)** — `KnobSpace`, `KnobApplicator`, perturbation, repair.
+- **[Hardware-Aware Normalization](hardware-aware-normalization.md)** — `WorkerResources` and warm-start.
+- **[Feature-Driven Scoring](feature-driven-scoring.md)** — the scoring math and policies.
+- **[Environment Backends](environment-backends.md)** — Docker vs bare-metal, instance cloning, snapshot management.
 
 ### File locations
 
-- `Worker`: [src/tuner/core/worker.py](../src/tuner/core/worker.py)
-- `Population`, `PopulationConfig`, `GenerationResult`: [src/tuner/core/population.py](../src/tuner/core/population.py)
-- Evolution algorithms: [src/tuner/core/evolution.py](../src/tuner/core/evolution.py)
-- Generation barriers: [src/tuner/core/barriers.py](../src/tuner/core/barriers.py)
-- Tests: [tests/unit/core/](../tests/unit/core/)
+- `Worker`: [src/tuner/core/worker.py](../../src/tuner/core/worker.py)
+- `Population`, `PopulationConfig`, `GenerationResult`: [src/tuner/core/population.py](../../src/tuner/core/population.py)
+- Evolution algorithms: [src/tuner/core/evolution.py](../../src/tuner/core/evolution.py)
+- Generation barriers: [src/tuner/core/barriers.py](../../src/tuner/core/barriers.py)
+- Tests: [tests/unit/core/](../../tests/unit/core/)

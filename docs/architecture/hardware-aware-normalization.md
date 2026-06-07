@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Configuration Management](./CONFIGURATION_MANAGEMENT.md), [Environment Backends](./ENVIRONMENT_BACKENDS.md), [Cross-Workload Transfer](./CROSS_WORKLOAD_TRANSFER.md)
+See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Environment Backends](environment-backends.md), [Cross-Workload Transfer](../research/cross-workload-transfer.md)
 
 ## 1. Overview
 
@@ -12,7 +12,7 @@ Using pre-recorded best configurations (`best_config.json`) evaluated on arbitra
 
 ### The Fractional Transfer System
 
-Rather than persisting raw absolute values, knobs tagged as `hardware_relative=True` in `TuningMetadata` (loaded from [`data/knob_metadata.json`](../data/knob_metadata.json) via `src/knobs/knob_metadata.py`) serialize to **fractions of the node's detectable limits**, allowing configs that maximized a 2GB RAM container to effectively warm-start tuning efforts inside an 8GB container without immediate OOM (Out Of Memory) or excessive swapping.
+Rather than persisting raw absolute values, knobs tagged as `hardware_relative=True` in `TuningMetadata` (loaded from [`data/knob_metadata.json`](../../data/knob_metadata.json) via `src/knobs/knob_metadata.py`) serialize to **fractions of the node's detectable limits**, allowing configs that maximized a 2GB RAM container to effectively warm-start tuning efforts inside an 8GB container without immediate OOM (Out Of Memory) or excessive swapping.
 
 ---
 
@@ -75,7 +75,7 @@ python -m src.tuner.main --warm-start ../results/best_config.json
 
 The hardware translation layer also runs at **population creation time** to give every parallel worker its own resource slice. Without this, eight workers on one host would each see the full host RAM in `resolve_hardware_ranges()` and collectively recommend memory budgets that would OOM the moment the population tried to evaluate them concurrently.
 
-`detect_worker_resources(num_parallel_workers, override_ram=None, override_cpus=None)` lives in [src/utils/hardware_info.py](../src/utils/hardware_info.py) and produces one `WorkerResources` per worker:
+`detect_worker_resources(num_parallel_workers, override_ram=None, override_cpus=None)` lives in [src/utils/hardware_info.py](../../src/utils/hardware_info.py) and produces one `WorkerResources` per worker:
 
 ```python
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ The session JSON records every worker's `worker_resources` so post-hoc tools can
 
 ## 7. Docker CPU Subset Enforcement
 
-Per-worker CPU pinning is enforced at the kernel level only when the [Docker environment backend](./ENVIRONMENT_BACKENDS.md) is in use. The `DockerEnvironment` derives `--cpuset-cpus` from `worker_resources.cpu_cores` and the host CPU count:
+Per-worker CPU pinning is enforced at the kernel level only when the [Docker environment backend](environment-backends.md) is in use. The `DockerEnvironment` derives `--cpuset-cpus` from `worker_resources.cpu_cores` and the host CPU count:
 
 ```text
 host has 16 cores
@@ -113,14 +113,14 @@ host has 16 cores
   (cores 12-15 reserved for host)
 ```
 
-Bare-metal does **not** enforce this — the OS scheduler is free to migrate any worker thread to any core. Bare-metal `WorkerResources` is therefore advisory: it correctly bounds knob-range resolution and memory normalisation, but it cannot prevent two workers' queries from time-slicing the same physical core. This is why publication-facing comparisons require Docker (see [ENVIRONMENT_BACKENDS.md §DockerEnvironment](./ENVIRONMENT_BACKENDS.md#dockerenvironment)).
+Bare-metal does **not** enforce this — the OS scheduler is free to migrate any worker thread to any core. Bare-metal `WorkerResources` is therefore advisory: it correctly bounds knob-range resolution and memory normalisation, but it cannot prevent two workers' queries from time-slicing the same physical core. This is why publication-facing comparisons require Docker (see [ENVIRONMENT_BACKENDS.md §DockerEnvironment](environment-backends.md#dockerenvironment)).
 
 When the host has fewer cores than `num_parallel_workers × cpu_cores`, the factory logs an oversubscription warning and proceeds with overlapping subsets. The user has explicitly chosen to oversubscribe by setting `--parallel-workers` higher than the host can cleanly accommodate; the warning gives them a chance to reconsider.
 
 ## 8. Related Documentation
 
-- [Configuration Management](./CONFIGURATION_MANAGEMENT.md) — `KnobSpace.resolve_hardware_ranges`, `config_to_fractions`, `fractions_to_config`.
-- [Environment Backends](./ENVIRONMENT_BACKENDS.md) — Docker `--cpuset-cpus` and `--memory` enforcement.
-- [PBT Core Components](./PBT_CORE_COMPONENTS.md) — how the population consumes `WorkerResources`.
-- [Cross-Workload Transfer](./CROSS_WORKLOAD_TRANSFER.md) — future work extending warm-start beyond same-workload boundaries.
-- [ADR-004 — Docker CPU subset isolation](./architecture/decisions/ADR-004-docker-cpu-subset-isolation.md) — design decision.
+- [Configuration Management](configuration-management.md) — `KnobSpace.resolve_hardware_ranges`, `config_to_fractions`, `fractions_to_config`.
+- [Environment Backends](environment-backends.md) — Docker `--cpuset-cpus` and `--memory` enforcement.
+- [PBT Core Components](pbt-core.md) — how the population consumes `WorkerResources`.
+- [Cross-Workload Transfer](../research/cross-workload-transfer.md) — future work extending warm-start beyond same-workload boundaries.
+- [ADR-004 — Docker CPU subset isolation](decisions/ADR-004-docker-cpu-subset-isolation.md) — design decision.

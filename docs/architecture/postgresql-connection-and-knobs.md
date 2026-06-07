@@ -2,16 +2,16 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Configuration Management](./CONFIGURATION_MANAGEMENT.md), [Autotuning Knob Policy](./AUTOTUNING_KNOB_POLICY.md), [Knob Importance Analysis](./KNOB_IMPORTANCE_ANALYSIS.md)
+See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Autotuning Knob Policy](../reference/autotuning-knob-policy.md), [Knob Importance Analysis](knob-importance-analysis.md)
 
 ## Overview
 
 This document describes the foundation layer that backs every other module: how the project connects to PostgreSQL, retrieves knob metadata from `pg_settings`, overlays tuning-specific metadata, and exports curated tier CSVs that the tuner consumes. The layer spans four packages:
 
-- **[src/config/](../src/config/)** — environment-derived database credentials and resolved data-root path.
-- **[src/database/](../src/database/)** — psycopg2 connections, SQLAlchemy engines, lifecycle management, CSV loaders.
-- **[src/knobs/](../src/knobs/)** — `pg_settings` retrieval, tuning metadata overlay, knob policy filter, preprocessing pipeline.
-- **[src/scripts/](../src/scripts/)** — CLI entry points (`setup_database`, `analyze_knob_importance`, `analyze_knobs`, `cleanup_instances`).
+- **[src/config/](../../src/config/)** — environment-derived database credentials and resolved data-root path.
+- **[src/database/](../../src/database/)** — psycopg2 connections, SQLAlchemy engines, lifecycle management, CSV loaders.
+- **[src/knobs/](../../src/knobs/)** — `pg_settings` retrieval, tuning metadata overlay, knob policy filter, preprocessing pipeline.
+- **[src/scripts/](../../src/scripts/)** — CLI entry points (`setup_database`, `analyze_knob_importance`, `analyze_knobs`, `cleanup_instances`).
 
 ---
 
@@ -70,7 +70,7 @@ This document describes the foundation layer that backs every other module: how 
 The two most important things this layer produces:
 
 - **A `DatabaseConfig` singleton** every other component imports for connections.
-- **The tier CSVs under `data/expert_defined_knobs/`** that drive [`KnobSpace`](./CONFIGURATION_MANAGEMENT.md#knobspace).
+- **The tier CSVs under `data/expert_defined_knobs/`** that drive [`KnobSpace`](configuration-management.md#knobspace).
 
 ---
 
@@ -78,19 +78,19 @@ The two most important things this layer produces:
 
 ### `DatabaseConfig`
 
-**Location**: [src/config/database.py](../src/config/database.py)
+**Location**: [src/config/database.py](../../src/config/database.py)
 
-Single source of truth for PostgreSQL credentials. Loaded once via `get_db_config()`, populated from `DB_USER`, `DB_PASSWORD` (required), `DB_HOST`, `DB_PORT`, `DB_NAME`. Password is masked in `__repr__` and in `get_connection_string(hide_password=True)`. See [ENVIRONMENT_SETUP.md](./ENVIRONMENT_SETUP.md) for the full env-var reference.
+Single source of truth for PostgreSQL credentials. Loaded once via `get_db_config()`, populated from `DB_USER`, `DB_PASSWORD` (required), `DB_HOST`, `DB_PORT`, `DB_NAME`. Password is masked in `__repr__` and in `get_connection_string(hide_password=True)`. See [ENVIRONMENT_SETUP.md](../getting-started/setup.md) for the full env-var reference.
 
 ### `resolve_data_root()`
 
-**Location**: [src/config/data_root.py](../src/config/data_root.py)
+**Location**: [src/config/data_root.py](../../src/config/data_root.py)
 
 Returns the absolute path to the `data/` directory regardless of working directory. The CSVs and JSON manifests under `data/` are referenced by both production code and notebooks; the resolver keeps the path stable.
 
 ### `loopback.py`
 
-**Location**: [src/config/loopback.py](../src/config/loopback.py)
+**Location**: [src/config/loopback.py](../../src/config/loopback.py)
 
 Helpers for resolving `localhost` semantics correctly across host/Docker/WSL boundaries. Used by the environment factory when deciding whether `host="localhost"` should become `host="host.docker.internal"` for a containerised orchestrator talking to a host PostgreSQL.
 
@@ -119,7 +119,7 @@ drop_database(config=None)
 reset_database(config=None)
 ```
 
-Lifecycle helpers that connect to the `postgres` administrative database with `ISOLATION_LEVEL_AUTOCOMMIT`, terminate active connections, then create/drop/recreate the target. **Destructive — `drop_database` and `reset_database` cannot be undone.** Used by [`src/scripts/setup_database.py`](../src/scripts/setup_database.py) and by the cleanup utility [`src/scripts/cleanup_instances.py`](../src/scripts/cleanup_instances.py).
+Lifecycle helpers that connect to the `postgres` administrative database with `ISOLATION_LEVEL_AUTOCOMMIT`, terminate active connections, then create/drop/recreate the target. **Destructive — `drop_database` and `reset_database` cannot be undone.** Used by [`src/scripts/setup_database.py`](../../src/scripts/setup_database.py) and by the cleanup utility [`src/scripts/cleanup_instances.py`](../../src/scripts/cleanup_instances.py).
 
 ### `data_loader.py`
 
@@ -210,7 +210,7 @@ get_knobs_by_tier(tier: str, source: str = "expert") -> list[str]
 load_data_driven_tiers(json_path: Optional[str] = None) -> None
 ```
 
-`load_data_driven_tiers` swaps in the analysis-pipeline output (`data/data_driven_knobs/{workload}/data_driven_tiers.json`) when a workload-specific tier set is preferred over the expert one. See [KNOB_IMPORTANCE_ANALYSIS.md](./KNOB_IMPORTANCE_ANALYSIS.md).
+`load_data_driven_tiers` swaps in the analysis-pipeline output (`data/data_driven_knobs/{workload}/data_driven_tiers.json`) when a workload-specific tier set is preferred over the expert one. See [KNOB_IMPORTANCE_ANALYSIS.md](knob-importance-analysis.md).
 
 ### `policy.py`
 
@@ -222,7 +222,7 @@ ensure_autotuning_policy_annotations(df) -> df
 apply_bounds_safety_gate(df) -> (df_safe, df_unsafe)
 ```
 
-Backed by `data/knob_policy.json`. Each entry is a `(policy, justification)` tuple — `policy` is one of `tune` / `freeze` / `unsafe`. Knobs marked `freeze` or `unsafe` never enter the search space. The full per-knob rationale lives in [AUTOTUNING_KNOB_POLICY.md](./AUTOTUNING_KNOB_POLICY.md).
+Backed by `data/knob_policy.json`. Each entry is a `(policy, justification)` tuple — `policy` is one of `tune` / `freeze` / `unsafe`. Knobs marked `freeze` or `unsafe` never enter the search space. The full per-knob rationale lives in [AUTOTUNING_KNOB_POLICY.md](../reference/autotuning-knob-policy.md).
 
 ### `preprocess_knobs.py`
 
@@ -237,7 +237,7 @@ preprocess_and_save_knobs(...)             # end-to-end driver
 load_knobs_for_tier(tier, source="expert", workload=None) -> df
 ```
 
-`preprocess_and_save_knobs` is the function called by [`src/scripts/analyze_knobs.py`](../src/scripts/analyze_knobs.py) to refresh `data/expert_defined_knobs/{tier}_knobs.csv`. After running it, the tuner sees the updated tiers automatically.
+`preprocess_and_save_knobs` is the function called by [`src/scripts/analyze_knobs.py`](../../src/scripts/analyze_knobs.py) to refresh `data/expert_defined_knobs/{tier}_knobs.csv`. After running it, the tuner sees the updated tiers automatically.
 
 ---
 
@@ -247,10 +247,10 @@ load_knobs_for_tier(tier, source="expert", workload=None) -> df
 | --- | --- | --- |
 | `setup_database.py` | `python -m src.scripts.setup_database` | Create + populate the operational database. Has interactive and `setup`/`reset` subcommands. |
 | `analyze_knobs.py` | `python -m src.scripts.analyze_knobs` | Run the preprocessing pipeline and refresh tier CSVs. |
-| `analyze_knob_importance.py` | `python -m src.scripts.analyze_knob_importance` | Run fANOVA + TreeSHAP + tier generation across PBT session results. See [KNOB_IMPORTANCE_ANALYSIS.md](./KNOB_IMPORTANCE_ANALYSIS.md). |
+| `analyze_knob_importance.py` | `python -m src.scripts.analyze_knob_importance` | Run fANOVA + TreeSHAP + tier generation across PBT session results. See [KNOB_IMPORTANCE_ANALYSIS.md](knob-importance-analysis.md). |
 | `cleanup_instances.py` | `python -m src.scripts.cleanup_instances` | Tear down stale Docker containers / bare-metal data dirs from prior runs. |
-| `bo_baseline/` | `python -m src.scripts.bo_baseline` | The Bayesian-Optimisation baseline. Documented separately in [BO_BASELINE.md](./BO_BASELINE.md). |
-| `pbt_vs_bo_comarison.py` | `python -m src.scripts.pbt_vs_bo_comarison` | Cross-method comparison. Documented in [PBT_VS_BO_COMPARISON.md](./PBT_VS_BO_COMPARISON.md). |
+| `bo_baseline/` | `python -m src.scripts.bo_baseline` | The Bayesian-Optimisation baseline. Documented separately in [BO_BASELINE.md](../guides/bo-baseline.md). |
+| `pbt_vs_bo_comarison.py` | `python -m src.scripts.pbt_vs_bo_comarison` | Cross-method comparison. Documented in [PBT_VS_BO_COMPARISON.md](../guides/pbt-vs-bo-comparison.md). |
 
 ---
 
@@ -264,7 +264,7 @@ Tier membership is the result of layering three filters:
 
 The analysis pipeline can additionally produce **data-driven tier overlays** stored under `data/data_driven_knobs/{workload}/`, used when the workload-specific importance ranking differs meaningfully from the expert-curated tiers.
 
-The reasoning behind every freeze/unsafe decision lives in [AUTOTUNING_KNOB_POLICY.md](./AUTOTUNING_KNOB_POLICY.md). Contributors adding a new knob should:
+The reasoning behind every freeze/unsafe decision lives in [AUTOTUNING_KNOB_POLICY.md](../reference/autotuning-knob-policy.md). Contributors adding a new knob should:
 
 1. Confirm it appears in `pg_settings` on the supported PostgreSQL versions (14+).
 2. Add a `TuningMetadata` entry in `data/knob_metadata.json` (or override).
@@ -300,20 +300,20 @@ Counts depend on the PostgreSQL version of the source database; on PG 14+ the `e
 
 ## Related documentation
 
-- **[Environment Setup](./ENVIRONMENT_SETUP.md)** — installing dependencies, configuring `.env`.
-- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)** — how the tier CSVs become a `KnobSpace`.
-- **[Autotuning Knob Policy](./AUTOTUNING_KNOB_POLICY.md)** — per-knob rationale.
-- **[Knob Importance Analysis](./KNOB_IMPORTANCE_ANALYSIS.md)** — how data-driven tiers are derived.
-- **[Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md)** — the fractional encoding used by hardware-relative knobs.
+- **[Environment Setup](../getting-started/setup.md)** — installing dependencies, configuring `.env`.
+- **[Configuration Management](configuration-management.md)** — how the tier CSVs become a `KnobSpace`.
+- **[Autotuning Knob Policy](../reference/autotuning-knob-policy.md)** — per-knob rationale.
+- **[Knob Importance Analysis](knob-importance-analysis.md)** — how data-driven tiers are derived.
+- **[Hardware-Aware Normalization](hardware-aware-normalization.md)** — the fractional encoding used by hardware-relative knobs.
 
 ### File locations
 
-- `DatabaseConfig`, `get_db_config`: [src/config/database.py](../src/config/database.py)
-- Connection helpers: [src/database/connection.py](../src/database/connection.py)
-- DB lifecycle: [src/database/management.py](../src/database/management.py)
-- CSV loaders: [src/database/data_loader.py](../src/database/data_loader.py)
-- `PostgreSQLKnobRetriever`: [src/knobs/retrieval.py](../src/knobs/retrieval.py)
-- Tuning metadata: [src/knobs/knob_metadata.py](../src/knobs/knob_metadata.py)
-- Knob policy filter: [src/knobs/policy.py](../src/knobs/policy.py)
-- Preprocessing pipeline: [src/knobs/preprocess_knobs.py](../src/knobs/preprocess_knobs.py)
-- Tests: [tests/unit/knobs/](../tests/unit/knobs/)
+- `DatabaseConfig`, `get_db_config`: [src/config/database.py](../../src/config/database.py)
+- Connection helpers: [src/database/connection.py](../../src/database/connection.py)
+- DB lifecycle: [src/database/management.py](../../src/database/management.py)
+- CSV loaders: [src/database/data_loader.py](../../src/database/data_loader.py)
+- `PostgreSQLKnobRetriever`: [src/knobs/retrieval.py](../../src/knobs/retrieval.py)
+- Tuning metadata: [src/knobs/knob_metadata.py](../../src/knobs/knob_metadata.py)
+- Knob policy filter: [src/knobs/policy.py](../../src/knobs/policy.py)
+- Preprocessing pipeline: [src/knobs/preprocess_knobs.py](../../src/knobs/preprocess_knobs.py)
+- Tests: [tests/unit/knobs/](../../tests/unit/knobs/)

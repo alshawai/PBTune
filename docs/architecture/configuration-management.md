@@ -2,14 +2,14 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md), [PostgreSQL Connection and Knobs](./POSTGRESQL_CONNECTION_AND_KNOBS.md), [Autotuning Knob Policy](./AUTOTUNING_KNOB_POLICY.md)
+See also: [Documentation Index](../README.md), [Hardware-Aware Normalization](hardware-aware-normalization.md), [PostgreSQL Connection and Knobs](postgresql-connection-and-knobs.md), [Autotuning Knob Policy](../reference/autotuning-knob-policy.md)
 
 ## Overview
 
 The configuration management layer is responsible for **defining what may be tuned** and **applying tuned values to a live PostgreSQL** safely. Two components do this:
 
-1. **[`KnobSpace`](../src/tuner/config/knob_space.py)** — the search space. Loaded from per-tier CSVs (or from a data-driven manifest), exposes per-knob bounds, scale, default, restart context, and **hardware-relative fractional encoding**. Owns sampling, perturbation, dependency repair, and warm-start translation.
-2. **[`KnobApplicator`](../src/utils/applicator.py)** — the runtime applier. Validates against `pg_settings`, writes via `ALTER SYSTEM` (persistent) or `SET` (session), respects parameter contexts (`postmaster` / `sighup` / `user`), and exposes a `verify()` read-back that returns the **actually quantised** values PostgreSQL is running with.
+1. **[`KnobSpace`](../../src/tuner/config/knob_space.py)** — the search space. Loaded from per-tier CSVs (or from a data-driven manifest), exposes per-knob bounds, scale, default, restart context, and **hardware-relative fractional encoding**. Owns sampling, perturbation, dependency repair, and warm-start translation.
+2. **[`KnobApplicator`](../../src/utils/applicator.py)** — the runtime applier. Validates against `pg_settings`, writes via `ALTER SYSTEM` (persistent) or `SET` (session), respects parameter contexts (`postmaster` / `sighup` / `user`), and exposes a `verify()` read-back that returns the **actually quantised** values PostgreSQL is running with.
 
 These two layers are independent. `KnobSpace` is the contract PBT and the BO baseline both consume; `KnobApplicator` is what the orchestrator calls per evaluation.
 
@@ -76,7 +76,7 @@ These two layers are independent. `KnobSpace` is the contract PBT and the BO bas
 
 ## KnobSpace
 
-**Location**: [src/tuner/config/knob_space.py](../src/tuner/config/knob_space.py)
+**Location**: [src/tuner/config/knob_space.py](../../src/tuner/config/knob_space.py)
 
 A `KnobSpace` is a typed collection of `KnobDefinition` records. It is the single source of truth for *which* knobs are tunable in this session and *with what bounds*.
 
@@ -123,13 +123,13 @@ class KnobDefinition:
 | `config_to_fractions(config)`, `fractions_to_config(fractions)` | Warm-start serialisation. |
 | `create_online_view()` | A `KnobSpace` filtered to runtime-modifiable knobs only (for `ONLINE` tuning mode). |
 
-The full file lives at [src/tuner/config/knob_space.py](../src/tuner/config/knob_space.py) — every method has a Google-style docstring.
+The full file lives at [src/tuner/config/knob_space.py](../../src/tuner/config/knob_space.py) — every method has a Google-style docstring.
 
 ---
 
 ## Knob tiers and data sources
 
-**Location**: [src/tuner/config/knob_loader.py](../src/tuner/config/knob_loader.py)
+**Location**: [src/tuner/config/knob_loader.py](../../src/tuner/config/knob_loader.py)
 
 There are four canonical tiers: `minimal`, `core`, `standard`, `extensive`. Each tier corresponds to a CSV under `data/`. Two layouts are supported:
 
@@ -149,20 +149,20 @@ data/
         └── data_driven_tiers.json
 ```
 
-`get_knob_space(tier, workload=None, source="expert")` picks the right CSV. When `source="data_driven"` and `workload` is set, the loader prefers `data/data_driven_knobs/{workload}/{tier}_knobs.csv` — these are the tier CSVs produced by [`src/analysis/tier_generator.py`](../src/analysis/tier_generator.py) from fANOVA+TreeSHAP importance (see [KNOB_IMPORTANCE_ANALYSIS.md](./KNOB_IMPORTANCE_ANALYSIS.md)).
+`get_knob_space(tier, workload=None, source="expert")` picks the right CSV. When `source="data_driven"` and `workload` is set, the loader prefers `data/data_driven_knobs/{workload}/{tier}_knobs.csv` — these are the tier CSVs produced by [`src/analysis/tier_generator.py`](../../src/analysis/tier_generator.py) from fANOVA+TreeSHAP importance (see [KNOB_IMPORTANCE_ANALYSIS.md](knob-importance-analysis.md)).
 
-CSV format constants live in [`knob_loader.py`](../src/tuner/config/knob_loader.py):
+CSV format constants live in [`knob_loader.py`](../../src/tuner/config/knob_loader.py):
 
 ```python
 EXPERT_KNOBS_DIR = "data/expert_defined_knobs"
 DATA_DRIVEN_KNOBS_DIR = "data/data_driven_knobs"
 ```
 
-The CSV columns mirror `KnobDefinition` fields (`name`, `vartype`, `min_value`, `max_value`, `scale`, `default`, `unit`, `enumvals`, `category`, `restart_required`, `hardware_relative`, `tuning_metadata`). The `tuning_metadata` JSON column carries fields not present in `pg_settings` — see [src/knobs/knob_metadata.py](../src/knobs/knob_metadata.py).
+The CSV columns mirror `KnobDefinition` fields (`name`, `vartype`, `min_value`, `max_value`, `scale`, `default`, `unit`, `enumvals`, `category`, `restart_required`, `hardware_relative`, `tuning_metadata`). The `tuning_metadata` JSON column carries fields not present in `pg_settings` — see [src/knobs/knob_metadata.py](../../src/knobs/knob_metadata.py).
 
 ### Knob policy file
 
-`data/knob_policy.json` selects which knobs are *eligible* for tuning at all (vs frozen for safety) regardless of tier. The policy is loaded by [`src/knobs/policy.py`](../src/knobs/policy.py) and applied as a filter at CSV-load time. See [AUTOTUNING_KNOB_POLICY.md](./AUTOTUNING_KNOB_POLICY.md) for the reasoning behind each frozen knob.
+`data/knob_policy.json` selects which knobs are *eligible* for tuning at all (vs frozen for safety) regardless of tier. The policy is loaded by [`src/knobs/policy.py`](../../src/knobs/policy.py) and applied as a filter at CSV-load time. See [AUTOTUNING_KNOB_POLICY.md](../reference/autotuning-knob-policy.md) for the reasoning behind each frozen knob.
 
 ---
 
@@ -170,7 +170,7 @@ The CSV columns mirror `KnobDefinition` fields (`name`, `vartype`, `min_value`, 
 
 For knobs flagged `hardware_relative=True` in metadata (RAM-dependent knobs like `shared_buffers`, `work_mem`; CPU-dependent like `max_parallel_workers`; disk-dependent like `random_page_cost`), the bounds in the CSV are not absolute — they are **fractions of the worker's available resources**.
 
-At session start, the tuner calls [`detect_worker_resources()`](../src/utils/hardware_info.py) to get a `WorkerResources` slice for each worker (host total ÷ parallel-worker count, less an 80 % budget headroom). Then:
+At session start, the tuner calls [`detect_worker_resources()`](../../src/utils/hardware_info.py) to get a `WorkerResources` slice for each worker (host total ÷ parallel-worker count, less an 80 % budget headroom). Then:
 
 ```python
 knob_space.resolve_hardware_ranges(worker_resources)
@@ -180,7 +180,7 @@ rewrites each hardware-relative knob's `min_value` and `max_value` to absolute i
 
 This is what makes **warm-start across hardware** work: a `best_config.json` produced on a 2 GB container can be re-resolved against an 8 GB container without OOM, because the stored configuration is fractional and gets converted to absolute values against the new resource ceiling.
 
-Details and the list of all hardware-relative knobs: [HARDWARE_AWARE_NORMALIZATION.md](./HARDWARE_AWARE_NORMALIZATION.md).
+Details and the list of all hardware-relative knobs: [HARDWARE_AWARE_NORMALIZATION.md](hardware-aware-normalization.md).
 
 ---
 
@@ -206,7 +206,7 @@ total_bytes = shared_buffers
 
 If `total_bytes` exceeds the worker's RAM budget, every memory knob is **scaled down by the same multiplier** `budget / total`. This preserves the ratios the perturbation chose while bringing total memory back under the budget. Without this, the explore step could easily produce configurations that fail to start (`shared_buffers` alone larger than container RAM).
 
-Implementation: [`src/tuner/config/knob_space.py:_repair_memory_budget`](../src/tuner/config/knob_space.py).
+Implementation: [`src/tuner/config/knob_space.py:_repair_memory_budget`](../../src/tuner/config/knob_space.py).
 
 ---
 
@@ -214,13 +214,13 @@ Implementation: [`src/tuner/config/knob_space.py:_repair_memory_budget`](../src/
 
 `config_to_fractions(config)` and `fractions_to_config(fractions)` are the round-trip used by `--warm-start`. Hardware-relative knobs are serialised as fractions of their resolved bounds; absolute knobs are kept as-is. The resulting JSON survives transport across hardware.
 
-The full warm-start flow lives in [`src/tuner/main.py`](../src/tuner/main.py) and is described in [HARDWARE_AWARE_NORMALIZATION.md §5](./HARDWARE_AWARE_NORMALIZATION.md). Notably, since commit `858d482` the warm-start serialiser now writes the **full knob space**, not just the best configuration — this lets the loader gracefully drop knobs that no longer exist in the target tier and LHS-fill new ones.
+The full warm-start flow lives in [`src/tuner/main.py`](../../src/tuner/main.py) and is described in [HARDWARE_AWARE_NORMALIZATION.md §5](hardware-aware-normalization.md). Notably, since commit `858d482` the warm-start serialiser now writes the **full knob space**, not just the best configuration — this lets the loader gracefully drop knobs that no longer exist in the target tier and LHS-fill new ones.
 
 ---
 
 ## KnobApplicator
 
-**Location**: [src/utils/applicator.py](../src/utils/applicator.py)
+**Location**: [src/utils/applicator.py](../../src/utils/applicator.py)
 
 `KnobApplicator` applies a `dict[str, Any]` of knob values to a live PostgreSQL instance. It is the only component that talks to PostgreSQL's configuration surface.
 
@@ -286,7 +286,7 @@ Two problems make this method non-trivial:
 1. **Quantisation** — PostgreSQL rounds many values to internal block boundaries (e.g. `shared_buffers` to the nearest 8 kB page). A suggested 134217729 becomes 134217728 internally. Without `verify()` the optimiser believes its raw suggestion is what's running.
 2. **Unit conversion** — `pg_settings.setting` is a raw number plus a separate `unit` column. `current_setting()` returns PostgreSQL's normalised typed value directly, avoiding manual unit math.
 
-The orchestrator calls `verify()` at barrier B5 and **merges `db_config` back into the worker's `knob_config`** before scoring. This makes session JSON faithful to what the database actually ran. The BO baseline does the same to keep its surrogate model gradients honest — see [BO_BASELINE.md §Quantization & Read-Back Parity](./BO_BASELINE.md).
+The orchestrator calls `verify()` at barrier B5 and **merges `db_config` back into the worker's `knob_config`** before scoring. This makes session JSON faithful to what the database actually ran. The BO baseline does the same to keep its surrogate model gradients honest — see [BO_BASELINE.md §Quantization & Read-Back Parity](../guides/bo-baseline.md).
 
 ---
 
@@ -333,19 +333,19 @@ The caller decides whether the quantised values replace the suggested values. PB
 
 ## Related documentation
 
-- **[Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md)** — fractional encoding, `WorkerResources`, warm-start across hardware.
-- **[PostgreSQL Connection and Knobs](./POSTGRESQL_CONNECTION_AND_KNOBS.md)** — `pg_settings` retrieval, `PostgreSQLKnobRetriever`, knob policy.
-- **[Autotuning Knob Policy](./AUTOTUNING_KNOB_POLICY.md)** — per-knob tuning rationale and safety classification.
-- **[Knob Importance Analysis](./KNOB_IMPORTANCE_ANALYSIS.md)** — how `data_driven_knobs/` CSVs are generated.
-- **[Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)** — how the applicator is driven during an evaluation.
-- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)** — how `KnobSpace` is consumed by the worker and population.
+- **[Hardware-Aware Normalization](hardware-aware-normalization.md)** — fractional encoding, `WorkerResources`, warm-start across hardware.
+- **[PostgreSQL Connection and Knobs](postgresql-connection-and-knobs.md)** — `pg_settings` retrieval, `PostgreSQLKnobRetriever`, knob policy.
+- **[Autotuning Knob Policy](../reference/autotuning-knob-policy.md)** — per-knob tuning rationale and safety classification.
+- **[Knob Importance Analysis](knob-importance-analysis.md)** — how `data_driven_knobs/` CSVs are generated.
+- **[Workload Orchestrator](workload-orchestrator.md)** — how the applicator is driven during an evaluation.
+- **[PBT Core Components](pbt-core.md)** — how `KnobSpace` is consumed by the worker and population.
 
 ### File locations
 
-- `KnobSpace`, `KnobDefinition`, `KnobType`, `KnobScale`: [src/tuner/config/knob_space.py](../src/tuner/config/knob_space.py)
-- Tier CSV loader: [src/tuner/config/knob_loader.py](../src/tuner/config/knob_loader.py)
-- `KnobApplicator`, `ApplicatorConfig`, `ApplicationResult`, `VerificationResult`: [src/utils/applicator.py](../src/utils/applicator.py)
-- Knob metadata overlay: [src/knobs/knob_metadata.py](../src/knobs/knob_metadata.py)
-- Knob policy filter: [src/knobs/policy.py](../src/knobs/policy.py)
-- Tier CSVs: [data/expert_defined_knobs/](../data/expert_defined_knobs/), [data/data_driven_knobs/](../data/data_driven_knobs/)
-- Tests: [tests/unit/knobs/](../tests/unit/knobs/), [tests/unit/config/test_hardware_normalization.py](../tests/unit/config/test_hardware_normalization.py)
+- `KnobSpace`, `KnobDefinition`, `KnobType`, `KnobScale`: [src/tuner/config/knob_space.py](../../src/tuner/config/knob_space.py)
+- Tier CSV loader: [src/tuner/config/knob_loader.py](../../src/tuner/config/knob_loader.py)
+- `KnobApplicator`, `ApplicatorConfig`, `ApplicationResult`, `VerificationResult`: [src/utils/applicator.py](../../src/utils/applicator.py)
+- Knob metadata overlay: [src/knobs/knob_metadata.py](../../src/knobs/knob_metadata.py)
+- Knob policy filter: [src/knobs/policy.py](../../src/knobs/policy.py)
+- Tier CSVs: [data/expert_defined_knobs/](../../data/expert_defined_knobs/), [data/data_driven_knobs/](../../data/data_driven_knobs/)
+- Tests: [tests/unit/knobs/](../../tests/unit/knobs/), [tests/unit/config/test_hardware_normalization.py](../../tests/unit/config/test_hardware_normalization.py)

@@ -2,17 +2,17 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md), [Generation Barriers](./GENERATION_BARRIERS.md)
+See also: [Documentation Index](../README.md), [Feature-Driven Scoring](feature-driven-scoring.md), [Workload Orchestrator](workload-orchestrator.md), [Generation Barriers](generation-barriers.md)
 
 ## Overview
 
 The performance evaluation system is PBT's **fitness function**: it converts a candidate PostgreSQL configuration into a single scalar score that drives evolution. It is composed of three layers:
 
-1. **[`PerformanceMetrics`](../src/utils/metrics.py)** — typed record of raw measurements collected from a single evaluation window (latency, throughput, variance, memory, scan efficiency, error rate, …).
-2. **Scoring-v2 pipeline** — `WorkloadFeatures` → `QuantileUtilityNormalizer` → `FeatureDrivenWeightModel` → `CompositeScorer` → `ScoreBreakdown`. The math and policies are documented in [FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md).
-3. **[`WorkloadOrchestrator`](../src/tuner/benchmark/orchestrator.py)** — the runtime that applies a configuration, drives a benchmark executor, captures metrics, and emits a `ScoreBreakdown`. It is the component PBT's [`Population`](../src/tuner/core/population.py) calls during each generation.
+1. **[`PerformanceMetrics`](../../src/utils/metrics.py)** — typed record of raw measurements collected from a single evaluation window (latency, throughput, variance, memory, scan efficiency, error rate, …).
+2. **Scoring-v2 pipeline** — `WorkloadFeatures` → `QuantileUtilityNormalizer` → `FeatureDrivenWeightModel` → `CompositeScorer` → `ScoreBreakdown`. The math and policies are documented in [FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md).
+3. **[`WorkloadOrchestrator`](../../src/tuner/benchmark/orchestrator.py)** — the runtime that applies a configuration, drives a benchmark executor, captures metrics, and emits a `ScoreBreakdown`. It is the component PBT's [`Population`](../../src/tuner/core/population.py) calls during each generation.
 
-The previous evaluator at `src/tuner/evaluator/evaluator.py` has been retired; all evaluation logic now lives under [src/tuner/benchmark/](../src/tuner/benchmark/) and the scoring layer under [src/utils/scoring/](../src/utils/scoring/).
+The previous evaluator at `src/tuner/evaluator/evaluator.py` has been retired; all evaluation logic now lives under [src/tuner/benchmark/](../../src/tuner/benchmark/) and the scoring layer under [src/utils/scoring/](../../src/utils/scoring/).
 
 ---
 
@@ -82,13 +82,13 @@ The previous evaluator at `src/tuner/evaluator/evaluator.py` has been retired; a
                      (exploit / explore step)
 ```
 
-The orchestrator is invoked from `Population.evaluate_generation()`, runs **per-worker on its own thread** (one per `WorkerResources` slice), and synchronises with the rest of the generation through the lockstep [`GenerationBarrier`](./GENERATION_BARRIERS.md) so every worker's measurement window experiences the same level of contention.
+The orchestrator is invoked from `Population.evaluate_generation()`, runs **per-worker on its own thread** (one per `WorkerResources` slice), and synchronises with the rest of the generation through the lockstep [`GenerationBarrier`](generation-barriers.md) so every worker's measurement window experiences the same level of contention.
 
 ---
 
 ## PerformanceMetrics
 
-**Location**: [src/utils/metrics.py](../src/utils/metrics.py)
+**Location**: [src/utils/metrics.py](../../src/utils/metrics.py)
 
 `PerformanceMetrics` is the canonical raw-measurement record. It is the **input** to scoring and the **output** of every benchmark executor. The dataclass is intentionally a superset of what any single scoring policy needs — the active policy selects which fields it consumes.
 
@@ -136,7 +136,7 @@ class PerformanceMetrics:
 
 ### Why so many fields?
 
-The scoring layer's [`FeatureDrivenWeightModel`](../src/utils/scoring/weights.py) computes weights from **workload features** (read/write mix, OLAP complexity, tail sensitivity, etc.). Different workloads emphasise different fields:
+The scoring layer's [`FeatureDrivenWeightModel`](../../src/utils/scoring/weights.py) computes weights from **workload features** (read/write mix, OLAP complexity, tail sensitivity, etc.). Different workloads emphasise different fields:
 
 - A Sysbench `oltp_read_write` run weighs `throughput`, `latency_p95`, and `error_rate` heavily.
 - A TPC-H run shifts weight toward `latency_p99`, `tail_amplification`, `scan_efficiency`, and `buffer_miss_rate`.
@@ -150,30 +150,30 @@ Keeping all fields populated by every executor lets the scorer reuse one schema 
 metrics.to_dict()                         # dict[str, float | str | int | None]
 ```
 
-Used by session writers, the BO baseline, the post-hoc evaluation suite, and the analysis pipeline. No `from_dict` is provided — deserialisation goes through the session loaders in [src/evaluation/loader.py](../src/evaluation/loader.py) and [src/visualization/loaders/](../src/visualization/loaders/), which handle policy/version migration.
+Used by session writers, the BO baseline, the post-hoc evaluation suite, and the analysis pipeline. No `from_dict` is provided — deserialisation goes through the session loaders in [src/evaluation/loader.py](../../src/evaluation/loader.py) and [src/visualization/loaders/](../../src/visualization/loaders/), which handle policy/version migration.
 
 ---
 
 ## Scoring Integration
 
-The orchestrator never imports the scoring math directly; it delegates to the `CompositeScorer` configured on the [`MetricConfig`](../src/utils/metrics.py) attached to its `WorkloadOrchestratorConfig`. The contract is:
+The orchestrator never imports the scoring math directly; it delegates to the `CompositeScorer` configured on the [`MetricConfig`](../../src/utils/metrics.py) attached to its `WorkloadOrchestratorConfig`. The contract is:
 
 ```python
 score_breakdown: ScoreBreakdown = scorer.score(metrics, workload_features)
 final_score: float = score_breakdown.score      # ∈ [0, 1]
 ```
 
-`ScoreBreakdown` (see [`src/utils/scoring/contracts.py`](../src/utils/scoring/contracts.py)) carries the resolved weights, per-metric utilities, reliability gate value, and the policy / metric reference version. Sessions persist this breakdown so post-hoc tools can rescore consistently.
+`ScoreBreakdown` (see [`src/utils/scoring/contracts.py`](../../src/utils/scoring/contracts.py)) carries the resolved weights, per-metric utilities, reliability gate value, and the policy / metric reference version. Sessions persist this breakdown so post-hoc tools can rescore consistently.
 
 The score is bounded by `[0, 1]`. The legacy `× 100.0` scaling factor used in the old policy is no longer part of the pipeline — comparisons, dashboards, and the BO baseline all read fractional scores from `ScoreBreakdown.score`.
 
-For the math, the floor-constrained softmax over feature-conditioned logits, and the reliability gate, see [FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md).
+For the math, the floor-constrained softmax over feature-conditioned logits, and the reliability gate, see [FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md).
 
 ---
 
 ## WorkloadOrchestrator
 
-**Location**: [src/tuner/benchmark/orchestrator.py](../src/tuner/benchmark/orchestrator.py)
+**Location**: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
 
 `WorkloadOrchestrator` replaces the older `Evaluator`. Its responsibility is to take a single worker's knob configuration and return a `(PerformanceMetrics, ScoreBreakdown)` pair.
 
@@ -198,14 +198,14 @@ class WorkloadOrchestratorConfig:
 
 Notable fields beyond the obvious timing knobs:
 
-- **`tuning_mode`** — `ONLINE` (default) applies via `pg_reload_conf()` and restarts only when needed; `OFFLINE` restarts unconditionally to mirror an academic batch tuner; `ADAPTIVE` applies the CDBTune-inspired batched-restart policy from [`src/tuner/benchmark/restart_policy.py`](../src/tuner/benchmark/restart_policy.py).
+- **`tuning_mode`** — `ONLINE` (default) applies via `pg_reload_conf()` and restarts only when needed; `OFFLINE` restarts unconditionally to mirror an academic batch tuner; `ADAPTIVE` applies the CDBTune-inspired batched-restart policy from [`src/tuner/benchmark/restart_policy.py`](../../src/tuner/benchmark/restart_policy.py).
 - **`adaptive_restart_interval`** — generation interval at which `ADAPTIVE` mode forces a restart even if no `postmaster`-context knob changed.
 - **`worker_memory_budget_bytes`** — the per-worker RAM slice used to normalise PostgreSQL's RSS into `memory_utilization`. Set from `WorkerResources` when running multiple workers on one host; falls back to total host RAM when unset.
 - **`vacuum_analyze_timeout_seconds`** — bounds the post-measurement `VACUUM ANALYZE` so a stuck maintenance pass cannot stall a whole generation.
 
 ### `evaluate_worker(worker)` flow
 
-Each call passes through 17 barrier-synchronised sub-steps (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)):
+Each call passes through 17 barrier-synchronised sub-steps (see [GENERATION_BARRIERS.md](generation-barriers.md)):
 
 ```text
 B1  connect                  TCP connection established
@@ -239,20 +239,20 @@ PostgreSQL silently rounds values to internal block boundaries (e.g. `shared_buf
 - gives PBT honest lineage tracking for warm-start serialisation,
 - ensures session JSON reflects what PostgreSQL is really running with.
 
-See [CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md#verifying-applied-config) for the verify contract.
+See [CONFIGURATION_MANAGEMENT.md](configuration-management.md#verifying-applied-config) for the verify contract.
 
 ---
 
 ## System Monitoring
 
-**Location**: [src/utils/metric_instrumentation.py](../src/utils/metric_instrumentation.py)
+**Location**: [src/utils/metric_instrumentation.py](../../src/utils/metric_instrumentation.py)
 
 System-level metrics (`memory_utilization`, `memory_pressure`, `cache_hit_ratio`, `buffer_miss_rate`, `scan_efficiency`, `io_read_mb`, `io_write_mb`) are collected from two sources:
 
 1. **PostgreSQL itself** — `pg_stat_database`, `pg_stat_bgwriter`, `pg_stat_user_tables`. Captured at B6 (pre) and B10 (post) and deltaed.
 2. **Process telemetry** — the PostgreSQL process RSS via `psutil`, normalised against `worker_memory_budget_bytes`. CPU stats are not part of the score (they vary too much with co-located workers); the budget-relative RSS is the stable memory signal.
 
-The CPU subset isolation and worker memory budgets are configured by [`EnvironmentFactory`](../src/utils/environments/factory.py) — see [ENVIRONMENT_BACKENDS.md](./ENVIRONMENT_BACKENDS.md).
+The CPU subset isolation and worker memory budgets are configured by [`EnvironmentFactory`](../../src/utils/environments/factory.py) — see [ENVIRONMENT_BACKENDS.md](environment-backends.md).
 
 ---
 
@@ -264,7 +264,7 @@ The CPU subset isolation and worker memory budgets are configured by [`Environme
 | **OLAP** (TPC-H) | `latency_p99`, `tail_amplification` | QphH, lower weight | high (large sorts) | scan efficiency + buffer miss rate matter |
 | **MIXED** / template workloads | derived from workload features | derived | derived | features extracted from the workload JSON / SQL text |
 
-There are **no** workload-specific scoring functions any more. A single `CompositeScorer` instance handles all three; what differs is the workload feature vector fed to `FeatureDrivenWeightModel`. Legacy sessions tagged with `fixed_v1` still resolve through the compatibility branch in [`policies.py`](../src/utils/scoring/policies.py).
+There are **no** workload-specific scoring functions any more. A single `CompositeScorer` instance handles all three; what differs is the workload feature vector fed to `FeatureDrivenWeightModel`. Legacy sessions tagged with `fixed_v1` still resolve through the compatibility branch in [`policies.py`](../../src/utils/scoring/policies.py).
 
 ---
 
@@ -272,7 +272,7 @@ There are **no** workload-specific scoring functions any more. A single `Composi
 
 ### 1. Single orchestrator, no per-workload subclasses
 
-The orchestrator stays workload-agnostic. Workload-specific logic lives in [`BenchmarkExecutor`](../src/benchmarks/executor.py) implementations ([`SysbenchExecutor`](../src/benchmarks/sysbench/executor.py), [`TPCHExecutor`](../src/benchmarks/tpch/executor.py), [`WorkloadExecutor`](../src/tuner/benchmark/workload.py)). This keeps the scoring contract and the barrier sequence shared across benchmarks.
+The orchestrator stays workload-agnostic. Workload-specific logic lives in [`BenchmarkExecutor`](../../src/benchmarks/executor.py) implementations ([`SysbenchExecutor`](../../src/benchmarks/sysbench/executor.py), [`TPCHExecutor`](../../src/benchmarks/tpch/executor.py), [`WorkloadExecutor`](../../src/tuner/benchmark/workload.py)). This keeps the scoring contract and the barrier sequence shared across benchmarks.
 
 ### 2. Score in `[0, 1]`, not `[0, 100]`
 
@@ -284,7 +284,7 @@ The verify-and-merge pattern means the configuration **stored in the session** i
 
 ### 4. Lockstep barriers around the measurement window
 
-Without barriers, workers that finished restarting early would run their measurement window with less contention than workers still restarting. The barriers (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)) force every measurement window to overlap, eliminating that bias.
+Without barriers, workers that finished restarting early would run their measurement window with less contention than workers still restarting. The barriers (see [GENERATION_BARRIERS.md](generation-barriers.md)) force every measurement window to overlap, eliminating that bias.
 
 ### 5. Reliability gate is multiplicative, not additive
 
@@ -292,7 +292,7 @@ A configuration that fails should not be ranked by accident on its non-failing d
 
 ### 6. Single source of metric semantics
 
-[`src/utils/scoring/constants.py`](../src/utils/scoring/constants.py) holds the canonical metric IDs, directionality (higher-is-better vs lower-is-better), and version constants. Adding or renaming a metric is a one-place change.
+[`src/utils/scoring/constants.py`](../../src/utils/scoring/constants.py) holds the canonical metric IDs, directionality (higher-is-better vs lower-is-better), and version constants. Adding or renaming a metric is a one-place change.
 
 ---
 
@@ -300,24 +300,24 @@ A configuration that fails should not be ranked by accident on its non-failing d
 
 ### Scoring layer
 
-- **[FEATURE_DRIVEN_SCORING.md](./FEATURE_DRIVEN_SCORING.md)** — policies, weight model, normaliser, reliability gate.
-- **[METRICS_VALIDATION.md](./METRICS_VALIDATION.md)** — academic validation of the multi-objective formulation.
+- **[FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md)** — policies, weight model, normaliser, reliability gate.
+- **[METRICS_VALIDATION.md](../reference/metrics-validation.md)** — academic validation of the multi-objective formulation.
 
 ### Surrounding components
 
-- **[CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md)** — `KnobSpace`, `KnobApplicator`, `verify()`.
-- **[PBT_CORE_COMPONENTS.md](./PBT_CORE_COMPONENTS.md)** — how `Population` drives the orchestrator each generation.
-- **[GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)** — the B1–B17 lockstep barriers.
-- **[WORKLOAD_ORCHESTRATOR.md](./WORKLOAD_ORCHESTRATOR.md)** — orchestrator internals, restart policy, executor selection.
-- **[ENVIRONMENT_BACKENDS.md](./ENVIRONMENT_BACKENDS.md)** — Docker vs bare-metal, CPU subsets, per-worker memory budgets.
-- **[BENCHMARKING.md](./BENCHMARKING.md)** — dual-evaluation strategy (external C-binaries vs JSON templates).
+- **[CONFIGURATION_MANAGEMENT.md](configuration-management.md)** — `KnobSpace`, `KnobApplicator`, `verify()`.
+- **[PBT_CORE_COMPONENTS.md](pbt-core.md)** — how `Population` drives the orchestrator each generation.
+- **[GENERATION_BARRIERS.md](generation-barriers.md)** — the B1–B17 lockstep barriers.
+- **[WORKLOAD_ORCHESTRATOR.md](workload-orchestrator.md)** — orchestrator internals, restart policy, executor selection.
+- **[ENVIRONMENT_BACKENDS.md](environment-backends.md)** — Docker vs bare-metal, CPU subsets, per-worker memory budgets.
+- **[BENCHMARKING.md](../reference/benchmarking.md)** — dual-evaluation strategy (external C-binaries vs JSON templates).
 
 ### File locations
 
-- `PerformanceMetrics`, `MetricConfig`, `WorkloadType`: [src/utils/metrics.py](../src/utils/metrics.py)
-- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../src/tuner/benchmark/orchestrator.py)
-- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../src/tuner/benchmark/workload.py)
-- `should_restart`: [src/tuner/benchmark/restart_policy.py](../src/tuner/benchmark/restart_policy.py)
-- `CompositeScorer`, `ScoreBreakdown`: [src/utils/scoring/scorer.py](../src/utils/scoring/scorer.py), [src/utils/scoring/contracts.py](../src/utils/scoring/contracts.py)
-- Metric instrumentation: [src/utils/metric_instrumentation.py](../src/utils/metric_instrumentation.py)
-- Tests: [tests/unit/core/](../tests/unit/core/), [tests/unit/scoring/](../tests/unit/scoring/), [tests/unit/utils/test_metric_instrumentation.py](../tests/unit/utils/test_metric_instrumentation.py)
+- `PerformanceMetrics`, `MetricConfig`, `WorkloadType`: [src/utils/metrics.py](../../src/utils/metrics.py)
+- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
+- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py)
+- `should_restart`: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
+- `CompositeScorer`, `ScoreBreakdown`: [src/utils/scoring/scorer.py](../../src/utils/scoring/scorer.py), [src/utils/scoring/contracts.py](../../src/utils/scoring/contracts.py)
+- Metric instrumentation: [src/utils/metric_instrumentation.py](../../src/utils/metric_instrumentation.py)
+- Tests: [tests/unit/core/](../../tests/unit/core/), [tests/unit/scoring/](../../tests/unit/scoring/), [tests/unit/utils/test_metric_instrumentation.py](../../tests/unit/utils/test_metric_instrumentation.py)

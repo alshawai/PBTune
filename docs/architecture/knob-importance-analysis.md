@@ -7,7 +7,7 @@ stable, hardware-aware tuning tiers. The approach combines fANOVA variance
 attribution with TreeSHAP explanations and uses Jenks Natural Breaks to
 translate continuous importance into discrete tiers.
 
-> Last reviewed: 2026-06-07. See also: [Documentation Index](./README.md), [Configuration Management](./CONFIGURATION_MANAGEMENT.md), [Visualization](./VISUALIZATION.md).
+> Last reviewed: 2026-06-07. See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Visualization](../guides/visualization.md).
 
 ## Data Flow
 
@@ -67,7 +67,7 @@ results/{workload}/pbt_runs/extensive/tuning_sessions/
         Next PBT/BO session uses the data-driven tiers
 ```
 
-The pipeline is invoked end-to-end by [`python -m src.scripts.analyze_knob_importance`](../src/scripts/analyze_knob_importance.py). Use `--export-tiers` to write the `data_driven_*` artifacts; without it the script only prints diagnostics and saves the importance JSON for visualization.
+The pipeline is invoked end-to-end by [`python -m src.scripts.analyze_knob_importance`](../../src/scripts/analyze_knob_importance.py). Use `--export-tiers` to write the `data_driven_*` artifacts; without it the script only prints diagnostics and saves the importance JSON for visualization.
 
 ## `data_driven_tiers.json` Schema
 

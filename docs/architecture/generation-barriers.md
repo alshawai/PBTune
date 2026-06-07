@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [PBT Core Components](./PBT_CORE_COMPONENTS.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md), [Performance Evaluation](./PERFORMANCE_EVALUATION.md), [ADR-003](./architecture/decisions/ADR-003-lockstep-generation-barriers.md)
+See also: [Documentation Index](../README.md), [PBT Core Components](pbt-core.md), [Workload Orchestrator](workload-orchestrator.md), [Performance Evaluation](performance-evaluation.md), [ADR-003](decisions/ADR-003-lockstep-generation-barriers.md)
 
 ## Why barriers exist
 
@@ -29,35 +29,35 @@ This is the single piece of machinery that makes "8 workers in parallel on one h
 
 ## Barrier table (B1–B17)
 
-Every call into [`WorkloadOrchestrator.evaluate_worker()`](../src/tuner/benchmark/orchestrator.py) passes through 17 ordered sub-steps. Each one ends with `barriers.wait(name, worker_id)` that blocks until all `N` workers in the generation have arrived.
+Every call into [`WorkloadOrchestrator.evaluate_worker()`](../../src/tuner/benchmark/orchestrator.py) passes through 17 ordered sub-steps. Each one ends with `barriers.wait(name, worker_id)` that blocks until all `N` workers in the generation have arrived.
 
 | # | Name (`BARRIER_NAMES`) | Sub-step | What just completed |
 | --- | --- | --- | --- |
 | B1 | `connected` | Connect | TCP/psycopg2 connection established. |
 | B2 | `config_applied` | Apply config | `ALTER SYSTEM SET …` + `pg_reload_conf()` for sighup knobs. |
-| B3 | `restarted` | Restart (or skip) | Restart triggered by [`should_restart`](../src/tuner/benchmark/restart_policy.py) finished. Workers that didn't need a restart pass through immediately and wait here for those that did. |
+| B3 | `restarted` | Restart (or skip) | Restart triggered by [`should_restart`](../../src/tuner/benchmark/restart_policy.py) finished. Workers that didn't need a restart pass through immediately and wait here for those that did. |
 | B4 | `reconnected` | Reconnect | Post-restart re-connection succeeded. |
-| B5 | `config_verified` | Verify | [`KnobApplicator.verify()`](../src/utils/applicator.py) read-back; quantised values merged into `worker.knob_config`. |
+| B5 | `config_verified` | Verify | [`KnobApplicator.verify()`](../../src/utils/applicator.py) read-back; quantised values merged into `worker.knob_config`. |
 | B6 | `pre_stats_captured` | Pre-stats snapshot | `pg_stat_database` / `pg_stat_bgwriter` / `pg_stat_user_tables` snapshot taken. |
 | B7 | `benchmark_ready` | Benchmark prepare | Schema validated; data loaded if first run. |
 | B8 | `warmup_done` | Warmup | Executor's warmup phase complete. |
 | B9 | `measurement_done` | **Measurement** | Timed measurement window complete. **This is the only window whose metrics enter the score.** |
 | B10 | `post_stats_captured` | Post-stats snapshot | Second `pg_stat_*` snapshot. |
 | B11 | `io_computed` | I/O delta | I/O delta + buffer stats derived from pre/post snapshots. |
-| B12 | `system_metrics_collected` | System metrics | Memory + cache + scan metrics via [`metric_instrumentation`](../src/utils/metric_instrumentation.py). |
+| B12 | `system_metrics_collected` | System metrics | Memory + cache + scan metrics via [`metric_instrumentation`](../../src/utils/metric_instrumentation.py). |
 | B13 | `memory_pressure_computed` | Memory pressure | Derived memory-pressure signal computed. |
 | B14 | `reliability_gated` | Reliability gate | Failure / degradation classification applied to the gate `G ∈ [0, 1]`. |
 | B15 | `vacuum_done` | Vacuum analyze | Post-DML `VACUUM ANALYZE` (bounded by `vacuum_analyze_timeout_seconds`). |
 | B16 | `score_computed` | Score | `CompositeScorer.score()` → `ScoreBreakdown`. |
 | B17 | `disconnected` | Disconnect | Connection closed. |
 
-The canonical list is the [`BARRIER_NAMES`](../src/tuner/core/barriers.py) constant. Any code that adds or removes a sub-step must update this list and the orchestrator's call sites together.
+The canonical list is the [`BARRIER_NAMES`](../../src/tuner/core/barriers.py) constant. Any code that adds or removes a sub-step must update this list and the orchestrator's call sites together.
 
 ---
 
 ## API
 
-**Location**: [src/tuner/core/barriers.py](../src/tuner/core/barriers.py)
+**Location**: [src/tuner/core/barriers.py](../../src/tuner/core/barriers.py)
 
 ```python
 class GenerationBarrier:
@@ -91,7 +91,7 @@ Instantly breaks every barrier (raises `BrokenBarrierError` on all current and f
 
 ### `reset()`
 
-Recreates the barriers for the next generation. Called once per generation by [`Population.train_generation()`](../src/tuner/core/population.py).
+Recreates the barriers for the next generation. Called once per generation by [`Population.train_generation()`](../../src/tuner/core/population.py).
 
 ### `next_barrier_name(current)`
 
@@ -241,14 +241,14 @@ The barrier object only knows about `num_workers`, `BARRIER_NAMES`, and a `_brok
 
 ## Related documentation
 
-- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)** — how the population drives the barriers each generation.
-- **[Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)** — the orchestrator's body and where each `wait()` call sits.
-- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)** — the measurement window the barriers protect.
-- **[Environment Backends](./ENVIRONMENT_BACKENDS.md)** — the `is_alive()` health-check that informs `abort()`.
-- **[ADR-003 — Lockstep generation barriers](./architecture/decisions/ADR-003-lockstep-generation-barriers.md)** — the design decision record.
+- **[PBT Core Components](pbt-core.md)** — how the population drives the barriers each generation.
+- **[Workload Orchestrator](workload-orchestrator.md)** — the orchestrator's body and where each `wait()` call sits.
+- **[Performance Evaluation](performance-evaluation.md)** — the measurement window the barriers protect.
+- **[Environment Backends](environment-backends.md)** — the `is_alive()` health-check that informs `abort()`.
+- **[ADR-003 — Lockstep generation barriers](decisions/ADR-003-lockstep-generation-barriers.md)** — the design decision record.
 
 ### File locations
 
-- `GenerationBarrier`, `BARRIER_NAMES`: [src/tuner/core/barriers.py](../src/tuner/core/barriers.py)
-- Orchestrator call sites: [src/tuner/benchmark/orchestrator.py](../src/tuner/benchmark/orchestrator.py)
-- Tests: [tests/unit/core/test_barriers.py](../tests/unit/core/test_barriers.py), [tests/unit/core/test_dead_rescue_convergence_and_restart.py](../tests/unit/core/test_dead_rescue_convergence_and_restart.py)
+- `GenerationBarrier`, `BARRIER_NAMES`: [src/tuner/core/barriers.py](../../src/tuner/core/barriers.py)
+- Orchestrator call sites: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
+- Tests: [tests/unit/core/test_barriers.py](../../tests/unit/core/test_barriers.py), [tests/unit/core/test_dead_rescue_convergence_and_restart.py](../../tests/unit/core/test_dead_rescue_convergence_and_restart.py)

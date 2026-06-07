@@ -2,15 +2,15 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Evaluation Reproducibility Runbook](./EVALUATION_RUNBOOK.md), [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md), [Statistical Analysis](#statistical-analysis)
+See also: [Documentation Index](../README.md), [Evaluation Reproducibility Runbook](../guides/evaluation-runbook.md), [Feature-Driven Scoring](feature-driven-scoring.md), [Workload Orchestrator](workload-orchestrator.md), [Statistical Analysis](#statistical-analysis)
 
 ## Overview
 
-The post-hoc **evaluation suite** at [src/evaluation/](../src/evaluation/) compares a tuned configuration produced by a tuning run (PBT or BO) against the PostgreSQL default configuration under controlled conditions, and emits a JSON report containing significance tests, confidence intervals, and effect sizes.
+The post-hoc **evaluation suite** at [src/evaluation/](../../src/evaluation/) compares a tuned configuration produced by a tuning run (PBT or BO) against the PostgreSQL default configuration under controlled conditions, and emits a JSON report containing significance tests, confidence intervals, and effect sizes.
 
 The suite is invoked via `python -m src.evaluation` and is the canonical way to answer the question *"is the tuned configuration statistically better than the default, and by how much?"* It is independent of the tuning loop — it ingests a saved tuning-session JSON, sets up a fresh database environment, and runs paired evaluations of `default` and `tuned` configurations.
 
-The runbook commands and reproducibility checklist live in [EVALUATION_RUNBOOK.md](./EVALUATION_RUNBOOK.md). **This document covers the architecture and statistical methodology.**
+The runbook commands and reproducibility checklist live in [EVALUATION_RUNBOOK.md](../guides/evaluation-runbook.md). **This document covers the architecture and statistical methodology.**
 
 ---
 
@@ -68,8 +68,8 @@ The runbook commands and reproducibility checklist live in [EVALUATION_RUNBOOK.m
 
 The runner reuses three components from the tuning side:
 
-- **[`WorkloadOrchestrator`](./WORKLOAD_ORCHESTRATOR.md)** to drive each evaluation.
-- **[`DatabaseEnvironment`](./ENVIRONMENT_BACKENDS.md)** (preferentially Docker) to isolate runs.
+- **[`WorkloadOrchestrator`](workload-orchestrator.md)** to drive each evaluation.
+- **[`DatabaseEnvironment`](environment-backends.md)** (preferentially Docker) to isolate runs.
 - **The scoring engine** to produce comparable scalar scores under a chosen scoring policy.
 
 ---
@@ -78,12 +78,12 @@ The runner reuses three components from the tuning side:
 
 | File | Responsibility |
 | --- | --- |
-| [`__main__.py`](../src/evaluation/__main__.py) | CLI entry point. Argparse, runbook-friendly defaults, dispatch. |
-| [`runner.py`](../src/evaluation/runner.py) | `ComparisonRunner` — orchestrates default-vs-tuned evaluations, multi-arm comparisons, JSON serialisation. |
-| [`statistics.py`](../src/evaluation/statistics.py) | Wilcoxon signed-rank, paired bootstrap CIs, paired Cohen's d, Holm correction for the secondary endpoint family. |
-| [`loader.py`](../src/evaluation/loader.py) | `load_tuning_session(path)` — parses session JSON across schema versions, normalises tuning config, extracts scoring metadata. |
-| [`types.py`](../src/evaluation/types.py) | Frozen dataclasses: `ComparisonConfig`, `TuningSessionData`, `RunResult`, `MetricComparison`, `ComparisonResult`, `PairwiseResult`, `MultiArmComparisonResult`. |
-| [`exceptions.py`](../src/evaluation/exceptions.py) | Domain-specific exception hierarchy (`SessionLoadError`, `EvaluationSetupError`, `RunFailureError`). |
+| [`__main__.py`](../../src/evaluation/__main__.py) | CLI entry point. Argparse, runbook-friendly defaults, dispatch. |
+| [`runner.py`](../../src/evaluation/runner.py) | `ComparisonRunner` — orchestrates default-vs-tuned evaluations, multi-arm comparisons, JSON serialisation. |
+| [`statistics.py`](../../src/evaluation/statistics.py) | Wilcoxon signed-rank, paired bootstrap CIs, paired Cohen's d, Holm correction for the secondary endpoint family. |
+| [`loader.py`](../../src/evaluation/loader.py) | `load_tuning_session(path)` — parses session JSON across schema versions, normalises tuning config, extracts scoring metadata. |
+| [`types.py`](../../src/evaluation/types.py) | Frozen dataclasses: `ComparisonConfig`, `TuningSessionData`, `RunResult`, `MetricComparison`, `ComparisonResult`, `PairwiseResult`, `MultiArmComparisonResult`. |
+| [`exceptions.py`](../../src/evaluation/exceptions.py) | Domain-specific exception hierarchy (`SessionLoadError`, `EvaluationSetupError`, `RunFailureError`). |
 
 The package surfaces a small public API in `__init__.py` — `ComparisonRunner`, `ComparisonConfig`, `load_tuning_session`, plus the result types used by downstream scripts and the visualization comparison loader.
 
@@ -147,22 +147,22 @@ Notable choices:
 
 ## Session loader and version compatibility
 
-**Location**: [src/evaluation/loader.py](../src/evaluation/loader.py)
+**Location**: [src/evaluation/loader.py](../../src/evaluation/loader.py)
 
 `load_tuning_session(path)` parses both PBT and BO session JSONs into a single `TuningSessionData` shape. The loader is deliberately permissive about historical schema variations:
 
-- **Scoring policy default.** Sessions without a `scoring_policy` field are treated as `fixed_v1` with policy version `1.0` and metric reference version `v1` (the constants in [src/utils/scoring/constants.py](../src/utils/scoring/constants.py)). Runs from before scoring-v2 still load and compare correctly.
+- **Scoring policy default.** Sessions without a `scoring_policy` field are treated as `fixed_v1` with policy version `1.0` and metric reference version `v1` (the constants in [src/utils/scoring/constants.py](../../src/utils/scoring/constants.py)). Runs from before scoring-v2 still load and compare correctly.
 - **Tuning-config normalisation.** `_normalize_tuning_config()` coerces numeric fields (`population_size`, `total_generations`, `sysbench_table_size`, `tpch_scale_factor`, etc.) from strings or floats into the right types, since older runs sometimes wrote durations as strings.
 - **Benchmark / workload inference.** When a session JSON omits `benchmark_name` or `workload_type`, `_infer_benchmark_and_workload()` derives them from the session path (`results/oltp/oltp_read_write/...` → sysbench OLTP; `results/olap/...` → TPC-H OLAP).
 - **Version compatibility check.** `_check_version_compatibility` warns (does not block) on metric-reference-version mismatches between sessions in a multi-arm comparison. The user can override the active scoring policy via `--scoring-policy` to force re-evaluation under newer weights — at which point the comparison JSON records both the original session policies and the active comparison policy.
 
-The runbook [EVALUATION_RUNBOOK.md](./EVALUATION_RUNBOOK.md) lists the metadata fields the loader populates so a reviewer can audit them.
+The runbook [EVALUATION_RUNBOOK.md](../guides/evaluation-runbook.md) lists the metadata fields the loader populates so a reviewer can audit them.
 
 ---
 
 ## Statistical analysis
 
-**Location**: [src/evaluation/statistics.py](../src/evaluation/statistics.py)
+**Location**: [src/evaluation/statistics.py](../../src/evaluation/statistics.py)
 
 The statistical layer is paired-design throughout. Given `default_runs` and `tuned_runs` of equal length, where pair `i` shares its seed:
 
@@ -249,7 +249,7 @@ A comparison JSON is structured as follows (truncated):
 }
 ```
 
-Every field listed in the [reproducibility checklist of the runbook](./EVALUATION_RUNBOOK.md#reproducibility-checklist) is populated by the runner. A reviewer should be able to recreate the comparison from the JSON alone.
+Every field listed in the [reproducibility checklist of the runbook](../guides/evaluation-runbook.md#reproducibility-checklist) is populated by the runner. A reviewer should be able to recreate the comparison from the JSON alone.
 
 ---
 
@@ -272,7 +272,7 @@ The runner:
 3. Computes pairwise statistics between every (arm, default) pair and between every (arm_a, arm_b) pair via `compute_pairwise_statistics`.
 4. Emits a `MultiArmComparisonResult` JSON with one `PairwiseResult` per pair plus the metadata block.
 
-This is what feeds the multi-arm comparison plots produced by [`src/scripts/pbt_vs_bo_comarison.py`](../src/scripts/pbt_vs_bo_comarison.py) and the comparison loader in [src/visualization/loaders/comparison.py](../src/visualization/loaders/comparison.py).
+This is what feeds the multi-arm comparison plots produced by [`src/scripts/pbt_vs_bo_comarison.py`](../../src/scripts/pbt_vs_bo_comarison.py) and the comparison loader in [src/visualization/loaders/comparison.py](../../src/visualization/loaders/comparison.py).
 
 ---
 
@@ -310,20 +310,20 @@ A research repo accumulates session formats over months. The loader's compatibil
 
 ## Related documentation
 
-- **[Evaluation Reproducibility Runbook](./EVALUATION_RUNBOOK.md)** — canonical commands, output paths, reproducibility checklist.
-- **[Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md)** — what the active scoring policy controls.
-- **[Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)** — the engine that runs each evaluation.
-- **[Environment Backends](./ENVIRONMENT_BACKENDS.md)** — Docker vs bare-metal trade-offs the runner inherits.
-- **[BO Baseline](./BO_BASELINE.md)** — produces session JSONs the suite consumes.
-- **[PBT vs BO Comparison](./PBT_VS_BO_COMPARISON.md)** — multi-arm visualization on top of comparison JSONs.
-- **[Metrics Validation](./METRICS_VALIDATION.md)** — academic justification for the multi-objective scoring formulation.
+- **[Evaluation Reproducibility Runbook](../guides/evaluation-runbook.md)** — canonical commands, output paths, reproducibility checklist.
+- **[Feature-Driven Scoring](feature-driven-scoring.md)** — what the active scoring policy controls.
+- **[Workload Orchestrator](workload-orchestrator.md)** — the engine that runs each evaluation.
+- **[Environment Backends](environment-backends.md)** — Docker vs bare-metal trade-offs the runner inherits.
+- **[BO Baseline](../guides/bo-baseline.md)** — produces session JSONs the suite consumes.
+- **[PBT vs BO Comparison](../guides/pbt-vs-bo-comparison.md)** — multi-arm visualization on top of comparison JSONs.
+- **[Metrics Validation](../reference/metrics-validation.md)** — academic justification for the multi-objective scoring formulation.
 
 ### File locations
 
-- CLI entry: [src/evaluation/__main__.py](../src/evaluation/__main__.py)
-- `ComparisonRunner`: [src/evaluation/runner.py](../src/evaluation/runner.py)
-- Statistics: [src/evaluation/statistics.py](../src/evaluation/statistics.py)
-- Session loader: [src/evaluation/loader.py](../src/evaluation/loader.py)
-- Types: [src/evaluation/types.py](../src/evaluation/types.py)
-- Exceptions: [src/evaluation/exceptions.py](../src/evaluation/exceptions.py)
-- Tests: [tests/unit/evaluation/](../tests/unit/evaluation/)
+- CLI entry: [src/evaluation/__main__.py](../../src/evaluation/__main__.py)
+- `ComparisonRunner`: [src/evaluation/runner.py](../../src/evaluation/runner.py)
+- Statistics: [src/evaluation/statistics.py](../../src/evaluation/statistics.py)
+- Session loader: [src/evaluation/loader.py](../../src/evaluation/loader.py)
+- Types: [src/evaluation/types.py](../../src/evaluation/types.py)
+- Exceptions: [src/evaluation/exceptions.py](../../src/evaluation/exceptions.py)
+- Tests: [tests/unit/evaluation/](../../tests/unit/evaluation/)
