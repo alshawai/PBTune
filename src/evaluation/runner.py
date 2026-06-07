@@ -820,17 +820,23 @@ class ComparisonRunner:
         )
         return default_runs, tuned_runs
 
-    def _fetch_boot_values(self, env: DatabaseEnvironment, param_names: list[str]) -> dict[str, str]:
+    def _fetch_boot_values(
+        self, env: DatabaseEnvironment, param_names: list[str]
+    ) -> dict[str, str]:
         """Fetch the PostgreSQL default boot values for the specified parameters."""
         if not param_names:
             return {}
         try:
             active_config = env.get_db_config(worker_id=0)
             from src.database.connection import get_connection
+
             conn = get_connection(config=active_config)
             cursor = conn.cursor()
             placeholders = ",".join(["%s"] * len(param_names))
-            cursor.execute(f"SELECT name, boot_val FROM pg_settings WHERE name IN ({placeholders})", param_names)
+            cursor.execute(
+                f"SELECT name, boot_val FROM pg_settings WHERE name IN ({placeholders})",
+                param_names,
+            )
             results = {row[0]: row[1] for row in cursor.fetchall()}
             cursor.close()
             conn.close()
@@ -907,7 +913,9 @@ class ComparisonRunner:
                     f"mem={r.metrics.memory_utilization * 100.0:6.1f}%, "
                     f"dur={r.duration_seconds:6.1f}s)"
                 )
-            LOGGER.info("➤ Rep %d complete:\n     %s", run_number, "\n     ".join(summary_parts))
+            LOGGER.info(
+                "➤ Rep %d complete:\n     %s", run_number, "\n     ".join(summary_parts)
+            )
 
         total_successful = min(len(v) for v in runs_by_arm.values())
         if total_successful == 0:
@@ -975,15 +983,17 @@ class ComparisonRunner:
                     config=applicator_config,
                     worker_id=0,
                 )
-                
+
                 boot_values = self._fetch_boot_values(env, list(knobs.keys()))
-                
+
                 apply_result = knob_applicator.apply(knobs)
-                
+
                 for k, v in knobs.items():
                     boot_val = boot_values.get(k)
                     if boot_val is not None and str(v) != boot_val:
-                        LOGGER.debug("  Knob '%s': boot_val=%s, applied_val=%s", k, boot_val, v)
+                        LOGGER.debug(
+                            "  Knob '%s': boot_val=%s, applied_val=%s", k, boot_val, v
+                        )
 
                 if apply_result.restart_required:
                     restart_started = time.monotonic()
@@ -1000,7 +1010,7 @@ class ComparisonRunner:
                         "  Instance restarted in %.1fs",
                         time.monotonic() - restart_started,
                     )
-                    
+
                     # Refresh config after restart and rebind applicator.
                     active_config = env.get_db_config(worker_id=0)
                     knob_applicator = KnobApplicator(
@@ -1297,12 +1307,7 @@ class ComparisonRunner:
             sc_str = f"{float(_np.median(scores)):.2f} ± {float(_np.std(scores, ddof=1) if len(scores) > 1 else 0.0):.2f}"
             tp_str = f"{float(_np.median(tps)):.1f} ± {float(_np.std(tps, ddof=1) if len(tps) > 1 else 0.0):.1f}"
             lt_str = f"{float(_np.median(lat)):.2f} ± {float(_np.std(lat, ddof=1) if len(lat) > 1 else 0.0):.2f}"
-            print(
-                f"  {arm_name:<12} "
-                f"{sc_str:>18} "
-                f"{tp_str:>22} "
-                f"{lt_str:>24}"
-            )
+            print(f"  {arm_name:<12} {sc_str:>18} {tp_str:>22} {lt_str:>24}")
         print("  " + "─" * 78)
 
         print("\n  PAIRWISE COMPARISONS (score)")

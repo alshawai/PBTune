@@ -1,6 +1,5 @@
 """Tests for reverse mapping of knobs to ConfigSpace Configuration."""
 
-import pytest
 from src.tuner.config import get_knob_space
 from src.scripts.bo_baseline.search_space import (
     build_configspace,
@@ -16,10 +15,10 @@ def test_roundtrip_identity():
 
     config = cs.sample_configuration()
     knob_dict = configspace_to_knobs(config, knob_space)
-    
+
     # Reverse mapping
     restored_config = knobs_to_configspace(knob_dict, knob_space, cs)
-    
+
     # Values should be identical
     for hp_name in cs.keys():
         if config.get(hp_name) is not None:
@@ -65,13 +64,13 @@ def test_inactive_hp_handled():
     assert config.get("archive_mode") is None
 
     knob_dict = configspace_to_knobs(config, knob_space)
-    
+
     # Simulate repair function setting archive_mode to off
     knob_dict["archive_mode"] = "off"
 
     # Reverse mapping should not crash and should produce a valid config
     restored_config = knobs_to_configspace(knob_dict, knob_space, cs)
-    
+
     # Because of allow_inactive_with_values=True, we can create the config,
     # and the Configuration object will retain the value we passed in.
     assert restored_config.get("archive_mode") == "off"
@@ -84,10 +83,10 @@ def test_repaired_config_differs():
 
     config = cs.sample_configuration()
     original_dict = configspace_to_knobs(config, knob_space)
-    
+
     # Make a copy and mutate it
     repaired_dict = dict(original_dict)
-    
+
     hp_name = "shared_buffers"
     if hp_name in original_dict and hp_name in cs:
         hp = cs[hp_name]

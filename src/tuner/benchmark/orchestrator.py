@@ -683,6 +683,7 @@ class WorkloadOrchestrator:
         apply_config: bool = True,
         generation: Optional[int] = None,
         barriers: Optional[GenerationBarrier] = None,
+        random_seed: Optional[int] = None,
     ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any]]:
         """
         Evaluate a Worker's configuration.
@@ -868,7 +869,9 @@ class WorkloadOrchestrator:
                     metrics = self.workload_executor.execute(
                         db_config=worker.db_config,
                         worker_id=worker.worker_id,
-                        random_seed=self.config.random_seed,
+                        random_seed=random_seed
+                        if random_seed is not None
+                        else self.config.random_seed,
                         duration=self.config.measurement_duration,
                         warmup=self.config.warmup_duration,
                         warmup_passes=self.config.warmup_passes,
@@ -881,7 +884,9 @@ class WorkloadOrchestrator:
                         duration=self.config.measurement_duration,
                         warmup=self.config.warmup_duration,
                         worker_id=worker.worker_id,
-                        random_seed=self.config.random_seed,
+                        random_seed=random_seed
+                        if random_seed is not None
+                        else self.config.random_seed,
                         pre_measurement_callback=lambda: _barrier("warmup_done"),
                     )
                     last_completed_barrier = "warmup_done"

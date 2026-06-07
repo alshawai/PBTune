@@ -3,7 +3,7 @@
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple
 from datetime import datetime
 
 from ConfigSpace import Configuration
@@ -58,10 +58,10 @@ class PilotResult:
     surrogate model after Phase 2 calibration.
     """
 
-    raw_config: Configuration       # raw suggestion from smac.ask()
+    raw_config: Configuration  # raw suggestion from smac.ask()
     resolved_config: Configuration  # actual executed params (valid Configuration)
-    raw_metrics: dict               # PerformanceMetrics.to_dict() output
-    eval_time: float                # wall-clock seconds
+    raw_metrics: dict  # PerformanceMetrics.to_dict() output
+    eval_time: float  # wall-clock seconds
     status: StatusType = field(default=StatusType.SUCCESS)
 
 
@@ -107,7 +107,9 @@ class BOBaselineRunner:
                 self.worker_resources.cpu_cores,
                 self.worker_resources.ram_bytes / (1024**3),
             )
-            self.logger.debug("PBT-derived worker resources object: %s", self.worker_resources)
+            self.logger.debug(
+                "PBT-derived worker resources object: %s", self.worker_resources
+            )
         else:
             self.worker_resources = detect_worker_resources(
                 max_parallel_workers=config.resource_division, data_path=self.data_root
@@ -118,7 +120,9 @@ class BOBaselineRunner:
                 self.worker_resources.cpu_cores,
                 self.worker_resources.ram_bytes / (1024**3),
             )
-            self.logger.debug("Host-divided worker resources object: %s", self.worker_resources)
+            self.logger.debug(
+                "Host-divided worker resources object: %s", self.worker_resources
+            )
 
         # Load knob space
         self.knob_space = get_knob_space(config.knob_tier)
@@ -133,7 +137,9 @@ class BOBaselineRunner:
             workload_type.value, scoring_policy=config.scoring_policy
         )
 
-        self.logger.info("BO Baseline Runner initialized for tier: %s", config.knob_tier)
+        self.logger.info(
+            "BO Baseline Runner initialized for tier: %s", config.knob_tier
+        )
 
     def _create_workload_executor(self):
         """Create appropriate workload executor based on benchmark type."""
@@ -254,10 +260,10 @@ class BOBaselineRunner:
 
             try:
                 (
-                    _cost,       # None — scoring deferred
+                    _cost,  # None — scoring deferred
                     knob_config,
                     metrics,
-                    _score,      # None — scoring deferred
+                    _score,  # None — scoring deferred
                     _breakdown,  # None — scoring deferred
                     _restarted,
                     wall_time,
@@ -269,36 +275,44 @@ class BOBaselineRunner:
                     previous_engine_config,
                     skip_scoring=True,
                 )
-                previous_engine_config = dict(configspace_to_knobs(sobol_config, self.knob_space))
+                previous_engine_config = dict(
+                    configspace_to_knobs(sobol_config, self.knob_space)
+                )
 
                 if metrics is not None:
                     resolved_cs_config = knobs_to_configspace(
-                        knob_config, self.knob_space, facade.scenario.configspace,
+                        knob_config,
+                        self.knob_space,
+                        facade.scenario.configspace,
                     )
                     status = StatusType.SUCCESS
                 else:
                     resolved_cs_config = sobol_config  # fallback
                     status = StatusType.CRASHED
 
-                pilot_results.append(PilotResult(
-                    raw_config=sobol_config,
-                    resolved_config=resolved_cs_config,
-                    raw_metrics=metrics.to_dict() if metrics is not None else {},
-                    eval_time=wall_time,
-                    status=status,
-                ))
+                pilot_results.append(
+                    PilotResult(
+                        raw_config=sobol_config,
+                        resolved_config=resolved_cs_config,
+                        raw_metrics=metrics.to_dict() if metrics is not None else {},
+                        eval_time=wall_time,
+                        status=status,
+                    )
+                )
 
             except Exception as exc:
                 self.logger.error(
                     "Pilot iteration %d failed: %s", pilot_idx, exc, exc_info=True
                 )
-                pilot_results.append(PilotResult(
-                    raw_config=sobol_config,
-                    resolved_config=sobol_config,
-                    raw_metrics={},
-                    eval_time=0.0,
-                    status=StatusType.CRASHED,
-                ))
+                pilot_results.append(
+                    PilotResult(
+                        raw_config=sobol_config,
+                        resolved_config=sobol_config,
+                        raw_metrics={},
+                        eval_time=0.0,
+                        status=StatusType.CRASHED,
+                    )
+                )
 
             self.logger.info(
                 "Pilot %d/%d: status=%s, wall_time=%.2fs",
@@ -312,8 +326,7 @@ class BOBaselineRunner:
         self.logger.info("=== Phase 2: Calibration ===")
 
         successful_pilots = [
-            r for r in pilot_results
-            if r.status == StatusType.SUCCESS and r.raw_metrics
+            r for r in pilot_results if r.status == StatusType.SUCCESS and r.raw_metrics
         ]
 
         if len(successful_pilots) == 0:
@@ -324,7 +337,8 @@ class BOBaselineRunner:
         elif len(successful_pilots) < 3:
             self.logger.warning(
                 "Only %d pilot evaluation(s) succeeded (minimum 3 recommended for reliable normalization). "
-                "Continuing with degraded calibration.", len(successful_pilots)
+                "Continuing with degraded calibration.",
+                len(successful_pilots),
             )
 
         all_metrics = [PerformanceMetrics(**r.raw_metrics) for r in successful_pilots]
@@ -369,21 +383,24 @@ class BOBaselineRunner:
                 "Injected pilot %d: score=%.2f, cost=%.2f", idx, score, cost
             )
 
-            iteration_log.append({
-                "iteration": idx,
-                "config": configspace_to_knobs(
-                    result.resolved_config, self.knob_space,
-                ),
-                "metrics": result.raw_metrics,
-                "score": score,
-                "score_breakdown": score_breakdown,
-                "cost": cost,
-                "bo_overhead_seconds": tell_overhead,
-                "wall_clock_seconds": result.eval_time,
-                "restarted": False,
-                "timestamp": time.time(),
-                "phase": "pilot",
-            })
+            iteration_log.append(
+                {
+                    "iteration": idx,
+                    "config": configspace_to_knobs(
+                        result.resolved_config,
+                        self.knob_space,
+                    ),
+                    "metrics": result.raw_metrics,
+                    "score": score,
+                    "score_breakdown": score_breakdown,
+                    "cost": cost,
+                    "bo_overhead_seconds": tell_overhead,
+                    "wall_clock_seconds": result.eval_time,
+                    "restarted": False,
+                    "timestamp": time.time(),
+                    "phase": "pilot",
+                }
+            )
 
         incumbents = facade.intensifier.get_incumbents()
         assert len(incumbents) > 0, (
@@ -429,7 +446,9 @@ class BOBaselineRunner:
                 trial_info = facade.ask()
                 ask_overhead = time.time() - t_ask
             except StopIteration:
-                self.logger.warning("SMAC exhausted its n_trials budget. Stopping BO loop early.")
+                self.logger.warning(
+                    "SMAC exhausted its n_trials budget. Stopping BO loop early."
+                )
                 break
 
             try:
@@ -449,7 +468,9 @@ class BOBaselineRunner:
                     previous_engine_config,
                     seed=trial_info.seed,
                 )
-                previous_engine_config = dict(configspace_to_knobs(trial_info.config, self.knob_space))
+                previous_engine_config = dict(
+                    configspace_to_knobs(trial_info.config, self.knob_space)
+                )
             except Exception as exc:
                 self.logger.error("Error evaluating config: %s", exc, exc_info=True)
                 (
@@ -463,16 +484,21 @@ class BOBaselineRunner:
                 ) = (100.0, {}, None, 0.0, None, False, 0.0)
 
             # Inject repaired (DB-quantized) config via facade.tell() if it differs
-            original_knob_config = configspace_to_knobs(trial_info.config, self.knob_space)
+            original_knob_config = configspace_to_knobs(
+                trial_info.config, self.knob_space
+            )
 
             from src.scripts.bo_baseline.search_space import get_config_drift
+
             configs_differ = bool(get_config_drift(original_knob_config, knob_config))
 
             repaired_cs_config = None
             if configs_differ:
                 try:
                     repaired_cs_config = knobs_to_configspace(
-                        knob_config, self.knob_space, facade.scenario.configspace,
+                        knob_config,
+                        self.knob_space,
+                        facade.scenario.configspace,
                     )
                 except Exception as exc:
                     self.logger.warning("Failed to inject repaired config: %s", exc)
@@ -496,19 +522,21 @@ class BOBaselineRunner:
             tell_overhead = time.time() - t_tell
 
             iteration_score = score if score is not None else 0.0
-            iteration_log.append({
-                "iteration": iteration_count,
-                "config": knob_config,
-                "metrics": metrics.to_dict() if metrics is not None else {},
-                "score": iteration_score,
-                "score_breakdown": score_breakdown,
-                "cost": cost,
-                "bo_overhead_seconds": ask_overhead + tell_overhead,
-                "wall_clock_seconds": wall_time,
-                "restarted": restarted,
-                "timestamp": time.time(),
-                "phase": "bo",
-            })
+            iteration_log.append(
+                {
+                    "iteration": iteration_count,
+                    "config": knob_config,
+                    "metrics": metrics.to_dict() if metrics is not None else {},
+                    "score": iteration_score,
+                    "score_breakdown": score_breakdown,
+                    "cost": cost,
+                    "bo_overhead_seconds": ask_overhead + tell_overhead,
+                    "wall_clock_seconds": wall_time,
+                    "restarted": restarted,
+                    "timestamp": time.time(),
+                    "phase": "bo",
+                }
+            )
 
             self.logger.info(
                 "Iteration %d/%d [BO]: score=%.2f, cost=%.2f, wall_time=%.2fs",
@@ -647,7 +675,9 @@ class BOBaselineRunner:
             # Create workload executor
             self.logger.info("Creating workload executor...")
             workload_executor = self._create_workload_executor()
-            self.logger.debug("Workload executor initialized: %s", type(workload_executor).__name__)
+            self.logger.debug(
+                "Workload executor initialized: %s", type(workload_executor).__name__
+            )
 
             # Create environment with N instances
             self.logger.info("Setting up database environment...")
@@ -666,7 +696,9 @@ class BOBaselineRunner:
                 image_name=self.config.docker_image,
                 force_recreate_baseline=self.config.force_recreate_baseline,
             )
-            self.logger.debug("Database environment created: %s", type(self.env).__name__)
+            self.logger.debug(
+                "Database environment created: %s", type(self.env).__name__
+            )
 
             # Single worker bound to the single PostgreSQL instance
             num_instances = 1
@@ -702,7 +734,10 @@ class BOBaselineRunner:
             configspace = build_configspace(
                 self.knob_space, seed=self.config.random_seed
             )
-            self.logger.debug("ConfigSpace initialized with %d dimensions", len(configspace.get_hyperparameters()))
+            self.logger.debug(
+                "ConfigSpace initialized with %d dimensions",
+                len(configspace.get_hyperparameters()),
+            )
 
             # Create iteration log
             iteration_log: list = []
@@ -738,14 +773,17 @@ class BOBaselineRunner:
                 max_ratio=1.0,  # Prevent SMAC from limiting pilot to 25% of n_trials
             )
             sobol_configs = _sobol_design.select_configurations()
-            
+
             # Inject the default configuration as the first pilot observation
             base_default_config = configspace.get_default_configuration()
             base_knobs = configspace_to_knobs(base_default_config, self.knob_space)
 
             # Fetch real defaults from the active DB using Applicator
             from src.utils.applicator import KnobApplicator
-            applicator = KnobApplicator(db_config=self.env.get_db_config(0), worker_id=0)
+
+            applicator = KnobApplicator(
+                db_config=self.env.get_db_config(0), worker_id=0
+            )
             verify_result = applicator.verify(expected_config=base_knobs)
 
             # Update base_knobs with the true active database values
@@ -753,18 +791,26 @@ class BOBaselineRunner:
 
             try:
                 real_default_config = knobs_to_configspace(
-                    base_knobs, self.knob_space, configspace,
+                    base_knobs,
+                    self.knob_space,
+                    configspace,
                 )
             except Exception as e:
-                self.logger.warning("Could not build real default config, falling back to static defaults: %s", e)
+                self.logger.warning(
+                    "Could not build real default config, falling back to static defaults: %s",
+                    e,
+                )
                 real_default_config = base_default_config
 
             # Prepend default, remove any exact duplicates, and slice to requested pilot size
-            sobol_configs = [real_default_config] + [c for c in sobol_configs if c != real_default_config]
+            sobol_configs = [real_default_config] + [
+                c for c in sobol_configs if c != real_default_config
+            ]
             sobol_configs = sobol_configs[:pilot_size]
 
             self.logger.info(
-                "Generated %d pilot configs (including real DB default configuration)", len(sobol_configs)
+                "Generated %d pilot configs (including real DB default configuration)",
+                len(sobol_configs),
             )
 
             # Since we use ask-tell loops, provide a dummy objective to satisfy
@@ -776,7 +822,8 @@ class BOBaselineRunner:
 
             # Create SMAC scenario (generous budget; n_trials covers pilot + BO + multi-seed validation)
             self.logger.info(
-                "Creating SMAC scenario with generous budget for %d iterations...", self.config.n_iterations
+                "Creating SMAC scenario with generous budget for %d iterations...",
+                self.config.n_iterations,
             )
             scenario = Scenario(
                 configspace=configspace,
@@ -835,7 +882,11 @@ class BOBaselineRunner:
             stale_counter = 0
             try:
                 early_stopped, stale_counter = self._run_sequential_optimization(
-                    facade, orchestrator, worker, iteration_log, pilot_size,
+                    facade,
+                    orchestrator,
+                    worker,
+                    iteration_log,
+                    pilot_size,
                     sobol_configs,
                 )
             except KeyboardInterrupt:
@@ -860,9 +911,7 @@ class BOBaselineRunner:
             )
 
             self.logger.info("BO tuning completed in %.2f seconds", total_time)
-            self.logger.info(
-                "Best score: %.4f", results["best_configuration"]["score"]
-            )
+            self.logger.info("Best score: %.4f", results["best_configuration"]["score"])
 
             return results
 
@@ -890,6 +939,7 @@ class BOBaselineRunner:
                 self.logger.info("✓ Database snapshot restored successfully")
         except Exception as exc:
             self.logger.error("Failed to restore database from snapshot: %s", exc)
+
 
 def main():
     """CLI entry point."""
