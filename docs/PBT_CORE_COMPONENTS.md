@@ -1,889 +1,415 @@
-# Population-Based Training (PBT): Core Components
+# PBT Core Components
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](./README.md), [Generation Barriers](./GENERATION_BARRIERS.md), [Performance Evaluation](./PERFORMANCE_EVALUATION.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)
 
 ## Overview
 
-This document explains the three core components that implement **Population Based Training (PBT)** for PostgreSQL configuration tuning: **Worker**, **Evolution**, and **Population**. These components work together to implement the evolutionary optimization algorithm described in DeepMind's 2017 paper "Population Based Training of Neural Networks."
+This document explains the three core classes that implement Population-Based Training in this project: **Worker**, **Evolution**, and **Population**. Together they realise DeepMind's 2017 PBT algorithm adapted for PostgreSQL configuration tuning.
 
-**What is PBT?** Population Based Training is an evolutionary optimization algorithm that maintains a population of candidate solutions (workers), periodically allowing poor performers to "exploit" good performers by copying their configurations, then "exploring" nearby variations through perturbation.
+**What PBT does.** Maintains a population of $N$ workers, each holding its own configuration $\theta_i$ and score $f(\theta_i)$. At each generation, poor performers exploit elites by copying configurations, then explore by perturbing them. Configurations evolve *during* training rather than being evaluated independently.
 
-### Key Insight
+**What this implementation adds beyond vanilla PBT:**
 
-Unlike traditional hyperparameter tuning (which evaluates configurations independently), PBT enables configurations to **evolve during training**. Poor performers don't waste time—they copy from successful peers and explore variations, leading to faster convergence and better final results.
+- **Lockstep generation barriers** so every worker's measurement window experiences identical contention from other workers (see [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md)).
+- **Physical instance cloning during exploit** so an exploited worker takes over the elite's data directory + buffer state, not just the knob values.
+- **Per-worker resource slices** (`WorkerResources`) so the population can run safely on a single host with bounded RAM/CPU budgets.
+- **Dead-worker rescue** so a single crashed evaluation doesn't block the generation indefinitely.
+- **Adaptive normalisation re-scoring** so scores remain comparable as observed metric ranges grow.
 
 ---
 
 ## Table of Contents
 
-1. [Architecture Overview](#architecture-overview)
-2. [Component 1: Worker](#component-1-worker)
-3. [Component 2: Evolution](#component-2-evolution)
-4. [Component 3: Population](#component-3-population)
-5. [How Components Interact](#how-components-interact)
-6. [The PBT Algorithm Flow](#the-pbt-algorithm-flow)
-7. [Design Decisions](#design-decisions)
-8. [Related Documentation](#related-documentation)
+1. [Architecture](#architecture)
+2. [Worker](#worker)
+3. [Evolution](#evolution)
+4. [Population](#population)
+5. [Lockstep generation flow](#lockstep-generation-flow)
+6. [Exploit-explore details](#exploit-explore-details)
+7. [Dead-worker rescue and convergence](#dead-worker-rescue-and-convergence)
+8. [Design decisions](#design-decisions)
+9. [Related documentation](#related-documentation)
 
 ---
 
-## Architecture Overview
+## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     PBT System Architecture                     │
-└─────────────────────────────────────────────────────────────────┘
-
-                    ┌───────────────────┐
-                    │    Population     │
-                    │  (Orchestrator)   │
-                    └─────────┬─────────┘
-                              │
-                 manages      │      coordinates
-                              │
-          ┌───────────────────┼───────────────────┐
-          │                   │                   │
-          ▼                   ▼                   ▼
-    ┌──────────┐        ┌──────────┐       ┌──────────┐
-    │ Worker 0 │        │ Worker 1 │  ...  │ Worker N │
-    │ (State)  │        │ (State)  │       │ (State)  │
-    └─────┬────┘        └─────┬────┘       └─────┬────┘
-          │                   │                   │
-          └───────────────────┼───────────────────┘
-                              │
-                         uses │
-                              ▼
-                    ┌───────────────────┐
-                    │    Evolution      │
-                    │   (Algorithms)    │
-                    └───────────────────┘
-                              │
-                    ┌─────────┴─────────┐
-                    │                   │
-                    ▼                   ▼
-            ┌──────────────┐    ┌──────────────┐
-            │   Exploit    │    │   Explore    │
-            │ (Copy elite) │    │  (Perturb)   │
-            └──────────────┘    └──────────────┘
+```text
+                        ┌──────────────────────┐
+                        │      Population      │
+                        │    (orchestrator)    │
+                        └──────────┬───────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                    │
+              ▼                    ▼                    ▼
+       ┌────────────┐       ┌────────────┐       ┌────────────┐
+       │  Worker 0  │       │  Worker 1  │  ...  │  Worker N  │
+       │   (state)  │       │   (state)  │       │   (state)  │
+       └─────┬──────┘       └─────┬──────┘       └─────┬──────┘
+             │                    │                    │
+             │ uses               │ uses               │ uses
+             ▼                    ▼                    ▼
+       ┌──────────────────────────────────────────────────────┐
+       │                     Evolution                        │
+       │  truncation_selection / execute_exploit_explore /    │
+       │  perturb / convergence / population statistics       │
+       └──────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │ GenerationBarrier    │
+                        │  (B1–B17 lockstep)   │
+                        └──────────┬───────────┘
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │ WorkloadOrchestrator │
+                        │ (per-worker eval)    │
+                        └──────────────────────┘
 ```
 
-### Component Roles
+**Roles:**
 
-- **Worker**: Individual population member with its own configuration and performance state
-- **Evolution**: Stateless algorithms for exploit (truncation selection) and explore (perturbation)
-- **Population**: Orchestrator managing worker lifecycle, parallel evaluation, and convergence
+- **Worker** — individual population member. Owns its config, score, history, and lineage.
+- **Evolution** — pure functions for selection, perturbation, statistics, convergence detection. No state.
+- **Population** — orchestrator. Manages worker lifecycle, parallel evaluation, exploit-explore triggering, dead-worker rescue, generation logging, score finalisation.
 
 ---
 
-## Component 1: Worker
+## Worker
 
 **Location**: [src/tuner/core/worker.py](../src/tuner/core/worker.py)
 
-### Purpose
+A `Worker` represents a single member of the population. It encapsulates:
 
-The Worker class represents a **single member of the PBT population**. Each worker maintains:
-- Its own database configuration (PostgreSQL knobs)
-- Performance metrics and score from evaluations
-- Evolutionary state (step count, readiness, lineage)
-
-### Why Workers?
-
-In PBT, we don't evaluate configurations in isolation—we track each configuration's **evolution over time**. Workers encapsulate this state, making it easy to:
-1. Track how many times a configuration has been evaluated
-2. Determine when it's ready for exploit/explore
-3. Maintain lineage (which elite worker did this copy from?)
-4. Store performance history
-
-### Key Attributes
+- the current PostgreSQL configuration,
+- the most recent `PerformanceMetrics` and `ScoreBreakdown`,
+- evolutionary state (step count, lineage, generation created),
+- an environment handle to its own PostgreSQL instance.
 
 ```python
 @dataclass
 class Worker:
-    worker_id: int                          # Unique ID (0 to N-1)
-    knob_space: KnobSpace                   # Defines valid configurations
-    knob_config: Dict[str, Any]             # Current PostgreSQL parameters
-    performance_score: float = 0.0          # Composite score (higher = better)
-    metrics: Optional[PerformanceMetrics]   # Detailed measurements
-    step_count: int = 0                     # Number of evaluations
-    ready_interval: int = 3                 # Steps before exploit-eligible
-    parent_id: Optional[int] = None         # ID of copied elite worker
-    generation_created: int = 0             # When created/last exploited
+    worker_id: int
+    knob_space: KnobSpace
+    knob_config: Dict[str, Any]
+    performance_score: float = 0.0
+    metrics: Optional[PerformanceMetrics] = None
+    score_breakdown: Optional[ScoreBreakdown] = None
+    step_count: int = 0
+    ready_interval: int = 3
+    parent_id: Optional[int] = None
+    generation_created: int = 0
+    # ... see source for full attribute set
 ```
 
-### Worker Lifecycle
+### Key methods
 
-A worker progresses through several stages during PBT:
+| Method | Purpose |
+| --- | --- |
+| `is_ready()` | `step_count >= ready_interval`. Workers below this count are not eligible for exploit/explore. |
+| `clone_from(other, generation, environment=None)` | Exploit step. Copies the elite's `knob_config`, sets `parent_id`, resets `step_count`. When `environment` is provided, the elite's data directory is also physically cloned (see below). |
+| `perturb(factors)` | Explore step. Calls `KnobSpace.perturb_config()` and applies dependency repair (memory-budget enforcement). |
+| `update_metrics(metrics, score, breakdown)` | Records evaluation results, increments `step_count`. |
+| `get_config_copy()` | Defensive copy for serialisation. |
+| `reset_to_random(seed=None)` | Used by the dead-worker rescue path. |
+| `to_dict()` | Session-serialisation entry point. |
 
-```
-┌─────────────┐
-│ Initialize  │  Random config sampled from KnobSpace
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Evaluate   │  Config applied → workload executed → metrics collected
-└──────┬──────┘  score = f(metrics), step_count += 1
-       │
-       ▼
-┌─────────────┐
-│ Ready Check │  step_count >= ready_interval?
-└──────┬──────┘
-       │
-       ├─── No ──────┐
-       │             │
-       ▼             │
-┌─────────────┐      │
-│   Exploit?  │      │
-└──────┬──────┘      │
-       │             │
-       ├─── Yes ─────┤  Poor performer → copy from elite
-       │             │
-       ▼             │
-┌─────────────┐      │
-│   Explore   │      │  Perturb configuration
-└──────┬──────┘      │
-       │             │
-       └─────────────┘
-       │
-       └──────► Back to Evaluate
-```
+### Why "ready interval" matters
 
-### The "Ready" Mechanism
+PBT's ready interval prevents premature exploitation: a worker that just exploited an elite needs at least one full evaluation under its new configuration before it can be ranked as poor again. Without this, a single noisy measurement could trigger a cascade of exploitations within one generation. Typical values: `1` (aggressive, fast convergence), `3` (balanced default), `5` (conservative, more diversity).
 
-One of PBT's key innovations is the **ready interval**:
+### Physical instance cloning during exploit
 
-```python
-def is_ready(self) -> bool:
-    """Check if worker has been evaluated enough times for exploit/explore."""
-    return self.step_count >= self.ready_interval
-```
+Since commit `4165ceb`, `Worker.clone_from(other, generation, environment=...)` does more than copy knob values. When the calling code passes the population's `DatabaseEnvironment` handle, the worker's underlying PostgreSQL data directory is **physically replaced** with a snapshot of the elite's data directory.
 
-**Why is this needed?**
+Why this matters:
 
-- Prevents **premature convergence**: New/exploited workers need time to prove themselves
-- Avoids **evaluation noise**: A single bad measurement shouldn't trigger exploitation
-- Typical values: 1 (aggressive), 3-5 (conservative)
+- A copied configuration without the underlying database state is "cold" — its buffer cache, page cache, and OS-level state are all empty. The next evaluation includes a long warmup tail that has nothing to do with knob quality.
+- With cloning, the exploit inherits the elite's warmed-up state and its first measured generation reflects the configuration honestly.
 
-**Example**: With `ready_interval=3`:
-1. Worker 0 initializes (step_count=0, not ready)
-2. Evaluate → step_count=1 (not ready)
-3. Evaluate → step_count=2 (not ready)
-4. Evaluate → step_count=3 (ready! can now be exploited/exploit others)
-
-### Core Methods
-
-#### `update_metrics(metrics, score)`
-Records evaluation results and increments step count:
-
-```python
-def update_metrics(self, metrics: PerformanceMetrics, score: float):
-    self.metrics = metrics
-    self.performance_score = score
-    self.step_count += 1
-```
-
-Called after each evaluation to update worker state.
-
-#### `exploit_from(other_worker)`
-Copies configuration from an elite worker:
-
-```python
-def exploit_from(self, other_worker: Worker, generation: int):
-    self.knob_config = copy.deepcopy(other_worker.knob_config)
-    self.parent_id = other_worker.worker_id
-    self.generation_created = generation
-    self.step_count = 0  # Reset: needs to prove new config
-```
-
-**Why reset step_count?** The worker has a new configuration that needs evaluation before being eligible for exploitation again. This prevents cascading exploitations in a single generation.
-
-#### `perturb_config(perturbation_factors)`
-Explores nearby configurations through random perturbation:
-
-```python
-def perturb_config(self, factors: tuple[float, float]):
-    for knob_name, value in self.knob_config.items():
-        knob_def = self.knob_space.get_knob(knob_name)
-        
-        if knob_def.is_numeric():
-            # Multiply by random factor (e.g., 0.8 to 1.2)
-            factor = np.random.uniform(factors[0], factors[1])
-            new_value = value * factor
-            # Clamp to valid range
-            new_value = knob_def.clamp_value(new_value)
-            self.knob_config[knob_name] = new_value
-```
-
-Perturbation ensures diversity—even if all poor workers copy the same elite, their perturbed configs will differ.
+The clone path is implemented per environment backend — see [`bare_metal.py`](../src/utils/environments/bare_metal.py) and [`docker.py`](../src/utils/environments/docker.py).
 
 ---
 
-## Component 2: Evolution
+## Evolution
 
 **Location**: [src/tuner/core/evolution.py](../src/tuner/core/evolution.py)
 
-### Purpose
+A module of stateless functions implementing the algorithmic core of PBT. Keeping these as functions (not methods on `Population`) makes them independently testable — see [tests/unit/core/](../tests/unit/core/).
 
-The Evolution module provides **stateless algorithms** for the exploit and explore phases of PBT. It implements:
-1. **Truncation Selection** (exploit): Which workers should copy from which elites?
-2. **Perturbation** (explore): How should copied configs be varied?
-3. **Population Statistics**: Convergence detection, best worker selection
+### Public functions
 
-### Why Separate Evolution Module?
-
-**Separation of Concerns**:
-- **Worker**: Manages individual state
-- **Evolution**: Provides algorithms (pure functions)
-- **Population**: Orchestrates the process
-
-This design makes algorithms reusable and testable independently of worker/population state management.
-
-### Mathematical Foundation
-
-From the DeepMind PBT paper:
-
-**Exploit (Truncation Selection)**:
-```
-For each worker wᵢ:
-    if performance(wᵢ) ∈ bottom α quantile:
-        wⱼ ~ Uniform(top α quantile)
-        wᵢ ← copy(wⱼ)
+```python
+truncation_selection(workers, exploit_quantile, require_ready=True) -> list[tuple[int, int]]
+execute_exploit_explore(workers, config, environment=None,
+                         require_ready=True, verbose=False) -> int
+get_elite_workers(workers, quantile=0.2) -> list[Worker]
+get_poor_workers(workers, quantile=0.2) -> list[Worker]
+get_best_worker(workers) -> Worker
+get_population_statistics(workers) -> dict
+check_convergence(workers, threshold) -> bool
 ```
 
-**Explore (Perturbation)**:
-```
-For each exploited worker wᵢ:
-    For each knob k:
-        wᵢ.knobs[k] ← wᵢ.knobs[k] × U(0.8, 1.2)
-```
+### Truncation selection
 
-Where:
-- α = `exploit_quantile` (typically 0.2-0.25, meaning bottom/top 20-25%)
-- U(a, b) = uniform random distribution
+Identifies which workers should exploit which elites:
 
-### Core Functions
+1. Filter to `is_ready()` workers if `require_ready=True`.
+2. Sort by `performance_score` descending.
+3. Slice top `α` quantile as elites, bottom `α` as poor.
+4. Pair each poor worker with a uniformly-sampled elite.
 
-#### `truncation_selection(workers, exploit_quantile, require_ready)`
+The elite pairing is uniform-random (not best-elite always) to prevent the population collapsing to a single point — different poor workers learn from different elites, preserving diversity.
 
-Identifies which workers should exploit which elites.
+### `execute_exploit_explore`
 
-**Algorithm**:
-1. Filter workers by readiness (if required)
-2. Sort by performance score (descending)
-3. Select top α% as elite, bottom α% as poor
-4. Randomly pair each poor worker with an elite
+The main entry point called once per generation by `Population.train_generation()`. Returns the count of workers that exploited.
 
-**Why random pairing?** 
-- Increases diversity (different poors copy different elites)
-- Prevents everyone converging to single best config
-- Matches original PBT paper design
-
-**Example with 8 workers, α=0.25**:
-```
-Sorted by score:
-[W5: 0.95, W2: 0.88, W1: 0.82, W7: 0.79, W3: 0.71, W4: 0.68, W0: 0.62, W6: 0.58]
-
-Elite (top 25%): [W5, W2]
-Poor (bottom 25%): [W0, W6]
-
-Random pairing:
-- W0 copies from W5
-- W6 copies from W2
-```
-
-#### `perturb_knob_config(config, knob_space, factors)`
-
-Perturbs numerical knobs in a configuration.
-
-**Algorithm**:
-1. For each knob in config:
-   - If numeric: multiply by random factor ∈ [0.8, 1.2]
-   - Clamp result to valid range (min/max)
-   - If non-numeric (bool/enum): leave unchanged
-
-**Why not perturb booleans/enums?** 
-- Booleans: Flipping randomly adds noise without direction
-- Enums: No natural notion of "nearby" values
-- Both can be explored through initial random sampling
-
-**Example**:
-```
-Original: shared_buffers = 8192 (pages)
-Factor: 1.15 (random)
-Perturbed: 8192 × 1.15 = 9420.8 → 9420
-Result: New config explores 15% higher shared_buffers
-```
-
-#### `execute_exploit_explore(workers, config)`
-
-High-level function orchestrating the entire exploit-explore step.
-
-**Algorithm**:
-```
+```text
 1. pairs = truncation_selection(workers, config.exploit_quantile)
-2. For each (poor_idx, elite_idx) in pairs:
-       workers[poor_idx].exploit_from(workers[elite_idx])
-       perturb_worker_config(workers[poor_idx], config.perturbation_factors)
-3. Return count of exploited workers
+2. for (poor_idx, elite_idx) in pairs:
+     workers[poor_idx].clone_from(workers[elite_idx], generation, environment)
+     workers[poor_idx].perturb(config.perturbation_factors)
+3. return len(pairs)
 ```
 
-This is the main entry point called by the Population class.
+### Convergence
 
-#### Supporting Functions
-
-**`get_best_worker(workers)`**: Returns worker with highest performance score
-
-**`get_population_statistics(workers)`**: Computes mean, std, best score across population
-
-**`check_convergence(workers, threshold)`**: Checks if standard deviation of scores < threshold (indicates population has converged)
+`check_convergence(workers, threshold)` returns `True` when the population's score standard deviation drops below `threshold`. This is one of three stopping signals (the others being max generations and early-stopping patience).
 
 ---
 
-## Component 3: Population
+## Population
 
 **Location**: [src/tuner/core/population.py](../src/tuner/core/population.py)
 
-### Purpose
+The orchestrator. Holds the worker pool, the evaluator, the environment factory, the barriers, and the policy/normalisation state.
 
-The Population class is the **orchestrator** of PBT. It manages the worker pool and coordinates the main training loop:
-
-1. Initialize workers with random configurations
-2. Evaluate all workers (parallel or sequential)
-3. Trigger exploit-explore when appropriate
-4. Track statistics and detect convergence
-5. Handle early stopping
-
-### Why a Population Class?
-
-PBT is fundamentally a **population-based algorithm**—we need to manage multiple workers collectively:
-- Parallel evaluation coordination
-- Cross-worker comparisons (who's elite? who's poor?)
-- Population-level statistics (mean, std, convergence)
-- Generation history tracking
-
-### Key Attributes
-
-```python
-class Population:
-    knob_space: KnobSpace                    # Defines valid configurations
-    config: PopulationConfig                 # Population parameters
-    workers: List[Worker]                    # The worker pool
-    generation: int = 0                      # Current generation
-    history: List[GenerationResult] = []     # Performance history
-    best_overall_score: float = 0.0          # Best score ever seen
-    generations_without_improvement: int = 0 # For early stopping
-```
-
-### Configuration
+### `PopulationConfig`
 
 ```python
 @dataclass
 class PopulationConfig:
-    population_size: int = 8                  # Number of workers
-    ready_interval: int = 3                   # Steps before exploit-eligible
-    exploit_quantile: float = 0.25            # Bottom/top 25%
-    perturbation_factors: tuple = (0.8, 1.2)  # ±20% perturbation
-    convergence_threshold: float = 0.05       # Std dev threshold
-    max_generations: int = 100                # Hard limit
-    early_stopping_patience: int = 10         # Gens without improvement
+    population_size: int = 8
+    ready_interval: int = 3
+    exploit_quantile: float = 0.25
+    perturbation_factors: tuple[float, float] = (0.8, 1.2)
+    convergence_threshold: float = 0.05
+    max_generations: int = 100
+    early_stopping_patience: int = 10
+    enable_snapshots: bool = True
+    snapshot_restore_interval: int = 10
+    num_parallel_workers: int = 1
+    worker_resources: Optional[WorkerResources] = None
+    # ... see source for full set
 ```
 
-### Core Methods
+The fields beyond the textbook PBT parameters:
 
-#### `initialize(initial_configs=None)`
+- **`enable_snapshots` / `snapshot_restore_interval`** — periodic baseline-snapshot restoration to prevent data drift. Implemented per environment backend.
+- **`num_parallel_workers`** — how many workers run concurrently on this host. The orchestrator uses this to slice `WorkerResources`.
+- **`worker_resources`** — per-worker resource slice (RAM, CPU cores, disk type). Detected at session start by [`detect_worker_resources()`](../src/utils/hardware_info.py).
 
-Creates the worker pool:
+### `GenerationResult`
 
 ```python
-def initialize(self, initial_configs=None):
-    if initial_configs:
-        # Use provided configs (e.g., resume from checkpoint)
-        for i, config in enumerate(initial_configs):
-            worker = Worker(i, self.knob_space, config, self.config.ready_interval)
-            self.workers.append(worker)
-    else:
-        # Random sampling from knob space
-        for i in range(self.config.population_size):
-            config = self.knob_space.sample()
-            worker = Worker(i, self.knob_space, config, self.config.ready_interval)
-            self.workers.append(worker)
+@dataclass
+class GenerationResult:
+    generation: int
+    best_score: float
+    mean_score: float
+    std_score: float
+    num_exploited: int
+    best_worker_id: int
+    best_config: Dict[str, Any]
+    converged: bool
+    # ... plus per-worker breakdowns and timing
 ```
 
-**Design choice**: Random initialization ensures diversity at start.
+### Public methods
 
-#### `evaluate_generation(evaluate_fn, parallel=True)`
+| Method | Purpose |
+| --- | --- |
+| `initialize(initial_configs=None)` | Create N workers. With LHS sampling by default; with explicit configs for warm-start. |
+| `setup_worker_instances()` | Create one PostgreSQL environment per worker (Docker container or bare-metal data dir). |
+| `setup_snapshots()` | Take the baseline snapshot used by `snapshot_restore_interval`. |
+| `evaluate_generation(orchestrator, parallel=True)` | Run all workers; the orchestrator drives the lockstep barriers internally. |
+| `train_generation(orchestrator, parallel=True)` | One full PBT generation: evaluate, exploit-explore, record, check convergence. |
+| `update_metric_ranges_if_needed()` | Triggered when the normaliser's drift detector fires; recomputes calibration anchors and rescores history for comparability. |
+| `rescue_dead_workers(...)` | Replace any worker whose environment has died with a freshly-resampled config and a fresh instance. |
+| `record_generation()` | Aggregate per-worker results into a `GenerationResult` and append to history. |
+| `should_stop()` | Combined check: max generations / early-stopping patience / convergence. |
+| `get_best_configuration()` | Return the best `(config, score)` ever observed. |
+| `get_population_summary()` | Final session summary used by the JSON writer in `main.py`. |
 
-Evaluates all workers using the provided evaluation function.
+### Score finalisation
 
-**The Evaluation Function Contract**:
-```python
-def evaluate_fn(worker: Worker) -> tuple[PerformanceMetrics, float]:
-    """
-    User-provided function that:
-    1. Applies worker's config to PostgreSQL
-    2. Runs workload (e.g., SYSBENCH)
-    3. Measures performance
-    4. Computes score
-    
-    Returns (metrics, score)
-    """
-    pass
-```
-
-**Parallel Execution**:
-```python
-with ThreadPoolExecutor(max_workers=max_workers) as executor:
-    future_to_worker = {executor.submit(evaluate_fn, w): w for w in self.workers}
-    
-    for future in as_completed(future_to_worker):
-        worker = future_to_worker[future]
-        metrics, score = future.result()
-        worker.update_metrics(metrics, score)
-```
-
-**Why ThreadPoolExecutor?** 
-- Workers can be evaluated independently (no shared state during evaluation)
-- Dramatically speeds up evaluation (8 workers evaluated simultaneously vs sequentially)
-- I/O-bound operations (database queries) benefit from threads
-
-**Sequential Mode**: Available for debugging or resource-limited scenarios.
-
-#### `exploit_and_explore(require_ready=True, verbose=False)`
-
-Triggers the exploit-explore step:
-
-```python
-def exploit_and_explore(self, require_ready=True, verbose=False):
-    num_exploited = execute_exploit_explore(
-        self.workers,
-        self.config,
-        require_ready=require_ready,
-        verbose=verbose
-    )
-    return num_exploited
-```
-
-**When is this called?** Typically after every generation evaluation, but only affects workers that are "ready."
-
-#### `train_generation(evaluate_fn, parallel=True)`
-
-**The main training loop method**—executes one complete PBT generation:
-
-```python
-def train_generation(self, evaluate_fn, parallel=True) -> GenerationResult:
-    self.evaluate_generation(evaluate_fn, parallel)
-    stats = get_population_statistics(self.workers)
-    num_exploited = self.exploit_and_explore()
-    converged = check_convergence(self.workers, self.config.convergence_threshold)
-    
-    if stats['best_score'] > self.best_overall_score:
-        self.best_overall_score = stats['best_score']
-        self.generations_without_improvement = 0
-    else:
-        self.generations_without_improvement += 1
-    
-    result = GenerationResult(
-        generation=self.generation,
-        best_score=stats['best_score'],
-        mean_score=stats['mean_score'],
-        std_score=stats['std_score'],
-        num_exploited=num_exploited,
-        best_worker_id=stats['best_worker_id'],
-        best_config=stats['best_config'],
-        converged=converged
-    )
-    self.history.append(result)
-    
-    self.generation += 1
-    return result
-```
-
-This encapsulates the entire PBT workflow for one generation.
-
-#### `should_stop()`
-
-Determines if training should terminate:
-
-```python
-def should_stop(self) -> bool:
-    if self.generation >= self.config.max_generations:
-        return True  # Hit generation limit
-    
-    if self.generations_without_improvement >= self.config.early_stopping_patience:
-        return True  # No improvement, early stop
-    
-    if self.history and self.history[-1].converged:
-        return True  # Population converged
-    
-    return False
-```
-
-**Three stopping conditions**:
-1. **Max generations**: Hard limit prevents infinite loops
-2. **Early stopping**: No improvement for N generations → likely stuck
-3. **Convergence**: Population variance too low → diversity exhausted
+`_finalize_scores()` runs once at session end and rescores every persisted `PerformanceMetrics` against the *final* normalisation anchors. This is what makes pre- and post-calibration generations comparable in the saved session JSON. The same rescoring helper is used by the post-hoc evaluation suite — see [src/utils/rescoring.py](../src/utils/rescoring.py).
 
 ---
 
-## How Components Interact
+## Lockstep generation flow
 
-### Initialization Phase
+Every generation goes through a strict lockstep sequence enforced by the [`GenerationBarrier`](../src/tuner/core/barriers.py). Each worker thread waits at every barrier point until **all** workers have arrived — guaranteeing measurement-window overlap.
 
-```
-User Creates Population
-         │
-         ▼
-Population.initialize()
-         │
-         ├─► Create Worker 0 (random config)
-         ├─► Create Worker 1 (random config)
-         ├─► ...
-         └─► Create Worker N (random config)
-```
+```text
+Generation N
 
-Each worker samples a random configuration from the KnobSpace.
-
-### Training Loop
-
-```
-┌─────────────────────────────────────────────────────────┐
-│              Population.train_generation()              │
-└─────────────────────────────────────────────────────────┘
-                           │
-    ┌──────────────────────┼──────────────────────┐
-    │                      │                      │
-    ▼                      ▼                      ▼
-┌─────────┐          ┌─────────┐            ┌─────────┐
-│Worker 0 │          │Worker 1 │    ...     │Worker N │
-└────┬────┘          └────┬────┘            └────┬────┘
-     │                    │                      │
-     └────────────────────┼──────────────────────┘
-                          │
-                 evaluate_fn(worker)
-                          │
-              ┌───────────┴───────────┐
-              │                       │
-              ▼                       ▼
-     Apply config to DB      Run workload (SYSBENCH)
-              │                       │
-              └───────────┬───────────┘
-                          │
-                          ▼
-            Collect metrics & compute score
-                          │
-                          ▼
-          worker.update_metrics(metrics, score)
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │     All workers evaluated?     │
-         └────────────────────────────────┘
-                          │
-                          ▼ Yes
-       ┌─────────────────────────────────────┐
-       │ Evolution.execute_exploit_explore() │
-       └─────────────────────────────────────┘
-                          │
-          ┌───────────────┴───────────────┐
-          │                               │
-          ▼                               ▼
-    Truncation Selection            For each poor worker:
-    (identify poor & elite)              │
-                                         ▼
-                                  exploit_from(elite)
-                                         │
-                                         ▼
-                                  perturb_config()
+  ┌─────────────────────────────────────────────────────────────┐
+  │              Population.evaluate_generation()               │
+  └────────────────────────────┬────────────────────────────────┘
+                               │ ThreadPoolExecutor(max_workers=N)
+                               ▼
+   for each worker, in its own thread:
+     orchestrator.evaluate_worker(worker)
+       ↓
+       B1  connect          ← all N workers wait here
+       B2  apply config
+       B3  restart (or skip)
+       B4  reconnect
+       B5  verify config
+       B6  pre-stats snapshot
+       B7  benchmark ready
+       B8  warmup
+       B9  measurement       ← every worker measures concurrently
+       B10 post-stats snapshot
+       B11 io delta
+       B12 system metrics
+       B13 memory pressure
+       B14 reliability gate
+       B15 vacuum analyze
+       B16 score
+       B17 disconnect
+                               │
+                               ▼
+                Population.exploit_and_explore()
+                Population.record_generation()
+                Population.update_metric_ranges_if_needed()
+                Population.rescue_dead_workers()
 ```
 
-### Exploit-Explore Details
+Two graceful-degradation paths handle stuck/crashed workers without deadlocking:
 
-```
-            Generation N: Workers evaluated
-                        │
-                        ▼
-┌──────────────────────────────────────────────────┐
-│  Sorted by performance:                          │
-│  Elite: [W3: 0.95, W1: 0.89]                     │
-│  Middle: [W5: 0.78, W2: 0.72, W4: 0.69, W7: 0.65]│
-│  Poor: [W0: 0.58, W6: 0.52]                      │
-└──────────────────────────────────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────────────────────────────┐
-│  Pairing (random from elite):                    │
-│  W0 → copies from W3                             │
-│  W6 → copies from W1                             │
-└──────────────────────────────────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────────────────────────────┐
-│  Exploitation:                                   │
-│  W0.knob_config = copy(W3.knob_config)           │
-│  W0.parent_id = 3                                │
-│  W0.step_count = 0 (reset)                       │
-│                                                  │
-│  W6.knob_config = copy(W1.knob_config)           │
-│  W6.parent_id = 1                                │
-│  W6.step_count = 0                               │
-└──────────────────────────────────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────────────────────────────┐
-│  Exploration (perturbation):                     │
-│  For each knob in W0.config:                     │
-│    new_value = old_value × random(0.8, 1.2)      │
-│  For each knob in W6.config:                     │
-│    new_value = old_value × random(0.8, 1.2)      │
-└──────────────────────────────────────────────────┘
-                        │
-                        ▼
-     Generation N+1: Evaluate with new configs
-```
+1. `barrier.drain_remaining(start_from)` — a worker that catches an exception releases its slots in all barriers it hasn't reached yet.
+2. `barrier.abort()` — when the population layer confirms a worker is dead, it instantly breaks every barrier (`BrokenBarrierError` on all waiters).
+
+There is **no per-barrier timeout** — legitimate workloads (e.g. 5-minute OLAP queries) need to wait indefinitely. The dead-worker case is the only thing barriers need to escape from, and `drain_remaining` / `abort` cover it.
+
+Full barrier table and rationale: [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md).
 
 ---
 
-## The PBT Algorithm Flow
+## Exploit-explore details
 
-Here's the complete end-to-end flow:
+```text
+After generation N evaluations:
 
-### Setup Phase
+  Sorted by score (descending):
+    Elite (top 25%):   [W3: 0.95, W1: 0.89]
+    Middle:            [W5: 0.78, W2: 0.72, W4: 0.69, W7: 0.65]
+    Poor  (bottom 25%):[W0: 0.58, W6: 0.52]
 
-```python
-knob_space = get_knob_space('minimal')  # or 'core', 'standard'
+  Truncation selection (uniform-random pairing):
+    W0 → exploit W3
+    W6 → exploit W1
 
-config = PopulationConfig(
-    population_size=8,
-    ready_interval=3,
-    max_generations=50,
-    exploit_quantile=0.25
-)
+  Exploit step (Worker.clone_from):
+    W0.knob_config = deepcopy(W3.knob_config)
+    W0.parent_id   = 3
+    W0.step_count  = 0
+    + physical data-directory clone via the environment backend
 
-population = Population(knob_space, config)
-population.initialize()
+  Explore step (Worker.perturb):
+    For each numeric knob k in W0.knob_config:
+      k *= U(0.8, 1.2), clamped to bounds
+    Memory budget repaired (KnobSpace.repair_config_dependencies)
+
+  Generation N+1: evaluate with the new configs
 ```
 
-### Training Loop
-
-```python
-def evaluate_worker(worker: Worker) -> tuple[PerformanceMetrics, float]:
-    # Apply configuration (see CONFIGURATION_MANAGEMENT.md)
-    applicator = KnobApplicator()
-    applicator.apply(worker.knob_config)
-    
-    # Run workload (see PERFORMANCE_EVALUATION.md)
-    evaluator = Evaluator(workload_config)
-    metrics = evaluator.run_workload()
-    
-    # Compute composite score
-    score = compute_score(metrics)
-    return metrics, score
-
-for generation in range(config.max_generations):
-    # Evaluate all workers, exploit & explore
-    result = population.train_generation(evaluate_worker, parallel=True)
-    
-    print(f"Gen {result.generation}: "
-          f"best={result.best_score:.4f}, "
-          f"mean={result.mean_score:.4f}, "
-          f"exploited={result.num_exploited}")
-    
-    if population.should_stop():
-        print(f"Stopping: {get_stop_reason()}")
-        break
-
-best_config, best_score = population.get_best_configuration()
-print(f"Best configuration (score={best_score:.4f}):")
-for knob, value in best_config.items():
-    print(f"  {knob}: {value}")
-```
-
-### Why This Works
-
-**Population diversity + Evolutionary pressure**:
-1. **Initial diversity**: Random sampling explores different regions
-2. **Exploitation**: Poor performers jump to successful regions
-3. **Exploration**: Perturbation maintains diversity around good solutions
-4. **Convergence**: Over time, population converges to high-performing regions
-
-**Efficiency gain**: Unlike grid search or random search, PBT doesn't waste time evaluating poor configurations—they're replaced by variations of good ones.
+Booleans and enums are perturbed differently — booleans flip with a configurable probability, enums probabilistically jump to a neighbour. Numeric knobs on a log scale are perturbed in log space. See [CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md#sampling-perturbation-and-dependency-repair).
 
 ---
 
-## Design Decisions
+## Dead-worker rescue and convergence
 
-### 1. Functional Composition Pattern
+### Dead-worker rescue
 
-**Decision**: Population delegates to evolution.py functions rather than implementing algorithms itself.
+`Population.rescue_dead_workers()` runs after every generation. It checks each worker's environment health (`environment.is_alive()`), and for any dead worker:
 
-**Why?**
-- **Separation of concerns**: Population manages state, Evolution provides algorithms
-- **Testability**: Can test truncation selection independently of Population
-- **Reusability**: Evolution functions can be used in other contexts
-- **Clarity**: Each module has a clear, focused responsibility
+1. tears down the broken instance,
+2. recreates a fresh PostgreSQL instance,
+3. resamples a configuration via `_choose_diverse_resample_config()` — which biases toward unexplored regions if the population has already converged on similar configs,
+4. resets the worker's `step_count` and lineage.
 
-### 2. Flexible Evaluation Function
+This avoids the failure mode where a single environment crash silently halves the population's effective diversity.
 
-**Decision**: `evaluate_fn` is a user-provided callback, not hardcoded.
+### Stopping conditions
 
-**Why?**
-- **Flexibility**: Works with any workload (SYSBENCH, TPC-H, custom)
-- **Testing**: Can use mock evaluations for unit tests
-- **Modularity**: Population doesn't need to know about databases or workloads
+`should_stop()` returns `True` if any of:
 
-**Trade-off**: User must implement evaluation logic, but gains complete control.
+- `generation >= max_generations`,
+- `generations_without_improvement >= early_stopping_patience`,
+- `check_convergence(workers, convergence_threshold)`.
 
-### 3. Ready Interval Mechanism
-
-**Decision**: Workers must complete `ready_interval` evaluations before participating in exploit/explore.
-
-**Why?**
-- **Prevents premature exploitation**: New configs need time to prove themselves
-- **Reduces noise**: Single bad evaluation doesn't trigger exploitation
-- **From PBT paper**: Original algorithm includes this for stability
-
-**Typical values**: 1 (aggressive), 3 (moderate), 5 (conservative)
-
-### 4. Parallel Evaluation
-
-**Decision**: ThreadPoolExecutor for concurrent worker evaluation.
-
-**Why?**
-- **Speed**: 8 workers evaluated simultaneously vs sequentially → 8× faster
-- **I/O-bound**: Database operations benefit from threads (vs CPU-bound → use processes)
-- **Independence**: Workers don't share state during evaluation
-
-**Trade-off**: Requires more database connections (one per worker).
-
-### 5. Multiple Stopping Conditions
-
-**Decision**: Three ways to stop training (max generations, early stopping, convergence).
-
-**Why?**
-- **Max generations**: Hard safety limit prevents infinite loops
-- **Early stopping**: Saves time when no progress is being made
-- **Convergence**: Recognizes when population has exhausted diversity
-
-**Implementation**: `should_stop()` checks all three conditions.
-
-### 6. History Tracking
-
-**Decision**: Maintain `List[GenerationResult]` for all generations.
-
-**Why?**
-- **Analysis**: Visualize evolution progress, identify trends
-- **Checkpointing**: Can resume from any generation
-- **Debugging**: Understand why/when exploit-explore happened
-- **Adaptive strategies**: Could adjust parameters based on history
-
-### 7. Worker Lineage Tracking
-
-**Decision**: Workers store `parent_id` and `generation_created`.
-
-**Why?**
-- **Genealogy analysis**: Which elite configs produced the best final results?
-- **Debugging**: Trace back how the best config evolved
-- **Research**: Understand evolutionary dynamics
-
-**Example**:
-```
-W0 (gen 0, random) → score: 0.58
-W0 (gen 5, copied W3) → score: 0.82  [parent_id=3]
-W0 (gen 12, copied W1) → score: 0.91 [parent_id=1]
-```
+All three are checked at the end of every generation.
 
 ---
 
-## Related Documentation
+## Design decisions
 
-### Detailed Component Documentation
+### 1. Functional Evolution module, not methods on Population
 
-- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)**: KnobSpace (search space definition) and KnobApplicator (applying configs to PostgreSQL)
-- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)**: Evaluator class, metrics collection, psutil integration for accurate resource monitoring
-- **[PostgreSQL Connection and Knobs](./POSTGRESQL_CONNECTION_AND_KNOBS.md)**: Database connection management and knob retrieval system
+Evolution is stateless — `truncation_selection`, `perturb`, `check_convergence` are pure functions. This means:
 
-### Prerequisites
+- they can be tested without standing up a Population,
+- the same logic is reused by analysis tooling and the BO baseline (which uses `get_best_worker` for incumbent extraction),
+- there's no temptation to silently mutate population state inside an "algorithm" call.
 
-- **[Environment Setup](./ENVIRONMENT_SETUP.md)**: Install dependencies (psutil, numpy, psycopg2) and configure database connection
+### 2. Lockstep barriers around the measurement window
 
-### System Architecture
+Without barriers, a worker that finished restarting early would measure under lower contention than a worker still restarting. The barriers force every measurement window to overlap, eliminating that bias. See [GENERATION_BARRIERS.md](./GENERATION_BARRIERS.md) for the full rationale and the abort/drain semantics.
 
-- **[Population Implementation Summary](./POPULATION_IMPLEMENTATION.md)**: Brief overview of Population class (this document provides more comprehensive explanation)
+### 3. Physical instance cloning during exploit
 
-### Next Steps
+A pure knob-value clone is cheap but produces a "cold" inheritor whose first generation's score reflects warmup, not knob quality. Cloning the data directory at exploit time is more expensive but gives the inheritor an honest starting point. The cost is bounded — exploit happens at most once per generation per poor worker.
 
-After understanding the core PBT components, you'll want to:
+### 4. Per-worker resource slicing
 
-1. **Understand evaluation**: Read [PERFORMANCE_EVALUATION.md](./PERFORMANCE_EVALUATION.md) to learn how workers are evaluated
-2. **Understand configuration**: Read [CONFIGURATION_MANAGEMENT.md](./CONFIGURATION_MANAGEMENT.md) to learn how configs are applied to PostgreSQL
-3. **Run end-to-end**: With all components understood, proceed to integration testing
+`WorkerResources` is computed once per session and passed into `KnobSpace.resolve_hardware_ranges()`. Every worker sees the *same* search space but bounded by *its* slice of host resources. This is what makes "8 parallel workers on one host" safe on memory.
 
----
+### 5. Score finalisation at session end
 
-## Example Output
+Adaptive normalisation means early-generation scores are anchored against narrower ranges than late-generation scores. Without finalisation, the saved session JSON would show artefactual generation-on-generation deltas. `_finalize_scores()` resolves this by rescoring every persisted metric against the final calibration anchors.
 
-Running PBT on a minimal knob space with 8 workers:
+### 6. Dead-worker rescue, not session abort
 
-```
-Initializing population of 8 workers...
-✓ 8 workers initialized with random configs
+A single instance crash should not kill an N-generation tuning session. `rescue_dead_workers()` swaps in a fresh instance + resampled config, logs the event, and continues. The session JSON records the rescue events so post-hoc analysis can see when they happened.
 
-Generation 0:
-  Evaluating 8 workers (parallel)...
-  ✓ All workers evaluated
-  Best: 0.8234 (Worker 3), Mean: 0.6892, Std: 0.0912
-  Exploit-explore: 2 workers exploited
+### 7. Three stopping signals
 
-Generation 1:
-  Evaluating 8 workers (parallel)...
-  ✓ All workers evaluated
-  Best: 0.8567 (Worker 3), Mean: 0.7234, Std: 0.0856
-  Exploit-explore: 2 workers exploited
-
-Generation 2:
-  Evaluating 8 workers (parallel)...
-  ✓ All workers evaluated
-  Best: 0.8891 (Worker 1), Mean: 0.7589, Std: 0.0798
-  Exploit-explore: 2 workers exploited
-
-...
-
-Generation 47:
-  Evaluating 8 workers (parallel)...
-  ✓ All workers evaluated
-  Best: 0.9512 (Worker 1), Mean: 0.9401, Std: 0.0034
-  Exploit-explore: 0 workers exploited (all converged)
-  ⚠ Convergence detected (std=0.0034 < threshold=0.05)
-
-Training complete!
-  Total generations: 48
-  Best score: 0.9512
-  Best worker: Worker 1
-
-Best configuration found:
-  shared_buffers: 131072 (pages, ~1GB)
-  effective_cache_size: 524288 (pages, ~4GB)
-  work_mem: 16384 (kB, ~16MB)
-  maintenance_work_mem: 262144 (kB, ~256MB)
-  random_page_cost: 1.1
-```
+Max generations is a hard ceiling. Early-stopping patience saves time on plateaued runs. Convergence catches diversity collapse. All three are required because each fires for a different reason.
 
 ---
 
-## Summary
+## Related documentation
 
-The three core PBT components work together to implement evolutionary optimization:
+- **[Generation Barriers](./GENERATION_BARRIERS.md)** — the B1–B17 lockstep mechanism in detail.
+- **[Performance Evaluation](./PERFORMANCE_EVALUATION.md)** — the `WorkloadOrchestrator` and the `PerformanceMetrics` contract.
+- **[Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)** — orchestrator internals, restart policy, executor selection.
+- **[Configuration Management](./CONFIGURATION_MANAGEMENT.md)** — `KnobSpace`, `KnobApplicator`, perturbation, repair.
+- **[Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md)** — `WorkerResources` and warm-start.
+- **[Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md)** — the scoring math and policies.
+- **[Environment Backends](./ENVIRONMENT_BACKENDS.md)** — Docker vs bare-metal, instance cloning, snapshot management.
 
-1. **Worker**: Individual population member with configuration state
-2. **Evolution**: Stateless algorithms for exploit (truncation selection) and explore (perturbation)
-3. **Population**: Orchestrator managing worker lifecycle, parallel evaluation, and convergence
+### File locations
 
-**Key Insight**: PBT's power comes from allowing configurations to **evolve during training** rather than evaluating them independently. Poor performers don't waste time—they copy from successful peers and explore variations.
-
-**File Locations**:
-- Worker: [src/tuner/core/worker.py](../src/tuner/core/worker.py)
-- Evolution: [src/tuner/core/evolution.py](../src/tuner/core/evolution.py)
-- Population: [src/tuner/core/population.py](../src/tuner/core/population.py)
-- Tests: [src/tuner/core/\_\_main\_\_.py](../src/tuner/core/__main__.py)
+- `Worker`: [src/tuner/core/worker.py](../src/tuner/core/worker.py)
+- `Population`, `PopulationConfig`, `GenerationResult`: [src/tuner/core/population.py](../src/tuner/core/population.py)
+- Evolution algorithms: [src/tuner/core/evolution.py](../src/tuner/core/evolution.py)
+- Generation barriers: [src/tuner/core/barriers.py](../src/tuner/core/barriers.py)
+- Tests: [tests/unit/core/](../tests/unit/core/)
