@@ -69,6 +69,8 @@ class BOConfig:
     batched_bo: bool = False
     pbt_worker_resources: Optional[Dict[str, Any]] = None
     resource_division: int = 1
+    worker_ram: Optional[str] = None
+    worker_cpus: Optional[int] = None
 
     # Scoring policy
     # Available options:
@@ -312,6 +314,8 @@ class BOConfig:
             if hasattr(args, "snapshot_restore_interval")
             and args.snapshot_restore_interval is not None
             else base_config.snapshot_restore_interval,
+            worker_ram=args.worker_ram if hasattr(args, "worker_ram") else None,
+            worker_cpus=args.worker_cpus if hasattr(args, "worker_cpus") else None,
         )
 
         if args.pbt_session:

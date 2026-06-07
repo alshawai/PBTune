@@ -101,6 +101,7 @@ from src.utils.hardware_info import (
     get_system_info,
     log_system_info,
     detect_worker_resources,
+    resolve_manual_worker_resources,
 )
 from src.utils.types import TuningMode
 
@@ -306,9 +307,6 @@ class PBTTuner:
 
         self.full_knob_space = self.knob_space
         if self.pbt_config.benchmark_config.tuning_mode == TuningMode.ONLINE:
-            LOGGER.info(
-                "Creating ONLINE knob view by filtering out `restart-required` knobs..."
-            )
             self.knob_space = self.knob_space.create_online_view()
 
         LOGGER.info(
@@ -317,10 +315,22 @@ class PBTTuner:
             self.pbt_config.num_parallel_workers,
             COLORS.reset,
         )
-        self.worker_resources = detect_worker_resources(
-            self.pbt_config.num_parallel_workers,
-            data_path=self.data_root,
-        )
+        
+        worker_ram_str = kwargs.get("worker_ram")
+        worker_cpus = kwargs.get("worker_cpus")
+
+        if worker_ram_str is not None or worker_cpus is not None:
+            self.worker_resources = resolve_manual_worker_resources(
+                worker_ram=worker_ram_str,
+                worker_cpus=worker_cpus,
+                num_workers=self.pbt_config.num_parallel_workers,
+                data_path=self.data_root,
+            )
+        else:
+            self.worker_resources = detect_worker_resources(
+                self.pbt_config.num_parallel_workers,
+                data_path=self.data_root,
+            )
 
         LOGGER.info(
             "Resolving hardware-relative knob ranges based on detected worker resources..."
@@ -1507,6 +1517,27 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     config_group.add_argument(
+        "--worker-ram",
+        type=str,
+        default=None,
+        help=(
+            "RAM to allocate per worker (e.g., '3G', '512M', '1073741824'). "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical RAM."
+        ),
+    )
+    config_group.add_argument(
+        "--worker-cpus",
+        type=int,
+        default=None,
+        help=(
+            "CPU cores to allocate per worker. "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical CPU cores."
+        ),
+    )
+
+    config_group.add_argument(
         "--tuning-mode",
         type=str,
         default=None,
@@ -1905,6 +1936,8 @@ def main():
             disable_early_stopping=args.disable_early_stopping,
             ablation_variable=args.ablation_variable,
             ablation_value=args.ablation_value,
+            worker_ram=args.worker_ram,
+            worker_cpus=args.worker_cpus,
         )
 
         tuner.run()
