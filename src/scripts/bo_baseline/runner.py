@@ -25,6 +25,7 @@ from src.utils.metrics import WorkloadType, create_metric_config
 from src.utils.hardware_info import (
     get_system_info,
     detect_worker_resources,
+    resolve_manual_worker_resources,
     WorkerResources,
 )
 from src.utils.logger import setup_logging, get_logger, log_section_header
@@ -73,7 +74,7 @@ class BOBaselineRunner:
         # Collect system info
         self.system_info = get_system_info(data_path=self.data_root)
 
-        # Resource equalization: use PBT-derived resources if available, else divide host resources
+        # Resource equalization: PBT-derived > manual CLI override > auto detection
         if config.pbt_worker_resources:
             self.worker_resources = WorkerResources(
                 ram_bytes=int(config.pbt_worker_resources.get("ram_bytes", 0)),
@@ -82,6 +83,18 @@ class BOBaselineRunner:
             )
             self.logger.info(
                 "Using PBT-derived per-worker resources: "
+                f"{self.worker_resources.cpu_cores} cores, "
+                f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM"
+            )
+        elif config.worker_ram is not None or config.worker_cpus is not None:
+            self.worker_resources = resolve_manual_worker_resources(
+                worker_ram=config.worker_ram,
+                worker_cpus=config.worker_cpus,
+                num_workers=config.resource_division,
+                data_path=self.data_root,
+            )
+            self.logger.info(
+                "Using manual per-worker resources: "
                 f"{self.worker_resources.cpu_cores} cores, "
                 f"{self.worker_resources.ram_bytes / (1024**3):.1f} GB RAM"
             )
@@ -820,6 +833,26 @@ def main():
         type=int,
         default=None,
         help="Divides host capacity by this number to determine instance resources. If a PBT session is provided, this automatically takes the PBT session's parallel worker count.",
+    )
+    parser.add_argument(
+        "--worker-ram",
+        type=str,
+        default=None,
+        help=(
+            "RAM to allocate per worker (e.g., '3G', '512M', '1073741824'). "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical RAM."
+        ),
+    )
+    parser.add_argument(
+        "--worker-cpus",
+        type=int,
+        default=None,
+        help=(
+            "CPU cores to allocate per worker. "
+            "When set, bypasses auto-detection. Total across all workers must "
+            "not exceed host physical CPU cores."
+        ),
     )
     parser.add_argument(
         "--scoring-policy",
