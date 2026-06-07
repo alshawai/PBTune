@@ -29,6 +29,7 @@ import requests
 from docker import errors as docker_errors
 
 from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
+from src.utils.hardware_info import WorkerResources
 from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.logger import get_logger, get_color_context
 from src.database.connection import get_connection
@@ -61,6 +62,7 @@ class DockerEnvironment(DatabaseEnvironment):
         schema_provider: BenchmarkExecutor,
         cpu_cores: float = 0.0,
         ram_bytes: int = 0,
+        worker_resources: Optional[WorkerResources] = None,
         image_name: str = "postgres:18",
         base_port: int = 5440,
         base_dir: Path = Path("./.instances"),
@@ -76,6 +78,7 @@ class DockerEnvironment(DatabaseEnvironment):
         )
         self.cpu_cores = cpu_cores
         self.ram_bytes = ram_bytes
+        self.worker_resources = worker_resources
         self.image_name = image_name
         self.base_port = base_port
         self.base_dir = base_dir
@@ -126,9 +129,57 @@ class DockerEnvironment(DatabaseEnvironment):
         """Resolve a worker's host port."""
         return self.base_port + worker_id
 
+    def _worker_cpuset_cpus(
+        self, worker_id: int, num_workers: int, concurrency: Optional[int] = None
+    ) -> Optional[str]:
+        """Assign each worker a deterministic, non-overlapping CPU slice.
+
+        With parallel execution, workers are grouped into batches. Within each batch,
+        workers get different CPU subsets. Across batches (sequential), workers reuse
+        the same CPU subsets.
+
+        Example with 8 workers, 4 parallel, 2 CPUs per worker:
+        - Batch 1 (workers 0-3 parallel): [0,1], [2,3], [4,5], [6,7]
+        - Batch 2 (workers 4-7 parallel): [0,1], [2,3], [4,5], [6,7] (reused)
+        """
+        del num_workers, concurrency  # Not needed; budget already encodes parallelism
+        worker_cpu_budget = self._worker_cpu_budget()
+        if worker_cpu_budget <= 0:
+            return None
+
+        host_cpu_count = os.cpu_count() or 1
+        # Determine position within parallel batch (cycles back to 0 for sequential batches)
+        within_batch_id = worker_id % self._num_parallel_workers
+        start_index = within_batch_id * worker_cpu_budget
+
+        # Clamp slice to available host CPUs
+        cpu_slice = [
+            cpu_id
+            for cpu_id in range(start_index, start_index + worker_cpu_budget)
+            if cpu_id < host_cpu_count
+        ]
+
+        if not cpu_slice:
+            return None
+
+        return ",".join(str(cpu_id) for cpu_id in cpu_slice)
+
+    def _worker_cpu_budget(self) -> int:
+        """Return the per-worker CPU budget used for cpuset sizing.
+
+        Prefer the concrete `WorkerResources` object when available because it is
+        the canonical per-worker resource allocation computed by hardware
+        detection. Fall back to the legacy `cpu_cores` value for compatibility
+        with tests and older call sites.
+        """
+        if self.worker_resources is not None:
+            return max(0, int(self.worker_resources.cpu_cores))
+        return max(0, int(self.cpu_cores))
+
     def _container_runtime_kwargs(
         self,
         worker_id: int,
+        num_workers: int,
         volumes: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Build runtime kwargs shared across worker container launches."""
@@ -142,6 +193,7 @@ class DockerEnvironment(DatabaseEnvironment):
             "ports": {"5432/tcp": self._worker_port(worker_id)},
             "mem_limit": self.ram_bytes if self.ram_bytes > 0 else None,
             "nano_cpus": int(self.cpu_cores * 1e9) if self.cpu_cores > 0 else None,
+            "cpuset_cpus": self._worker_cpuset_cpus(worker_id, num_workers),
             "network": self.network_name,
             "detach": True,
         }
@@ -293,13 +345,18 @@ class DockerEnvironment(DatabaseEnvironment):
         self,
         image_name: str,
         worker_id: int,
+        num_workers: int,
         action_label: str,
         volumes: Optional[Dict[str, Dict[str, str]]] = None,
         timeout: Optional[int] = None,
     ) -> tuple[bool, Optional[Exception]]:
         """Launch a worker container with shared timeout + recovery handling."""
         container_name = self._container_name(worker_id)
-        kwargs = self._container_runtime_kwargs(worker_id=worker_id, volumes=volumes)
+        kwargs = self._container_runtime_kwargs(
+            worker_id=worker_id,
+            num_workers=num_workers,
+            volumes=volumes,
+        )
 
         try:
             with self._with_timeout(timeout):
@@ -418,6 +475,7 @@ class DockerEnvironment(DatabaseEnvironment):
         launched, _ = self._launch_worker_container(
             image_name=self.image_name,
             worker_id=worker_id,
+            num_workers=1,
             action_label="creating clean-slate worker",
             volumes=volumes,
             timeout=self._restore_api_timeout,
@@ -464,11 +522,17 @@ class DockerEnvironment(DatabaseEnvironment):
             return False
 
     def setup_instances(
-        self, num_workers: int, force_recreate: bool = False
+        self,
+        num_workers: int,
+        force_recreate: bool = False,
+        num_parallel_workers: int = 1,
     ) -> List[InstanceConfig]:
         """Create and start the Docker containers for N workers."""
         if num_workers <= 0:
             raise ValueError("Must specify at least 1 worker")
+
+        # Store num_parallel_workers for CPU allocation within _worker_cpuset_cpus
+        self._num_parallel_workers = num_parallel_workers
 
         if self.force_recreate_baseline:
             self._remove_baseline_snapshot()
@@ -551,6 +615,7 @@ class DockerEnvironment(DatabaseEnvironment):
                 launched, launch_error = self._launch_worker_container(
                     image_name=self.image_name,
                     worker_id=worker_id,
+                    num_workers=num_workers,
                     action_label="creating worker container",
                     volumes=volumes,
                     timeout=self._ready_timeout,
@@ -875,7 +940,11 @@ class DockerEnvironment(DatabaseEnvironment):
             ``statement_timeout`` provides the safety net).
         """
         original = self.client.api.timeout
-        self.client.api.timeout = seconds
+        # The Docker SDK's APIClient may accept None to indicate "no timeout",
+        # but the type stubs declare an `int` timeout. Silence the type checker
+        # here while preserving runtime semantics by assigning the provided
+        # value directly.
+        self.client.api.timeout = seconds  # type: ignore[assignment]
         try:
             yield
         finally:
@@ -950,11 +1019,30 @@ class DockerEnvironment(DatabaseEnvironment):
     def _snapshot_profile_context(self) -> Dict[str, Any]:
         """Build a stable benchmark-profile payload used for snapshot identity."""
         provider = self.schema_provider
-        provider_name = f"{provider.__class__.__module__}.{provider.__class__.__name__}"
 
-        context: Dict[str, Any] = {
-            "provider": provider_name,
-        }
+        # Default provider identity is the full class path. Some benchmark
+        # executors (e.g., Sysbench) expose multiple workload *scripts* that
+        # only change the query mix but not the underlying physical dataset
+        # (tables, rows, indexes). In such cases we collapse the provider
+        # identity to a canonical family while preserving the dataset-defining
+        # parameters so snapshots can be reused across script variants.
+        provider_module = provider.__class__.__module__
+        provider_class = provider.__class__.__name__
+
+        if (
+            provider_module == "src.benchmarks.sysbench.executor"
+            and provider_class == "SysbenchExecutor"
+        ):
+            context: Dict[str, Any] = {
+                "provider": "sysbench",
+                "sysbench_tables": getattr(provider, "tables", None),
+                "sysbench_table_size": getattr(provider, "table_size", None),
+            }
+            return context
+
+        provider_name = f"{provider.__class__.__module__}.{provider.__class__.__name__}"
+        generic_context: Dict[str, Any] = {"provider": provider_name}
+
         for attribute in (
             "tables",
             "table_size",
@@ -966,9 +1054,9 @@ class DockerEnvironment(DatabaseEnvironment):
                 continue
             value = getattr(provider, attribute)
             if isinstance(value, (str, int, float, bool)) or value is None:
-                context[attribute] = value
+                generic_context[attribute] = value
 
-        return context
+        return generic_context
 
     def _snapshot_profile_signature(self) -> str:
         """Compute a compact signature for the current benchmark schema profile."""
@@ -1192,6 +1280,7 @@ class DockerEnvironment(DatabaseEnvironment):
             launched, _ = self._launch_worker_container(
                 image_name=self.image_name,
                 worker_id=worker_id,
+                num_workers=1,
                 action_label="creating snapshot-restored worker",
                 volumes=volumes,
                 timeout=self._restore_api_timeout,
@@ -1211,6 +1300,136 @@ class DockerEnvironment(DatabaseEnvironment):
             return True
         except (docker_errors.DockerException, RuntimeError) as e:
             LOGGER.error("Failed to restore snapshot to %s: %s", container_name, e)
+            return False
+
+    def clone_instances(
+        self, source_worker_id: int, target_worker_ids: List[int]
+    ) -> bool:
+        """Clone the physical database state from a source worker to multiple target workers."""
+        if not target_worker_ids:
+            return True
+
+        source_container_name = self._container_name(source_worker_id)
+        source_port = self._worker_port(source_worker_id)
+        source_pgdata = self._worker_host_pgdata_dir(source_worker_id)
+
+        try:
+            # 1. Checkpoint source to flush WAL (minimize recovery on targets)
+            self._checkpoint_instance(source_worker_id)
+
+            # 2. Stop source cleanly
+            source_container = self.client.containers.get(source_container_name)
+            source_container.reload()
+            if source_container.status == "running":
+                source_container.stop(timeout=45)
+
+            # 3. Stop and prepare targets
+            target_volumes = {}
+            for target_id in target_worker_ids:
+                # Stop and remove current target container
+                if not self._remove_worker_container(
+                    worker_id=target_id,
+                    purpose="instance clone",
+                    timeout=self._restore_api_timeout,
+                ):
+                    return False
+
+                target_pgdata = self._worker_host_pgdata_dir(target_id)
+                self._force_remove_host_dir(target_pgdata)
+                target_pgdata.mkdir(parents=True, exist_ok=True)
+                os.chmod(target_pgdata, 0o777)
+
+                target_volumes[self._docker_bind_path(target_pgdata)] = {
+                    "bind": f"/dest_{target_id}",
+                    "mode": "rw",
+                }
+
+            # 4. Copy data using a throwaway container
+            # Build the copy command for all targets
+            copy_commands = ["set -euo pipefail"]
+            for target_id in target_worker_ids:
+                copy_commands.append(f"cp -R /source/. /dest_{target_id}/")
+
+            volumes = {
+                self._docker_bind_path(source_pgdata): {
+                    "bind": "/source",
+                    "mode": "ro",
+                }
+            }
+            volumes.update(target_volumes)
+
+            with self._with_timeout(self._snapshot_timeout):
+                copy_container = self.client.containers.run(
+                    self.image_name,
+                    user="999:999",  # postgres user
+                    entrypoint=["bash", "-lc"],
+                    command=["; ".join(copy_commands)],
+                    volumes=volumes,
+                    detach=True,
+                )
+                result = copy_container.wait()
+                if result.get("StatusCode", 1) != 0:
+                    raise docker_errors.DockerException(
+                        f"Clone copy failed with exit code {result.get('StatusCode')}: "
+                        f"{copy_container.logs().decode('utf-8', errors='replace')}"
+                    )
+                copy_container.remove(force=True)
+
+            # 5. Start source container back up
+            source_container.start()
+            self._wait_for_ready(
+                source_container_name,
+                source_port,
+                timeout=self._ready_timeout,
+                context="clone-post-start",
+            )
+            if source_worker_id in self.instances:
+                self.instances[source_worker_id].running = True
+
+            # 6. Recreate and Start target containers
+            success = True
+            for target_id in target_worker_ids:
+                target_pgdata = self._worker_host_pgdata_dir(target_id)
+                target_container_name = self._container_name(target_id)
+                target_port = self._worker_port(target_id)
+
+                vols = {
+                    self._docker_bind_path(target_pgdata): {
+                        "bind": "/pgdata/data",
+                        "mode": "rw",
+                    }
+                }
+                launched, _ = self._launch_worker_container(
+                    image_name=self.image_name,
+                    worker_id=target_id,
+                    num_workers=1,
+                    action_label="creating cloned worker",
+                    volumes=vols,
+                    timeout=self._restore_api_timeout,
+                )
+                if not launched:
+                    success = False
+                    continue
+
+                try:
+                    self._wait_for_ready(
+                        target_container_name,
+                        target_port,
+                        timeout=self._restore_ready_timeout,
+                        context="clone-restore",
+                    )
+                    if target_id in self.instances:
+                        self.instances[target_id].running = True
+                except RuntimeError as e:
+                    LOGGER.error(
+                        "Failed to wait for cloned target %d: %s", target_id, e
+                    )
+                    success = False
+
+            return success
+
+        except (docker_errors.DockerException, RuntimeError) as e:
+            LOGGER.error("Failed to clone instances from %d: %s", source_worker_id, e)
             return False
 
     def get_db_config(self, worker_id: int) -> DatabaseConfig:

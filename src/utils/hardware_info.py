@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import subprocess
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 import math
@@ -276,6 +277,113 @@ def detect_worker_resources(
     return WorkerResources(
         ram_bytes=worker_ram, cpu_cores=worker_cpu, disk_type=disk_type
     )
+
+
+def parse_ram_value(value: str) -> int:
+    """Parse a human-readable RAM string into bytes."""
+    value = str(value).strip().upper()
+    match = re.match(r"^(\d+)\s*([KMGTPE]?)[B]?$", value)
+    if not match:
+        raise ValueError(f"Invalid RAM value format: {value}")
+    
+    number = int(match.group(1))
+    suffix = match.group(2)
+    
+    multipliers = {
+        "": 1,
+        "K": 1024,
+        "M": 1024**2,
+        "G": 1024**3,
+        "T": 1024**4,
+        "P": 1024**5,
+        "E": 1024**6,
+    }
+    return number * multipliers[suffix]
+
+
+def resolve_manual_worker_resources(
+    worker_ram: Optional[str] = None,
+    worker_cpus: Optional[int] = None,
+    num_workers: int = 1,
+    data_path: Optional[Path] = None,
+) -> WorkerResources:
+    """
+    Resolve manual worker resources and validate against host limits.
+    
+    Allows up to 95% of host capacity. Warns if > 80% is used.
+    Falls back entirely to auto-detection if > 95% is requested.
+    """
+    if data_path is not None:
+        disk_type = detect_disk_type_for_path(data_path)
+    else:
+        disk_type = detect_disk_type()
+
+    mem = psutil.virtual_memory()
+    total_ram = mem.total
+
+    try:
+        total_cpus = len(psutil.Process().cpu_affinity())
+    except (AttributeError, NotImplementedError):
+        total_cpus = psutil.cpu_count(logical=True) or 1
+
+    # Fallback auto-detection values
+    usable_ram = int(total_ram * 0.8)
+    usable_cpu = total_cpus * 0.8
+    auto_ram = max(100 * 1024 * 1024, int(usable_ram / num_workers))
+    auto_cpu = max(1, math.floor(usable_cpu / num_workers))
+
+    resolved_ram = auto_ram
+    if worker_ram is not None:
+        resolved_ram = parse_ram_value(worker_ram)
+
+    resolved_cpu = auto_cpu
+    if worker_cpus is not None:
+        resolved_cpu = int(worker_cpus)
+
+    total_req_ram = resolved_ram * num_workers
+    total_req_cpu = resolved_cpu * num_workers
+
+    # Validation logic (95% cap)
+    ram_exceeded = total_req_ram > (total_ram * 0.95)
+    cpu_exceeded = total_req_cpu > (total_cpus * 0.95)
+
+    if ram_exceeded or cpu_exceeded:
+        LOGGER.warning(
+            "Manual resource allocation (%d workers \u00d7 %s bytes RAM, %d CPUs) "
+            "exceeds 95%% of host physical capacity (RAM: %s bytes, CPU: %d). "
+            "Falling back to auto-detected resources.",
+            num_workers,
+            resolved_ram,
+            resolved_cpu,
+            total_ram,
+            total_cpus,
+        )
+        LOGGER.debug(
+            "➤ Worker resources allocated (fallback): RAM=%s bytes, CPU=%s cores, Disk=%s",
+            auto_ram,
+            auto_cpu,
+            disk_type,
+        )
+        return WorkerResources(ram_bytes=auto_ram, cpu_cores=auto_cpu, disk_type=disk_type)
+
+    # Warning logic (> 80% and <= 95%)
+    ram_warn = total_req_ram > (total_ram * 0.80)
+    cpu_warn = total_req_cpu > (total_cpus * 0.80)
+
+    if ram_warn or cpu_warn:
+        LOGGER.warning(
+            "Manual resource allocation uses more than 80%% of host capacity. "
+            "This may bottleneck the host machine and tuning processes. "
+            "Proceeding with requested allocation."
+        )
+        
+    LOGGER.info(
+        "Using manual worker resources: RAM=%s bytes, CPU=%s cores, Disk=%s",
+        resolved_ram,
+        resolved_cpu,
+        disk_type,
+    )
+    return WorkerResources(ram_bytes=resolved_ram, cpu_cores=resolved_cpu, disk_type=disk_type)
 
 
 def _detect_disk_type_linux(device_path: Optional[str] = None) -> str:

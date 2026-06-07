@@ -7,6 +7,7 @@ from src.analysis.tier_generator import (
     generate_tiers,
     get_tier_names,
     get_tier_rank_map,
+    export_data_driven_tiers,
 )
 from src.knobs.knob_metadata import TuningMetadata
 
@@ -140,3 +141,42 @@ def test_compare_tier_results_detects_shift(tmp_path):
     # Assert
     assert report["n_shifted_knobs"] == 1
     assert report["shifted_knobs"][0]["knob"] == "knob_a"
+
+
+def test_export_data_driven_tiers(tmp_path):
+    # Arrange
+    importances = {
+        "shared_buffers": 0.9,
+        "work_mem": 0.5,
+        "max_connections": 0.1,
+        "maintenance_work_mem": 0.01,
+    }
+    output_file = tmp_path / "data_driven_tiers.json"
+
+    # Act
+    result = export_data_driven_tiers(
+        marginal_importances=importances,
+        workload_label="oltp_read_write",
+        output_path=output_file,
+        source_results="results/pbt_results_1",
+    )
+
+    # Assert
+    assert result.optimal_k in (2, 3, 4)
+    assert output_file.exists()
+    with open(output_file, "r") as f:
+        data = json.load(f)
+
+    assert "metadata" in data
+    assert data["metadata"]["workload_type"] == "oltp_read_write"
+    assert data["metadata"]["source_results"] == "results/pbt_results_1"
+    assert data["metadata"]["optimal_k"] == result.optimal_k
+
+    assert "tiers" in data
+    tiers = data["tiers"]
+    assert set(tiers.keys()) == {"minimal", "core", "standard", "extensive"}
+    assert tiers["extensive"] is None
+    # Verify that the sorted lists of knobs are populated
+    assert isinstance(tiers["minimal"], list)
+    assert isinstance(tiers["core"], list)
+    assert isinstance(tiers["standard"], list)

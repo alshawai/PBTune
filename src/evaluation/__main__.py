@@ -292,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log_level = "DEBUG" if args.v else args.verbose
     setup_logging(verbosity=log_level)
-    logger = get_logger("ComparisonRunner")
+    logger = get_logger("Evaluator")
 
     if args.repetitions < 2:
         parser.error(

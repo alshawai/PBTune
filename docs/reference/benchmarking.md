@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-03-13
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](../README.md)
 
 The Population-Based Training (PBT) Auto-Tuning framework employs a unique **Dual-Evaluation Benchmarking Strategy** designed to support both rigorous academic peer-review and flexible real-world application tuning.
 
@@ -147,7 +147,7 @@ The tuner connects to your `DB_HOST`, uses `pg_basebackup` to pull a binary snap
 
 ## Note on PBT Relative Scoring
 
-When configuring the population-based training, the internal PBT algorithm does not cross-compare raw benchmark numbers across these two methods. It records benchmark metrics, then converts them through the shared scoring-v2 pipeline documented in [Feature-Driven Scoring](./FEATURE_DRIVEN_SCORING.md).
+When configuring the population-based training, the internal PBT algorithm does not cross-compare raw benchmark numbers across these two methods. It records benchmark metrics, then converts them through the shared scoring-v2 pipeline documented in [Feature-Driven Scoring](../architecture/feature-driven-scoring.md).
 
 The practical implication is that the benchmark driver can differ, but the scorer remains the same. That keeps Sysbench, TPC-H, and template workloads comparable within a single policy version while preserving compatibility with historical `fixed_v1` sessions.
 

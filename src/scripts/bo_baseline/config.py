@@ -31,6 +31,7 @@ class BOConfig:
 
     # Knob Space
     knob_tier: str = "core"  # minimal, core, standard, extensive
+    knob_source: str = "expert"  # expert, data_driven
 
     # Benchmark/workload configuration
     benchmark_config: BenchmarkConfig = field(
@@ -60,13 +61,15 @@ class BOConfig:
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
     # Snapshot configuration
-    enable_snapshots: bool = False
+    enable_snapshots: bool = True
     snapshot_restore_interval: int = 1
 
     # Worker configuration (strictly sequential — single worker)
     max_workers: int = 1
     pbt_worker_resources: Optional[Dict[str, Any]] = None
     resource_division: int = 1
+    worker_ram: Optional[str] = None
+    worker_cpus: Optional[int] = None
 
     # Scoring policy
     # Available options:
@@ -114,6 +117,7 @@ class BOConfig:
 
         self.pbt_session_path = path
         self.knob_tier = str(session.get("knob_tier", self.knob_tier))
+        self.knob_source = str(session.get("knob_source", self.knob_source))
         benchmark = str(session.get("benchmark_name", self.benchmark_config.benchmark))
         workload_type = str(
             session.get("workload_type", self.benchmark_config.workload_type)
@@ -313,6 +317,7 @@ class BOConfig:
             else base_config.n_iterations,
             random_seed=args.seed if args.seed is not None else base_config.random_seed,
             knob_tier=args.tier or base_config.knob_tier,
+            knob_source=args.knob_source or base_config.knob_source,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
             docker_image=args.docker_image,
@@ -347,6 +352,8 @@ class BOConfig:
             else base_config.snapshot_restore_interval,
             early_stopping_enabled=early_stopping_enabled,
             early_stopping_patience=early_stopping_patience,
+            worker_ram=args.worker_ram if hasattr(args, "worker_ram") else None,
+            worker_cpus=args.worker_cpus if hasattr(args, "worker_cpus") else None,
         )
 
         if args.pbt_session:
@@ -365,6 +372,10 @@ class BOConfig:
 
         config.max_workers = 1  # Always sequential
 
+        # Explicit CLI overrides session / defaults
+        if getattr(args, "knob_source", None) is not None:
+            config.knob_source = args.knob_source
+
         return config
 
 
@@ -375,7 +386,7 @@ RAPID_BO_CONFIG = BOConfig(
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
 )
 STANDARD_BO_CONFIG = BOConfig(
-    n_iterations=120,
+    n_iterations=80,
     range_update_interval=10,
     early_stopping_patience=20,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),

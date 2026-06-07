@@ -118,12 +118,6 @@ class PBTConfig:
         advances until all workers have completed the current step.
         This ensures fair resource sharing during measurement.
         Default: True
-
-    barrier_timeout_seconds : float
-        Maximum seconds each barrier will wait for all workers to arrive
-        before raising BrokenBarrierError and degrading gracefully.
-        Should accommodate Docker worst-case restart latency (~70 s).
-        Default: 120.0
     """
 
     population_size: int = 4
@@ -146,7 +140,6 @@ class PBTConfig:
     metric_reference_version: Optional[str] = None
     scoring_calibration_evals: int = 5
     synchronize_workers: bool = True
-    barrier_timeout_seconds: float = 120.0
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -191,9 +184,6 @@ class PBTConfig:
         if self.scoring_calibration_evals < 1:
             raise ValueError("scoring_calibration_evals must be at least 1")
 
-        if self.barrier_timeout_seconds <= 0:
-            raise ValueError("barrier_timeout_seconds must be positive")
-
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -230,7 +220,6 @@ class PBTConfig:
             "metric_reference_version": self.metric_reference_version,
             "scoring_calibration_evals": self.scoring_calibration_evals,
             "synchronize_workers": self.synchronize_workers,
-            "barrier_timeout_seconds": self.barrier_timeout_seconds,
         }
 
     def __repr__(self) -> str:
@@ -253,28 +242,25 @@ class PBTConfig:
             f"  scoring_policy_version={self.scoring_policy_version},\n"
             f"  metric_reference_version={self.metric_reference_version},\n"
             f"  scoring_calibration_evals={self.scoring_calibration_evals},\n"
-            f"  synchronize_workers={self.synchronize_workers},\n"
-            f"  barrier_timeout_seconds={self.barrier_timeout_seconds}\n"
+            f"  synchronize_workers={self.synchronize_workers}\n"
             f")"
         )
 
 
-# Strategy: Short evaluations, few warmup, quick iterations
 RAPID_CONFIG = PBTConfig(
-    population_size=4,
-    num_generations=10,
+    population_size=2,
+    num_generations=5,
     exploit_quantile=0.25,
     ready_interval=1,
-    num_parallel_workers=4,
+    num_parallel_workers=2,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
     snapshot_restore_interval=10,  # Infrequent snapshotting for speed
     verbose=True,
 )
 
-# Strategy: Moderate evaluations, balanced accuracy vs speed
 STANDARD_CONFIG = PBTConfig(
     population_size=4,
-    num_generations=30,
+    num_generations=20,
     exploit_quantile=0.2,
     ready_interval=2,
     num_parallel_workers=4,
@@ -283,7 +269,6 @@ STANDARD_CONFIG = PBTConfig(
     verbose=True,
 )
 
-# Strategy: Longer evaluations for accuracy, more exploration
 THOROUGH_CONFIG = PBTConfig(
     population_size=8,
     num_generations=50,
@@ -295,20 +280,17 @@ THOROUGH_CONFIG = PBTConfig(
     verbose=True,
 )
 
-# Strategy: Production-grade measurements, extensive exploration
 RESEARCH_CONFIG = PBTConfig(
-    population_size=16,
+    population_size=12,
     num_generations=100,
     exploit_quantile=0.2,
-    ready_interval=5,
-    num_parallel_workers=16,
+    ready_interval=4,
+    num_parallel_workers=12,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
-    enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True,
 )
 
-# Strategy: Heavy-duty benchmark requirements (>10GB analytical scaling)
 EXTREME_CONFIG = PBTConfig(
     population_size=16,
     num_generations=200,
@@ -316,7 +298,6 @@ EXTREME_CONFIG = PBTConfig(
     ready_interval=10,
     num_parallel_workers=16,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
-    enable_snapshots=True,
     snapshot_restore_interval=1,
     verbose=True,
 )

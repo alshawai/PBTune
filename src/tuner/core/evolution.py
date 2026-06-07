@@ -191,7 +191,7 @@ def execute_exploit_explore(
     require_ready: bool = True,
     dead_config_threshold: float = 6.0,
     exclude_knobs: Optional[List[str]] = None,
-) -> int:
+) -> List[Tuple[int, int]]:
     """
     Execute complete exploit-explore cycle for the population.
 
@@ -225,8 +225,8 @@ def execute_exploit_explore(
 
     Returns
     -------
-    int
-        Number of workers that were exploited
+    List[Tuple[int, int]]
+        List of (poor_worker_idx, elite_worker_idx) pairs that were exploited
 
     Notes
     -----
@@ -243,14 +243,13 @@ def execute_exploit_explore(
     Examples
     --------
     >>> # Typical usage in Population.exploit_and_explore()
-    >>> num_exploited = execute_exploit_explore(
+    >>> pairs_exploited = execute_exploit_explore(
     ...     workers=self.workers,
     ...     exploit_quantile=self.config.exploit_quantile,
     ...     perturbation_factors=self.config.perturbation_factors,
     ...     current_generation=self.current_generation,
-    ...     verbose=self.config.verbose
     ... )
-    >>> print(f"Exploited {num_exploited} workers")
+    >>> print(f"Exploited {len(pairs_exploited)} workers")
     """
     pairs = truncation_selection(
         workers=workers,
@@ -261,7 +260,7 @@ def execute_exploit_explore(
 
     if not pairs:
         LOGGER.debug(" ➤ No workers exploited (not enough ready workers)")
-        return 0
+        return []
 
     for poor_idx, elite_idx in pairs:
         poor_worker = workers[poor_idx]
@@ -293,7 +292,7 @@ def execute_exploit_explore(
         COLORS.reset,
     )
 
-    return len(pairs)
+    return pairs
 
 
 def get_elite_workers(workers: List[Worker], quantile: float = 0.2) -> List[Worker]:

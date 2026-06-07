@@ -100,9 +100,11 @@ data/raw/
 data/processed/
 *.csv
 *.parquet
-!data/tuner_knobs/
-!data/tuner_knobs/*.csv
+!data/expert_defined_knobs/
+!data/expert_defined_knobs/*.csv
 
+# Ignore data-driven generated knobs but we will force-push a sample
+data/data_driven_knobs/
 # IDE and editor files
 *.swp
 *.swo
@@ -127,6 +129,9 @@ results/**/multi_arm_comparison_*
 results/oltp/comparisons/
 results/**/fanova_importance.json
 results/**/bo_runs/**/smac_output/
+
+# Ignore analysis outputs but we will force-push a sample
+results/analysis/
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
