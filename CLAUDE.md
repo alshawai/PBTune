@@ -182,7 +182,7 @@ python -m src.tuner.main --tier core --config standard --verbose DEBUG
 - `src/tuner/evaluator/evaluator.py` - Performance measurement
 - `src/tuner/config/knob_space.py` - Knob space management
 - `src/utils/environments/factory.py` - Environment backend selection and lifecycle
-- `docs/FEATURE_DRIVEN_SCORING.md` - Canonical reference for the scoring-v2 architecture and migration path
+- `docs/architecture/feature-driven-scoring.md` - Canonical reference for the scoring-v2 architecture and migration path
 
 ## Research Context
 

@@ -1,6 +1,6 @@
 # Population-Based Training for PostgreSQL Configuration Tuning
 
-> Last reviewed: 2026-04-17
+> Last reviewed: 2026-06-07
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-316192.svg)](https://www.postgresql.org/) [![License: Academic Research](https://img.shields.io/badge/License-Academic%20Research-red.svg)](#license)
 
@@ -86,9 +86,9 @@ Our implementation extends vanilla PBT with database-specific adaptations:
 - **Feature-Driven Scoring**: Workload features drive composite metric weighting through scoring-v2, with `fixed_v1` retained for compatibility
 - **Intelligent Restarts**: CDBTune-inspired batched restarts (every 10 generations) balance configuration changes vs. overhead
 
-See [`docs/FEATURE_DRIVEN_SCORING.md`](./docs/FEATURE_DRIVEN_SCORING.md) for the scoring model, policy metadata, and migration notes.
+See [`docs/architecture/feature-driven-scoring.md`](./docs/architecture/feature-driven-scoring.md) for the scoring model, policy metadata, and migration notes.
 
-See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed algorithm description.
+See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for detailed algorithm description.
 
 ---
 
@@ -133,44 +133,59 @@ See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for detailed 
 
 ### Core Components
 
-| Component            | Purpose                                              | Location                                                                     |
-| -------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------- |
-| **Population**       | Manages worker pool, orchestrates PBT algorithm      | [`src/tuner/core/population.py`](src/tuner/core/population.py)               |
-| **Worker**           | Individual configuration + performance state         | [`src/tuner/core/worker.py`](src/tuner/core/worker.py)                       |
-| **Evolution**        | Exploit-explore algorithms (selection, perturbation) | [`src/tuner/core/evolution.py`](src/tuner/core/evolution.py)                 |
-| **Evaluator**        | Workload execution, metric collection                | [`src/tuner/evaluator/evaluator.py`](src/tuner/evaluator/evaluator.py)       |
-| **Environment Layer** | Multi-instance PostgreSQL orchestration              | [`src/utils/environments/`](src/utils/environments/) |
-| **Knob Space**       | Search space definition, sampling, perturbation      | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py)           |
+| Component                 | Purpose                                                                  | Location                                                                     |
+| ------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| **Population**            | Manages worker pool, orchestrates PBT algorithm                          | [`src/tuner/core/population.py`](src/tuner/core/population.py)               |
+| **Worker**                | Individual configuration + performance state                             | [`src/tuner/core/worker.py`](src/tuner/core/worker.py)                       |
+| **Evolution**             | Exploit-explore algorithms (selection, perturbation)                     | [`src/tuner/core/evolution.py`](src/tuner/core/evolution.py)                 |
+| **Generation Barriers**   | Lockstep B1–B17 synchronisation for measurement fairness                 | [`src/tuner/core/barriers.py`](src/tuner/core/barriers.py)                   |
+| **Workload Orchestrator** | Per-worker evaluation: apply config, run benchmark, collect metrics      | [`src/tuner/benchmark/orchestrator.py`](src/tuner/benchmark/orchestrator.py) |
+| **Environment Backends**  | Multi-instance PostgreSQL (Docker / bare-metal), CPU subsets, snapshots  | [`src/utils/environments/`](src/utils/environments/)                         |
+| **Knob Space**            | Search space definition, sampling, perturbation, hardware-aware ranges   | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py)           |
+| **Scoring (v2)**          | Feature-driven composite score with reliability gate                     | [`src/utils/scoring/`](src/utils/scoring/)                                   |
 
-See [`docs/PBT_CORE_COMPONENTS.md`](./docs/PBT_CORE_COMPONENTS.md) for component interaction details.
+See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for component interaction details.
 
 ---
 
 ## Repository Structure
 
-```
+```text
 .
 ├── src/                          # Source code
-│   ├── tuner/                    # PBT tuning system
-│   │   ├── core/                 # PBT algorithm (population, worker, evolution)
-│   │   ├── config/               # Configuration management (knob space, sampling)
-│   │   ├── evaluator/            # Performance evaluation (metrics, workloads)
-│   │   └── main.py               # Entry point
-│   ├── utils/                    # Shared utilities (environments, logging, metrics, restart)
-│   ├── database/                 # Database connection & management
-│   ├── config/                   # Global configuration (database settings)
-│   ├── knobs/                    # Knob metadata retrieval from PostgreSQL
-│   └── scripts/                  # Utility scripts (setup, cleanup, analysis)
-├── docs/                         # Documentation
-│   ├── PBT_CORE_COMPONENTS.md    # Worker, Evolution, Population details
-│   ├── PERFORMANCE_EVALUATION.md # Metrics, scoring, workload types
-│   ├── ENVIRONMENT_SETUP.md      # Installation and configuration guide
-│   ├── POSTGRESQL_CONNECTION_AND_KNOBS.md  # Database connection, knob retrieval
-│   └── CONFIGURATION_MANAGEMENT.md         # KnobSpace, KnobApplicator
-├── data/                         # JSON Knob metadata/policy files (and gitignored CSV exports)
-│   ├── postgresql_knobs.csv      # PostgreSQL knob definitions
-│   └── expert_defined_knobs/     # Tiered expert knob selections (minimal, core, standard)
+│   ├── tuner/                    # PBT tuning engine
+│   │   ├── core/                 # population, worker, evolution, barriers
+│   │   ├── config/               # KnobSpace + tier loading
+│   │   ├── benchmark/            # WorkloadOrchestrator + restart policy + workload loader
+│   │   └── main.py               # CLI entry point
+│   ├── utils/                    # Shared utilities
+│   │   ├── environments/         # Docker / bare-metal PostgreSQL backends
+│   │   ├── scoring/              # Feature-driven scoring v2
+│   │   ├── logger/               # Colored logging + HTML output + context
+│   │   ├── applicator.py         # KnobApplicator
+│   │   ├── metrics.py            # PerformanceMetrics
+│   │   ├── metric_instrumentation.py
+│   │   ├── hardware_info.py      # WorkerResources detection
+│   │   ├── rescoring.py          # Post-hoc global score recalibration
+│   │   └── types.py
+│   ├── benchmarks/               # External benchmark executors (sysbench, tpch)
+│   ├── database/                 # psycopg2 / SQLAlchemy connections + lifecycle
+│   ├── config/                   # Env-derived database credentials + data-root resolution
+│   ├── knobs/                    # pg_settings retrieval + tuning metadata + policy filter
+│   ├── analysis/                 # fANOVA + TreeSHAP + tier generation
+│   ├── evaluation/               # Post-hoc default-vs-tuned comparison suite
+│   ├── visualization/            # Plot loaders + registry + theme + CLI
+│   └── scripts/                  # Setup, cleanup, BO baseline, comparisons
+├── docs/                         # Documentation (see docs/README.md for the index)
+├── data/                         # Knob metadata, policy, tier CSVs
+│   ├── knob_metadata.json
+│   ├── knob_policy.json
+│   ├── expert_defined_knobs/     # minimal | core | standard | extensive CSVs
+│   └── data_driven_knobs/        # workload-specific tiers from analysis pipeline
 ├── results/                      # Optimization results (JSON + HTML logs)
+│   ├── oltp/{workload}/{pbt_runs,bo_runs,comparisons,baselines}/
+│   ├── olap/{pbt_runs,bo_runs,comparisons,baselines}/
+│   └── analysis/{workload}/
 ├── workloads/                    # Workload definitions (OLTP, OLAP, custom)
 ├── notebooks/                    # Jupyter notebooks for analysis
 ├── tests/                        # Unit test suite
@@ -240,7 +255,7 @@ DB_PORT=5432
 DB_NAME=test_dataset
 ```
 
-See [`docs/ENVIRONMENT_SETUP.md`](./docs/ENVIRONMENT_SETUP.md) for detailed setup instructions.
+See [`docs/getting-started/setup.md`](./docs/getting-started/setup.md) for detailed setup instructions.
 
 ### Step 4: Initialize Database Schema
 
@@ -336,6 +351,17 @@ export DB_NAME=myapp
 python -m src.tuner.main --workload-file workloads/my_real_queries.json
 ```
 
+### Example 6: Manual Worker Resource Allocation
+
+Override automatic hardware detection to manually allocate RAM and CPU cores for each parallel worker (up to 95% of host capacity):
+
+```bash
+python -m src.tuner.main \
+  --worker-ram 4G \
+  --worker-cpus 2 \
+  --parallel-workers 3
+```
+
 ### View Results
 
 Open the HTML log in your browser for color-coded output:
@@ -368,7 +394,7 @@ python -m src.tuner.main --help
 | `--workload`    | `oltp`, `olap`, `mixed`                    | `oltp`     | Workload type                          |
 | `--duration`    | seconds                                    | 30         | Evaluation duration per worker         |
 | `--sysbench-workload` | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | `oltp_read_write` | Sysbench OLTP mode when `--benchmark sysbench` |
-| `--scoring-policy` | `fixed_v1`, `feature_driven_v2`          | `fixed_v1` | Scoring policy for metric weighting    |
+| `--scoring-policy` | `fixed_v1`, `feature_driven_v2`          | `feature_driven_v2` | Scoring policy (default for new runs)  |
 | `--scoring-policy-version` | version string                    | `1.0`      | Scoring policy version                 |
 | `--scoring-calibration-evals` | integer                         | 50         | Number of evals for normalization calibration |
 | `--verbose`     | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG`      | `NORMAL`   | Logging level                          |
@@ -409,8 +435,9 @@ python -m src.evaluation \
 ```
 
 Available policies:
-- `fixed_v1` — legacy static weights (default)
-- `feature_driven_v2` — dynamic workload-feature-conditioned weights
+
+- `fixed_v1` — legacy static weights (compatibility only; loaded automatically for historical sessions)
+- `feature_driven_v2` — dynamic workload-feature-conditioned weights (**default for new runs**)
 
 ### Dual-Evaluation Strategy
 
@@ -419,7 +446,7 @@ This framework intentionally supports a two-pronged benchmarking methodology:
 - **Academic Baselines**: For scientifically rigorous evaluations without Python overhead, use external C-binaries (e.g. `--benchmark sysbench`).
 - **Custom Prototyping**: For tuning proprietary application databases, use the internal JSON-based query templates.
 
-For full architectural details on this design, please read the [Benchmarking Documentation](./docs/BENCHMARKING.md).
+For full architectural details on this design, please read the [Benchmarking Documentation](./docs/reference/benchmarking.md).
 
 ### Custom Workloads
 
@@ -462,17 +489,16 @@ Comprehensive documentation available in [`docs/`](./docs/):
 
 ### Core System Components
 
-- **[PBT Core Components](./docs/PBT_CORE_COMPONENTS.md)** - Worker, Evolution, Population classes implementing the PBT algorithm
-- **[Feature-Driven Scoring](./docs/FEATURE_DRIVEN_SCORING.md)** - Scoring-v2 policies, workload features, normalization, and reliability gate
-- **[Performance Evaluation](./docs/PERFORMANCE_EVALUATION.md)** - Evaluator, PerformanceMetrics, scoring system
-- **[Configuration Management](./docs/CONFIGURATION_MANAGEMENT.md)** - KnobSpace, KnobDefinition, sampling & perturbation
+- **[PBT Core Components](./docs/architecture/pbt-core.md)** - Worker, Evolution, Population, lockstep generation barriers
+- **[Feature-Driven Scoring](./docs/architecture/feature-driven-scoring.md)** - Scoring-v2 policies, workload features, normalization, and reliability gate
+- **[Performance Evaluation](./docs/architecture/performance-evaluation.md)** - WorkloadOrchestrator, PerformanceMetrics, scoring integration
+- **[Configuration Management](./docs/architecture/configuration-management.md)** - KnobSpace, tier CSVs, KnobApplicator, verify() read-back
 
 ### Technical Details
 
-- **[PostgreSQL Connection and Knobs](./docs/POSTGRESQL_CONNECTION_AND_KNOBS.md)** - Database connection, knob retrieval, metadata management
-- **[Population Implementation](./docs/POPULATION_IMPLEMENTATION.md)** - Population initialization, parallel evaluation, evolution cycle
-- **[Environment Setup](./docs/ENVIRONMENT_SETUP.md)** - Installation, configuration, troubleshooting
-- **[Evaluation Reproducibility Runbook](./docs/EVALUATION_RUNBOOK.md)** - Canonical comparative-evaluation commands, outputs, and reproducibility checks
+- **[PostgreSQL Connection and Knobs](./docs/architecture/postgresql-connection-and-knobs.md)** - Database connection, knob retrieval, tuning metadata, policy filter
+- **[Environment Setup](./docs/getting-started/setup.md)** - Installation, configuration, troubleshooting
+- **[Evaluation Reproducibility Runbook](./docs/guides/evaluation-runbook.md)** - Canonical comparative-evaluation commands, outputs, and reproducibility checks
 
 ---
 
@@ -504,9 +530,9 @@ This work builds upon several research directions:
 
 See the curated analysis and references in:
 
-- [`docs/ALGORITHM_COMPARISON.md`](./docs/ALGORITHM_COMPARISON.md)
-- [`docs/COMPETITIVE_ANALYSIS.md`](./docs/COMPETITIVE_ANALYSIS.md)
-- [`docs/BENCHMARKING.md`](./docs/BENCHMARKING.md)
+- [`docs/research/algorithm-comparison.md`](./docs/research/algorithm-comparison.md)
+- [`docs/research/competitive-analysis.md`](./docs/research/competitive-analysis.md)
+- [`docs/reference/benchmarking.md`](./docs/reference/benchmarking.md)
 
 - Auto DBMS Tuner (5 papers)
 - Reinforcement Learning for DB tuning (4 papers)
