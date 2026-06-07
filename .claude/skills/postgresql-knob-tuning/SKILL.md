@@ -37,7 +37,7 @@ Examples:
 - `work_mem = 0.02` → 2% of detected RAM
 - `max_parallel_workers = 0.5` → 50% of detected CPU cores
 
-Fractions are stored in population state and only resolved to absolute values at runtime for the current hardware. This enables transfer learning and warm-start portability.
+Fractions are stored in population state and only resolved to absolute values at runtime against the `WorkerResources` for the given worker. These resources are either auto-detected from host limits (divided by number of parallel workers) or manually allocated (e.g., via `--worker-ram` and `--worker-cpus`). This enables transfer learning and warm-start portability.
 
 ### Cross-Knob Aggregate Validation
 After sampling, perturbation, or exploit copy, validate:
