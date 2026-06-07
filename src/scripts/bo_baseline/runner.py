@@ -180,7 +180,7 @@ class BOBaselineRunner:
         iteration_log: list,
         pilot_size: int,
         sobol_configs: list,
-    ) -> None:
+    ) -> tuple[bool, int]:
         """
         Run sequential BO optimization using a four-phase bootstrapping architecture.
 
@@ -208,6 +208,8 @@ class BOBaselineRunner:
             iterations.  The facade's initial design is empty (``n_configs=0``),
             so the first ``ask()`` immediately enters BO (acquisition) mode.
             ``update_ranges()`` is NEVER called again.
+            Early stopping: if the incumbent score does not improve for
+            ``early_stopping_patience`` consecutive iterations, the loop exits.
 
         Parameters
         ----------
@@ -224,10 +226,16 @@ class BOBaselineRunner:
         sobol_configs : list[Configuration]
             Pre-generated Sobol configurations from
             ``SobolInitialDesign.select_configurations()``
+
+        Returns
+        -------
+        tuple[bool, int]
+            (early_stopped, stale_counter) — whether early stopping fired and
+            how many consecutive non-improving iterations were recorded.
         """
         from src.utils.metrics import PerformanceMetrics
 
-        previous_config = None
+        previous_engine_config = None
 
         # ── Phase 1: Pilot Collection ─────────────────────────────────────────
         self.logger.info(
@@ -258,14 +266,14 @@ class BOBaselineRunner:
                     worker,
                     orchestrator,
                     self.knob_space,
-                    previous_config,
+                    previous_engine_config,
                     skip_scoring=True,
                 )
-                previous_config = knob_config
+                previous_engine_config = dict(configspace_to_knobs(sobol_config, self.knob_space))
 
                 if metrics is not None:
                     resolved_cs_config = knobs_to_configspace(
-                        knob_config, self.knob_space, facade.scenario.configspace
+                        knob_config, self.knob_space, facade.scenario.configspace,
                     )
                     status = StatusType.SUCCESS
                 else:
@@ -299,7 +307,6 @@ class BOBaselineRunner:
                 pilot_results[-1].status.name,
                 pilot_results[-1].eval_time,
             )
-        # facade is untouched — no ghost pending trials.
 
         # ── Phase 2: Calibration ──────────────────────────────────────────────
         self.logger.info("=== Phase 2: Calibration ===")
@@ -352,10 +359,12 @@ class BOBaselineRunner:
             score = score_breakdown.final_score
             cost = max(0.0, min(100.0, 100.0 - score))
 
+            t_tell = time.time()
             facade.tell(
                 TrialInfo(config=result.resolved_config, seed=self.config.random_seed),
                 TrialValue(cost=cost, time=result.eval_time, status=result.status),
             )
+            tell_overhead = time.time() - t_tell
             self.logger.debug(
                 "Injected pilot %d: score=%.2f, cost=%.2f", idx, score, cost
             )
@@ -363,12 +372,13 @@ class BOBaselineRunner:
             iteration_log.append({
                 "iteration": idx,
                 "config": configspace_to_knobs(
-                    result.resolved_config, self.knob_space
+                    result.resolved_config, self.knob_space,
                 ),
                 "metrics": result.raw_metrics,
                 "score": score,
                 "score_breakdown": score_breakdown,
                 "cost": cost,
+                "bo_overhead_seconds": tell_overhead,
                 "wall_clock_seconds": result.eval_time,
                 "restarted": False,
                 "timestamp": time.time(),
@@ -388,8 +398,21 @@ class BOBaselineRunner:
 
         # ── Phase 4: BO Optimization Loop ─────────────────────────────────────
         remaining = self.config.n_iterations - pilot_size
-        self.logger.info("=== Phase 4: BO Loop (%d iterations) ===", remaining)
+        self.logger.info(
+            "=== Phase 4: BO Loop (%d iterations, early_stopping=%s, patience=%d) ===",
+            remaining,
+            self.config.early_stopping_enabled,
+            self.config.early_stopping_patience,
+        )
         # update_ranges() is NEVER called again — scoring engine stays frozen.
+
+        # Early stopping state
+        early_stopped = False
+        stale_counter = 0
+        best_score_so_far = max(
+            (entry.get("score", 0.0) or 0.0 for entry in iteration_log),
+            default=0.0,
+        )
 
         for bo_idx in range(remaining):
             iteration_count = pilot_size + bo_idx
@@ -401,7 +424,13 @@ class BOBaselineRunner:
             ):
                 self._restore_snapshot_safe(worker)
 
-            trial_info = facade.ask()
+            try:
+                t_ask = time.time()
+                trial_info = facade.ask()
+                ask_overhead = time.time() - t_ask
+            except StopIteration:
+                self.logger.warning("SMAC exhausted its n_trials budget. Stopping BO loop early.")
+                break
 
             try:
                 (
@@ -417,50 +446,64 @@ class BOBaselineRunner:
                     worker,
                     orchestrator,
                     self.knob_space,
-                    previous_config,
+                    previous_engine_config,
+                    seed=trial_info.seed,
                 )
-                previous_config = knob_config
+                previous_engine_config = dict(configspace_to_knobs(trial_info.config, self.knob_space))
             except Exception as exc:
                 self.logger.error("Error evaluating config: %s", exc, exc_info=True)
-                cost, wall_time, knob_config, metrics, score, score_breakdown, restarted = (
-                    100.0, 0.0, {}, None, 0.0, None, False
-                )
-
-            facade.tell(
-                trial_info,
-                TrialValue(cost=cost, time=wall_time, status=StatusType.SUCCESS),
-            )
+                (
+                    cost,
+                    knob_config,
+                    metrics,
+                    score,
+                    score_breakdown,
+                    restarted,
+                    wall_time,
+                ) = (100.0, {}, None, 0.0, None, False, 0.0)
 
             # Inject repaired (DB-quantized) config via facade.tell() if it differs
-            original_knob_config = configspace_to_knobs(
-                trial_info.config, self.knob_space
-            )
-            if knob_config != original_knob_config:
+            original_knob_config = configspace_to_knobs(trial_info.config, self.knob_space)
+
+            from src.scripts.bo_baseline.search_space import get_config_drift
+            configs_differ = bool(get_config_drift(original_knob_config, knob_config))
+
+            repaired_cs_config = None
+            if configs_differ:
                 try:
                     repaired_cs_config = knobs_to_configspace(
-                        knob_config, self.knob_space, facade.scenario.configspace
-                    )
-                    facade.tell(
-                        TrialInfo(
-                            config=repaired_cs_config, seed=self.config.random_seed
-                        ),
-                        TrialValue(
-                            cost=cost, time=wall_time, status=StatusType.SUCCESS
-                        ),
-                    )
-                    self.logger.debug(
-                        "Injected repaired config via facade.tell() (quantized values differ)"
+                        knob_config, self.knob_space, facade.scenario.configspace,
                     )
                 except Exception as exc:
                     self.logger.warning("Failed to inject repaired config: %s", exc)
 
+            t_tell = time.time()
+            if repaired_cs_config is not None:
+                # Tell the repaired config first so it becomes incumbent in case of a tie
+                facade.tell(
+                    TrialInfo(config=repaired_cs_config, seed=trial_info.seed),
+                    TrialValue(cost=cost, time=wall_time, status=StatusType.SUCCESS),
+                )
+                self.logger.debug(
+                    "Injected repaired config via facade.tell() (quantized values differ)"
+                )
+
+            # Then tell the raw config (so SMAC knows the asked trial finished)
+            facade.tell(
+                trial_info,
+                TrialValue(cost=cost, time=wall_time, status=StatusType.SUCCESS),
+            )
+            tell_overhead = time.time() - t_tell
+
+            iteration_score = score if score is not None else 0.0
             iteration_log.append({
                 "iteration": iteration_count,
                 "config": knob_config,
                 "metrics": metrics.to_dict() if metrics is not None else {},
-                "score": score if score is not None else 0.0,
+                "score": iteration_score,
                 "score_breakdown": score_breakdown,
                 "cost": cost,
+                "bo_overhead_seconds": ask_overhead + tell_overhead,
                 "wall_clock_seconds": wall_time,
                 "restarted": restarted,
                 "timestamp": time.time(),
@@ -471,10 +514,31 @@ class BOBaselineRunner:
                 "Iteration %d/%d [BO]: score=%.2f, cost=%.2f, wall_time=%.2fs",
                 iteration_count + 1,
                 self.config.n_iterations,
-                score or 0.0,
+                iteration_score,
                 cost,
                 wall_time,
             )
+
+            # ── Early Stopping Check ─────────────────────────────────────────
+            if self.config.early_stopping_enabled:
+                if iteration_score > best_score_so_far:
+                    best_score_so_far = iteration_score
+                    stale_counter = 0
+                else:
+                    stale_counter += 1
+
+                if stale_counter >= self.config.early_stopping_patience:
+                    self.logger.warning(
+                        "Early stopping triggered: no improvement for %d consecutive "
+                        "iterations (patience=%d). Best score=%.4f.",
+                        stale_counter,
+                        self.config.early_stopping_patience,
+                        best_score_so_far,
+                    )
+                    early_stopped = True
+                    break
+
+        return early_stopped, stale_counter
 
     def _prune_unsupported_runtime_knobs(self) -> None:
         """Prune knobs unavailable on runtime PostgreSQL."""
@@ -659,22 +723,48 @@ class BOBaselineRunner:
                 "Pre-generating %d Sobol pilot configurations...", pilot_size
             )
             # Temporary scenario used only for Sobol generation (same seed/space).
+            # We request 5x more trials so we can filter out invalid configs and still
+            # guarantee exactly `pilot_size` valid configurations.
             _sobol_scenario = Scenario(
                 configspace=configspace,
-                n_trials=pilot_size,
+                n_trials=pilot_size * 5,
                 seed=self.config.random_seed,
-                deterministic=False,
                 n_workers=1,
                 output_directory=self._build_smac_output_root() / "_sobol_gen",
             )
             _sobol_design = SobolInitialDesign(
                 scenario=_sobol_scenario,
-                n_configs=pilot_size,
+                n_configs=pilot_size * 5,
                 max_ratio=1.0,  # Prevent SMAC from limiting pilot to 25% of n_trials
             )
             sobol_configs = _sobol_design.select_configurations()
+            
+            # Inject the default configuration as the first pilot observation
+            base_default_config = configspace.get_default_configuration()
+            base_knobs = configspace_to_knobs(base_default_config, self.knob_space)
+
+            # Fetch real defaults from the active DB using Applicator
+            from src.utils.applicator import KnobApplicator
+            applicator = KnobApplicator(db_config=self.env.get_db_config(0), worker_id=0)
+            verify_result = applicator.verify(expected_config=base_knobs)
+
+            # Update base_knobs with the true active database values
+            base_knobs.update(verify_result.db_config)
+
+            try:
+                real_default_config = knobs_to_configspace(
+                    base_knobs, self.knob_space, configspace,
+                )
+            except Exception as e:
+                self.logger.warning("Could not build real default config, falling back to static defaults: %s", e)
+                real_default_config = base_default_config
+
+            # Prepend default, remove any exact duplicates, and slice to requested pilot size
+            sobol_configs = [real_default_config] + [c for c in sobol_configs if c != real_default_config]
+            sobol_configs = sobol_configs[:pilot_size]
+
             self.logger.info(
-                "Generated %d Sobol configs for pilot phase", len(sobol_configs)
+                "Generated %d pilot configs (including real DB default configuration)", len(sobol_configs)
             )
 
             # Since we use ask-tell loops, provide a dummy objective to satisfy
@@ -684,13 +774,13 @@ class BOBaselineRunner:
                     "Objective should not be called directly in ask-tell mode"
                 )
 
-            # Create SMAC scenario (full budget; n_trials covers pilot + BO)
+            # Create SMAC scenario (generous budget; n_trials covers pilot + BO + multi-seed validation)
             self.logger.info(
-                "Creating SMAC scenario with %d iterations...", self.config.n_iterations
+                "Creating SMAC scenario with generous budget for %d iterations...", self.config.n_iterations
             )
             scenario = Scenario(
                 configspace=configspace,
-                n_trials=self.config.n_iterations,
+                n_trials=self.config.n_iterations * 3,
                 seed=self.config.random_seed,
                 deterministic=False,
                 n_workers=1,
@@ -741,9 +831,12 @@ class BOBaselineRunner:
 
             # Run optimization
             self.logger.info("Starting Bayesian Optimization...")
+            early_stopped = False
+            stale_counter = 0
             try:
-                self._run_sequential_optimization(
-                    facade, orchestrator, worker, iteration_log, pilot_size, sobol_configs
+                early_stopped, stale_counter = self._run_sequential_optimization(
+                    facade, orchestrator, worker, iteration_log, pilot_size,
+                    sobol_configs,
                 )
             except KeyboardInterrupt:
                 self.logger.warning("Optimization interrupted by user")
@@ -762,6 +855,8 @@ class BOBaselineRunner:
                 output_dir=self.config.output_dir,
                 metric_config=self.metric_config,
                 bo_surrogate=bo_surrogate,
+                early_stopped=early_stopped,
+                stale_counter=stale_counter,
             )
 
             self.logger.info("BO tuning completed in %.2f seconds", total_time)
@@ -1010,6 +1105,22 @@ def main():
         type=int,
         default=None,
         help="Restore snapshots every N iterations.",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=None,
+        help=(
+            "Number of consecutive non-improving BO iterations before stopping early. "
+            "Defaults to ~20%% of n_iterations per preset "
+            "(Rapid=8, Standard=20, Thorough=60, Research=200, Extreme=400). "
+            "Auto-scaled when --pbt-session sets the budget."
+        ),
+    )
+    parser.add_argument(
+        "--disable-early-stopping",
+        action="store_true",
+        help="Disable early stopping and always run all BO iterations.",
     )
 
     args = parser.parse_args()

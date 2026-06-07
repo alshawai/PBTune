@@ -65,6 +65,8 @@ def write_bo_results(
     output_dir: Path,
     metric_config: MetricConfig,
     bo_surrogate: str = "gp",
+    early_stopped: bool = False,
+    stale_counter: int = 0,
 ) -> Dict[str, Any]:
     """
     Serialize Bayesian Optimization results in PBT-compatible JSON format.
@@ -89,6 +91,10 @@ def write_bo_results(
         The metric configuration for scoring policy metadata
     bo_surrogate : str
         Surrogate model type (gp or rf)
+    early_stopped : bool
+        Whether the run terminated via early stopping
+    stale_counter : int
+        Number of consecutive non-improving iterations at termination
 
     Returns
     -------
@@ -124,9 +130,8 @@ def write_bo_results(
         if score > best_score_so_far:
             best_score_so_far = score
 
-        # Estimate BO overhead (ask + tell time) - for now, estimate as 5% of wall time
-        # In a real implementation, this would be tracked separately
-        bo_overhead = iteration.get("wall_clock_seconds", 0.0) * 0.05
+        # Extract precise BO overhead (ask + tell time) recorded by the runner
+        bo_overhead = iteration.get("bo_overhead_seconds", 0.0)
         bo_overhead_total += bo_overhead
 
         generation_entry = {
@@ -200,6 +205,9 @@ def write_bo_results(
             ),
             "reference_pbt_knobs": list(config.pbt_knob_names or ()),
             "resource_equalization": config.pbt_worker_resources is not None,
+            "early_stopped": early_stopped,
+            "early_stopping_patience": config.early_stopping_patience,
+            "early_stopping_enabled": config.early_stopping_enabled,
         },
         "scoring_policy": metric_config.scoring_policy,
         "scoring_policy_version": metric_config.scoring_policy_version,
@@ -226,8 +234,10 @@ def write_bo_results(
         },
         "generation_history": generation_history,
         "convergence": {
-            "converged": False,
-            "generations_without_improvement": 0,
+            "converged": early_stopped,
+            "generations_without_improvement": stale_counter,
+            "early_stopped": early_stopped,
+            "early_stopping_patience": config.early_stopping_patience,
         },
         "system_info": system_info,
     }
