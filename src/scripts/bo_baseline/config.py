@@ -74,6 +74,11 @@ class BOConfig:
     # - "feature_driven_v2": Dynamic weights based on workload features evaluating variance, tail amplification, and DB stats
     scoring_policy: str = "default"
 
+    # Early stopping — stop the BO loop if the incumbent does not improve for
+    # `early_stopping_patience` consecutive iterations.  Scales with budget.
+    early_stopping_enabled: bool = True
+    early_stopping_patience: int = 20  # default overridden by presets
+
     @staticmethod
     def _load_pbt_session(path: Path) -> Dict[str, Any]:
         """Load a PBT tuning-session JSON file."""
@@ -168,13 +173,37 @@ class BOConfig:
         )
         if set_iteration_budget:
             population_size = int(session.get("population_size", 0) or 0)
-            total_generations = int(session.get("total_generations", 0) or 0)
-            if population_size > 0 and total_generations > 0:
-                self.n_iterations = population_size * total_generations
+
+            # Use the actual completed generation count, not the configured max.
+            # PBT writes current_generation into total_generations at save time,
+            # so this reflects real work done (even if PBT early-stopped).
+            # Fallback: len(generation_history) is ground truth.
+            actual_generations = int(session.get("total_generations", 0) or 0)
+            if actual_generations <= 0:
+                gen_hist = payload.get("generation_history", [])
+                actual_generations = len(gen_hist)
+
+            if population_size > 0 and actual_generations > 0:
+                self.n_iterations = population_size * actual_generations
+                LOGGER.info(
+                    "PBT session: pop_size=%d × actual_generations=%d → n_iterations=%d",
+                    population_size,
+                    actual_generations,
+                    self.n_iterations,
+                )
             else:
                 LOGGER.warning(
                     "PBT session is missing positive population_size or "
-                    "total_generations; keeping configured BO iteration budget"
+                    "actual completed generations; keeping configured BO iteration budget"
+                )
+
+            # Auto-scale early stopping patience to ~20% of the resolved budget
+            if self.early_stopping_enabled:
+                self.early_stopping_patience = max(5, int(self.n_iterations * 0.20))
+                LOGGER.info(
+                    "Auto-scaled early_stopping_patience to %d (20%% of %d iterations)",
+                    self.early_stopping_patience,
+                    self.n_iterations,
                 )
 
         best_configuration = payload.get("best_configuration", {})
@@ -205,12 +234,11 @@ class BOConfig:
 
         if self.enable_snapshots and "snapshot_restore_interval" in session:
             # PBT restores every N generations.
-            # Translate to BO iterations by multiplying by population_size.
+            # BO now operates per-generation as well, so no pop_size multiplier.
             pbt_interval = int(session["snapshot_restore_interval"])
-            pop_size = int(session.get("population_size", 1))
-            self.snapshot_restore_interval = pbt_interval * pop_size
+            self.snapshot_restore_interval = pbt_interval
             LOGGER.info(
-                f"Extracted PBT snapshot interval ({pbt_interval} gens * {pop_size} pop) "
+                f"Extracted PBT snapshot interval ({pbt_interval} gens) "
                 f"-> BO interval: {self.snapshot_restore_interval} iterations"
             )
 
@@ -266,6 +294,17 @@ class BOConfig:
             else benchmark_preset.warmup_passes,
         )
 
+        # Resolve early stopping settings
+        early_stopping_enabled = base_config.early_stopping_enabled
+        if hasattr(args, "disable_early_stopping") and args.disable_early_stopping:
+            early_stopping_enabled = False
+
+        early_stopping_patience = (
+            args.early_stopping_patience
+            if hasattr(args, "early_stopping_patience") and args.early_stopping_patience is not None
+            else base_config.early_stopping_patience
+        )
+
         config = replace(
             base_config,
             n_iterations=args.iterations
@@ -305,6 +344,8 @@ class BOConfig:
             if hasattr(args, "snapshot_restore_interval")
             and args.snapshot_restore_interval is not None
             else base_config.snapshot_restore_interval,
+            early_stopping_enabled=early_stopping_enabled,
+            early_stopping_patience=early_stopping_patience,
         )
 
         if args.pbt_session:
@@ -329,26 +370,31 @@ class BOConfig:
 RAPID_BO_CONFIG = BOConfig(
     n_iterations=40,
     range_update_interval=10,
+    early_stopping_patience=8,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
 )
 STANDARD_BO_CONFIG = BOConfig(
     n_iterations=120,
     range_update_interval=10,
+    early_stopping_patience=20,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
 )
 THOROUGH_BO_CONFIG = BOConfig(
     n_iterations=400,
     range_update_interval=15,
+    early_stopping_patience=60,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
 )
 RESEARCH_BO_CONFIG = BOConfig(
     n_iterations=1600,
     range_update_interval=20,
+    early_stopping_patience=200,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
 )
 EXTREME_BO_CONFIG = BOConfig(
     n_iterations=3200,
     range_update_interval=25,
+    early_stopping_patience=400,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
 )
 

@@ -68,6 +68,7 @@ The runner uses a strictly sequential, four-phase execution pipeline to ensure r
 2. **Phase 2 (Calibration)**: The `metric_config` calibrates its normalization bounds using the raw metrics from all successful pilot evaluations exactly once. The scoring engine is reloaded and its ranges are frozen permanently.
 3. **Phase 3 (Warm-Start Injection)**: The pilot configurations are re-scored using the frozen engine. The runner then injects these results into the SMAC surrogate model as unsolicited observations (using `facade.tell()`). Crucially, it injects the *resolved* configurations (engine-quantized values), priming the surrogate with ground-truth data.
 4. **Phase 4 (BO Loop)**: The runner enters the standard `facade.ask()` / `facade.tell()` loop for the remaining iterations. Because the surrogate is already primed, the first `ask()` immediately enters Bayesian Optimization mode. If PostgreSQL further quantizes suggested values during this phase, both the original and resolved configurations are logged to maintain intensifier and surrogate integrity.
+   - **Early Stopping**: If the incumbent score does not improve for a set number of consecutive iterations (`--early-stopping-patience`), the loop aborts early to conserve resources. This patience defaults to ~20% of the total iteration budget.
 
 ### Resource Equalization
 
@@ -98,10 +99,10 @@ While BO runs strictly sequentially, it can equalize hardware resources against 
 When `--pbt-session` is used, `--tier` is optional. If `--iterations` is omitted, BO sets:
 
 ```text
-iterations = population_size * total_generations
+iterations = population_size * actual_completed_generations
 ```
 
-from the PBT session. Passing `--iterations` explicitly overrides this derived budget.
+from the PBT session (accounting for PBT's own early stopping). Passing `--iterations` explicitly overrides this derived budget.
 
 Example:
 
@@ -125,6 +126,8 @@ python -m src.scripts.bo_baseline \
   (default: predefined policy per workload).
 - `--enable-snapshots` - Enables periodic database snapshot restoration to prevent data drift.
 - `--snapshot-restore-interval INT` - Restores snapshots every N iterations.
+- `--early-stopping-patience INT` - Number of consecutive non-improving iterations before stopping. Defaults to ~20% of the iteration budget.
+- `--disable-early-stopping` - Force BO to run all iterations without stopping.
 
 ### Benchmark Options
 - `--benchmark {sysbench|tpch}` - Benchmark type (default: sysbench)
@@ -159,7 +162,7 @@ python -m src.scripts.bo_baseline \
 | --- | --- | --- |
 | `--pbt-session` | Loads a PBT tuning-session file and copies the settings needed for a stable BO comparison. | Not set |
 | `--tier` | Selects the knob tier when running BO independently. | Required unless `--pbt-session` is set |
-| `--iterations` | Sets the BO evaluation budget. | `50`, or PBT `population_size * total_generations` |
+| `--iterations` | Sets the BO evaluation budget. | `50`, or PBT `pop_size * actual_completed_generations` |
 | `--seed` | Controls BO random seed and SMAC scenario seed. | `42` |
 | `--benchmark` | Chooses `sysbench` or `tpch`. | `sysbench`, or PBT `benchmark_name` |
 | `--workload` | Chooses metric scoring context: `oltp`, `olap`, or `mixed`. | `oltp`, or PBT `workload_type` |
@@ -182,6 +185,8 @@ python -m src.scripts.bo_baseline \
 | `--scoring-policy` | Specific scoring policy to apply to metric evaluation (`fixed_v1` or `feature_driven_v2`). | Set by metric default |
 | `--enable-snapshots` | Enables periodic database snapshot restoration to prevent data drift. | Disabled, or PBT `enable_snapshots` |
 | `--snapshot-restore-interval` | Number of iterations between snapshot restorations. | `1`, or scaled PBT interval |
+| `--early-stopping-patience` | Iterations without improvement before early abort. | Auto-scaled to ~20% of iterations |
+| `--disable-early-stopping` | Disables early stopping. | Disabled |
 
 ## Output Format
 
@@ -257,6 +262,7 @@ python -m pytest tests/test_bo_baseline.py::TestSearchSpaceTranslation::test_bui
 
 ### Search Space Translation
 
+- **Hardware-Resolved Sampling**: Unlike older BO approaches that used "fractional" parameters for memory and connections, this runner translates hardware-relative properties dynamically into absolute ConfigSpace boundaries at initialization. The surrogate model samples actual byte values (e.g., `shared_buffers=4096000000`) rather than abstract floats.
 - Integer knobs with log scale: min clamped to 1
 - Float knobs with log scale: min clamped to 1e-9
 - Degenerate ranges (min == max): converted to Constant parameters
