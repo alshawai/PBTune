@@ -28,7 +28,9 @@ from src.utils.logger import get_logger
 LOGGER = get_logger("SearchSpace")
 
 
-def get_config_drift(expected: Dict[str, Any], actual: Dict[str, Any]) -> Dict[str, tuple]:
+def get_config_drift(
+    expected: Dict[str, Any], actual: Dict[str, Any]
+) -> Dict[str, tuple]:
     """
     Compare two configurations and return the keys that differ,
     ignoring microscopic floating-point rounding errors.
@@ -39,6 +41,7 @@ def get_config_drift(expected: Dict[str, Any], actual: Dict[str, Any]) -> Dict[s
         Mapping of parameter names to (expected_val, actual_val)
     """
     import math
+
     drift = {}
     for k, v_exp in expected.items():
         if k not in actual:
@@ -76,7 +79,9 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
     """
     cs = ConfigurationSpace(seed=seed)
 
-    auto_zero_knobs = knob_space.non_zero_knobs if hasattr(knob_space, "non_zero_knobs") else set()
+    auto_zero_knobs = (
+        knob_space.non_zero_knobs if hasattr(knob_space, "non_zero_knobs") else set()
+    )
 
     for knob_def in knob_space.knobs.values():
         name = knob_def.name
@@ -224,16 +229,27 @@ def _add_configspace_constraints(cs: ConfigurationSpace, knob_space: KnobSpace) 
     for constraint in knob_space.configspace_constraints:
         ctype = constraint.get("type")
         if ctype == "not_equals":
-            child, parent, val = constraint["child"], constraint["parent"], constraint["value"]
+            child, parent, val = (
+                constraint["child"],
+                constraint["parent"],
+                constraint["value"],
+            )
             if child in cs and parent in cs:
                 cs.add(NotEqualsCondition(cs[child], cs[parent], val))
         elif ctype == "forbidden_and_in_equals":
-            k1, v1, k2, v2 = constraint["knob1"], constraint["values1"], constraint["knob2"], constraint["value2"]
+            k1, v1, k2, v2 = (
+                constraint["knob1"],
+                constraint["values1"],
+                constraint["knob2"],
+                constraint["value2"],
+            )
             if k1 in cs and k2 in cs:
-                cs.add(ForbiddenAndConjunction(
-                    ForbiddenInClause(cs[k1], v1),
-                    ForbiddenEqualsClause(cs[k2], v2),
-                ))
+                cs.add(
+                    ForbiddenAndConjunction(
+                        ForbiddenInClause(cs[k1], v1),
+                        ForbiddenEqualsClause(cs[k2], v2),
+                    )
+                )
         elif ctype == "forbidden_less_than":
             left, right = constraint["left"], constraint["right"]
             if left in cs and right in cs:
@@ -269,7 +285,9 @@ def configspace_to_knobs(
     """
     config_dict: Dict[str, Any] = {}
 
-    auto_zero_knobs = knob_space.non_zero_knobs if hasattr(knob_space, "non_zero_knobs") else set()
+    auto_zero_knobs = (
+        knob_space.non_zero_knobs if hasattr(knob_space, "non_zero_knobs") else set()
+    )
 
     for knob_def in knob_space.knobs.values():
         name = knob_def.name
@@ -280,7 +298,11 @@ def configspace_to_knobs(
         value = cs_config[name]
 
         # Reconstruct integer values from indices if a step > 1 was used
-        if knob_def.knob_type == KnobType.INTEGER and knob_def.step and knob_def.step > 1:
+        if (
+            knob_def.knob_type == KnobType.INTEGER
+            and knob_def.step
+            and knob_def.step > 1
+        ):
             base = int(knob_def.min_value) if knob_def.min_value is not None else 0
             if name in auto_zero_knobs and base == 0:
                 base = 1
@@ -329,7 +351,9 @@ def knobs_to_configspace(
         Valid ConfigSpace configuration
     """
     values = {}
-    auto_zero_knobs = knob_space.non_zero_knobs if hasattr(knob_space, "non_zero_knobs") else set()
+    auto_zero_knobs = (
+        knob_space.non_zero_knobs if hasattr(knob_space, "non_zero_knobs") else set()
+    )
 
     for hp in list(configspace.values()):
         name = hp.name
@@ -339,7 +363,12 @@ def knobs_to_configspace(
         val = knob_config[name]
         knob_def = knob_space.knobs.get(name)
 
-        if knob_def and knob_def.knob_type == KnobType.INTEGER and knob_def.step and knob_def.step > 1:
+        if (
+            knob_def
+            and knob_def.knob_type == KnobType.INTEGER
+            and knob_def.step
+            and knob_def.step > 1
+        ):
             base = int(knob_def.min_value) if knob_def.min_value is not None else 0
             if name in auto_zero_knobs and base == 0:
                 base = 1

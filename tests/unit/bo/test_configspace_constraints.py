@@ -1,7 +1,5 @@
 """Tests for ConfigSpace constraints and logic."""
 
-import pytest
-from ConfigSpace import ConfigurationSpace, Configuration
 from src.tuner.config import get_knob_space
 from src.scripts.bo_baseline.search_space import build_configspace
 
@@ -47,10 +45,10 @@ def test_max_worker_processes_relation():
     """Test that max_worker_processes >= max_parallel_workers."""
     knob_space = get_knob_space("extensive")
     cs = build_configspace(knob_space, seed=42)
-    
+
     assert "max_worker_processes" in cs
     assert "max_parallel_workers" in cs
-    
+
     for _ in range(100):
         config = cs.sample_configuration()
         wp = config.get("max_worker_processes")
@@ -62,10 +60,10 @@ def test_wal_size_relation():
     """Test that min_wal_size <= max_wal_size."""
     knob_space = get_knob_space("extensive")
     cs = build_configspace(knob_space, seed=42)
-    
+
     assert "min_wal_size" in cs
     assert "max_wal_size" in cs
-    
+
     for _ in range(100):
         config = cs.sample_configuration()
         min_wal = config.get("min_wal_size")
@@ -77,7 +75,7 @@ def test_conditions_skip_when_knobs_absent():
     """Test that conditions are safely skipped when knobs are not in the tier."""
     # minimal tier does not contain wal_level or huge_pages
     knob_space = get_knob_space("minimal")
-    
+
     # This should not raise any KeyError or ValueError
     cs = build_configspace(knob_space, seed=42)
     assert cs is not None

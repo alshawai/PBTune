@@ -301,7 +301,8 @@ class BOConfig:
 
         early_stopping_patience = (
             args.early_stopping_patience
-            if hasattr(args, "early_stopping_patience") and args.early_stopping_patience is not None
+            if hasattr(args, "early_stopping_patience")
+            and args.early_stopping_patience is not None
             else base_config.early_stopping_patience
         )
 
