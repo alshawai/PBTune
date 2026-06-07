@@ -1,355 +1,234 @@
-# Bayesian Optimization Baseline Runner
+# Run the Bayesian Optimization baseline
 
-## Overview
+> Last reviewed: 2026-06-07
 
-The BO baseline runner implements a Bayesian Optimization (BO) approach to PostgreSQL configuration tuning using SMAC3 (Sequential Model-based Algorithm Configuration). This provides a controlled comparison baseline against the PBT-based tuner for academic peer review.
+See also: [reference/cli](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline), [architecture/bo-baseline](../architecture/bo-baseline.md), [pbt-vs-bo-comparison](pbt-vs-bo-comparison.md)
 
-## Quick Start
+This guide is for someone who wants to **run** the BO baseline. For the architecture and design rationale of the baseline, read [architecture/bo-baseline](../architecture/bo-baseline.md).
 
-### Basic Usage
+The most common use case is producing a BO session that can be compared head-to-head against a PBT session — for that, jump to [Match a PBT session](#1-match-a-pbt-session-recommended).
+
+---
+
+## Quick checks before launching
+
+Confirm dependencies:
 
 ```bash
-# Match a completed PBT tuning session for stable comparison
-python -m src.scripts.bo_baseline \
-  --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
-  --seed 42
-
-# Minimal test (3 iterations, 10 seconds evaluation)
-python -m src.scripts.bo_baseline \
-  --tier minimal \
-  --iterations 3 \
-  --benchmark sysbench \
-  --duration 10 \
-  --warmup 5
-
-# Standard tuning (50 iterations)
-python -m src.scripts.bo_baseline \
-  --tier core \
-  --iterations 50 \
-  --benchmark sysbench \
-  --workload oltp \
-  --sysbench-workload oltp_read_write
-
-# Comprehensive tuning (100 iterations, TPC-H)
-python -m src.scripts.bo_baseline \
-  --tier standard \
-  --iterations 100 \
-  --benchmark tpch \
-  --scale-factor 1.0
+python -c "import smac, ConfigSpace; print(smac.__version__, ConfigSpace.__version__)"
+# Expected: smac >= 2.2.0, ConfigSpace >= 1.1.0
 ```
 
-## Architecture
+Confirm Docker is reachable (recommended for publication-grade comparisons):
 
-### Components
-
-1. **config.py** - BOConfig dataclass with all tuning parameters
-2. **search_space.py** - Translates KnobSpace ↔ ConfigSpace
-3. **objective.py** - SMAC3-compatible objective function
-4. **result_writer.py** - Serializes results in PBT-compatible JSON
-5. **runner.py** - Main orchestrator (BOBaselineRunner)
-6. **__main__.py** - CLI entry point
-
-### Facade Selection
-
-The SMAC3 facade controls the underlying surrogate model used for Bayesian Optimization. You can specify this using the `--bo-surrogate` argument:
-
-- **Random Forest (`--bo-surrogate rf`)**: Uses `HyperparameterOptimizationFacade`. Handles high-dimensional, mixed spaces better and is robust to flat penalty regions. Includes 20% random interleaving (`ProbabilityRandomDesign`) to prevent surrogate over-exploitation. Default behavior.
-- **Gaussian Process (`--bo-surrogate gp`)**: Uses `BlackBoxFacade`. Employs a Gaussian Process surrogate with Matérn 5/2 kernel and Expected Improvement acquisition function. Better for low-dimensional, continuous spaces.
-
-Both facades use:
-- `deterministic=False` — database benchmarks have inherent measurement variance; this forces SMAC to re-evaluate incumbents and prevents overconfidence.
-- `SobolInitialDesign` — quasi-random initial points for uniform pilot-phase coverage of the search space.
-
-### Pilot + Freeze Normalization
-
-The scoring function (`feature_driven_v2`) requires normalization ranges (e.g., max TPS, min latency). Dynamically updating these ranges mid-run corrupts the surrogate model's training signal because historical cost values become stale.
-
-The BO runner uses a **Pilot + Freeze** strategy:
-
-1. **Pilot Phase** (first N iterations, controlled by `--range-update-interval`): SMAC's Sobol initial design evaluates diverse configurations using default fallback ranges. Raw metrics are recorded.
-2. **Freeze Event** (exactly once, at the end of the pilot): `metric_config.expand_ranges_for_metrics()` calibrates normalization bounds from all pilot observations.
-3. **Frozen Phase** (remaining iterations): Normalization bounds are locked. The surrogate model trains on a stable cost surface.
-
-Post-hoc global rescoring (via `pbt_vs_bo_comparison.py`) uses the saved raw `PerformanceMetrics` to recompute scores with globally calibrated ranges, so the frozen in-run scores do not affect final comparison validity.
-
-### Snapshot Restoration Parity
-
-To ensure the BO baseline runs on a perfectly level playing field against PBT, the BO runner supports database snapshot restoration. Long tuning campaigns can cause "data drift" (where the database state degrades over time due to accumulating writes or changes). PBT mitigates this by restoring worker instances to a clean baseline snapshot every N generations.
-
-The BO baseline implements this same capability:
-- If `--enable-snapshots` is provided, BO will periodically restore the database instance to the baseline snapshot.
-- The `--snapshot-restore-interval` defines how many iterations occur between restorations.
-- **PBT Session Syncing**: If a `--pbt-session` is provided, BO automatically extracts `enable_snapshots` and `snapshot_restore_interval`. It safely scales the interval from PBT's generation-based metric to BO's iteration-based metric by multiplying the PBT interval by the PBT population size, guaranteeing that the exact same number of configuration evaluations occur between restorations in both algorithms.
-
-### Quantization & Read-Back Parity
-
-PostgreSQL silently modifies suggested configurations to fit internal constraints (e.g., rounding `shared_buffers` to the nearest 8kB page). This "hidden resolution" destroys the Bayesian Optimization surrogate model's gradients by creating the illusion of flat performance landscapes (where many different suggested values map to the exact same internal configuration and yield identical performance).
-
-To combat this, the BO loop employs a **Read-Back Abstraction** during `evaluate_config`:
-1. The BO agent suggests a continuous configuration.
-2. The orchestrator applies the configuration.
-3. After application (and potential restart), the orchestrator immediately calls `KnobApplicator.verify()`, which queries `pg_settings` for the **actually applied** typed values.
-4. The orchestrator's `evaluate_worker` returns these true, quantized values alongside the performance metrics.
-5. These actual values are merged back into the configuration dictionary *before* it is returned to SMAC3, ensuring the surrogate model trains on the exact data PostgreSQL is running with.
-
-### Parallel BO Evaluation and Resource Equalization
-
-The BO baseline supports parallel evaluation and explicit resource division to mirror the concurrency and hardware constraints of a reference PBT session independently.
-
-- `--batched-bo` enables running Bayesian Optimization in parallel using ask-tell mode.
-- `--resource-division N` acts as the denominator for dividing host resources (RAM/CPU) for the database instance(s), ensuring fairness.
-- When `--pbt-session` is provided, BO copies `num_parallel_workers` from the reference session and applies it to `--resource-division`.
-- If BO needs to derive the budget or resource division and the PBT session is missing `population_size`, `total_generations`, or `num_parallel_workers`, BO keeps the default or explicitly supplied CLI value for that setting.
-- If the PBT session includes `worker_resources`, BO uses that per-worker resource slice for knob-range resolution instead of dividing the local host resources via `--resource-division`.
-- The result JSON records completed `iterations`, `num_parallel_workers`, and `resource_equalization` so downstream comparison tools can confirm parity. BO does not record `population_size` because it is not population-based.
-
-In parallel mode (`--batched-bo`), BO uses SMAC3 ask-tell evaluation with a local `ThreadPoolExecutor`, which keeps the database environment in the main process while evaluating multiple candidates concurrently.
-
-### Ask-Tell Execution Model
-
-The runner uses two execution paths:
-
-- **Sequential path (default)**: uses the standard
-  `facade.optimize()` loop with the objective closure.
-- **Parallel path (`--batched-bo`)**: uses explicit ask-tell control in
-  `runner.py`.
-
-In ask-tell mode, each batch follows this cycle:
-
-1. `ask()` requests one `TrialInfo` per worker for the current batch.
-2. Configurations are evaluated concurrently using `ThreadPoolExecutor`.
-3. Each completed trial is returned to SMAC via
-   `tell(trial_info, TrialValue(...))`.
-4. After each batch, the surrogate is updated before the next `ask()` calls.
-
-This design is intentional:
-
-- The SMAC `Scenario` keeps `n_workers=1` to avoid Dask process workers.
-- Parallelism is handled in-process via threads, which avoids pickling issues
-  with environment objects such as Docker clients.
-- Worker-local previous configuration state is tracked independently, so
-  restart detection is isolated per BO worker.
-
-## Configuration Options
-
-### PBT Session Parity
-- `--pbt-session PATH` - Reference PBT tuning-session JSON. When provided, BO copies comparable experimental settings from the PBT run:
-  - `knob_tier`
-  - `benchmark_name`
-  - `workload_type`
-  - `tuning_mode`
-  - `sysbench_tables`
-  - `sysbench_table_size`
-  - `sysbench_workload`
-  - `sysbench_duration_seconds`
-  - `sysbench_warmup_seconds`
-  - `tpch_scale_factor`
-  - `tpch_warmup_passes`
-  - knob names from `best_configuration.knobs`
-
-When `--pbt-session` is used, `--tier` is optional. If `--iterations` is omitted, BO sets:
-
-```text
-iterations = population_size * total_generations
+```bash
+docker info >/dev/null && echo OK
 ```
 
-from the PBT session. Passing `--iterations` explicitly overrides this derived budget.
+If Docker isn't reachable, every command on this page accepts `--no-docker` to fall back to bare-metal with reduced isolation.
 
-Example:
+---
+
+## 1. Match a PBT session (recommended)
+
+The single most useful command — runs BO with all comparable settings copied from a PBT session, ensuring a fair head-to-head:
 
 ```bash
 python -m src.scripts.bo_baseline \
-  --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
-  --seed 42
+    --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
+    --seed 42
 ```
 
-### Search Space
-- `--tier {minimal|core|standard|extensive}` - Knob space tier. Required only when `--pbt-session` is not provided.
+What gets copied automatically:
 
-### BO Configuration
-- `--iterations N` - Number of BO iterations. Defaults to `50`, or to `population_size * total_generations` when `--pbt-session` is used.
-- `--seed INT` - Random seed for reproducibility (default: `42`)
-- `--bo-surrogate {rf|gp}` - SMAC Surrogate model: Random Forest (`rf`) or Gaussian Process (`gp`). Default is `rf`.
-- `--resource-division INT` - Denominator for dividing host resources (RAM/CPU) for the database instance (default: `1`).
-- `--scoring-policy STR` - Custom scoring policy to use for metrics evaluation. Available options:
-  - `fixed_v1`: Legacy static weights based on workload type (OLTP/OLAP/MIXED).
-  - `feature_driven_v2`: Dynamic weights based on workload features and a coefficient matrix, evaluating variance, tail amplification, and DB stats.
-  (default: predefined policy per workload).
-- `--enable-snapshots` - Enables periodic database snapshot restoration to prevent data drift.
-- `--snapshot-restore-interval INT` - Restores snapshots every N iterations.
+- knob tier, benchmark, workload type, tuning mode
+- sysbench / TPC-H runtime parameters
+- `population_size × total_generations` becomes the BO iteration budget
+- `num_parallel_workers` becomes `--resource-division` (per-worker resource slicing)
+- snapshot settings (`enable_snapshots`, `snapshot_restore_interval`) with iteration scaling
 
-### Benchmark Options
-- `--benchmark {sysbench|tpch}` - Benchmark type (default: sysbench)
-- `--workload {oltp|olap|mixed}` - Workload type (default: oltp)
-- `--duration FLOAT` - Evaluation duration in seconds (default: 30)
-- `--warmup FLOAT` - Warmup duration in seconds (default: 10)
+You only need `--seed` (and `--no-docker` if applicable). Override anything by passing it explicitly.
 
-### Sysbench-Specific
-- `--sysbench-tables INT` - Number of tables (default: 4)
-- `--sysbench-table-size INT` - Table size (default: 100000)
-- `--sysbench-workload {oltp_read_only|oltp_read_write|oltp_write_only}` - Workload (default: oltp_read_write)
+## 2. Run BO independently
 
-### TPC-H-Specific
-- `--scale-factor FLOAT` - Scale factor (default: 1.0)
-- `--tpch-warmup-passes INT` - Warmup passes (default: 1)
+Without a reference session you must specify the search space and runtime parameters explicitly:
 
-### Instance Options
-- `--no-docker` - Use bare-metal PostgreSQL instead of Docker
-- `--docker-image IMAGE` - Custom Docker image name
-- `--force-recreate-instances` - Force recreate PostgreSQL instances
-- `--force-recreate-baseline` - Force recreate baseline snapshot
-- `--tuning-mode {offline|online|adaptive}` - Tuning mode (default: offline)
+```bash
+# Smallest possible smoke test
+python -m src.scripts.bo_baseline \
+    --tier minimal \
+    --iterations 3 \
+    --benchmark sysbench \
+    --duration 10 \
+    --warmup 5
 
-### Output Options
-- `--output-dir PATH` - Output directory (default: results)
-- `--verbose {DEBUG|INFO|WARNING|ERROR}` - Logging level (default: INFO)
-- `--range-update-interval INT` - Pilot phase size (default: 10)
+# Standard BO run (50 iterations, OLTP)
+python -m src.scripts.bo_baseline \
+    --tier core \
+    --iterations 50 \
+    --benchmark sysbench \
+    --workload oltp \
+    --sysbench-workload oltp_read_write
 
-## Parameter Reference
-
-| Parameter | Purpose | Default / Source |
-| --- | --- | --- |
-| `--pbt-session` | Loads a PBT tuning-session file and copies the settings needed for a stable BO comparison. | Not set |
-| `--tier` | Selects the knob tier when running BO independently. | Required unless `--pbt-session` is set |
-| `--iterations` | Sets the BO evaluation budget. | `50`, or PBT `population_size * total_generations` |
-| `--seed` | Controls BO random seed and SMAC scenario seed. | `42` |
-| `--benchmark` | Chooses `sysbench` or `tpch`. | `sysbench`, or PBT `benchmark_name` |
-| `--workload` | Chooses metric scoring context: `oltp`, `olap`, or `mixed`. | `oltp`, or PBT `workload_type` |
-| `--duration` | Measurement duration per evaluated configuration. | `30`, or PBT `sysbench_duration_seconds` |
-| `--warmup` | Warmup duration before measurement. | `10`, or PBT `sysbench_warmup_seconds` |
-| `--sysbench-tables` | Number of sysbench tables to prepare. | `4`, or PBT `sysbench_tables` |
-| `--sysbench-table-size` | Rows per sysbench table. | `100000`, or PBT `sysbench_table_size` |
-| `--sysbench-workload` | Sysbench script/workload. | `oltp_read_write`, or PBT `sysbench_workload` |
-| `--scale-factor` | TPC-H scale factor. | `1.0`, or PBT `tpch_scale_factor` |
-| `--tpch-warmup-passes` | TPC-H query warmup passes. | `1`, or PBT `tpch_warmup_passes` |
-| `--no-docker` | Uses bare-metal PostgreSQL instead of Docker. | Docker enabled |
-| `--docker-image` | Overrides PostgreSQL Docker image. | Environment default |
-| `--force-recreate-instances` | Recreates worker database instances. | Disabled |
-| `--force-recreate-baseline` | Recreates baseline snapshot state. | Disabled |
-| `--tuning-mode` | Controls restart/application behavior. | `offline`, or PBT `tuning_mode` |
-| `--output-dir` | Root directory for BO result files. | `results` |
-| `--verbose` | Logging verbosity. | `INFO` |
-| `--range-update-interval` | Pilot phase size: initial-design iterations before freezing normalization ranges. | `10` |
-| `--batched-bo` | Run BO in parallel using ask-tell mode. | Sequential execution |
-| `--resource-division` | Divides host resources to constrain the database instance. | `1`, or PBT `num_parallel_workers` |
-| `--scoring-policy` | Specific scoring policy to apply to metric evaluation (`fixed_v1` or `feature_driven_v2`). | Set by metric default |
-| `--enable-snapshots` | Enables periodic database snapshot restoration to prevent data drift. | Disabled, or PBT `enable_snapshots` |
-| `--snapshot-restore-interval` | Number of iterations between snapshot restorations. | `1`, or scaled PBT interval |
-
-## Output Format
-
-Results are written to:
-```
-{output_dir}/{workload_type}/bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json
+# Comprehensive BO run (100 iterations, TPC-H)
+python -m src.scripts.bo_baseline \
+    --tier standard \
+    --iterations 100 \
+    --benchmark tpch \
+    --scale-factor 1.0
 ```
 
-The JSON format is strictly compatible with the evaluation pipeline and identical to the PBT schema:
-- `tuning_session` - Metadata about the BO run, including optimizer, scoring policy, and version information
-- `scoring_policy` / `scoring_policy_version` - Global scoring engine properties
-- `normalization_metadata` / `workload_features` - Details around the environment constraints and bounds
-- `best_configuration` - Best knob config (fractionally normalized `[0.0, 1.0]`) and score found, including full `score_breakdown`
-- `worker_resources` - Hardware constraints
-- `generation_history` - Per-iteration convergence data and metric breakdown (`wall_clock_seconds`, `generation_elapsed_seconds`)
-- `system_info` - System snapshot
-
-The BO CLI `--seed` value is recorded as `tuning_session.seed` in the result
-JSON so downstream comparison tools can report the actual tuning seed rather
-than inferring one from file order.
-
-When `--pbt-session` is used, `tuning_session` also records:
-- `reference_pbt_session` - Path to the PBT session used as the reference
-- `reference_pbt_knobs` - Knob names copied from `best_configuration.knobs`
-
-- `num_parallel_workers` - Parallel BO worker count used for the run
-- `resource_equalization` - Whether BO used the reference PBT worker resource
-  slice
-
-## Multi-Seed Evaluation
-
-For statistical significance, run with multiple seeds:
+## 3. Multi-seed campaign for statistical significance
 
 ```bash
 for seed in 42 123 456 789 1024; do
-  python -m src.scripts.bo_baseline \
-    --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
-    --seed $seed
+    python -m src.scripts.bo_baseline \
+        --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
+        --seed $seed
 done
 ```
 
-Then use the evaluation pipeline to compare:
+Then run the post-hoc evaluation suite against each output:
 
 ```bash
-python -m src.evaluation \
-  --session results/oltp/bo_runs/core/tuning_sessions/bo_results_*.json
+for f in results/oltp/oltp_read_write/bo_runs/minimal/tuning_sessions/bo_results_*.json; do
+    python -m src.evaluation --session "$f" --repetitions 5
+done
 ```
 
-## Normalization Strategy
-
-During tuning, BO uses a **Pilot + Freeze** approach: the first N iterations (Sobol initial design) run with default fallback ranges, then `metric_config.expand_ranges_for_metrics()` is called exactly once to calibrate bounds from pilot observations. Ranges are frozen for the remainder of the run to preserve surrogate model integrity.
-
-PBT uses rolling adaptive normalization (expanding ranges every generation). This difference is intentional — BO requires a stable cost surface for its surrogate, while PBT's population-based approach is robust to shifting targets.
-
-For cross-method comparison, use `rescore_metrics_globally()` from `src/utils/rescoring.py` to pool raw metrics from both runs and rescore with a single globally calibrated `MetricConfig`.
-
-## Testing
-
-Run the test suite:
+Or feed all of them to the cross-method comparison script for aggregated convergence + Pareto figures:
 
 ```bash
-# All tests
-python -m pytest tests/test_bo_baseline.py -v
-
-# Specific test class
-python -m pytest tests/test_bo_baseline.py::TestSearchSpaceTranslation -v
-
-# Specific test
-python -m pytest tests/test_bo_baseline.py::TestSearchSpaceTranslation::test_build_configspace_minimal -v
+python -m src.scripts.pbt_vs_bo_comarison \
+    --pbt results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_*.json \
+    --bo  results/oltp/oltp_read_write/bo_runs/minimal/tuning_sessions/bo_results_*.json \
+    --output-dir analysis/oltp-rw-minimal
 ```
 
-## Implementation Notes
+See [pbt-vs-bo-comparison](pbt-vs-bo-comparison.md).
 
-### Search Space Translation
+## 4. Choose the surrogate
 
-- Integer knobs with log scale: min clamped to 1
-- Float knobs with log scale: min clamped to 1e-9
-- Degenerate ranges (min == max): converted to Constant parameters
-- Default values: validated to be within bounds, set to None if out of range
+Random Forest (default) is robust across tier sizes:
 
-### Objective Function
+```bash
+python -m src.scripts.bo_baseline --tier core --bo-surrogate rf --iterations 50
+```
 
-- Cost = 100 - score (SMAC minimizes cost)
-- Failure penalties:
-  - Timeout: cost = 99.0
-  - Dead instance: cost = 99.5
-  - Unexpected error: cost = 100.0
-- Restart detection: checks if any restart-required knobs changed
-- Pilot+Freeze normalization: ranges calibrated once after initial design, then locked
+Gaussian Process is stronger on low-dimensional, smooth spaces — recommended for `minimal` tier only:
 
-### Result Serialization
+```bash
+python -m src.scripts.bo_baseline --tier minimal --bo-surrogate gp --iterations 30
+```
 
-- Compatible with `load_tuning_session()` from evaluation pipeline
-- Generation history uses same schema as PBT (single-element worker arrays)
-- Best configuration extracted from SMAC's incumbent
-- Convergence tracking via generation_history
+For why these defaults exist, see [architecture/bo-baseline §Facade selection](../architecture/bo-baseline.md#facade-selection).
+
+## 5. Run BO in parallel
+
+```bash
+python -m src.scripts.bo_baseline \
+    --tier core \
+    --iterations 50 \
+    --batched-bo \
+    --resource-division 4
+```
+
+`--batched-bo` enables ask-tell parallel evaluation; `--resource-division` slices host RAM/CPU across the parallel workers (same role as `num_parallel_workers` for PBT). When `--pbt-session` is provided, the resource division is inherited from the reference session — you don't need to specify it manually.
+
+## 6. Override scoring
+
+Re-evaluate under a different scoring policy without changing the search space:
+
+```bash
+python -m src.scripts.bo_baseline \
+    --pbt-session results/.../pbt_results_<timestamp>.json \
+    --scoring-policy feature_driven_v2 \
+    --seed 42
+```
+
+Available policies: `fixed_v1` (legacy static weights), `feature_driven_v2` (workload-feature-driven). The chosen policy is recorded in the output JSON's `tuning_session.scoring_policy`.
+
+---
+
+## Parameter reference (most-used flags)
+
+For the **complete** flag set, see [reference/cli §src.scripts.bo_baseline](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline).
+
+| Flag | Default | When to use |
+| --- | --- | --- |
+| `--pbt-session PATH` | none | **Almost always.** Copies all parity settings from a PBT session for fair comparison. |
+| `--tier {minimal\|core\|standard\|extensive}` | required without `--pbt-session` | Knob search space size. |
+| `--iterations N` | `50`, or `population_size × total_generations` from `--pbt-session` | Evaluation budget. |
+| `--seed INT` | `42` | Master seed; recorded in output JSON. |
+| `--bo-surrogate {rf\|gp}` | `rf` | RF for high-dim/mixed; GP for low-dim/smooth. |
+| `--batched-bo` | off | Parallel ask-tell mode. |
+| `--resource-division N` | `1`, or PBT `num_parallel_workers` | Denominator for slicing host resources. |
+| `--scoring-policy {fixed_v1\|feature_driven_v2}` | per-workload default | Override the active scoring policy. |
+| `--enable-snapshots` | off, or PBT `enable_snapshots` | Periodic snapshot restoration to combat data drift. |
+| `--snapshot-restore-interval N` | `1`, or scaled PBT interval | Iterations between restorations. |
+| `--no-docker` | off | Bare-metal fallback (reduced isolation; tagged in output JSON). |
+| `--force-recreate-instances` / `--force-recreate-baseline` | off | Reset state before launching. |
+
+---
+
+## Output
+
+Results are written to:
+
+```text
+{output_dir}/{workload_type}/bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json
+```
+
+The schema is identical to the PBT session schema with one optimiser-specific addition (`optimizer: "bo_smac3"`, `bo_surrogate`, etc.). Full schema in [reference/session-json-schema §BO session schema](../reference/session-json-schema.md#bo-session-schema).
+
+When `--pbt-session` was provided, the output JSON additionally records:
+
+- `reference_pbt_session` — path to the source PBT session
+- `reference_pbt_knobs` — knob names copied from `best_configuration.knobs`
+- `num_parallel_workers` — parallel BO worker count
+- `resource_equalization` — whether per-worker resource slices came from the reference session
+
+These are what the cross-method comparison script consumes to verify parity.
+
+---
 
 ## Troubleshooting
 
-### Import Errors
-- Ensure ConfigSpace is installed: `pip install ConfigSpace>=1.1.0`
-- Ensure SMAC3 is installed: `pip install smac>=2.2.0`
-- Note: Import is `from ConfigSpace` (capital C), not `from configspace`
+### `ConfigSpace` / `smac` import errors
 
-### Connection Errors
-- Verify PostgreSQL instances are running on ports 5440+
-- Check `.env` file for database credentials
-- Use `--force-recreate-instances` to reset state
+```bash
+pip install 'ConfigSpace>=1.1.0' 'smac>=2.2.0'
+```
 
-### Memory Issues
-- Reduce `--iterations` for lower memory usage
-- Use `--tier minimal` for quick testing
-- Reduce `--duration` for faster iterations
+Note the import path is `from ConfigSpace import …` (capital `C`), not `from configspace`.
 
-### Long Runtimes
-- Reduce `--duration` parameter for faster evaluation
-- Use `--tier minimal` for quick prototyping
-- Increase `--iterations` only after validating with smaller runs
+### Connection errors
+
+- Verify PostgreSQL instances on ports 5440+ are reachable.
+- Check `.env` credentials.
+- `python -m src.scripts.cleanup_instances` to reset stale state.
+- Re-launch with `--force-recreate-instances` if cleanup didn't help.
+
+### Memory pressure
+
+Reduce in this order:
+
+1. `--iterations` — fewer evaluations means smaller surrogate model.
+2. `--tier minimal` — fewer knobs means a smaller `ConfigSpace`.
+3. `--duration` — shorter measurement window means smaller PostgreSQL working set per evaluation.
+
+### Long runtimes
+
+Verify the iteration budget is reasonable for the tier (see [architecture/bo-baseline](../architecture/bo-baseline.md) on why high-dim spaces need more iterations to converge). For wall-clock comparisons, prefer `--batched-bo` over sequential when the host has spare cores.
+
+### Tests
+
+```bash
+python -m pytest tests/test_bo_baseline.py -v
+```
+
+Targeted tests:
+
+```bash
+python -m pytest tests/test_bo_baseline.py::TestSearchSpaceTranslation -v
+```

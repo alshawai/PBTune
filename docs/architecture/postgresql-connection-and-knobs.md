@@ -264,12 +264,7 @@ Tier membership is the result of layering three filters:
 
 The analysis pipeline can additionally produce **data-driven tier overlays** stored under `data/data_driven_knobs/{workload}/`, used when the workload-specific importance ranking differs meaningfully from the expert-curated tiers.
 
-The reasoning behind every freeze/unsafe decision lives in [AUTOTUNING_KNOB_POLICY.md](../reference/autotuning-knob-policy.md). Contributors adding a new knob should:
-
-1. Confirm it appears in `pg_settings` on the supported PostgreSQL versions (14+).
-2. Add a `TuningMetadata` entry in `data/knob_metadata.json` (or override).
-3. Decide its policy in `data/knob_policy.json` (`tune` / `freeze` / `unsafe`).
-4. Re-run `python -m src.scripts.analyze_knobs` to regenerate tier CSVs.
+The reasoning behind every freeze/unsafe decision lives in [AUTOTUNING_KNOB_POLICY.md](../reference/autotuning-knob-policy.md). For the contributor recipe — how to actually promote a knob into a tier — see [guides/adding-knobs](../guides/adding-knobs.md).
 
 ---
 
