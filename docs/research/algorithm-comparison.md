@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-03-13
 
-See also: [Documentation Index](./README.md)
+See also: [Documentation Index](../README.md)
 
 This document provides a comprehensive comparison of how the Population-Based Training (PBT) approach for database parameter tuning measures up against existing state-of-the-art auto-tuners, and explains the rationale behind our benchmarking methodologies.
 
