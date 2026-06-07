@@ -22,7 +22,7 @@ We considered three responses:
 
 ## Decision
 
-Introduce a `GenerationBarrier` object that holds one `threading.Barrier` per sub-step of `WorkloadOrchestrator.evaluate_worker()`. Every worker thread calls `barrier.wait(name, worker_id)` at the end of each sub-step. The thread cannot advance until every worker in the generation has arrived. There are 17 sub-steps, labelled B1 through B17 (see [GENERATION_BARRIERS.md](../../GENERATION_BARRIERS.md) for the full table).
+Introduce a `GenerationBarrier` object that holds one `threading.Barrier` per sub-step of `WorkloadOrchestrator.evaluate_worker()`. Every worker thread calls `barrier.wait(name, worker_id)` at the end of each sub-step. The thread cannot advance until every worker in the generation has arrived. There are 17 sub-steps, labelled B1 through B17 (see [generation-barriers](../generation-barriers.md) for the full table).
 
 Three secondary decisions follow:
 
@@ -63,4 +63,4 @@ Trade-offs:
 
 The barrier is opt-in: the orchestrator only calls `barriers.wait(...)` when a `GenerationBarrier` instance is passed in. Callers that want sequential evaluation pass a barrier object with `enabled=False`, which is a structural no-op. Existing tests that mock the orchestrator's body are unaffected.
 
-The session JSON now records, per generation, the wall-clock duration of each barrier and whether the barrier was broken — this is what enabled the analysis showing measurement-window overlap is achieved in practice. See [GENERATION_BARRIERS.md](../../GENERATION_BARRIERS.md) and [tests/unit/core/test_barriers.py](../../../tests/unit/core/test_barriers.py).
+The session JSON now records, per generation, the wall-clock duration of each barrier and whether the barrier was broken — this is what enabled the analysis showing measurement-window overlap is achieved in practice. See [generation-barriers](../generation-barriers.md) and [tests/unit/core/test_barriers.py](../../../tests/unit/core/test_barriers.py).

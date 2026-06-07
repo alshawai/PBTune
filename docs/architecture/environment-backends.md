@@ -2,16 +2,16 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [PBT Core Components](./PBT_CORE_COMPONENTS.md), [Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md), [Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md), [ADR-004](./architecture/decisions/ADR-004-docker-cpu-subset-isolation.md)
+See also: [Documentation Index](../README.md), [PBT Core Components](pbt-core.md), [Workload Orchestrator](workload-orchestrator.md), [Hardware-Aware Normalization](hardware-aware-normalization.md), [ADR-004](decisions/ADR-004-docker-cpu-subset-isolation.md)
 
 ## Overview
 
 The environment layer abstracts the lifecycle of the **PostgreSQL instances each worker tunes against**. Two backends share one `DatabaseEnvironment` interface:
 
-- **`DockerEnvironment`** ([src/utils/environments/docker.py](../src/utils/environments/docker.py)) — one container per worker, with CPU subset pinning, RAM caps, and network isolation. **Recommended for any methodologically rigorous run** (publication-facing comparisons, multi-seed campaigns, the BO-vs-PBT baseline).
-- **`BareMetalEnvironment`** ([src/utils/environments/bare_metal.py](../src/utils/environments/bare_metal.py)) — `initdb`-managed data directories on the host, separate ports, no kernel-level resource isolation. Used when Docker is unavailable, for fast smoke tests, or in environments where the user explicitly accepts reduced isolation.
+- **`DockerEnvironment`** ([src/utils/environments/docker.py](../../src/utils/environments/docker.py)) — one container per worker, with CPU subset pinning, RAM caps, and network isolation. **Recommended for any methodologically rigorous run** (publication-facing comparisons, multi-seed campaigns, the BO-vs-PBT baseline).
+- **`BareMetalEnvironment`** ([src/utils/environments/bare_metal.py](../../src/utils/environments/bare_metal.py)) — `initdb`-managed data directories on the host, separate ports, no kernel-level resource isolation. Used when Docker is unavailable, for fast smoke tests, or in environments where the user explicitly accepts reduced isolation.
 
-The factory ([`EnvironmentFactory.create`](../src/utils/environments/factory.py)) auto-selects: try Docker first; fall back to bare-metal with a banner-style warning if Docker is unreachable, with `--no-docker`, or on errors during container creation.
+The factory ([`EnvironmentFactory.create`](../../src/utils/environments/factory.py)) auto-selects: try Docker first; fall back to bare-metal with a banner-style warning if Docker is unreachable, with `--no-docker`, or on errors during container creation.
 
 A single `DatabaseEnvironment` instance manages **all** worker instances for a run; per-worker calls take a `worker_id`. The interface is deliberately uniform across backends — orchestrator and population code never branches on backend type.
 
@@ -33,7 +33,7 @@ A single `DatabaseEnvironment` instance manages **all** worker instances for a r
 
 ## `DatabaseEnvironment` interface
 
-**Location**: [src/utils/environments/base.py](../src/utils/environments/base.py)
+**Location**: [src/utils/environments/base.py](../../src/utils/environments/base.py)
 
 ```python
 class DatabaseEnvironment(ABC):
@@ -92,7 +92,7 @@ Backends differ in **how strong** the isolation is — see the per-backend secti
 
 ## `EnvironmentFactory`
 
-**Location**: [src/utils/environments/factory.py](../src/utils/environments/factory.py)
+**Location**: [src/utils/environments/factory.py](../../src/utils/environments/factory.py)
 
 ```python
 EnvironmentFactory.create(
@@ -116,7 +116,7 @@ The factory:
 3. Falls back to `BareMetalEnvironment` on `ImportError`, `docker.errors.DockerException`, `OSError`, `RuntimeError`, or `ValueError` — with a prominent isolation warning.
 4. Always falls back to bare-metal if `use_docker=False`.
 
-`worker_resources` carries the per-worker CPU/RAM slice computed by [`detect_worker_resources()`](../src/utils/hardware_info.py) and is propagated into the Docker container limits or used to bound bare-metal memory accounting.
+`worker_resources` carries the per-worker CPU/RAM slice computed by [`detect_worker_resources()`](../../src/utils/hardware_info.py) and is propagated into the Docker container limits or used to bound bare-metal memory accounting.
 
 ---
 
@@ -126,7 +126,7 @@ The factory:
 
 - **Distinct port** (`base_port + worker_id`) bound to `127.0.0.1`.
 - **Distinct PGDATA volume** mounted from `.instances/<run_id>/<benchmark_subpath>/worker_N/pgdata/`.
-- **CPU subset pinning** via `--cpuset-cpus` (computed from the host CPU count and the number of parallel workers — see [ADR-004](./architecture/decisions/ADR-004-docker-cpu-subset-isolation.md)).
+- **CPU subset pinning** via `--cpuset-cpus` (computed from the host CPU count and the number of parallel workers — see [ADR-004](decisions/ADR-004-docker-cpu-subset-isolation.md)).
 - **RAM cap** via `--memory` derived from `worker_resources.ram_bytes`.
 - **Network mode** appropriate for `host.docker.internal` semantics so the orchestrator (running on the host) can reach the container.
 - **Container name** `pbt-worker_<worker_id>_<run_id_short>` so cleanup is greppable.
@@ -214,7 +214,7 @@ session start
 
 PBT runs span hours. Across hundreds of evaluations, a Sysbench OLTP workload writes meaningful data into `sbtest1`, an OLAP workload's `pg_class.relpages` drifts as `VACUUM ANALYZE` runs, and the buffer cache stabilises into shapes specific to the configurations seen so far. Without periodic restoration, the late-generation measurements are run against a different database state than the early ones — confounding the score.
 
-Restoring to a baseline snapshot every `snapshot_restore_interval` generations resets the database to a known starting point. The interval is configurable: too short and the cost of restoration dominates; too long and drift contaminates the score. Default is `10` generations; the BO baseline scales this by population size when matching a PBT reference (see [BO_BASELINE.md](./BO_BASELINE.md)).
+Restoring to a baseline snapshot every `snapshot_restore_interval` generations resets the database to a known starting point. The interval is configurable: too short and the cost of restoration dominates; too long and drift contaminates the score. Default is `10` generations; the BO baseline scales this by population size when matching a PBT reference (see [BO_BASELINE.md](../guides/bo-baseline.md)).
 
 ### Backend differences
 
@@ -302,20 +302,20 @@ Multiple poor workers exploiting the same elite become one rsync pass with a fan
 
 ## Related documentation
 
-- **[PBT Core Components](./PBT_CORE_COMPONENTS.md)** — how the population drives the environment.
-- **[Workload Orchestrator](./WORKLOAD_ORCHESTRATOR.md)** — how an evaluation invokes start/stop/restart.
-- **[Hardware-Aware Normalization](./HARDWARE_AWARE_NORMALIZATION.md)** — `WorkerResources` and warm-start.
-- **[Generation Barriers](./GENERATION_BARRIERS.md)** — how `is_alive()` informs `abort()`.
-- **[ADR-004 — Docker CPU subset isolation](./architecture/decisions/ADR-004-docker-cpu-subset-isolation.md)** — design decision.
-- **[BENCHMARKING.md](./BENCHMARKING.md)** — schema providers (Sysbench / TPC-H / template).
-- **[BO_BASELINE.md](./BO_BASELINE.md)** — how the BO baseline reuses the same environment layer.
+- **[PBT Core Components](pbt-core.md)** — how the population drives the environment.
+- **[Workload Orchestrator](workload-orchestrator.md)** — how an evaluation invokes start/stop/restart.
+- **[Hardware-Aware Normalization](hardware-aware-normalization.md)** — `WorkerResources` and warm-start.
+- **[Generation Barriers](generation-barriers.md)** — how `is_alive()` informs `abort()`.
+- **[ADR-004 — Docker CPU subset isolation](decisions/ADR-004-docker-cpu-subset-isolation.md)** — design decision.
+- **[BENCHMARKING.md](../reference/benchmarking.md)** — schema providers (Sysbench / TPC-H / template).
+- **[BO_BASELINE.md](../guides/bo-baseline.md)** — how the BO baseline reuses the same environment layer.
 
 ### File locations
 
-- `DatabaseEnvironment`, `InstanceConfig`: [src/utils/environments/base.py](../src/utils/environments/base.py)
-- `DockerEnvironment`: [src/utils/environments/docker.py](../src/utils/environments/docker.py)
-- `BareMetalEnvironment`: [src/utils/environments/bare_metal.py](../src/utils/environments/bare_metal.py)
-- `EnvironmentFactory`: [src/utils/environments/factory.py](../src/utils/environments/factory.py)
-- `WorkerResources` detection: [src/utils/hardware_info.py](../src/utils/hardware_info.py)
-- Cleanup script: [src/scripts/cleanup_instances.py](../src/scripts/cleanup_instances.py)
-- Tests: [tests/unit/utils/test_docker_environment.py](../tests/unit/utils/test_docker_environment.py), [tests/unit/utils/test_bare_metal_memory_utilization.py](../tests/unit/utils/test_bare_metal_memory_utilization.py), [tests/unit/utils/test_environment_base.py](../tests/unit/utils/test_environment_base.py)
+- `DatabaseEnvironment`, `InstanceConfig`: [src/utils/environments/base.py](../../src/utils/environments/base.py)
+- `DockerEnvironment`: [src/utils/environments/docker.py](../../src/utils/environments/docker.py)
+- `BareMetalEnvironment`: [src/utils/environments/bare_metal.py](../../src/utils/environments/bare_metal.py)
+- `EnvironmentFactory`: [src/utils/environments/factory.py](../../src/utils/environments/factory.py)
+- `WorkerResources` detection: [src/utils/hardware_info.py](../../src/utils/hardware_info.py)
+- Cleanup script: [src/scripts/cleanup_instances.py](../../src/scripts/cleanup_instances.py)
+- Tests: [tests/unit/utils/test_docker_environment.py](../../tests/unit/utils/test_docker_environment.py), [tests/unit/utils/test_bare_metal_memory_utilization.py](../../tests/unit/utils/test_bare_metal_memory_utilization.py), [tests/unit/utils/test_environment_base.py](../../tests/unit/utils/test_environment_base.py)

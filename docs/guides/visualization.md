@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-06-07
 
-See also: [Documentation Index](./README.md), [Knob Importance Analysis](./KNOB_IMPORTANCE_ANALYSIS.md), [PBT vs BO Comparison](./PBT_VS_BO_COMPARISON.md)
+See also: [Documentation Index](../README.md), [Knob Importance Analysis](../architecture/knob-importance-analysis.md), [PBT vs BO Comparison](pbt-vs-bo-comparison.md)
 
 ## Overview
 
@@ -70,7 +70,7 @@ python -m src.visualization --venue preview         # bigger, on-screen review
 python -m src.visualization --data-dir results/ --output-dir figures/
 ```
 
-Available venues: `pvldb` (PVLDB / VLDB single+double column widths, 9 pt serif, LaTeX), `springer` (Springer LNCS, 10 pt serif), `preview` (larger sans-serif for on-screen review). The widths and typography are encoded as `VenuePreset` records in [theme.py](../src/visualization/theme.py).
+Available venues: `pvldb` (PVLDB / VLDB single+double column widths, 9 pt serif, LaTeX), `springer` (Springer LNCS, 10 pt serif), `preview` (larger sans-serif for on-screen review). The widths and typography are encoded as `VenuePreset` records in [theme.py](../../src/visualization/theme.py).
 
 The CLI auto-discovers plot modules: importing `src.visualization.plots` triggers each module's top-level `register_figure(...)` call. Adding a new module under `src/visualization/plots/` is enough to make it visible to `--list`.
 
@@ -78,7 +78,7 @@ The CLI auto-discovers plot modules: importing `src.visualization.plots` trigger
 
 ## The figure registry
 
-**Location**: [src/visualization/registry.py](../src/visualization/registry.py)
+**Location**: [src/visualization/registry.py](../../src/visualization/registry.py)
 
 The registry tracks every figure by a stable string ID along with its category, paper section, default loader, and renderer.
 
@@ -127,7 +127,7 @@ Auto-discovery means contributors do not edit the registry directly — they wri
 
 ## Theme engine
 
-**Location**: [src/visualization/theme.py](../src/visualization/theme.py)
+**Location**: [src/visualization/theme.py](../../src/visualization/theme.py)
 
 `PBTuneTheme` enforces consistent matplotlib styling across every figure for a chosen venue.
 
@@ -160,7 +160,7 @@ The theme owns:
 
 - **Figure sizing** — single-column / double-column widths are venue-specific and the renderer must request a `FigureSize` (one of `SINGLE_COL`, `DOUBLE_COL`, `SQUARE`, `WIDE_SHORT`).
 - **Typography** — base font size + family. With `use_latex=True` the theme switches to LaTeX rendering for all text; the resulting PDFs embed Type 1 fonts compatible with PVLDB / Springer requirements.
-- **Color palette** — the colorblind-friendly palette from [src/visualization/colors.py](../src/visualization/colors.py). Renderers should use `theme.colorblind_palette()` rather than picking colors directly.
+- **Color palette** — the colorblind-friendly palette from [src/visualization/colors.py](../../src/visualization/colors.py). Renderers should use `theme.colorblind_palette()` rather than picking colors directly.
 - **Axes styling** — uniform tick formatting, spine styles, grid behaviour.
 
 Renderers should never mutate `plt.rcParams` directly. `theme.temporary_overrides(...)` is the escape hatch for one-off tweaks.
@@ -169,7 +169,7 @@ Renderers should never mutate `plt.rcParams` directly. `theme.temporary_override
 
 ## Loaders
 
-**Location**: [src/visualization/loaders/](../src/visualization/loaders/)
+**Location**: [src/visualization/loaders/](../../src/visualization/loaders/)
 
 Each loader knows how to walk a results subtree and build a typed dataclass for the renderer to consume.
 
@@ -177,7 +177,7 @@ Each loader knows how to walk a results subtree and build a typed dataclass for 
 | --- | --- | --- |
 | `session.py` | `results/{workload}/pbt_runs/{tier}/tuning_sessions/pbt_results_*.json` | `TuningSession` (per-generation history, best config, score breakdown, metadata) |
 | `baseline.py` | Default-PostgreSQL baseline JSONs under `results/{workload}/baselines/` | Baseline metric distributions |
-| `comparison.py` | `results/{workload}/comparisons/{tier}/comparison_*.json` | `ComparisonReport` from the post-hoc evaluation suite (see [EVALUATION_SUITE.md](./EVALUATION_SUITE.md)) |
+| `comparison.py` | `results/{workload}/comparisons/{tier}/comparison_*.json` | `ComparisonReport` from the post-hoc evaluation suite (see [EVALUATION_SUITE.md](../architecture/evaluation-suite.md)) |
 | `ablation.py` | Multi-config sweeps for ablation tables | Per-condition metric records |
 | `importance.py` | `results/analysis/{workload}/importance_results.json` | fANOVA + TreeSHAP per-knob importance + pairwise interactions |
 | `multi_seed.py` | Multiple seed-tagged session JSONs | Per-seed convergence curves with mean / std bands |
@@ -188,7 +188,7 @@ Loaders are deliberately schema-tolerant: they accept the current session JSON l
 
 ## Built-in plots
 
-**Location**: [src/visualization/plots/](../src/visualization/plots/)
+**Location**: [src/visualization/plots/](../../src/visualization/plots/)
 
 | Plot module | `fig_id` | What it shows |
 | --- | --- | --- |
@@ -196,7 +196,7 @@ Loaders are deliberately schema-tolerant: they accept the current session JSON l
 | `knob_dependence.py` | `knob_dependence` | SHAP dependence plots for the top-K knobs, with hardware-feature coloring. |
 | `knob_interaction_heatmap.py` | `knob_interaction_heatmap` | Pairwise interaction heatmap from fANOVA second-order terms. |
 
-Convergence and Pareto plots for the PBT-vs-BO comparison are produced by [`src/scripts/pbt_vs_bo_comarison.py`](../src/scripts/pbt_vs_bo_comarison.py) — see [PBT_VS_BO_COMPARISON.md](./PBT_VS_BO_COMPARISON.md). They predate the registry and are kept in `src/scripts/` for now; migrating them into the registry is tracked as a follow-up.
+Convergence and Pareto plots for the PBT-vs-BO comparison are produced by [`src/scripts/pbt_vs_bo_comarison.py`](../../src/scripts/pbt_vs_bo_comarison.py) — see [PBT_VS_BO_COMPARISON.md](pbt-vs-bo-comparison.md). They predate the registry and are kept in `src/scripts/` for now; migrating them into the registry is tracked as a follow-up.
 
 ---
 
@@ -230,7 +230,7 @@ Renderers ask the theme for a `FigureSize` and the theme converts it to inches g
 
 ### 4. Colorblind-friendly palette by default
 
-The default palette comes from [colors.py](../src/visualization/colors.py); the order is chosen so the first 4–5 series are distinguishable both in color and in print. Renderers that need more series should also set distinct line styles or markers, not rely on color alone.
+The default palette comes from [colors.py](../../src/visualization/colors.py); the order is chosen so the first 4–5 series are distinguishable both in color and in print. Renderers that need more series should also set distinct line styles or markers, not rely on color alone.
 
 ### 5. Independent of `src/tuner/`
 
@@ -244,18 +244,18 @@ The package never imports from the tuning engine. This both keeps the dependency
 
 ## Related documentation
 
-- **[Knob Importance Analysis](./KNOB_IMPORTANCE_ANALYSIS.md)** — what the importance plots draw from.
-- **[PBT vs BO Comparison](./PBT_VS_BO_COMPARISON.md)** — convergence / Pareto / resource-efficiency PDFs from the comparison script.
-- **[Evaluation Runbook](./EVALUATION_RUNBOOK.md)** — generating the comparison JSONs that feed the comparison loader.
+- **[Knob Importance Analysis](../architecture/knob-importance-analysis.md)** — what the importance plots draw from.
+- **[PBT vs BO Comparison](pbt-vs-bo-comparison.md)** — convergence / Pareto / resource-efficiency PDFs from the comparison script.
+- **[Evaluation Runbook](evaluation-runbook.md)** — generating the comparison JSONs that feed the comparison loader.
 
 ### File locations
 
-- CLI entry: [src/visualization/__main__.py](../src/visualization/__main__.py)
-- Registry: [src/visualization/registry.py](../src/visualization/registry.py)
-- Theme: [src/visualization/theme.py](../src/visualization/theme.py)
-- Types (`FigureSpec`, `VenuePreset`, `ExportFormat`, `FigureSize`): [src/visualization/types.py](../src/visualization/types.py)
-- Colors: [src/visualization/colors.py](../src/visualization/colors.py)
-- Export helpers: [src/visualization/export.py](../src/visualization/export.py)
-- Loaders: [src/visualization/loaders/](../src/visualization/loaders/)
-- Plots: [src/visualization/plots/](../src/visualization/plots/)
-- Tests: [tests/unit/visualization/test_types.py](../tests/unit/visualization/test_types.py)
+- CLI entry: [src/visualization/__main__.py](../../src/visualization/__main__.py)
+- Registry: [src/visualization/registry.py](../../src/visualization/registry.py)
+- Theme: [src/visualization/theme.py](../../src/visualization/theme.py)
+- Types (`FigureSpec`, `VenuePreset`, `ExportFormat`, `FigureSize`): [src/visualization/types.py](../../src/visualization/types.py)
+- Colors: [src/visualization/colors.py](../../src/visualization/colors.py)
+- Export helpers: [src/visualization/export.py](../../src/visualization/export.py)
+- Loaders: [src/visualization/loaders/](../../src/visualization/loaders/)
+- Plots: [src/visualization/plots/](../../src/visualization/plots/)
+- Tests: [tests/unit/visualization/test_types.py](../../tests/unit/visualization/test_types.py)
