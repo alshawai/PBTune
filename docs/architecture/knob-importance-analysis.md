@@ -108,24 +108,11 @@ The pipeline is invoked end-to-end by [`python -m src.scripts.analyze_knob_impor
 
 The `agreement_with_expert` block reports the fraction of expert-tier members that survived into the data-driven tier of the same name. Low agreement on a tier is a signal that the expert categorisation may benefit from review for that workload — not that the data-driven tier is automatically correct. The conservative hardware safety rule is applied before this comparison.
 
-## fANOVA Setup and Dependencies
+## fANOVA dependency note
 
-The fANOVA implementation relies on `pyrfr`, a C++-backed Random Forest
-library. The repository setup script handles SWIG, build tools, and the
-`pyrfr` patching workflow for modern compilers.
+The fANOVA implementation relies on `pyrfr`, a C++-backed Random Forest library that requires SWIG and a C++ toolchain to build. For installation steps see [getting-started/setup](../getting-started/setup.md), which handles the SWIG / `pyrfr` patching workflow for modern GCC. The Python version requirement is the project-wide `>=3.11,<3.14`.
 
-### Recommended Setup
-
-```bash
-./setup.sh
-```
-
-The script enforces Python >=3.11,<3.14, checks for `swig` and `g++`, patches
-`pyrfr` for modern GCC, and installs all Python dependencies. If you manage
-your own environment, keep the same Python version range and ensure SWIG and
-build tools are available.
-
-### Analysis Modules
+## Analysis modules
 
 - `data_loader.py` loads multi-session JSON results, rescales metrics with
   global normalization, encodes categorical knobs, and resolves knob bounds

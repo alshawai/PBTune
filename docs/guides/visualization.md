@@ -44,8 +44,9 @@ results/                              src/visualization/
 4. [Loaders](#loaders)
 5. [Built-in plots](#built-in-plots)
 6. [Adding a new figure](#adding-a-new-figure)
-7. [Design decisions](#design-decisions)
-8. [Related documentation](#related-documentation)
+7. [Related documentation](#related-documentation)
+
+For the design rationale behind the framework (auto-discovery, loader/renderer separation, why the theme owns sizing), see [architecture/visualization](../architecture/visualization.md).
 
 ---
 
@@ -214,36 +215,9 @@ Use the existing `knob_importance` module as a template — it covers the loader
 
 ---
 
-## Design decisions
-
-### 1. Auto-discovery via package import
-
-Plot modules register themselves at import; the registry never holds a hard list of figures. This keeps the CLI flat (no `--config figures.yaml`) and makes it trivial to develop a single figure in isolation.
-
-### 2. Loader/renderer separation
-
-A loader returns a typed dataclass; a renderer consumes it. The loader can be unit-tested with a JSON fixture; the renderer can be unit-tested with a constructed dataclass. Contrast with monolithic plot scripts that read JSON and render in one function — those are nearly impossible to test.
-
-### 3. Theme owns sizing, not the renderer
-
-Renderers ask the theme for a `FigureSize` and the theme converts it to inches given the active venue. A figure rendered with `--venue pvldb` and `FigureSize.SINGLE_COL` is `3.33 in` wide; the same figure with `--venue springer` is `3.39 in`. Renderers never hard-code inches — that is what made older one-off scripts impossible to retarget across venues.
-
-### 4. Colorblind-friendly palette by default
-
-The default palette comes from [colors.py](../../src/visualization/colors.py); the order is chosen so the first 4–5 series are distinguishable both in color and in print. Renderers that need more series should also set distinct line styles or markers, not rely on color alone.
-
-### 5. Independent of `src/tuner/`
-
-The package never imports from the tuning engine. This both keeps the dependency graph small and lets the visualization run in CI as a self-contained job against checked-in result fixtures.
-
-### 6. Output formats per figure
-
-`FigureSpec.formats` is a list — typically `[PDF, PNG]`. PDFs go into the paper; PNGs are for previews and slide decks. Vector exports for line plots, raster for densely-sampled heatmaps. The registry honours the spec's preferred formats but the CLI can override.
-
----
-
 ## Related documentation
 
+- **[architecture/visualization](../architecture/visualization.md)** — design rationale for the framework.
 - **[Knob Importance Analysis](../architecture/knob-importance-analysis.md)** — what the importance plots draw from.
 - **[PBT vs BO Comparison](pbt-vs-bo-comparison.md)** — convergence / Pareto / resource-efficiency PDFs from the comparison script.
 - **[Evaluation Runbook](evaluation-runbook.md)** — generating the comparison JSONs that feed the comparison loader.

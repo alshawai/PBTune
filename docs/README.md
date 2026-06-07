@@ -58,6 +58,8 @@ Understanding-oriented. The "how it works and why" set. Read in the listed order
 - [postgresql-connection-and-knobs](architecture/postgresql-connection-and-knobs.md) — connection layer, knob retrieval, tuning metadata, policy filter
 - [evaluation-suite](architecture/evaluation-suite.md) — `ComparisonRunner`, paired statistical methodology, multi-arm comparisons
 - [knob-importance-analysis](architecture/knob-importance-analysis.md) — fANOVA + TreeSHAP + Jenks tier generation
+- [bo-baseline](architecture/bo-baseline.md) — SMAC3 surrogate selection, Pilot+Freeze normalisation, read-back parity, parallel ask-tell
+- [visualization](architecture/visualization.md) — figure-framework design rationale (auto-discovery, loader/renderer split, theme ownership)
 
 ### architecture/decisions/ — ADRs
 
