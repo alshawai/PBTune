@@ -15,7 +15,7 @@ This is a research implementation of Population-Based Training (PBT) for Postgre
 ```bash
 # Setup environment (Recommended for Linux/macOS)
 # (Handles system dependencies, Python version checks, and GCC quirks)
-./setup.sh
+./scripts/bootstrap.sh
 source .venv/bin/activate
 
 # Alternative Setup: Conda (Best for avoiding C++ compilation)
