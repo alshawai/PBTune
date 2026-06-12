@@ -48,6 +48,8 @@ import numpy as np
 import psycopg2
 
 from src.config.data_root import resolve_data_root
+from src.utils.session_clock import format_session_id
+from src.utils.timing import TimingRecorder
 from src.config.database import get_db_config
 from src.database.connection import get_connection
 
@@ -83,7 +85,7 @@ from src.utils.metrics import (
     WorkloadType,
     create_metric_config,
 )
-from src.utils.types import clone_benchmark_config
+from src.utils.types import clone_benchmark_config, build_session_environment
 from src.utils.scoring.workload_features import WorkloadFeatureExtractor
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.logger import (
@@ -277,7 +279,7 @@ class PBTTuner:
         self.ablation_variable = kwargs.get("ablation_variable", None)
         self.ablation_value = kwargs.get("ablation_value", None)
 
-        self.timestamp = kwargs.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M"))
+        self.timestamp = kwargs.get("timestamp", format_session_id())
 
         self.knob_source = knob_source
 
@@ -496,6 +498,19 @@ class PBTTuner:
         LOGGER.info("Collecting system hardware and software information...")
         self.system_info = get_system_info(data_path=self.data_root)
 
+        # Compose a SessionEnvironment provenance record. Populated lazily —
+        # ``pg_server_version`` is filled in by ``_prune_unsupported_runtime_knobs``
+        # so the value embedded here may be ``None`` until that helper runs.
+        # ``save_final_results`` rebuilds the record at write time so the JSON
+        # always reflects the final captured server version.
+        self.session_environment = build_session_environment(
+            env=self.env,
+            num_parallel_workers=self.pbt_config.num_parallel_workers,
+            population_size=self.pbt_config.population_size,
+            system_info=self.system_info,
+            use_docker=not no_docker,
+        )
+
         self.output_dir = self._build_output_dir(
             Path(kwargs.get("output_dir", "results"))
         )
@@ -597,6 +612,10 @@ class PBTTuner:
     def _prune_unsupported_runtime_knobs(self) -> None:
         """Prune knobs unavailable on runtime PostgreSQL to avoid apply/verify failures."""
         supported_knobs, server_version = self._get_runtime_supported_knobs(worker_id=0)
+        # Persist the discovered server version on the env so SessionEnvironment
+        # and any later consumer can read it back without re-querying.
+        if server_version and server_version != "unknown":
+            self.env.pg_server_version = server_version
         configured_knobs = set(self.knob_space.knobs.keys())
         unsupported_knobs = sorted(configured_knobs - supported_knobs)
 
@@ -698,18 +717,24 @@ class PBTTuner:
             )
             self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
-            metrics, score, restart_occurred, _actual_db_config = (
+            # Check if snapshot restore is due this generation (set by Population).
+            restore_due = getattr(self.population, "_restore_due_this_gen", False)
+
+            metrics, score, restart_occurred, _actual_db_config, eval_timing = (
                 self.orchestrator.evaluate_worker(
                     worker,
                     apply_config=True,
                     generation=self.current_generation,
                     barriers=barriers,
+                    restore_due=restore_due,
                 )
             )
 
             if restart_occurred and not self._restarted_this_generation:
                 self.restart_count += 1
                 self._restarted_this_generation = True
+
+            worker.last_eval_timing = eval_timing
 
             return metrics, score
 
@@ -969,6 +994,7 @@ class PBTTuner:
         )
 
         self.start_time = time.time()
+        self.bootstrap_timing = TimingRecorder()
         try:
             log_section_header(
                 LOGGER,
@@ -983,17 +1009,20 @@ class PBTTuner:
                     self.pbt_config.population_size,
                     self.force_recreate_instances,
                 )
-                instances = self.env.setup_instances(
-                    num_workers=self.pbt_config.population_size,
-                    force_recreate=self.force_recreate_instances,
-                    num_parallel_workers=self.pbt_config.num_parallel_workers,
-                )
+                with self.bootstrap_timing.span("setup_instances"):
+                    instances = self.env.setup_instances(
+                        num_workers=self.pbt_config.population_size,
+                        force_recreate=self.force_recreate_instances,
+                        num_parallel_workers=self.pbt_config.num_parallel_workers,
+                    )
 
                 LOGGER.info("Verifying instance accessibility and configurations...")
-                self.env.verify_instances()
+                with self.bootstrap_timing.span("verify_instances"):
+                    self.env.verify_instances()
 
                 LOGGER.info("Pruning unsupported knobs based on container version...")
-                self._prune_unsupported_runtime_knobs()
+                with self.bootstrap_timing.span("prune_knobs"):
+                    self._prune_unsupported_runtime_knobs()
 
                 LOGGER.info(
                     "%s%sPostgreSQL instances are ready.%s",
@@ -1056,10 +1085,11 @@ class PBTTuner:
             )
 
             LOGGER.info("Configuring snapshot restoration...")
-            self.population.setup_snapshots(
-                env=self.env,
-                pbt_config=self.pbt_config,
-            )
+            with self.bootstrap_timing.span("setup_snapshots"):
+                self.population.setup_snapshots(
+                    env=self.env,
+                    pbt_config=self.pbt_config,
+                )
 
             LOGGER.info(
                 "%s%sInitialized %d workers with dedicated instances.%s",
@@ -1207,8 +1237,27 @@ class PBTTuner:
             score_breakdown=self.population.best_overall_score_breakdown,
         )
 
+        # Refresh the SessionEnvironment record at write time so the JSON
+        # captures the final ``pg_server_version`` (populated lazily by
+        # ``_prune_unsupported_runtime_knobs``) and any post-init mutations
+        # to env state. The original record built in ``__init__`` may have
+        # had ``pg_server_version=None``.
+        try:
+            self.session_environment = build_session_environment(
+                env=self.env,
+                num_parallel_workers=self.pbt_config.num_parallel_workers,
+                population_size=self.pbt_config.population_size,
+                system_info=self.system_info,
+                use_docker=getattr(
+                    self.session_environment, "use_docker", True
+                ),
+            )
+        except (AttributeError, TypeError) as exc:
+            LOGGER.debug("Failed to refresh SessionEnvironment: %s", exc)
+
         results = {
             "tuning_session": {
+                "timing_schema_version": "1.0",
                 "knob_tier": self.knob_tier,
                 "knob_source": self.knob_source,
                 "num_knobs": len(self.full_knob_space),
@@ -1264,6 +1313,7 @@ class PBTTuner:
                 ),
             },
             "system_info": self.system_info,
+            "session_environment": self.session_environment.to_dict(),
             "scoring_policy": scoring_payload["scoring_policy"],
             "scoring_policy_version": scoring_payload["scoring_policy_version"],
             "metric_reference_version": scoring_payload["metric_reference_version"],
@@ -1570,6 +1620,17 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    config_group.add_argument(
+        "--perturbation-factor",
+        type=float,
+        default=None,
+        help=(
+            "Perturbation spread factor for knob exploration (default: 0.2). "
+            "A value of X sets perturbation range to [1-X, 1+X]. "
+            "E.g., 0.2 -> [0.8, 1.2], 0.1 -> [0.9, 1.1], 0.4 -> [0.6, 1.4]."
+        ),
+    )
+
     scoring_group = parser.add_argument_group("Scoring & Normalization")
     scoring_group.add_argument(
         "--scoring-policy",
@@ -1778,7 +1839,7 @@ on your hardware, configuration, and workload/benchmark.
 def main():
     """Main entry point"""
     args = parse_args()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    timestamp = format_session_id()
 
     enable_colors = not args.no_color
     set_colors_enabled(enable_colors)
@@ -1837,6 +1898,13 @@ def main():
         ),
     )
 
+    perturbation_factors = base_config.perturbation_factors
+    if args.perturbation_factor is not None:
+        perturbation_factors = (
+            round(1.0 - args.perturbation_factor, 4),
+            round(1.0 + args.perturbation_factor, 4)
+        )
+
     pbt_config = replace(
         base_config,
         population_size=(
@@ -1874,6 +1942,7 @@ def main():
             if args.scoring_calibration_evals is not None
             else base_config.scoring_calibration_evals
         ),
+        perturbation_factors=perturbation_factors,
         synchronize_workers=not args.no_sync,
         benchmark_config=benchmark_config,
     )
