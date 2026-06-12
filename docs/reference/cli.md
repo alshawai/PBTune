@@ -51,6 +51,7 @@ The primary entry point. See [getting-started/quickstart](../getting-started/qui
 | `--generations <int>` | from profile | Override the profile's generation count. |
 | `--parallel-workers <int>` | population size | Number of workers running concurrently. Limits resource division — see [hardware-aware-normalization §7](../architecture/hardware-aware-normalization.md#7-docker-cpu-subset-enforcement). |
 | `--tuning-mode {online\|offline\|adaptive}` | `online` | Restart policy. See [workload-orchestrator §Restart policy](../architecture/workload-orchestrator.md#restart-policy-and-tuning-modes). |
+| `--perturbation-factor <float>` | `0.2` | Perturbation spread factor for knob exploration. Range is `[1-X, 1+X]`. |
 | `--disable-early-stopping` | off | Run the full `--generations` even after the early-stopping patience expires. |
 | `--no-sync` | off | Disable lockstep barriers. **Reduces measurement fairness** — use only for single-worker debugging. See [generation-barriers](../architecture/generation-barriers.md). |
 
