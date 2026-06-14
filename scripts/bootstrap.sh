@@ -87,28 +87,61 @@ install_system_packages() {
 }
 
 install_python() {
-    if command -v python3.11 &>/dev/null || command -v python3.12 &>/dev/null || command -v python3.13 &>/dev/null; then
-        info "Compatible Python already installed."
-        return
-    fi
+    # Check if a compatible interpreter already exists
+    for candidate in python3.13 python3.12 python3.11; do
+        if command -v "$candidate" &>/dev/null; then
+            info "● Compatible Python already installed ($candidate)."
+            # Ensure venv module is available for the detected interpreter
+            if ! "$candidate" -m venv --help &>/dev/null 2>&1; then
+                local pm
+                pm=$(detect_pkg_manager)
+                local ver_short
+                ver_short="$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+                info "Installing venv module for $candidate..."
+                case "$pm" in
+                    apt) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "python${ver_short}-venv" || true ;;
+                esac
+            fi
+            return
+        fi
+    done
+
     local pm
     pm=$(detect_pkg_manager)
-    info "Installing Python 3.12..."
+
+    # Try each compatible version in descending preference until one succeeds
     case "$pm" in
         apt)
             sudo apt-get install -y software-properties-common
             sudo add-apt-repository -y ppa:deadsnakes/ppa
             sudo apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev
+
+            for pyver in 3.13 3.12 3.11; do
+                if apt-cache show "python${pyver}" &>/dev/null 2>&1; then
+                    info "Installing Python ${pyver} from deadsnakes..."
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                        "python${pyver}" "python${pyver}-venv" "python${pyver}-dev" \
+                        && return
+                fi
+            done
+            # Last resort: system python3 + venv
+            info "No deadsnakes Python found — falling back to system python3."
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-dev
             ;;
         dnf|yum)
-            sudo $pm install -y python3.12
+            for pyver in 3.13 3.12 3.11; do
+                sudo $pm install -y "python${pyver/./}" 2>/dev/null && return || true
+            done
+            sudo $pm install -y python3
             ;;
         pacman)
             sudo pacman -Sy --noconfirm --needed python
             ;;
         zypper)
-            sudo zypper install -y python312
+            for pyver in 313 312 311; do
+                sudo zypper install -y "python${pyver}" 2>/dev/null && return || true
+            done
+            sudo zypper install -y python3
             ;;
     esac
 }
