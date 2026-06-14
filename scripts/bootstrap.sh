@@ -173,9 +173,25 @@ install_postgres_client() {
     fi
     local pm
     pm=$(detect_pkg_manager)
-    info "Installing PostgreSQL 16 client tools..."
+    info "Installing PostgreSQL client tools..."
     case "$pm" in
         apt)
+            # Try versioned packages from default repos first (16→17→15)
+            for pgver in 16 17 15; do
+                if apt-cache show "postgresql-client-${pgver}" &>/dev/null 2>&1; then
+                    info "Installing postgresql-client-${pgver}..."
+                    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "postgresql-client-${pgver}" && return
+                fi
+            done
+
+            # Add the official PostgreSQL APT repository (PGDG) as fallback
+            info "Adding official PostgreSQL APT repository (apt.postgresql.org)..."
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates gnupg
+            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+                | sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+                | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+            sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-16
             ;;
         dnf|yum)
