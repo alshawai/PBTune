@@ -278,7 +278,7 @@ class BOConfig:
             else base_config.n_iterations,
             random_seed=args.seed if args.seed is not None else base_config.random_seed,
             knob_tier=args.tier or base_config.knob_tier,
-            knob_source=args.knob_source or base_config.knob_source,
+            knob_source=getattr(args, "knob_source", None) or base_config.knob_source,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
             docker_image=args.docker_image,

@@ -8,6 +8,7 @@ from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import MetricConfig, PerformanceMetrics
+from src.utils.timing import TimingRecorder
 from src.scripts.bo_baseline.search_space import configspace_to_knobs
 from src.utils.logger import get_logger
 
@@ -25,7 +26,14 @@ def evaluate_config(
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
 ) -> Tuple[
-    float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float
+    float,
+    Dict,
+    Optional[PerformanceMetrics],
+    float,
+    Optional[Dict],
+    bool,
+    float,
+    TimingRecorder,
 ]:
     """
     Evaluate a single configuration on a specific worker instance.
@@ -52,9 +60,12 @@ def evaluate_config(
 
     Returns
     -------
-    Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float]
-        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time)
+    Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float, TimingRecorder]
+        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing)
         ``knob_config`` contains the *true* applied values after read-back.
+        ``eval_timing`` is the per-evaluation recorder returned by
+        ``WorkloadOrchestrator.evaluate_worker``; callers may serialize it
+        directly via ``eval_timing.to_dict()``.
     """
     t_start = time.time()
 
@@ -75,7 +86,7 @@ def evaluate_config(
     worker.knob_config = knob_config
     worker.force_restart_next_eval = force_restart
 
-    metrics, score, restarted, actual_db_config = orchestrator.evaluate_worker(
+    metrics, score, restarted, actual_db_config, eval_timing = orchestrator.evaluate_worker(
         worker, apply_config=True
     )
 
@@ -104,7 +115,16 @@ def evaluate_config(
                 metrics, worker_logger=worker.logger
             )
 
-    return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
+    return (
+        cost,
+        knob_config,
+        metrics,
+        score,
+        score_breakdown,
+        restarted,
+        wall_time,
+        eval_timing,
+    )
 
 
 def create_objective(
@@ -201,7 +221,7 @@ def create_objective(
                 except Exception as e:
                     LOGGER.error("Failed to restore database from snapshot: %s", e)
 
-            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
+            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing = (
                 evaluate_config(
                     config, worker, orchestrator, knob_space, state["previous_config"]
                 )
@@ -217,6 +237,10 @@ def create_objective(
                 "wall_clock_seconds": wall_time,
                 "restarted": restarted,
                 "timestamp": time.time(),
+                "timing": eval_timing.to_dict(include_summary=False),
+                # Sequential mode does not bracket ask/tell — see runner.py for
+                # the parallel-mode path that breaks these out.
+                "bo_overhead_seconds": 0.0,
             }
             iteration_log.append(iteration_entry)
 

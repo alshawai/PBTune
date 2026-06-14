@@ -90,6 +90,18 @@ class DockerEnvironment(DatabaseEnvironment):
         self._ready_timeout = 60
         self._restore_ready_timeout = self._derive_restore_ready_timeout()
         self._restore_api_timeout = self._derive_restore_api_timeout()
+        # ``_num_parallel_workers`` is set in ``setup_instances``; default
+        # to 1 so resource allocation queries before that call still work.
+        self._num_parallel_workers = 1
+
+        # Capture the Docker daemon version once at init so SessionEnvironment
+        # has it before setup_instances runs. Failures fall back to ``None``.
+        try:
+            version_info = self.client.version()
+            self.docker_version = version_info.get("Version") if version_info else None
+        except (docker_errors.DockerException, requests.RequestException, OSError) as exc:
+            LOGGER.debug("Failed to capture Docker version: %s", exc)
+            self.docker_version = None
 
         # Ensure network exists
         self.network_name = "pbt-network"
@@ -520,6 +532,45 @@ class DockerEnvironment(DatabaseEnvironment):
                 exc,
             )
             return False
+
+    def get_resource_allocations(self):
+        """Return per-worker resource allocations enforced via cgroups.
+
+        Reads the same ``cpuset_cpus`` and ``mem_limit`` values that go
+        into ``_container_runtime_kwargs`` so the JSON record matches
+        what Docker actually applied.
+        """
+        from src.utils.types import WorkerResourceAllocation
+
+        worker_ids = sorted(self.instances.keys())
+        if not worker_ids:
+            # Fall back to a single-worker projection so the SessionEnvironment
+            # builder still has something useful when called before setup.
+            worker_ids = [0]
+        num_workers = len(worker_ids)
+        allocations: List[WorkerResourceAllocation] = []
+        per_worker_ram = (
+            int(self.worker_resources.ram_bytes)
+            if self.worker_resources is not None
+            else int(self.ram_bytes)
+        )
+        per_worker_cpu = (
+            int(self.worker_resources.cpu_cores)
+            if self.worker_resources is not None
+            else int(self.cpu_cores) if self.cpu_cores else 0
+        )
+        docker_mem_limit = self.ram_bytes if self.ram_bytes > 0 else None
+        for worker_id in worker_ids:
+            allocations.append(
+                WorkerResourceAllocation(
+                    worker_id=worker_id,
+                    cpu_cores=per_worker_cpu,
+                    cpuset_cpus=self._worker_cpuset_cpus(worker_id, num_workers),
+                    ram_bytes=per_worker_ram,
+                    docker_memory_limit_bytes=docker_mem_limit,
+                )
+            )
+        return allocations
 
     def setup_instances(
         self,
@@ -1165,7 +1216,9 @@ class DockerEnvironment(DatabaseEnvironment):
                     self.image_name,
                     user="999:999",  # Copy as postgres user to avoid chown errors on exFAT/NTFS
                     entrypoint=["bash", "-lc"],
-                    command=["set -euo pipefail; cp -R /source/. /dest/"],
+                    command=[
+                        "set -euo pipefail; cp -R /source/. /dest/ && rm -f /dest/postgresql.auto.conf"
+                    ],
                     volumes={
                         self._docker_bind_path(source_pgdata): {
                             "bind": "/source",
@@ -1348,7 +1401,9 @@ class DockerEnvironment(DatabaseEnvironment):
             # Build the copy command for all targets
             copy_commands = ["set -euo pipefail"]
             for target_id in target_worker_ids:
-                copy_commands.append(f"cp -R /source/. /dest_{target_id}/")
+                copy_commands.append(
+                    f"cp -R /source/. /dest_{target_id}/ && rm -f /dest_{target_id}/postgresql.auto.conf"
+                )
 
             volumes = {
                 self._docker_bind_path(source_pgdata): {

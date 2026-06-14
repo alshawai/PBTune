@@ -15,7 +15,7 @@ import subprocess
 import shutil
 import tempfile
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional, TYPE_CHECKING
 import psycopg2
 import psutil
 
@@ -24,6 +24,9 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.utils.hardware_info import WorkerResources
 
 logger = get_logger("BareMetalEnvironment")
 
@@ -44,6 +47,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
         base_port: int = 5440,
         base_dir: Path = Path("./.instances"),
         ram_bytes: int = 0,
+        worker_resources: Optional["WorkerResources"] = None,
         force_recreate_baseline: bool = False,
     ):
         """Initialize bare metal environment with configuration."""
@@ -61,7 +65,15 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self.base_port = base_port
         self.base_dir = base_dir
         self.ram_bytes = ram_bytes
+        self.worker_resources = worker_resources
         self.instances: Dict[int, InstanceConfig] = {}
+        # Bare-metal does not use Docker; declared explicitly for symmetry
+        # with ``DockerEnvironment`` so SessionEnvironment can serialize
+        # both backends through the same code path.
+        self.docker_version = None
+        # Number of parallel workers, populated in ``setup_instances``.
+        # Default of 1 keeps resource queries safe before setup runs.
+        self._num_parallel_workers = 1
 
         logger.debug(
             "➤ Initialized BareMetalEnvironment with base_port=%d, base_dir=%s",
@@ -129,6 +141,10 @@ class BareMetalEnvironment(DatabaseEnvironment):
         """Set up N database instances on the bare metal host."""
         if num_workers <= 0:
             raise ValueError("Must specify at least 1 worker")
+
+        # Track parallelism on the instance so SessionEnvironment / resource
+        # allocation queries can read it back later.
+        self._num_parallel_workers = num_parallel_workers
 
         logger.info(
             "Setting up %d BareMetal PostgreSQL instances (force_recreate=%s)",
@@ -371,6 +387,8 @@ class BareMetalEnvironment(DatabaseEnvironment):
                 "postgresql.conf",
                 "--exclude",
                 "postmaster.pid",
+                "--exclude",
+                "postgresql.auto.conf",
                 str(self.instances[worker_id].data_dir) + "/",
                 str(baseline_path) + "/",
             ],
@@ -400,6 +418,8 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     "--delete",
                     "--exclude",
                     "postgresql.conf",
+                    "--exclude",
+                    "postgresql.auto.conf",
                     str(snapshot_path) + "/",
                     str(data_dir) + "/",
                 ],
@@ -410,11 +430,6 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self.start_instance(worker_id)
             self._wait_for_ready(worker_id)
             return False
-
-        # Make sure persist configuration logic stays clean! (removes any postgresql.auto.conf)
-        auto_conf = data_dir / "postgresql.auto.conf"
-        if auto_conf.exists():
-            auto_conf.unlink()
 
         self.start_instance(worker_id)
         self._wait_for_ready(worker_id)
@@ -448,16 +463,13 @@ class BareMetalEnvironment(DatabaseEnvironment):
                             "--delete",
                             "--exclude",
                             "postgresql.conf",
+                            "--exclude",
+                            "postgresql.auto.conf",
                             str(source_data_dir) + "/",
                             str(target_data_dir) + "/",
                         ],
                         check=True,
                     )
-
-                    # Clean auto.conf just like restore_snapshot
-                    auto_conf = target_data_dir / "postgresql.auto.conf"
-                    if auto_conf.exists():
-                        auto_conf.unlink()
 
                 except subprocess.CalledProcessError as e:
                     logger.error(
@@ -500,6 +512,39 @@ class BareMetalEnvironment(DatabaseEnvironment):
             user=self.base_config.user,
             password=self.base_config.password,
         )
+
+    def get_resource_allocations(self):
+        """Return per-worker resource allocations.
+
+        Bare-metal does not enforce cgroup-style isolation, so ``cpuset_cpus``
+        and ``docker_memory_limit_bytes`` are always ``None``. CPU/RAM
+        figures come from the ``worker_resources`` passed at construction
+        when available; otherwise reasonable host-derived fallbacks are
+        used so the JSON record is still populated.
+        """
+        from src.utils.types import WorkerResourceAllocation
+
+        worker_ids = sorted(self.instances.keys()) or [0]
+        if self.worker_resources is not None:
+            per_worker_ram = int(self.worker_resources.ram_bytes)
+            per_worker_cpu = int(self.worker_resources.cpu_cores)
+        else:
+            num_workers = max(1, len(worker_ids))
+            per_worker_ram = (
+                int(self.ram_bytes) if self.ram_bytes > 0
+                else int(psutil.virtual_memory().total / num_workers)
+            )
+            per_worker_cpu = max(1, (psutil.cpu_count(logical=True) or 1) // num_workers)
+        return [
+            WorkerResourceAllocation(
+                worker_id=worker_id,
+                cpu_cores=per_worker_cpu,
+                cpuset_cpus=None,
+                ram_bytes=per_worker_ram,
+                docker_memory_limit_bytes=None,
+            )
+            for worker_id in worker_ids
+        ]
 
     def collect_memory_utilization(self, worker_id: int) -> float:
         """Collect PostgreSQL RSS utilization ratio against worker memory budget."""
