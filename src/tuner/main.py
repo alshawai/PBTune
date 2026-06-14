@@ -898,6 +898,12 @@ class PBTTuner:
             "timestamp": datetime.now().isoformat(),
             "wall_clock_seconds": time.time() - self.start_time,
             "generation_elapsed_seconds": gen_elapsed_time,
+            "timing": (
+                self.population.generation_timing.to_dict(include_summary=False)
+                if hasattr(self.population, "generation_timing")
+                and self.population.generation_timing is not None
+                else None
+            ),
             "worker_scores": [
                 {
                     "worker_id": w.worker_id,
@@ -919,6 +925,11 @@ class PBTTuner:
                             if w.metrics
                             else None
                         )
+                    ),
+                    "timing": (
+                        w.last_eval_timing.to_dict(include_summary=False)
+                        if getattr(w, "last_eval_timing", None) is not None
+                        else None
                     ),
                 }
                 for w in self.population.workers
@@ -1100,6 +1111,7 @@ class PBTTuner:
             )
 
             try:
+                self.tuning_start_time = time.time()
                 for generation in range(self.pbt_config.num_generations):
                     self.run_generation(generation)
 
@@ -1152,9 +1164,15 @@ class PBTTuner:
                     )
 
         total_time = time.time() - self.start_time
+        tuning_time = time.time() - getattr(self, "tuning_start_time", self.start_time)
+        bootstrap_seconds = total_time - tuning_time
 
         LOGGER.info("Saving final results to output directory...")
-        results = self.save_final_results(total_time)
+        results = self.save_final_results(
+            total_time,
+            tuning_time_seconds=tuning_time,
+            bootstrap_seconds=bootstrap_seconds,
+        )
         log_final_summary(LOGGER, results)
 
         return results
@@ -1226,7 +1244,13 @@ class PBTTuner:
 
         LOGGER.debug("%sSaved intermediate result.%s", COLORS.italic, COLORS.reset)
 
-    def save_final_results(self, total_time: float) -> Dict[str, Any]:
+    def save_final_results(
+        self,
+        total_time: float,
+        *,
+        tuning_time_seconds: Optional[float] = None,
+        bootstrap_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Save final tuning results"""
         best_metrics = self.population.best_overall_metrics
         worker_resources = self.worker_resources
@@ -1257,7 +1281,7 @@ class PBTTuner:
 
         results = {
             "tuning_session": {
-                "timing_schema_version": "1.0",
+                "timing_schema_version": "1.1",
                 "knob_tier": self.knob_tier,
                 "knob_source": self.knob_source,
                 "num_knobs": len(self.full_knob_space),
@@ -1279,6 +1303,8 @@ class PBTTuner:
                 "seed": self.random_seed,
                 "total_generations": self.population.current_generation,
                 "total_time_seconds": total_time,
+                "tuning_time_seconds": tuning_time_seconds if tuning_time_seconds is not None else total_time,
+                "bootstrap_seconds": bootstrap_seconds if bootstrap_seconds is not None else 0.0,
                 "timestamp": self.timestamp,
                 "tuning_mode": self.pbt_config.benchmark_config.tuning_mode.value,
                 "adaptive_restart_interval": self.pbt_config.benchmark_config.adaptive_restart_interval,
@@ -1304,6 +1330,13 @@ class PBTTuner:
             },
             "warm_start": self.warm_start_provenance,
             "generation_history": convert_numpy_types(self.generation_history),
+            "bootstrap_breakdown": (
+                self.bootstrap_timing.to_dict()
+                if hasattr(self, "bootstrap_timing")
+                and self.bootstrap_timing is not None
+                else None
+            ),
+            "timing_summary": self._aggregate_session_timing(),
             "convergence": {
                 "converged": bool(self.population.history[-1].converged)
                 if self.population.history
@@ -1349,6 +1382,36 @@ class PBTTuner:
         )
 
         return results
+
+    def _aggregate_session_timing(self) -> Dict[str, Any]:
+        """Aggregate per-component timing across every (gen, worker) tuple.
+
+        Walks ``self.generation_history`` and merges every per-worker and
+        per-generation ``timing.records`` block into a single recorder, then
+        emits ``aggregate()`` so callers get mean/std/n/min/max/total per
+        component for the whole session.
+        """
+        merged = TimingRecorder()
+        for gen in self.generation_history:
+            gen_timing = gen.get("timing")
+            if gen_timing and isinstance(gen_timing, dict):
+                for rec in gen_timing.get("records", []) or []:
+                    merged.add(
+                        rec.get("component", "unknown"),
+                        float(rec.get("seconds", 0.0)),
+                        **(rec.get("metadata") or {}),
+                    )
+            for ws in gen.get("worker_scores", []) or []:
+                ws_timing = ws.get("timing")
+                if not ws_timing or not isinstance(ws_timing, dict):
+                    continue
+                for rec in ws_timing.get("records", []) or []:
+                    merged.add(
+                        rec.get("component", "unknown"),
+                        float(rec.get("seconds", 0.0)),
+                        **(rec.get("metadata") or {}),
+                    )
+        return merged.aggregate()
 
     def _compute_warm_start_perturbation_factors(
         self,

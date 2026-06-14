@@ -105,7 +105,7 @@ def test_evaluate_worker_raises_on_benchmark_execution_failure() -> None:
         patch.object(evaluator, "collect_system_metrics", return_value={}),
         patch.object(evaluator, "_vacuum_after_dml", return_value=None),
     ):
-        metrics, score, _, _db_config = evaluator.evaluate_worker(
+        metrics, score, _, _db_config, _timing = evaluator.evaluate_worker(
             worker, apply_config=False, generation=3
         )
         assert score == 0.0
