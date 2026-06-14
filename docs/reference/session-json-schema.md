@@ -1,8 +1,8 @@
 # Session JSON Schema
 
-> Last reviewed: 2026-06-07
+> Last reviewed: 2026-06-13
 
-See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [pbt-core](../architecture/pbt-core.md), [bo-baseline guide](../guides/bo-baseline.md)
+See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [pbt-core](../architecture/pbt-core.md), [bo-baseline guide](../guides/bo-baseline.md), [timing instrumentation contributor guide](../contributor/timing-instrumentation.md)
 
 Every tuning run, evaluation comparison, and analysis pass emits or consumes one of three JSON shapes:
 
@@ -23,6 +23,92 @@ All three schemas have evolved over the project's lifetime. The loader is **sche
 - Memory sizes follow the originating layer's unit — `ram_bytes` is bytes, `shared_buffers` is whatever unit PostgreSQL reported (typically `8kB` pages).
 - Knob values are stored at the **resolved (post-`verify()`) granularity**, not the suggested granularity — see [configuration-management §Verifying applied config](../architecture/configuration-management.md#verifying-applied-config).
 - `null` is used for "field absent / not applicable"; missing keys are equivalent to `null` for downstream tooling.
+
+---
+
+## Timing instrumentation (v1.1)
+
+Sessions written from 2026-06 onward carry `tuning_session.timing_schema_version`. v1.0 introduced per-component wall-clock instrumentation; v1.1 (current) is a non-breaking refinement that strips the redundant `summary` field at non-aggregating layers — see [Changes from v1.0](#changes-from-v10) below.
+
+**Clock.** All durations come from `time.monotonic()` via the `TimingRecorder` / `TimingRecord` primitives in [`src/utils/timing.py`](../../src/utils/timing.py). Wall-clock timestamps (filenames, log lines, ordering) come from `session_timestamp()` in [`src/utils/session_clock.py`](../../src/utils/session_clock.py). Durations and wall-clock timestamps are deliberately decoupled — durations are immune to NTP drift, leap seconds, and DST.
+
+**Hierarchy.** Timing data lives at three nested layers:
+
+1. **Session-level** — `bootstrap_breakdown` (one-shot setup costs incurred before the gen loop) and `timing_summary` (mean/std/n/min/max/total per component, aggregated across every `(generation, worker)` tuple in the session). Both carry a `summary` field — this is where aggregation matters.
+2. **Generation-level** — `generation_history[i].timing` is a per-generation block for whole-generation work that is not attributable to any single worker (currently only `evolve`). Shape: `{ "records": [...] }` — no `summary` because each component appears once per gen (n=1).
+3. **Worker-level** — `generation_history[i].worker_scores[j].timing` is a per-worker block covering everything from configuration apply through scoring. Shape: `{ "records": [...] }` — no `summary` because each component appears once per worker per gen (n=1).
+
+The `records` field is the ordered list of `TimingRecord` entries (component name, duration, optional metadata) at every layer.
+
+The `summary` field — present only at session level (`timing_summary` and `bootstrap_breakdown.summary`) — is `aggregate()` output keyed by component name: `{n, mean, std, min, max, total}`. `std` is population standard deviation (`statistics.pstdev`), `0.0` when `n == 1`.
+
+### Changes from v1.0
+
+v1.0 emitted `summary` at every layer uniformly. At per-worker / per-gen scope each component appeared exactly once per evaluation, so the summary block had `n=1`, `std=0.0`, and `mean=min=max=total=record.seconds` — pure JSON noise (~5x the bytes of the records block) without information beyond `records[i].seconds`. v1.1 emits `summary` only at the session-level layers where pooling actually produces non-trivial aggregates (`timing_summary` over all (gen, worker) tuples; `bootstrap_breakdown.summary` over the bootstrap component set).
+
+Backwards compatibility: v1.0 readers that walk `worker_scores[*].timing.summary` will see a missing key. The analysis script ([`src/analysis/timing_breakdown.py`](../../src/analysis/timing_breakdown.py)) already pulls from `records` (and falls back to flattening when `timing_summary` is absent), so it consumes both v1.0 and v1.1 unchanged.
+
+### Component reference
+
+The components currently emitted by the orchestrator, population, and tuner bootstrap. The source-file pointer is where the bracket is opened; new components are added by following the [contributor guide](../contributor/timing-instrumentation.md).
+
+| Component | Layer | Semantics | Source |
+| --- | --- | --- | --- |
+| `setup_instances` | bootstrap | Bring PostgreSQL workers up (containers, datadirs, schema load). | `src/tuner/main.py` — `PBTTuner.run` bootstrap block |
+| `verify_instances` | bootstrap | Probe each worker for liveness, version, capability. | `src/tuner/main.py` — `PBTTuner.run` bootstrap block |
+| `prune_knobs` | bootstrap | Drop knobs unsupported by the resolved PG server version. | `src/tuner/main.py` — `_prune_unsupported_runtime_knobs` |
+| `setup_snapshots` | bootstrap | Create per-worker baseline snapshots for fast restart. | `src/tuner/main.py` — `PBTTuner.run` bootstrap block |
+| `apply_only` | worker | `ALTER SYSTEM` writes only — no reload, no restart. Sets `restart_required`. | `src/utils/applicator.py` — `KnobApplicator.apply_only`, invoked from `WorkloadOrchestrator.apply_configuration` |
+| `activate_reload` | worker | `pg_reload_conf()` for SIGHUP / user / superuser-context knobs. Metadata: `strategy="reload"`. | `src/utils/applicator.py` — `KnobApplicator.activate` |
+| `activate_restart` | worker | `restart_instance()` for postmaster-context knobs. Metadata: `strategy="restart"`. | `src/utils/applicator.py` — `KnobApplicator.activate` |
+| `snapshot_restore` | worker | `env.restore_snapshot(worker_id)` when `restore_due=True`. Replaces `activate_*` on restore-interval generations (the restore IS the restart). | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `knob_verify` | worker | Read-back via `KnobApplicator.verify()` — confirms PostgreSQL accepted and quantised the values. | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `workload` | worker | Full workload execution (warmup + measurement). Metadata: `executor="internal"` or `executor="benchmark"` (sysbench / tpch). | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `score` | worker | `engine.compute_breakdown()` over the captured metrics. | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `evolve` | generation | `execute_exploit_explore` + `env.clone_instances` — the PBT step itself. | `src/tuner/core/population.py` — `Population.train_generation` |
+
+Component names are snake_case and stable: they are the dimension key in the cost-decomposition table, so renaming one silently breaks reproducibility of older sessions through the analysis script.
+
+### Observed vs. configured
+
+The `workload` component's semantics depend on the executor metadata:
+
+- `executor="benchmark"` (sysbench, tpch): warmup and measurement are not separately bracketed — the C-binary owns the warmup/measurement boundary internally. The reported `seconds` is the wall-clock duration of the subprocess call, which dominates both phases plus any process startup overhead. The configured `sysbench_warmup_seconds` / `sysbench_duration_seconds` (or `tpch_warmup_passes` / measurement-pass count) live in `tuning_session` and give the configured-vs-observed perspective.
+- `executor="internal"` (template-driven JSON workloads): warmup and measurement are **not yet** separately bracketed in the v1.0 schema. Splitting them is a follow-up to Phase 2C.10 of the timing instrumentation plan ([`docs/research/timing-instrumentation-plan.md`](../research/timing-instrumentation-plan.md)) and will land in a later schema bump. Until then, the bracket reports the combined wall-clock of both phases together.
+
+For sysbench specifically, the audit's [Phase 2C.10 note](../research/timing-instrumentation-plan.md) records that warmup / measurement durations can be reported as the configured values with `observed=False` metadata. The v1.0 emitter does not yet add that metadata; downstream tools that need the breakdown should consult the `tuning_session` configuration fields and treat the bracket as a single-block total.
+
+### Worker timing JSON example
+
+```json
+{
+  "timing": {
+    "records": [
+      {"component": "apply_only", "seconds": 0.124},
+      {"component": "activate_reload", "seconds": 0.087, "metadata": {"strategy": "reload"}},
+      {"component": "knob_verify", "seconds": 0.205},
+      {"component": "workload", "seconds": 300.45, "metadata": {"executor": "benchmark"}},
+      {"component": "score", "seconds": 0.012}
+    ]
+  }
+}
+```
+
+On a restore-interval generation, the record list contains a single `snapshot_restore` entry instead of `activate_reload` / `activate_restart`. A per-generation `timing` block is identical in shape but typically contains only an `evolve` record. Neither layer carries a `summary` field in v1.1 — see [Changes from v1.0](#changes-from-v10).
+
+The corresponding aggregate lives at the session level — `timing_summary[component]` accumulates each component's durations across every `(gen, worker)` tuple and emits `{n, mean, std, min, max, total}`. For the worker example above, the workload entry contributes one sample to `timing_summary["workload"]`.
+
+### Time accounting
+
+`tuning_session` carries three duration fields:
+
+| Field | Meaning |
+| --- | --- |
+| `total_time_seconds` | End-to-end session wall-clock (bootstrap + tuning loop). Kept for backwards compatibility with v0.0 sessions. |
+| `tuning_time_seconds` | Measurement-loop time only — captured from immediately before the gen loop to its end. This is what the paper's wall-clock-to-deployment-ready-config plot uses. *new in v1.0* |
+| `bootstrap_seconds` | `total_time_seconds - tuning_time_seconds`. The cost paid before the algorithm starts learning. *new in v1.0* |
+
+Legacy sessions (`timing_schema_version` absent) carry only `total_time_seconds`; the loader treats `tuning_time_seconds` / `bootstrap_seconds` / `bootstrap_breakdown` / `timing_summary` as `None` for those sessions and the analysis script must handle that case explicitly.
 
 ---
 
@@ -71,7 +157,10 @@ The five scoring-related top-level keys (`scoring_policy`, `scoring_policy_versi
 | `num_parallel_workers` | int | Workers run concurrently. *added in v2* |
 | `enable_snapshots`, `snapshot_restore_interval` | bool, int | Baseline-snapshot policy. *added in v2* |
 | `seed` | int | Master random seed. |
-| `total_time_seconds` | float | Wall-clock duration. |
+| `total_time_seconds` | float | Wall-clock duration (bootstrap + tuning). |
+| `tuning_time_seconds` | float | Measurement-loop wall-clock only (excludes bootstrap). *added in timing-schema v1.0* |
+| `bootstrap_seconds` | float | Bootstrap wall-clock only. *added in timing-schema v1.0* |
+| `timing_schema_version` | str | `"1.0"` from 2026-06 onwards; absent in legacy sessions. |
 | `timestamp` | str | `YYYYMMDD_HHMM`. |
 | `workload_features` | object | Workload feature vector (mirrored at top level). |
 
@@ -396,5 +485,9 @@ There's no direct lineage field; lineage has to be reconstructed from `worker_co
 | `tuning_session.enable_snapshots` | snapshot lifecycle | Absent in earliest sessions. |
 | `comparison_metadata.scoring_policy_override` | scoring policy override flag | Absent in older comparisons. |
 | `comparison_metadata.reproducibility` | reproducibility checklist | Absent in older comparisons. |
+| `tuning_session.timing_schema_version` | timing-instrumentation v1.0 (current value `"1.1"`) | Absent in pre-2026-06 sessions; loader treats absence as `"0.0"`. |
+| `tuning_session.tuning_time_seconds`, `bootstrap_seconds` | timing-instrumentation v1.0 | Absent in pre-2026-06 sessions. |
+| `bootstrap_breakdown`, `timing_summary` | timing-instrumentation v1.0 | Top-level. Absent in pre-2026-06 sessions. Both carry `records` + `summary`. |
+| `generation_history[].timing`, `generation_history[].worker_scores[].timing` | timing-instrumentation v1.0 | Absent in pre-2026-06 sessions. v1.0 carried `records` + `summary`; v1.1 drops the redundant `summary` here (each component has n=1 at this scope). |
 
 When in doubt, run the file through `load_tuning_session()` — the loader's compatibility branches are the source of truth on what older sessions look like and how to interpret missing fields.

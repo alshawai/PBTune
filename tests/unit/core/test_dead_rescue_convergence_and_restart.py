@@ -5,8 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.config.database import DatabaseConfig
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
@@ -188,7 +186,7 @@ def test_evaluate_worker_consumes_force_restart_marker() -> None:
         ),
         patch.object(evaluator, "_vacuum_after_dml", return_value=None),
     ):
-        _metrics, _score, restart_occurred, _db_config = evaluator.evaluate_worker(
+        _metrics, _score, restart_occurred, _db_config, _timing = evaluator.evaluate_worker(
             worker,
             apply_config=True,
             generation=4,
@@ -199,8 +197,8 @@ def test_evaluate_worker_consumes_force_restart_marker() -> None:
     assert worker.force_restart_next_eval is False
 
 
-def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
-    """Generation should attempt clean-slate rebuild when snapshot restore fails."""
+def test_train_generation_sets_restore_due_flag_when_interval_matches() -> None:
+    """train_generation should set _restore_due_this_gen when on restore interval."""
     knob_space = MagicMock()
     population = Population(
         knob_space=knob_space,
@@ -214,8 +212,6 @@ def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
     population.restore_interval = 5
     population.current_generation = 5
     population.env = MagicMock()
-    population.env.restore_snapshot.side_effect = [True, False]
-    population.env.rebuild_worker_instance.return_value = True
     population.evaluate_generation = MagicMock()
     population.rescue_dead_workers = MagicMock(return_value=0)
     population.update_metric_ranges_if_needed = MagicMock()
@@ -236,12 +232,12 @@ def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
         parallel=False,
     )
 
-    population.env.rebuild_worker_instance.assert_called_once_with(1)
+    assert population._restore_due_this_gen is True
     population.evaluate_generation.assert_called_once()
 
 
-def test_train_generation_raises_when_snapshot_restore_and_rebuild_fail() -> None:
-    """Generation should abort only if both restore and rebuild fail for a worker."""
+def test_train_generation_clears_restore_due_flag_off_interval() -> None:
+    """train_generation should NOT set _restore_due_this_gen off-interval."""
     knob_space = MagicMock()
     population = Population(
         knob_space=knob_space,
@@ -253,19 +249,30 @@ def test_train_generation_raises_when_snapshot_restore_and_rebuild_fail() -> Non
     ]
     population.enable_snapshots = True
     population.restore_interval = 5
-    population.current_generation = 5
+    population.current_generation = 3
     population.env = MagicMock()
-    population.env.restore_snapshot.side_effect = [True, False]
-    population.env.rebuild_worker_instance.return_value = False
     population.evaluate_generation = MagicMock()
-
-    with pytest.raises(RuntimeError, match="Snapshot restore recovery failed"):
-        population.train_generation(
-            lambda _w: (PerformanceMetrics(), 0.0),
-            parallel=False,
+    population.rescue_dead_workers = MagicMock(return_value=0)
+    population.update_metric_ranges_if_needed = MagicMock()
+    population._finalize_scores = MagicMock()
+    population.record_generation = MagicMock(
+        return_value=MagicMock(
+            generation=3,
+            best_score=0.0,
+            mean_score=0.0,
+            std_score=0.0,
+            converged=False,
+            num_exploited=0,
         )
+    )
 
-    population.evaluate_generation.assert_not_called()
+    population.train_generation(
+        lambda _w: (PerformanceMetrics(), 0.0),
+        parallel=False,
+    )
+
+    assert population._restore_due_this_gen is False
+    population.evaluate_generation.assert_called_once()
 
 
 def test_train_generation_logs_historical_best_worker_metrics_table() -> None:

@@ -3,7 +3,6 @@
 import time
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from smac import BlackBoxFacade, HyperparameterOptimizationFacade
@@ -29,6 +28,9 @@ from src.utils.hardware_info import (
     WorkerResources,
 )
 from src.utils.logger import setup_logging, get_logger, log_section_header
+from src.utils.session_clock import format_session_id
+from src.utils.timing import TimingRecorder
+from src.utils.types import build_session_environment
 from src.config.database import get_db_config
 from src.config.data_root import resolve_data_root
 from src.database.connection import get_connection
@@ -57,7 +59,7 @@ class BOBaselineRunner:
             Configuration for BO tuning
         """
         self.config = config
-        self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_timestamp = format_session_id()
         log_output_file = self._build_log_output_file(self.run_timestamp)
         setup_logging(verbosity=config.verbose, output_file=log_output_file)
         self.logger = get_logger("Runner")
@@ -137,6 +139,18 @@ class BOBaselineRunner:
 
         self.logger.info(f"BO Baseline Runner initialized for tier: {config.knob_tier}")
 
+        # Bootstrap recorder collects pre-tuning setup spans (instance setup,
+        # snapshot prep, knob pruning). Populated in :meth:`run` before the
+        # ask/tell loop starts so :attr:`tuning_start_time` excludes them.
+        self.bootstrap_timing = TimingRecorder()
+        # BO control-loop recorder collects facade.ask / facade.tell spans
+        # accumulated across the parallel ask/tell loop (sequential mode
+        # cannot easily intercept facade.optimize()).
+        self.bo_timing = TimingRecorder()
+        # Captured at the start of optimize() (after bootstrap). Used to
+        # report a leak-free ``tuning_time_seconds`` excluding bootstrap.
+        self.tuning_start_time: Optional[float] = None
+
     def _create_workload_executor(self):
         """Create appropriate workload executor based on benchmark type."""
         if self.config.benchmark_config.benchmark == "sysbench":
@@ -182,6 +196,10 @@ class BOBaselineRunner:
     def _prune_unsupported_runtime_knobs(self) -> None:
         """Prune knobs unavailable on runtime PostgreSQL."""
         supported_knobs, server_version = self._get_runtime_supported_knobs(worker_id=0)
+        # Persist the discovered server version on the env so SessionEnvironment
+        # can pick it up without a separate connection round-trip.
+        if server_version and server_version != "unknown":
+            self.env.pg_server_version = server_version
         configured_knobs = set(self.knob_space.knobs.keys())
         unsupported_knobs = sorted(configured_knobs - supported_knobs)
 
@@ -304,13 +322,15 @@ class BOBaselineRunner:
             # Setup N instances
             num_instances = self.config.max_workers
             self.logger.info(f"Setting up {num_instances} PostgreSQL instance(s)...")
-            self.env.setup_instances(
-                num_workers=num_instances, num_parallel_workers=num_instances
-            )
+            with self.bootstrap_timing.span("setup_instances", num_workers=num_instances):
+                self.env.setup_instances(
+                    num_workers=num_instances, num_parallel_workers=num_instances
+                )
 
             # Prune unsupported knobs
-            self._prune_unsupported_runtime_knobs()
-            self._apply_pbt_knob_filter()
+            with self.bootstrap_timing.span("prune_knobs"):
+                self._prune_unsupported_runtime_knobs()
+                self._apply_pbt_knob_filter()
 
             # Create workload orchestrator
             self.logger.info("Creating workload orchestrator...")
@@ -377,7 +397,7 @@ class BOBaselineRunner:
                 n_workers=1,
                 output_directory=(
                     self._build_smac_output_root()
-                    / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.config.random_seed}"
+                    / f"run_{self.run_timestamp}_{self.config.random_seed}"
                 ),
             )
 
@@ -420,6 +440,9 @@ class BOBaselineRunner:
 
             # Run optimization
             self.logger.info("Starting Bayesian Optimization...")
+            # Bootstrap is done; capture the post-bootstrap clock so
+            # ``tuning_time_seconds`` excludes setup overhead.
+            self.tuning_start_time = time.time()
             try:
                 if self.config.max_workers == 1:
                     # Sequential mode: use standard facade.optimize()
@@ -434,7 +457,16 @@ class BOBaselineRunner:
 
             # Write results
             self.logger.info("Writing results...")
+            tuning_time = time.time() - self.tuning_start_time
             total_time = time.time() - start_time
+
+            session_environment = build_session_environment(
+                env=self.env,
+                num_parallel_workers=self.config.max_workers,
+                population_size=self.config.n_iterations,
+                system_info=self.system_info,
+                use_docker=self.config.use_docker,
+            )
 
             results = write_bo_results(
                 knob_space=self.knob_space,
@@ -446,6 +478,10 @@ class BOBaselineRunner:
                 output_dir=self.config.output_dir,
                 metric_config=self.metric_config,
                 bo_surrogate=bo_surrogate,
+                session_environment=session_environment,
+                tuning_time_seconds=tuning_time,
+                bootstrap_timing=self.bootstrap_timing,
+                run_timestamp=self.run_timestamp,
             )
 
             self.logger.info(f"BO tuning completed in {total_time:.2f} seconds")
@@ -527,8 +563,25 @@ class BOBaselineRunner:
                         "Failed to restore databases from snapshots: %s", e
                     )
 
-            # Ask for batch of configs
-            trial_infos = [facade.ask() for _ in range(batch_size)]
+            # Ask for batch of configs.
+            # Each facade.ask() is bracketed so the per-iteration overhead is
+            # the real measured BO-side time (no fabricated proxies).
+            ask_timings: List[float] = []
+            trial_infos: List[TrialInfo] = []
+            for _ in range(batch_size):
+                t0 = time.monotonic()
+                ti = facade.ask()
+                elapsed = time.monotonic() - t0
+                ask_timings.append(elapsed)
+                self.bo_timing.add(
+                    "bo_overhead_ask", elapsed, batch_size=batch_size
+                )
+                trial_infos.append(ti)
+            # Amortize ask cost evenly across the batch — each trial in the
+            # batch sees its share of the wall-clock the BO spent picking it.
+            ask_overhead_per_trial = (
+                sum(ask_timings) / batch_size if batch_size > 0 else 0.0
+            )
 
             # Evaluate batch in parallel
             def evaluate_trial(worker_idx: int, trial_info: TrialInfo):
@@ -542,6 +595,7 @@ class BOBaselineRunner:
                         score_breakdown,
                         restarted,
                         wall_time,
+                        eval_timing,
                     ) = evaluate_config(
                         trial_info.config,
                         worker,
@@ -560,13 +614,24 @@ class BOBaselineRunner:
                         score,
                         score_breakdown,
                         restarted,
+                        eval_timing,
                     )
                 except Exception as e:
                     self.logger.error(
                         f"Error evaluating config on worker {worker_idx}: {e}",
                         exc_info=True,
                     )
-                    return trial_info, 100.0, 0.0, {}, None, 0.0, None, False
+                    return (
+                        trial_info,
+                        100.0,
+                        0.0,
+                        {},
+                        None,
+                        0.0,
+                        None,
+                        False,
+                        TimingRecorder(),
+                    )
 
             with ThreadPoolExecutor(max_workers=batch_size) as executor:
                 futures = {
@@ -584,13 +649,22 @@ class BOBaselineRunner:
                         score,
                         score_breakdown,
                         restarted,
+                        eval_timing,
                     ) = future.result()
 
-                    # Tell SMAC the result
+                    # Tell SMAC the result, bracketed so per-iteration
+                    # bo_overhead is measured rather than estimated.
+                    t0 = time.monotonic()
                     facade.tell(
                         trial_info,
                         TrialValue(cost=cost, time=wall_time),
                     )
+                    tell_elapsed = time.monotonic() - t0
+                    self.bo_timing.add(
+                        "bo_overhead_tell", tell_elapsed, batch_size=batch_size
+                    )
+
+                    bo_overhead_seconds = ask_overhead_per_trial + tell_elapsed
 
                     # Log iteration
                     iteration_entry = {
@@ -603,6 +677,8 @@ class BOBaselineRunner:
                         "wall_clock_seconds": wall_time,
                         "restarted": restarted,
                         "timestamp": time.time(),
+                        "timing": eval_timing.to_dict(include_summary=False),
+                        "bo_overhead_seconds": bo_overhead_seconds,
                     }
                     iteration_log.append(iteration_entry)
 
