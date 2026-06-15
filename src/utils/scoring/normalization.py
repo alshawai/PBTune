@@ -186,8 +186,18 @@ class QuantileUtilityNormalizer:
     def expand_metric_anchor(self, metric_name: str, bound: str) -> bool:
         """Expand a single metric's anchor on the saturated bound.
 
-        Uses the history buffer to recompute the anchor with a wider percentile,
-        expanding only the saturated side.
+        ``bound`` describes saturation in **utility space** (as returned by
+        ``detect_metric_saturation``): ``"upper"`` means workers cluster at
+        utility ≈ 1.0; ``"lower"`` means utility ≈ 0.0. The corresponding
+        raw-anchor end depends on the metric's direction:
+
+        * ``HIGHER_IS_BETTER``: utility=1 ↔ raw ``q_high``; utility=0 ↔ raw ``q_low``
+        * ``LOWER_IS_BETTER`` / ``ZERO_IS_BEST``: utility=1 ↔ raw ``q_low``; utility=0 ↔ raw ``q_high``
+
+        Without this mapping, expanding "upper" utility saturation for a
+        LOWER_IS_BETTER metric (e.g. latency_p95) would push ``q_high`` up
+        even though every saturated worker is clamped at ``q_low`` — leaving
+        utilities pinned at 1.0 forever.
         """
         if metric_name not in self._history or metric_name not in self.anchors:
             return False
@@ -221,9 +231,16 @@ class QuantileUtilityNormalizer:
         if rng == 0:
             rng = max(abs(new_high), 1e-6) * 0.2
 
-        if bound == "upper":
+        if direction == MetricDirection.HIGHER_IS_BETTER:
+            raw_bound = bound
+        else:
+            # LOWER_IS_BETTER and ZERO_IS_BEST both invert utility,
+            # so utility-"upper" saturation lives at raw q_low and vice versa.
+            raw_bound = "lower" if bound == "upper" else "upper"
+
+        if raw_bound == "upper":
             new_high = new_high + rng * 0.2
-        elif bound == "lower":
+        elif raw_bound == "lower":
             new_low = max(0.0, new_low - rng * 0.2)
 
         if new_low == new_high:
