@@ -409,6 +409,13 @@ class DockerEnvironment(DatabaseEnvironment):
 
         Copies the snapshot's PGDATA directory into the worker's bind-mount
         directory using a container (to handle UID 999 ownership).
+
+        The freshly-written ``postgresql.auto.conf`` is preserved across the
+        wipe so the knob configuration applied by the orchestrator survives
+        a restore-as-restart. The snapshot itself was created with auto.conf
+        excluded (see ``create_snapshot``), so the post-copy state has only
+        the per-worker auto.conf the orchestrator just wrote — which is the
+        whole point of the apply_only -> restore-as-restart sequence.
         """
         snapshot_pgdata = self._snapshot_host_dir()
         if not snapshot_pgdata.exists():
@@ -419,7 +426,21 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return None
 
-        pgdata_dir = self._prepare_worker_pgdata_dir(worker_id, quiet=quiet)
+        # Do NOT wipe the destination from the host side: that would destroy
+        # the postgresql.auto.conf the orchestrator just wrote via apply_only.
+        # The wipe + preserve + copy + restore happens atomically inside the
+        # copy container (which runs as UID 999 and can manage postgres-owned
+        # files without chown errors).
+        pgdata_dir = self._worker_host_pgdata_dir(worker_id)
+        if not pgdata_dir.exists():
+            # Brand-new path (e.g. first restore on a fresh repo): create
+            # with permissive mode so the copy container can write into it.
+            pgdata_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(pgdata_dir, 0o777)
+        # If the dir already exists, don't mkdir or chmod — the host user
+        # may not own the contents (postgres UID 999 created them) and
+        # ``os.chmod`` would raise PermissionError. The copy container
+        # handles all in-directory mutation as 999:999.
 
         try:
             with self._with_timeout(self._restore_api_timeout):
@@ -427,7 +448,26 @@ class DockerEnvironment(DatabaseEnvironment):
                     self.image_name,
                     user="999:999",  # Copy as postgres user to avoid chown errors on exFAT/NTFS
                     entrypoint=["bash", "-lc"],
-                    command=["set -euo pipefail; cp -R /source/. /dest/"],
+                    command=[
+                        # 1. Preserve auto.conf if present (apply_only just
+                        #    wrote the worker's knobs there).
+                        # 2. Wipe everything in /dest (worker's stale PGDATA).
+                        # 3. Copy snapshot in (snapshot has no auto.conf).
+                        # 4. Restore preserved auto.conf if we saved one.
+                        # find -mindepth 1 -delete leaves /dest itself intact
+                        # but removes every child (regular files, dirs, dotfiles).
+                        "set -euo pipefail; "
+                        "PRESERVED=0; "
+                        "if [ -f /dest/postgresql.auto.conf ]; then "
+                        "  cp -p /dest/postgresql.auto.conf /tmp/auto.conf.preserve; "
+                        "  PRESERVED=1; "
+                        "fi; "
+                        "find /dest -mindepth 1 -delete; "
+                        "cp -R /source/. /dest/; "
+                        "if [ \"$PRESERVED\" = \"1\" ]; then "
+                        "  cp -p /tmp/auto.conf.preserve /dest/postgresql.auto.conf; "
+                        "fi"
+                    ],
                     volumes={
                         self._docker_bind_path(snapshot_pgdata): {
                             "bind": "/source",
