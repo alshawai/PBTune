@@ -198,6 +198,7 @@ def execute_exploit_explore(
     require_ready: bool = True,
     dead_config_threshold: float = 6.0,
     exclude_knobs: Optional[List[str]] = None,
+    resample_probability: float = 0.0,
 ) -> List[Tuple[int, int]]:
     """
     Execute complete exploit-explore cycle for the population.
@@ -229,6 +230,10 @@ def execute_exploit_explore(
     exclude_knobs : Optional[List[str]]
         Knobs to exclude from perturbation (keep constant)
         Used for two-stage PBT where restart knobs are frozen between restart intervals
+
+    resample_probability : float
+        Probability of fully resampling a knob from its prior instead of perturbing it.
+        Default: 0.0
 
     Returns
     -------
@@ -288,6 +293,7 @@ def execute_exploit_explore(
             perturbation_factors=perturbation_factors,
             current_generation=current_generation,
             exclude_knobs=exclude_knobs,
+            resample_probability=resample_probability,
         )
 
         LOGGER.debug(" ➤ Copied config and applied perturbation")

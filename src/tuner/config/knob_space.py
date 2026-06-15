@@ -1059,6 +1059,7 @@ class KnobSpace:
         seed: Optional[int] = None,
         worker_id: Optional[int] = None,
         exclude_knobs: Optional[List[str]] = None,
+        resample_probability: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Perturb a configuration (PBT exploration step).
@@ -1078,6 +1079,9 @@ class KnobSpace:
             Worker ID for reproducibility
         exclude_knobs : Optional[List[str]]
             List of knob names to exclude from perturbation (keep unchanged)
+        resample_probability : float
+            Probability (0.0 to 1.0) of entirely resampling a knob from its prior 
+            instead of applying a local perturbation. Default is 0.0.
 
         Returns
         -------
@@ -1098,6 +1102,11 @@ class KnobSpace:
                 continue
 
             knob_def = self.knobs[knob_name]
+
+            # Original PBT resample logic: with probability p, draw entirely from prior
+            if rng.random() < resample_probability:
+                perturbed[knob_name] = knob_def.sample_random_value(rng)
+                continue
 
             if knob_def.knob_type == KnobType.INTEGER:
                 if knob_def.scale == KnobScale.LOG and value > 0:
