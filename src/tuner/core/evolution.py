@@ -97,10 +97,17 @@ def truncation_selection(
     else:
         ready_workers = workers
 
-    if len(ready_workers) < 2:
+    # Dead workers are always eligible for rescue, even before they (or any
+    # donor) reach ``ready_interval``. Returning here would skip rescue
+    # entirely during the warm-up window and leave broken instances in
+    # place until the population coincidentally has enough ready members.
+    # The elite-fallback below already promotes non-ready non-dead workers
+    # when no ready elites exist.
+    if len(ready_workers) < 2 and not dead_workers:
         return []
 
-    quantile_size = max(1, int(len(ready_workers) * exploit_quantile))
+    quantile_basis = ready_workers if ready_workers else workers
+    quantile_size = max(1, int(len(quantile_basis) * exploit_quantile))
 
     ready_non_dead = [
         w for w in ready_workers if w.performance_score >= dead_config_threshold
