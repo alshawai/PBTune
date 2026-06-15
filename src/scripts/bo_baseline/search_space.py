@@ -49,8 +49,8 @@ def get_config_drift(
         v_act = actual[k]
 
         if isinstance(v_exp, float) and isinstance(v_act, (float, int)):
-            abs_tolerance = max(1e-6, abs(v_exp) * 1e-6)
-            if not math.isclose(v_exp, v_act, rel_tol=1e-6, abs_tol=abs_tolerance):
+            abs_tolerance = max(1e-4, abs(v_exp) * 1e-4)
+            if not math.isclose(v_exp, v_act, rel_tol=1e-4, abs_tol=abs_tolerance):
                 drift[k] = (v_exp, v_act)
         elif v_exp != v_act:
             drift[k] = (v_exp, v_act)
@@ -92,6 +92,13 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
             and knob_def.max_value is not None
             and knob_def.min_value == knob_def.max_value
         ):
+            LOGGER.debug(
+                "Knob '%s' has degenerate range [%s, %s] after hardware resolution — "
+                "adding as Constant (not tunable)",
+                name,
+                knob_def.min_value,
+                knob_def.max_value,
+            )
             cs.add(Constant(name, knob_def.min_value))
             continue
 
@@ -212,6 +219,17 @@ def build_configspace(knob_space: KnobSpace, seed: int = 42) -> ConfigurationSpa
             cs.add(param)
 
     _add_configspace_constraints(cs, knob_space)
+
+    # Log a type-breakdown summary to verify the space was built as expected
+    hp_types: dict[str, int] = {}
+    for hp in cs.values():
+        t = type(hp).__name__
+        hp_types[t] = hp_types.get(t, 0) + 1
+    LOGGER.info(
+        "ConfigSpace built: %d hyperparameters total — %s",
+        len(list(cs.values())),
+        ", ".join(f"{count}×{t}" for t, count in sorted(hp_types.items())),
+    )
 
     return cs
 
@@ -390,9 +408,15 @@ def knobs_to_configspace(
             val = hp.value
         elif isinstance(hp, CategoricalHyperparameter):
             if val not in hp.choices:
+                knob_def_repr = knob_space.knobs.get(name)
                 LOGGER.error(
-                    f"Injection mismatch: Value '{val}' (type: {type(val).__name__}) "
-                    f"not in valid choices {hp.choices} for categorical knob '{name}'."
+                    "Injection mismatch for '%s': value=%r (type=%s), "
+                    "valid choices=%s, knob_def=%s",
+                    name,
+                    val,
+                    type(val).__name__,
+                    hp.choices,
+                    knob_def_repr,
                 )
                 raise ValueError(
                     f"Injection mismatch: Value '{val}' not in valid choices "
@@ -401,8 +425,11 @@ def knobs_to_configspace(
 
         values[name] = val
 
-    # allow_inactive_with_values=True handles conditional HPs gracefully
-    return Configuration(configspace, values=values, allow_inactive_with_values=True)
+    return Configuration(
+        configuration_space=configspace,
+        values=values,
+        allow_inactive_with_values=True,
+    )
 
 
 def build_env_context(knob_space: KnobSpace) -> Dict[str, Any]:

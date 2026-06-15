@@ -50,7 +50,9 @@ class BOConfig:
     colocate_output: bool = False
     verbose: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
-    # Pilot+Freeze: number of initial design iterations before freezing ranges
+    # Bootstrap size: number of initial Sobol iterations evaluated before the
+    # normalizer is first calibrated and SMAC history is relabeled.
+    # After calibration the normalizer continues to expand dynamically.
     range_update_interval: int = 10
 
     # SMAC surrogate model
@@ -178,34 +180,26 @@ class BOConfig:
         if set_iteration_budget:
             population_size = int(session.get("population_size", 0) or 0)
 
-            # Use the actual completed generation count, not the configured max.
-            # PBT writes current_generation into total_generations at save time,
-            # so this reflects real work done (even if PBT early-stopped).
-            # Fallback: len(generation_history) is ground truth.
-            actual_generations = int(session.get("total_generations", 0) or 0)
-            if actual_generations <= 0:
-                gen_hist = payload.get("generation_history", [])
-                actual_generations = len(gen_hist)
-
-            if population_size > 0 and actual_generations > 0:
-                self.n_iterations = population_size * actual_generations
+            if population_size > 0:
+                base_iterations = self.n_iterations
+                self.n_iterations = population_size * base_iterations
                 LOGGER.info(
-                    "PBT session: pop_size=%d × actual_generations=%d → n_iterations=%d",
+                    "PBT session provided: pop_size=%d × preset_iterations=%d → n_iterations=%d",
                     population_size,
-                    actual_generations,
+                    base_iterations,
                     self.n_iterations,
                 )
             else:
                 LOGGER.warning(
-                    "PBT session is missing positive population_size or "
-                    "actual completed generations; keeping configured BO iteration budget"
+                    "PBT session is missing positive population_size; "
+                    "keeping preset BO iteration budget"
                 )
 
-            # Auto-scale early stopping patience to ~20% of the resolved budget
+            # Auto-scale early stopping patience to ~50% of the resolved budget
             if self.early_stopping_enabled:
-                self.early_stopping_patience = max(5, int(self.n_iterations * 0.20))
+                self.early_stopping_patience = max(10, int(self.n_iterations * 0.50))
                 LOGGER.info(
-                    "Auto-scaled early_stopping_patience to %d (20%% of %d iterations)",
+                    "Auto-scaled early_stopping_patience to %d (50%% of %d iterations)",
                     self.early_stopping_patience,
                     self.n_iterations,
                 )
@@ -249,6 +243,30 @@ class BOConfig:
         # Extract scoring policy from PBT session if present
         if "scoring_policy" in session:
             self.scoring_policy = str(session["scoring_policy"])
+
+        # ── Consolidated summary of everything copied from the PBT session ──
+        LOGGER.info(
+            "Applied PBT session '%s':\n"
+            "  tier=%s, knob_source=%s, benchmark=%s/%s\n"
+            "  tuning_mode=%s, eval=%.0fs, warmup=%.0fs\n"
+            "  n_iterations=%d, knob_filter=%d knob(s), resource_division=%d\n"
+            "  snapshots=%s (interval=%d), scoring_policy=%s",
+            path.name,
+            self.knob_tier,
+            self.knob_source,
+            self.benchmark_config.benchmark,
+            self.benchmark_config.sysbench_workload
+            or self.benchmark_config.workload_type,
+            self.benchmark_config.tuning_mode,
+            self.benchmark_config.evaluation_duration,
+            self.benchmark_config.warmup_duration,
+            self.n_iterations,
+            len(self.pbt_knob_names) if self.pbt_knob_names else 0,
+            self.resource_division,
+            self.enable_snapshots,
+            self.snapshot_restore_interval,
+            self.scoring_policy,
+        )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "BOConfig":
@@ -316,8 +334,8 @@ class BOConfig:
             if args.iterations is not None
             else base_config.n_iterations,
             random_seed=args.seed if args.seed is not None else base_config.random_seed,
-            knob_tier=args.tier or base_config.knob_tier,
-            knob_source=args.knob_source or base_config.knob_source,
+            knob_tier=getattr(args, "tier", None) or base_config.knob_tier,
+            knob_source=getattr(args, "knob_source", None) or base_config.knob_source,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
             docker_image=args.docker_image,
@@ -382,31 +400,31 @@ class BOConfig:
 RAPID_BO_CONFIG = BOConfig(
     n_iterations=40,
     range_update_interval=10,
-    early_stopping_patience=8,
+    early_stopping_patience=20,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
 )
 STANDARD_BO_CONFIG = BOConfig(
     n_iterations=80,
     range_update_interval=10,
-    early_stopping_patience=20,
+    early_stopping_patience=50,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
 )
 THOROUGH_BO_CONFIG = BOConfig(
     n_iterations=400,
     range_update_interval=15,
-    early_stopping_patience=60,
+    early_stopping_patience=200,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
 )
 RESEARCH_BO_CONFIG = BOConfig(
     n_iterations=1600,
     range_update_interval=20,
-    early_stopping_patience=200,
+    early_stopping_patience=800,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
 )
 EXTREME_BO_CONFIG = BOConfig(
     n_iterations=3200,
     range_update_interval=25,
-    early_stopping_patience=400,
+    early_stopping_patience=1600,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
 )
 

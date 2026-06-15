@@ -24,7 +24,6 @@ def evaluate_config(
     orchestrator: WorkloadOrchestrator,
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
-    skip_scoring: bool = False,
     seed: Optional[int] = None,
 ) -> Tuple[
     Optional[float],
@@ -57,18 +56,15 @@ def evaluate_config(
         Knob space for configuration repair
     previous_config : Optional[Dict]
         Previous configuration for restart detection
-    skip_scoring : bool, default=False
-        When True (Phase 1 pilot collection), knob application and metric
-        collection proceed normally but cost/score/breakdown are returned as
-        None. The caller is responsible for scoring later with calibrated
-        normalization ranges.
+    seed : Optional[int]
+        Optional random seed for reproducibility.
 
     Returns
     -------
     Tuple[Optional[float], Dict, Optional[PerformanceMetrics], Optional[float], Optional[Dict], bool, float]
-        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time)
-        ``cost``, ``score``, and ``score_breakdown`` are None when skip_scoring=True.
+        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time).
         ``knob_config`` contains the *true* applied values after read-back.
+        ``cost`` and ``score`` are 100.0 / 0.0 on failure.
     """
     t_start = time.time()
 
@@ -85,6 +81,7 @@ def evaluate_config(
 
     # Detect if restart is needed
     force_restart = False
+    trigger_knob: str | None = None
     if previous_config is not None:
         for knob_def in knob_space.knobs.values():
             if knob_def.restart_required:
@@ -92,7 +89,22 @@ def evaluate_config(
                 curr_val = knob_config.get(knob_def.name)
                 if prev_val != curr_val:
                     force_restart = True
+                    trigger_knob = knob_def.name
                     break
+    else:
+        # Very first evaluation: must restart to guarantee DB state matches config
+        force_restart = True
+
+    if force_restart:
+        if trigger_knob is not None:
+            LOGGER.debug(
+                "Restart required — knob '%s' changed: %r → %r",
+                trigger_knob,
+                previous_config.get(trigger_knob) if previous_config else None,
+                knob_config.get(trigger_knob),
+            )
+        else:
+            LOGGER.debug("Restart required — first evaluation, forcing clean DB state")
 
     worker.knob_config = knob_config.copy()
     worker.force_restart_next_eval = force_restart
@@ -121,14 +133,16 @@ def evaluate_config(
     wall_time = time.time() - t_start
 
     if metrics is None or score is None:
-        cost = 100.0 if not skip_scoring else None
-        score = 0.0 if not skip_scoring else None
+        cost = 100.0
+        score = 0.0
         score_breakdown = None
-    elif skip_scoring:
-        # Phase 1 pilot: metrics collected, scoring deferred until calibration
-        cost = None
-        score = None
-        score_breakdown = None
+        LOGGER.warning(
+            "evaluate_config returning failure result (cost=100, score=0): "
+            "metrics=%s, score=%s, wall_time=%.2fs",
+            "None" if metrics is None else "present",
+            score,
+            wall_time,
+        )
     else:
         cost = max(0.0, min(100.0, 100.0 - score))
         score_breakdown = worker.score_breakdown
