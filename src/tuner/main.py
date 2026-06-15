@@ -1657,7 +1657,7 @@ on your hardware, configuration, and workload/benchmark.
         choices=["online", "offline", "adaptive"],
         help=(
             "Tuning mode controlling restart behavior "
-            "(default: online). "
+            "(default: offline). "
             "online = runtime knobs only, no restarts; "
             "offline = all knobs, restart every generation; "
             "adaptive = all knobs, restart every N generations"

@@ -131,6 +131,70 @@ def test_restore_snapshot_returns_false_when_container_run_fails() -> None:
     assert env.restore_snapshot(worker_id=0, snapshot_id="pbt-snapshot-test") is False
 
 
+def test_seed_pgdata_dir_preserves_auto_conf_across_restore(tmp_path: Path) -> None:
+    """The copy container must preserve postgresql.auto.conf so the worker's
+    freshly-applied knobs (written by apply_only just before restore) survive
+    the wipe-and-reseed.
+
+    Regression test for the bug where `_prepare_worker_pgdata_dir` wiped the
+    PGDATA bind mount from the host, destroying the auto.conf that
+    `apply_only` had just written. The fix moves the wipe + auto.conf
+    preserve + copy into a single atomic shell command inside the copy
+    container.
+    """
+    env = _make_environment()
+    env.base_dir = tmp_path
+
+    # Make the snapshot dir exist so the early-return guard passes.
+    snapshot_dir = env._snapshot_host_dir()
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    # Capture what command the copy container actually receives.
+    captured: dict = {}
+
+    def _run_capture(*args, **kwargs):
+        captured.update(kwargs)
+        m = MagicMock()
+        m.wait.return_value = {"StatusCode": 0}
+        return m
+
+    env.client.containers.run.side_effect = _run_capture
+
+    result = env._seed_pgdata_dir_from_snapshot(worker_id=0, quiet=True)
+    assert result is not None
+
+    cmd = captured.get("command")
+    assert cmd is not None, "containers.run must be called with a command"
+    cmd_str = cmd[0] if isinstance(cmd, list) else cmd
+
+    # Three invariants that prevent the auto.conf-wipe regression:
+    # 1. The pre-copy preservation hop must exist (cp before delete).
+    assert "/dest/postgresql.auto.conf" in cmd_str, (
+        "Command must reference /dest/postgresql.auto.conf for preservation"
+    )
+    assert "auto.conf.preserve" in cmd_str, (
+        "Command must save auto.conf to a tmp location before wiping /dest"
+    )
+    # 2. The wipe + copy + restore sequence must be ordered correctly:
+    #    preserve -> delete -> copy -> restore. We assert ordering by string
+    #    position in the single shell command.
+    save_pos = cmd_str.find("auto.conf.preserve")
+    delete_pos = cmd_str.find("find /dest")
+    copy_pos = cmd_str.find("cp -R /source")
+    restore_pos = cmd_str.rfind("auto.conf.preserve")
+    assert 0 <= save_pos < delete_pos < copy_pos < restore_pos, (
+        f"Sequence must be preserve→delete→copy→restore; got positions "
+        f"save={save_pos} delete={delete_pos} copy={copy_pos} restore={restore_pos}"
+    )
+    # 3. The destructive host-side wipe must NOT be used: that's what caused
+    #    the bug. _prepare_worker_pgdata_dir calls _force_remove_host_dir,
+    #    which would destroy auto.conf before the container ever runs.
+    #    Patching here would silently regress us — assert via call count.
+    assert not any(
+        "force_remove" in str(call) for call in env.client.containers.run.mock_calls
+    ), "Host-side _force_remove_host_dir must not be invoked during restore"
+
+
 @pytest.mark.skip(reason="Legacy volume tests")
 def test_restore_snapshot_uses_restore_specific_ready_timeout() -> None:
     """Snapshot restore should use a longer, restore-specific readiness timeout."""

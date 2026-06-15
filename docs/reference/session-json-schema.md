@@ -1,8 +1,8 @@
 # Session JSON Schema
 
-> Last reviewed: 2026-06-13
+> Last reviewed: 2026-06-15
 
-See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [pbt-core](../architecture/pbt-core.md), [bo-baseline guide](../guides/bo-baseline.md), [timing instrumentation contributor guide](../contributor/timing-instrumentation.md)
+See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [pbt-core](../architecture/pbt-core.md), [bo-baseline guide](../guides/bo-baseline.md), [timing instrumentation contributor guide](timing-instrumentation.md)
 
 Every tuning run, evaluation comparison, and analysis pass emits or consumes one of three JSON shapes:
 
@@ -50,7 +50,7 @@ Backwards compatibility: v1.0 readers that walk `worker_scores[*].timing.summary
 
 ### Component reference
 
-The components currently emitted by the orchestrator, population, and tuner bootstrap. The source-file pointer is where the bracket is opened; new components are added by following the [contributor guide](../contributor/timing-instrumentation.md).
+The components currently emitted by the orchestrator, population, and tuner bootstrap. The source-file pointer is where the bracket is opened; new components are added by following the [contributor guide](timing-instrumentation.md).
 
 | Component | Layer | Semantics | Source |
 | --- | --- | --- | --- |

@@ -300,8 +300,9 @@ python -m src.tuner.main \
 
 **Output:**
 
-- JSON results: `results/pbt_results_TIMESTAMP.json`
-- HTML log (colored): `results/pbt_tuning.html`
+- JSON results: `results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_TIMESTAMP.json`
+- HTML log (colored): `results/oltp/oltp_read_write/pbt_runs/minimal/pbt_tuning_TIMESTAMP.html`
+- Best config: `results/oltp/oltp_read_write/pbt_runs/minimal/best_configs/best_config_TIMESTAMP.json`
 
 ### Example 2: Standard Tuning Session (15-20 minutes)
 
@@ -367,14 +368,17 @@ python -m src.tuner.main \
 Open the HTML log in your browser for color-coded output:
 
 ```bash
+# Path follows the workload-partitioned layout, e.g. for OLTP read-write minimal tier:
+LOG=results/oltp/oltp_read_write/pbt_runs/minimal/pbt_tuning_TIMESTAMP.html
+
 # Windows
-start results/pbt_tuning.html
+start "$LOG"
 
 # macOS
-open results/pbt_tuning.html
+open "$LOG"
 
 # Linux
-xdg-open results/pbt_tuning.html
+xdg-open "$LOG"
 ```
 
 ### CLI Reference
@@ -388,16 +392,17 @@ python -m src.tuner.main --help
 | Argument        | Options                                    | Default    | Description                            |
 | --------------- | ------------------------------------------ | ---------- | -------------------------------------- |
 | `--tier`        | `minimal`, `core`, `standard`, `extensive` | `minimal`  | Knob space tier (5, 13, 36, 80+ knobs) |
-| `--config`      | `rapid`, `standard`, `thorough`            | `standard` | PBT configuration profile              |
-| `--population`  | 4-16                                       | 8          | Number of parallel workers             |
-| `--generations` | 10-100                                     | 30         | Optimization iterations                |
+| `--config`      | `rapid`, `standard`, `thorough`, `research`, `extreme` | `standard` | PBT configuration profile  |
+| `--population`  | integer                                    | from profile | Worker count (overrides profile)     |
+| `--generations` | integer                                    | from profile | Optimization iterations              |
 | `--workload`    | `oltp`, `olap`, `mixed`                    | `oltp`     | Workload type                          |
 | `--duration`    | seconds                                    | 30         | Evaluation duration per worker         |
 | `--sysbench-workload` | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | `oltp_read_write` | Sysbench OLTP mode when `--benchmark sysbench` |
-| `--scoring-policy` | `fixed_v1`, `feature_driven_v2`          | `feature_driven_v2` | Scoring policy (default for new runs)  |
-| `--scoring-policy-version` | version string                    | `1.0`      | Scoring policy version                 |
-| `--scoring-calibration-evals` | integer                         | 50         | Number of evals for normalization calibration |
-| `--verbose`     | `QUIET`, `NORMAL`, `VERBOSE`, `DEBUG`      | `NORMAL`   | Logging level                          |
+| `--scoring-policy` | `fixed_v1`, `feature_driven_v2`          | falls back to PBT config | Scoring policy (`feature_driven_v2` for new runs) |
+| `--scoring-policy-version` | version string                    | `2.0`      | Scoring policy version                 |
+| `--scoring-calibration-evals` | integer                         | `5`        | Number of evals for normalization calibration |
+| `--tuning-mode` | `online`, `offline`, `adaptive`            | `offline`  | Restart policy (online = no restarts; offline = every gen; adaptive = every N gens) |
+| `--verbose`     | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `TRACE` | `INFO`   | Console log level                      |
 
 ### Sysbench Benchmark Modes
 

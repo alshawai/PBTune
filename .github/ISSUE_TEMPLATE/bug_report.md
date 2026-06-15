@@ -39,7 +39,7 @@ Paste full error traceback here
 
 ## Logs
 
-Attach `results/pbt_tuning.html` or relevant log excerpts.
+Attach the relevant `pbt_tuning_*.html` from `results/{olap,oltp/<workload>}/pbt_runs/<tier>/` or relevant log excerpts.
 
 ## Additional Context
 

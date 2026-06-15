@@ -80,6 +80,10 @@ scoring_policy_version = "1.0"
 metric_reference_version = "v1"
 ```
 
+For new runs, the active default is `feature_driven_v2`; `fixed_v1` is retained
+for compatibility with legacy sessions. The loader is also tolerant of the v1.1
+session/timing JSON schema (see `docs/reference/session-json-schema.md`).
+
 The evaluation CLI supports policy override for re-evaluation:
 ```bash
 python -m src.evaluation \
@@ -91,12 +95,26 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-    --session <path>           # Required: path to tuning session JSON
-    --repetitions <N>          # Default: 5
-    --no-docker                # Use bare-metal instead of Docker
-    --scoring-policy <id>      # Override: fixed_v1 or feature_driven_v2
-    --output <path>            # Custom output path for comparison report
+    --session <path>              # Required: path to tuning session JSON
+    --bo-session <path>           # Optional: 3-way Default vs BO vs PBT comparison
+    --benchmark {sysbench,tpch}   # Auto-detected when omitted
+    --repetitions <N>             # Default: 5
+    --no-docker                   # Use bare-metal instead of Docker
+    --scoring-policy <id>         # Override: fixed_v1 or feature_driven_v2
+    --scoring-policy-version <v>  # Override policy version
+    --metric-reference-version <v># Override metric reference version
+    --output-dir <path>           # Custom output directory for comparison report
+    --colocate-output             # Place report next to the session file
+    --seed <N>                    # RNG seed for reproducibility
+    --data-dir <path>             # Override data dir
+    --docker-image <image>        # Override evaluation Docker image
+    --verbose {DEBUG,INFO,WARNING,ERROR}   # or -v for DEBUG
 ```
+
+Benchmark parameters (auto-detected from session, override only when needed):
+`--tpch-scale-factor`, `--tpch-warmup-passes`, `--sysbench-duration`,
+`--sysbench-tables`, `--sysbench-table-size`, `--sysbench-workload`,
+`--sysbench-warmup-seconds`.
 
 ## Output: ComparisonReport
 
@@ -128,7 +146,7 @@ JSON report saved to `results/{workload}/comparisons/{tier}/`:
 | Type definitions | `src/evaluation/types.py` |
 | Exceptions | `src/evaluation/exceptions.py` |
 | Docker image | `docker/eval.Dockerfile` |
-| Runbook | `docs/EVALUATION_RUNBOOK.md` |
+| Runbook | `docs/guides/evaluation-runbook.md` |
 
 ## Common Pitfalls
 
