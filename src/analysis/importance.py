@@ -202,7 +202,7 @@ def _run_importance_pass(
     pass_r2 = float(rf.score(X, y))
 
     shap_importances = {}
-    shap_values = []
+    shap_values: np.ndarray = np.empty(0)
     if not skip_shap:
         explainer = shap.TreeExplainer(rf)
         shap_values = explainer.shap_values(X)

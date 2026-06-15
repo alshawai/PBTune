@@ -1,7 +1,7 @@
 """Knob dependence plots using SHAP values."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 import textwrap
 
 import numpy as np
@@ -167,7 +167,7 @@ def generate_knob_dependence(
             axes = np.ravel(axes)
 
             for idx in range(len(knob_chunk)):
-                ax = axes[idx]
+                ax = cast(Axes, axes[idx])
                 knob = knob_chunk[idx]
                 if knob not in column_index:
                     ax.text(
@@ -211,10 +211,11 @@ def generate_knob_dependence(
                     ax.set_ylabel("")
                 ax.tick_params(axis="both", labelsize=7)
 
-            for ax in axes[len(knob_chunk) :]:
-                ax.set_axis_off()
+            for ax_obj in axes[len(knob_chunk):]:
+                cast(Axes, ax_obj).set_axis_off()
 
-            for idx, ax in enumerate(axes[: len(knob_chunk)]):
+            for idx, ax_obj in enumerate(axes[: len(knob_chunk)]):
+                ax = cast(Axes, ax_obj)
                 ax.text(
                     -0.08,
                     1.05,
