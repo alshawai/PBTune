@@ -1,6 +1,6 @@
 # Evaluation Reproducibility Runbook
 
-> Last reviewed: 2026-04-17
+> Last reviewed: 2026-06-15
 
 See also: [Documentation Index](../README.md)
 
@@ -91,14 +91,18 @@ python -m src.evaluation \
   --tpch-warmup-passes 2
 ```
 
-### Option E: One-Command Repro Script
+### Option E: Three-Way Comparison (Default vs BO vs PBT)
+
+When a paired BO baseline run is available, run a multi-arm comparison so that
+default, BO-tuned, and PBT-tuned configurations are measured against the same
+workload under the same paired seeds:
 
 ```bash
-./scripts/run_repro_eval.sh --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json --repetitions 10
+python -m src.evaluation \
+  --session results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --bo-session results/oltp/oltp_read_write/bo_runs/core/tuning_sessions/bo_results_YYYYMMDD_HHMM.json \
+  --repetitions 10
 ```
-
-`run_repro_eval.sh` is a convenience-only passthrough. Argument validation,
-defaults, and CLI contract are defined only in `python -m src.evaluation`.
 
 When omitted, `--seed` defaults to `50000`.
 

@@ -1,8 +1,31 @@
 # Environment Setup Guide
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-06-15
 
-See also: [Documentation Index](../README.md)
+See also: [Documentation Index](../README.md), [quickstart](quickstart.md)
+
+## Recommended: one-shot bootstrap
+
+The fastest path on Linux/macOS is the bootstrap script. It detects your package
+manager, installs system dependencies (build toolchain, PostgreSQL client
+headers, sysbench prerequisites), provisions a Python 3.11+ virtual environment
+under `.venv/`, and installs `requirements.txt`:
+
+```bash
+./scripts/bootstrap.sh             # Full install
+./scripts/bootstrap.sh --dev       # Also installs requirements-dev.txt
+./scripts/bootstrap.sh --clean     # Wipe .venv and start fresh
+./scripts/bootstrap.sh --skip-system  # Skip the system-package step
+```
+
+After it completes:
+
+```bash
+source .venv/bin/activate
+```
+
+The manual steps below are equivalent if you prefer to do them yourself or are
+on a platform the script doesn't cover.
 
 ## Database Configuration
 
@@ -32,10 +55,12 @@ DB_NAME=test_dataset
 
 #### Python packages
 
-Install the required Python packages:
+Install the required Python packages (Python 3.11+ required):
 
 ```bash
 pip install -r requirements.txt
+# For development (linting, typecheck, tests):
+pip install -r requirements-dev.txt
 ```
 
 **Key Dependencies**:
@@ -124,7 +149,8 @@ After setting up your environment, explore the system documentation:
 ### Core System Documentation
 - **[PostgreSQL Connection and Knobs](../architecture/postgresql-connection-and-knobs.md)**: Database connection management and knob retrieval system
 - **[PBT Core Components](../architecture/pbt-core.md)**: Worker, Evolution, and Population classes for population-based training
-- **[Performance Evaluation](../architecture/performance-evaluation.md)**: Evaluator, metrics collection, and scoring system
+- **[Performance Evaluation](../architecture/performance-evaluation.md)**: WorkloadOrchestrator, metrics collection, and scoring system
+- **[Workload Orchestrator](../architecture/workload-orchestrator.md)**: Workload execution and per-worker measurement pipeline
 - **[Configuration Management](../architecture/configuration-management.md)**: KnobSpace and KnobApplicator for safe configuration handling
 
 ### Quick Start
