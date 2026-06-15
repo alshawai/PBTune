@@ -11,7 +11,7 @@ from src.knobs.knob_metadata import KNOB_TUNING_METADATA
 
 def _load_policy(path: str = "data/knob_policy.json") -> Dict[str, tuple[str, str]]:
     """Load source exclusion policy from JSON while preserving tuple-based API."""
-    path = Path(path)
+    path = str(Path(path))
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

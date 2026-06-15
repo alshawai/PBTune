@@ -323,7 +323,7 @@ def generate_tiers(
 
     if n_samples == 1:
         tier_names = get_tier_names(1)
-        tier_assignments = {knobs[0]: tier_names[0]}
+        tier_assignments: dict[str, str] = {knobs[0]: tier_names[0]}
         data_rank_map = get_tier_rank_map(tier_names)
         agreement_report = compare_to_expert(tier_assignments, data_rank_map)
         return TierResult(
@@ -356,7 +356,7 @@ def generate_tiers(
         labels = _assign_labels(scores, breaks)
     tier_names = get_tier_names(optimal_k)
 
-    tier_assignments: dict[str, str] = {}
+    tier_assignments = {}
     for knob, label in zip(knobs, labels, strict=True):
         tier_index = (optimal_k - 1) - label
         tier_assignments[knob] = tier_names[tier_index]

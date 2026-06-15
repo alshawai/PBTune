@@ -45,6 +45,7 @@ from src.utils.logger.helpers import log_section_header, log_worker_metrics_tabl
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.logger import get_logger, get_color_context
+from src.utils.timing import TimingRecorder
 
 LOGGER = get_logger("Population")
 COLORS = get_color_context()
@@ -212,6 +213,10 @@ class Population:
         self.restore_interval: int = 5
         self.env: Optional[DatabaseEnvironment] = None
 
+        # Per-generation flag: True when snapshot restore is due this gen.
+        # Set by train_generation(), consumed by evaluate_fn via the orchestrator.
+        self._restore_due_this_gen: bool = False
+
         self._ranges_calibrated: bool = False
         self._features_refined: bool = False
 
@@ -363,7 +368,7 @@ class Population:
 
     def evaluate_generation(
         self,
-        evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
+        evaluate_fn: Callable[..., tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         max_workers: Optional[int] = None,
         synchronize_workers: bool = False,
@@ -917,7 +922,7 @@ class Population:
 
     def train_generation(
         self,
-        evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]],
+        evaluate_fn: Callable[..., Tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         require_ready: bool = True,
         max_workers: Optional[int] = None,
@@ -965,57 +970,28 @@ class Population:
         ...     if population.should_stop():
         ...         break
         """
-        if (
+        # Per-generation timing recorder (fresh each generation).
+        self.generation_timing = TimingRecorder()
+
+        # Determine if snapshot restore is due this generation.
+        # The actual restore happens inside evaluate_worker (after apply_only
+        # writes the new knobs to auto.conf), so the restore preserves the
+        # freshly-written configuration and serves as the restart.
+        self._restore_due_this_gen = bool(
             self.enable_snapshots
             and self.current_generation > 0
             and self.current_generation % self.restore_interval == 0
-        ):
+        )
+
+        if self._restore_due_this_gen:
             log_section_header(
                 LOGGER,
-                "%sRestoring database snapshots for generation %d%s",
+                "%sSnapshot restore due for generation %d (will restore per-worker during eval)%s",
                 COLORS.bold,
                 self.current_generation,
                 COLORS.reset,
                 top_separator=False,
             )
-
-            try:
-                failed_workers = []
-                for worker in self.workers:
-                    restored = self.env.restore_snapshot(worker.worker_id, quiet=True)  # type: ignore
-                    if restored:
-                        LOGGER.info(
-                            " %sRestored snapshot for [Worker-%d]%s",
-                            COLORS.italic,
-                            worker.worker_id,
-                            COLORS.reset,
-                        )
-                    if not restored:
-                        LOGGER.error(
-                            "Snapshot restore failed for [Worker-%d]; attempting clean-slate rebuild",
-                            worker.worker_id,
-                        )
-
-                        rebuilt = self.env.rebuild_worker_instance(worker.worker_id)  # type: ignore
-
-                        if not rebuilt:
-                            failed_workers.append(worker.worker_id)
-
-                if failed_workers:
-                    raise RuntimeError(
-                        "Snapshot restore recovery failed for workers: "
-                        f"{failed_workers}"
-                    )
-
-                log_section_header(
-                    LOGGER,
-                    "➤ Database snapshots restored successfully.",
-                    top_separator=False,
-                )
-            except Exception as e:
-                LOGGER.error("Failed to restore databases from snapshots: %s", e)
-                LOGGER.debug("Exception details:", exc_info=True)
-                raise
 
         self.evaluate_generation(
             evaluate_fn,
@@ -1040,32 +1016,33 @@ class Population:
         result = self.record_generation()
 
         LOGGER.info("Performing evolution step...")
-        pairs_exploited = execute_exploit_explore(
-            workers=self.workers,
-            exploit_quantile=self.config.exploit_quantile,
-            perturbation_factors=self.config.perturbation_factors,
-            current_generation=self.current_generation,
-            require_ready=require_ready,
-            dead_config_threshold=self.config.dead_config_threshold,
-            exclude_knobs=None,
-        )
+        with self.generation_timing.span("evolve"):
+            pairs_exploited = execute_exploit_explore(
+                workers=self.workers,
+                exploit_quantile=self.config.exploit_quantile,
+                perturbation_factors=self.config.perturbation_factors,
+                current_generation=self.current_generation,
+                require_ready=require_ready,
+                dead_config_threshold=self.config.dead_config_threshold,
+                exclude_knobs=None,
+            )
 
-        if self.env is not None and pairs_exploited:
-            clones_by_source = {}
-            for poor_idx, elite_idx in pairs_exploited:
-                source_id = self.workers[elite_idx].worker_id
-                target_id = self.workers[poor_idx].worker_id
-                if source_id not in clones_by_source:
-                    clones_by_source[source_id] = []
-                clones_by_source[source_id].append(target_id)
+            if self.env is not None and pairs_exploited:
+                clones_by_source: dict[int, list[int]] = {}
+                for poor_idx, elite_idx in pairs_exploited:
+                    source_id = self.workers[elite_idx].worker_id
+                    target_id = self.workers[poor_idx].worker_id
+                    if source_id not in clones_by_source:
+                        clones_by_source[source_id] = []
+                    clones_by_source[source_id].append(target_id)
 
-            for source_id, target_ids in clones_by_source.items():
-                LOGGER.info(
-                    " ➤ Physically cloning database from elite worker %d to %d poor workers...",
-                    source_id,
-                    len(target_ids),
-                )
-                self.env.clone_instances(source_id, target_ids)
+                for source_id, target_ids in clones_by_source.items():
+                    LOGGER.info(
+                        " ➤ Physically cloning database from elite worker %d to %d poor workers...",
+                        source_id,
+                        len(target_ids),
+                    )
+                    self.env.clone_instances(source_id, target_ids)
 
         result.num_exploited = len(pairs_exploited)
         self.current_generation += 1
@@ -1187,7 +1164,7 @@ class Population:
         if ranges_expanded:
             LOGGER.debug(" ➤ Saturation/drift detected: expanded normalizer ranges")
 
-        weights_updated = self.orchestrator.maybe_update_feature_weights(
+        weights_updated = self.orchestrator.maybe_update_feature_weights(  # type: ignore
             self.current_generation,
             force=ranges_expanded,
             log_every=5,

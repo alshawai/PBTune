@@ -8,6 +8,8 @@ from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
+from src.utils.timing import TimingRecorder
 from src.scripts.bo_baseline.search_space import configspace_to_knobs, get_config_drift
 from src.utils.logger import get_logger
 
@@ -30,9 +32,10 @@ def evaluate_config(
     Dict,
     Optional[PerformanceMetrics],
     Optional[float],
-    Optional[Dict],
+    Optional[ScoreBreakdown],
     bool,
     float,
+    TimingRecorder,
 ]:
     """
     Evaluate a single configuration on a specific worker instance.
@@ -61,10 +64,13 @@ def evaluate_config(
 
     Returns
     -------
-    Tuple[Optional[float], Dict, Optional[PerformanceMetrics], Optional[float], Optional[Dict], bool, float]
-        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time).
+    Tuple[Optional[float], Dict, Optional[PerformanceMetrics], Optional[float], Optional[ScoreBreakdown], bool, float, TimingRecorder]
+        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing).
         ``knob_config`` contains the *true* applied values after read-back.
         ``cost`` and ``score`` are 100.0 / 0.0 on failure.
+        ``eval_timing`` is the per-evaluation recorder returned by
+        ``WorkloadOrchestrator.evaluate_worker``; callers may serialize it
+        directly via ``eval_timing.to_dict()``.
     """
     t_start = time.time()
 
@@ -109,7 +115,7 @@ def evaluate_config(
     worker.knob_config = knob_config.copy()
     worker.force_restart_next_eval = force_restart
 
-    metrics, score, restarted, actual_db_config = orchestrator.evaluate_worker(
+    metrics, score, restarted, actual_db_config, eval_timing = orchestrator.evaluate_worker(
         worker, apply_config=True, random_seed=seed
     )
 
@@ -152,4 +158,13 @@ def evaluate_config(
                 metrics, worker_logger=worker.logger
             )
 
-    return cost, knob_config, metrics, score, score_breakdown, restarted, wall_time
+    return (
+        cost,
+        knob_config,
+        metrics,
+        score,
+        score_breakdown,
+        restarted,
+        wall_time,
+        eval_timing,
+    )

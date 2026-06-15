@@ -8,7 +8,7 @@ abstracting away whether it runs in Docker or on Bare-Metal.
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 from pathlib import Path
 from dataclasses import dataclass
 import time
@@ -20,6 +20,9 @@ from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger, get_color_context
 from src.benchmarks.executor import BenchmarkExecutor
+
+if TYPE_CHECKING:
+    from src.utils.types import WorkerResourceAllocation
 
 
 LOGGER = get_logger("BaseEnvironment")
@@ -70,6 +73,43 @@ class DatabaseEnvironment(ABC):
         self.base_config = db_config
         self.schema_provider = schema_provider
         self.force_recreate_baseline = force_recreate_baseline
+        # Lazily populated on first connection (see ``_capture_pg_server_version``).
+        self.pg_server_version: Optional[str] = None
+        # Backend-specific. Bare-metal sets this to ``None`` for symmetry;
+        # Docker captures the daemon version on init.
+        self.docker_version: Optional[str] = None
+
+    def _capture_pg_server_version(self, connection) -> Optional[str]:
+        """Capture the PostgreSQL ``server_version`` and store it on the env.
+
+        Idempotent — once populated, subsequent calls become a no-op so that
+        repeated callers (e.g. ``_prune_unsupported_runtime_knobs`` and the
+        SessionEnvironment builder) don't re-query the server.
+
+        Parameters
+        ----------
+        connection
+            An active psycopg2 connection. Caller manages its lifetime.
+
+        Returns
+        -------
+        Optional[str]
+            The server version string, or ``None`` if the query failed.
+        """
+        if self.pg_server_version is not None:
+            return self.pg_server_version
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SHOW server_version")
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+            if row and row[0]:
+                self.pg_server_version = str(row[0]).strip()
+        except (psycopg2.Error, OSError, ValueError, TypeError, AttributeError) as exc:
+            LOGGER.debug("Failed to capture pg_server_version: %s", exc)
+        return self.pg_server_version
 
     def _get_instance_subpath(self) -> str:
         """Determine the logical subpath for runtime data based on the schema."""
@@ -305,6 +345,17 @@ class DatabaseEnvironment(ABC):
     @abstractmethod
     def collect_memory_utilization(self, worker_id: int) -> float:
         """Collect per-worker PostgreSQL memory utilization as a [0, 1] ratio."""
+
+    @abstractmethod
+    def get_resource_allocations(self) -> List["WorkerResourceAllocation"]:
+        """Return per-worker resource allocations.
+
+        Backends that enforce resource limits (Docker via cgroups) report
+        ``cpuset_cpus`` and ``docker_memory_limit_bytes`` from the
+        configured container runtime kwargs. Backends without enforced
+        isolation (bare-metal) return ``cpuset_cpus=None`` and
+        ``docker_memory_limit_bytes=None``.
+        """
 
     def collect_cache_hit_ratio(self, worker_id: int) -> float:
         """Query pg_stat_database for buffer cache hit ratio.

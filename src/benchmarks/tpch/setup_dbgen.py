@@ -10,10 +10,11 @@ Prerequisites: gcc, make (apt install build-essential)
 """
 
 import logging
+import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
-import re
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ def _compile_dbgen() -> Path:
     # GCC 14+ treats -Wincompatible-pointer-types as error by default,
     # but the old tpch-dbgen codebase relies on implicit pointer casts.
     env = {
-        **subprocess.os.environ,
+        **os.environ,
         "CFLAGS": "-O2 -Wno-error=incompatible-pointer-types",
     }
     logger.info("Compiling dbgen...")

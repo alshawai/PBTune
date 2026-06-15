@@ -187,6 +187,26 @@ class ApplicationResult:
     message: str = ""
 
 
+@dataclass
+class ActivationResult:
+    """
+    Result of activating (reload/restart) previously-written configuration.
+
+    Attributes
+    ----------
+    strategy : str
+        Activation strategy used: "reload", "restart", or "none".
+    success : bool
+        Whether the activation succeeded.
+    message : str
+        Human-readable summary.
+    """
+
+    strategy: str  # "reload" | "restart" | "none"
+    success: bool
+    message: str = ""
+
+
 class KnobApplicator:
     """
     Applies PostgreSQL configuration changes safely with validation.
@@ -514,12 +534,110 @@ class KnobApplicator:
         finally:
             cursor.close()
 
+    def apply_only(self, knob_config: Dict[str, Any]) -> ApplicationResult:
+        """
+        Write knobs to postgresql.auto.conf via ALTER SYSTEM. Does NOT reload or restart.
+
+        This performs only the ALTER SYSTEM writes and returns an ApplicationResult
+        with ``restart_required`` populated. The caller decides activation strategy
+        (reload, restart, or none) separately via ``activate()``.
+
+        Parameters
+        ----------
+        knob_config : Dict[str, Any]
+            Dictionary of parameter_name -> value
+
+        Returns
+        -------
+        ApplicationResult
+            Result with applied/failed parameters and restart requirements
+        """
+        with self._lock:
+            return self._apply_locked(knob_config, skip_reload=True)
+
+    def activate(
+        self,
+        *,
+        restart_required: bool,
+        env: Any,
+        worker_id: int,
+        force_restart: bool = False,
+        mode: Optional[str] = None,
+    ) -> "ActivationResult":
+        """
+        Activate previously-written knobs by either pg_reload_conf() or full restart.
+
+        Parameters
+        ----------
+        restart_required : bool
+            Whether the last apply_only() flagged restart-requiring parameters.
+        env : DatabaseEnvironment
+            Environment backend capable of restarting instances.
+        worker_id : int
+            Worker whose instance should be activated.
+        force_restart : bool
+            Force restart regardless of other conditions.
+        mode : Optional[str]
+            Reserved for future use (tuning mode hint).
+
+        Returns
+        -------
+        ActivationResult
+            Result with strategy ("reload", "restart", or "none") and success flag.
+        """
+        if force_restart or restart_required:
+            # Full restart via environment
+            try:
+                success = env.restart_instance(worker_id, quiet=True)
+                if success:
+                    return ActivationResult(
+                        strategy="restart",
+                        success=True,
+                        message="Restarted instance to apply postmaster-context parameters",
+                    )
+                else:
+                    return ActivationResult(
+                        strategy="restart",
+                        success=False,
+                        message="Restart failed",
+                    )
+            except Exception as e:
+                return ActivationResult(
+                    strategy="restart",
+                    success=False,
+                    message=f"Restart failed with exception: {e}",
+                )
+        else:
+            # Reload (pg_reload_conf) for sighup/user/superuser params
+            with self._lock:
+                was_connected = self.connection is not None
+                if not was_connected:
+                    try:
+                        self._connect_internal()
+                    except Exception as e:
+                        return ActivationResult(
+                            strategy="reload",
+                            success=False,
+                            message=f"Failed to connect for reload: {e}",
+                        )
+                try:
+                    success = self._reload_configuration()
+                    return ActivationResult(
+                        strategy="reload",
+                        success=success,
+                        message="Reloaded configuration" if success else "Reload failed",
+                    )
+                finally:
+                    if not was_connected:
+                        self._disconnect_internal()
+
     def apply(self, knob_config: Dict[str, Any]) -> ApplicationResult:
         """
-        Apply knob configuration to PostgreSQL.
+        Apply knob configuration to PostgreSQL (back-compat wrapper).
 
-        This is the main entry point for applying configurations.
-        Handles validation, application, and rollback if needed.
+        Writes knobs via ALTER SYSTEM and reloads configuration in one call.
+        For new code, prefer ``apply_only()`` + ``activate()`` for explicit
+        control over the activation step.
 
         Parameters
         ----------
@@ -544,10 +662,12 @@ class KnobApplicator:
         >>> else:
         ...     print(f"Failed: {result.message}")
         """
-        with self._lock:  # Use lock to ensure thread-safe application
-            return self._apply_locked(knob_config)
+        with self._lock:
+            return self._apply_locked(knob_config, skip_reload=False)
 
-    def _apply_locked(self, knob_config: Dict[str, Any]) -> ApplicationResult:
+    def _apply_locked(
+        self, knob_config: Dict[str, Any], skip_reload: bool = False
+    ) -> ApplicationResult:
         """Internal apply method (called while holding lock)."""
         result = ApplicationResult(success=False)
 
@@ -629,7 +749,8 @@ class KnobApplicator:
                 result.message = f"{result.failed_count} failures"
             else:
                 if (
-                    self.config.persist
+                    not skip_reload
+                    and self.config.persist
                     and self.config.auto_reload
                     and result.applied_count > 0
                 ):

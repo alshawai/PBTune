@@ -55,6 +55,7 @@ from src.tuner.benchmark.restart_policy import should_restart
 from src.tuner.core.barriers import GenerationBarrier
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger, get_color_context
+from src.utils.timing import TimingRecorder
 
 LOGGER = get_logger("WorkloadOrchestrator")
 COLORS = get_color_context()
@@ -150,7 +151,7 @@ class WorkloadOrchestrator:
     >>> orchestrator = WorkloadOrchestrator(config, executor)
     >>>
     >>> # Evaluate a worker
-    >>> metrics, score = orchestrator.evaluate_worker(worker)
+    >>> metrics, score, _, _, timing = orchestrator.evaluate_worker(worker)
     >>> print(f"Score: {score:.4f}, Throughput: {metrics.throughput:.2f} TPS")
     """
 
@@ -310,13 +311,16 @@ class WorkloadOrchestrator:
         knob_applicator: KnobApplicator,
         force_restart: bool = False,
         generation: Optional[int] = None,
+        restore_due: bool = False,
+        recorder: Optional[TimingRecorder] = None,
     ) -> bool:
         """
         Apply knob configuration and optionally restart via policy.
 
-        This method applies knobs directly through KnobApplicator,
-        then uses RestartPolicy (should_restart) for restart decisions,
-        with env.restart_instance() for the actual restart mechanism.
+        This method writes knobs via apply_only (ALTER SYSTEM only), then
+        decides activation strategy (reload/restart/none) via RestartPolicy.
+        When ``restore_due`` is True, activation is skipped because the
+        caller will perform a snapshot restore that serves as the restart.
 
         Parameters
         ----------
@@ -325,11 +329,15 @@ class WorkloadOrchestrator:
         worker : Worker
             Worker instance for which to apply configuration
         knob_applicator : KnobApplicator
-            Applicator for this worker's instance (legacy compat)
+            Applicator for this worker's instance
         force_restart : bool
             Force immediate restart regardless of mode/interval
         generation : Optional[int]
             Current generation number
+        restore_due : bool
+            When True, skip activation — snapshot restore will serve as
+            the restart. The caller is responsible for calling
+            env.restore_snapshot() after this method returns.
 
         Returns
         -------
@@ -337,7 +345,11 @@ class WorkloadOrchestrator:
             True if restart occurred during this application
         """
         try:
-            result = knob_applicator.apply(worker.knob_config)  # type: ignore
+            if recorder is not None:
+                with recorder.span("apply_only"):
+                    result = knob_applicator.apply_only(worker.knob_config)  # type: ignore
+            else:
+                result = knob_applicator.apply_only(worker.knob_config)  # type: ignore
 
             restart_required = bool(
                 result.restart_required and len(result.restart_required) > 0
@@ -359,6 +371,14 @@ class WorkloadOrchestrator:
                     COLORS.reset,
                 )
 
+            # When snapshot restore is due, the restore IS the restart.
+            # Skip activation here; the orchestrator handles it.
+            if restore_due:
+                worker.logger.debug(
+                    " Snapshot restore due — skipping activation (restore IS the restart)"
+                )
+                return False
+
             do_restart = should_restart(
                 mode=self.config.tuning_mode,
                 restart_required=restart_required,
@@ -369,6 +389,9 @@ class WorkloadOrchestrator:
 
             if do_restart:
                 worker.logger.debug(" Restarting PostgreSQL instance...")
+                if recorder is not None:
+                    with recorder.span("activate_restart", strategy="restart"):
+                        return self._perform_restart(connection, worker=worker)
                 return self._perform_restart(connection, worker=worker)
 
             if restart_required and not do_restart:
@@ -390,6 +413,27 @@ class WorkloadOrchestrator:
                         " %s➤ ONLINE mode: restart-required knobs written but restart skipped%s",
                         COLORS.bold,
                         COLORS.reset,
+                    )
+
+            # Non-restart activation: reload for sighup params
+            if not do_restart and result.applied_count > 0 and not restart_required:
+                # Reload to pick up sighup/user params without restart
+                if recorder is not None:
+                    with recorder.span("activate_reload", strategy="reload"):
+                        activation = knob_applicator.activate(
+                            restart_required=False,
+                            env=self.env,
+                            worker_id=worker.worker_id,
+                        )
+                else:
+                    activation = knob_applicator.activate(
+                        restart_required=False,
+                        env=self.env,
+                        worker_id=worker.worker_id,
+                    )
+                if not activation.success:
+                    worker.logger.warning(
+                        " ➤ Configuration reload failed: %s", activation.message
                     )
 
             return False
@@ -516,7 +560,7 @@ class WorkloadOrchestrator:
             active_connection = connection
             owns_connection = False
             try:
-                if active_connection is None or getattr(active_connection, "closed", 1):
+                if active_connection is None or getattr(active_connection, "closed", True):
                     active_connection = self.connect(
                         db_config, max_retries=2, retry_delay=1.0
                     )
@@ -684,7 +728,8 @@ class WorkloadOrchestrator:
         generation: Optional[int] = None,
         barriers: Optional[GenerationBarrier] = None,
         random_seed: Optional[int] = None,
-    ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any]]:
+        restore_due: bool = False,
+    ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any], TimingRecorder]:
         """
         Evaluate a Worker's configuration.
 
@@ -692,10 +737,12 @@ class WorkloadOrchestrator:
 
         Process:
         1. Apply worker's knob configuration (if apply_config=True)
-        2. Execute workload with warmup and measurement phases
-        3. Collect performance metrics
-        4. Collect system metrics
-        5. Compute composite performance score
+        2. If restore_due: snapshot restore (which IS the restart)
+        3. Otherwise: activate (reload or restart per policy)
+        4. Execute workload with warmup and measurement phases
+        5. Collect performance metrics
+        6. Collect system metrics
+        7. Compute composite performance score
 
         All sub-steps are gated by optional ``GenerationBarrier`` synchronization
         points (B1–B17) so that workers advance in lockstep when barriers are
@@ -713,24 +760,33 @@ class WorkloadOrchestrator:
             Optional lockstep barriers.  When provided and enabled, this
             method will ``wait()`` at each barrier so all workers stay
             in phase.
+        restore_due : bool, default=False
+            When True, perform snapshot restore after apply_only instead of
+            the normal activate step. The snapshot restore serves as the
+            restart (instance stops, PGDATA restored preserving auto.conf,
+            instance starts with new knobs).
 
         Returns
         -------
-        tuple[PerformanceMetrics, float, bool, Dict[str, Any]]
-            (metrics, score, restart_occurred, actual_db_config) tuple.
+        tuple[PerformanceMetrics, float, bool, Dict[str, Any], TimingRecorder]
+            (metrics, score, restart_occurred, actual_db_config, timing) tuple.
             ``actual_db_config`` contains the true values currently active
             in PostgreSQL after apply + optional restart, as read back
             from ``pg_settings``.
+            ``timing`` contains per-component wall-clock durations for this
+            evaluation.
 
         Example
         -------
-        >>> metrics, score, restarted, db_cfg = evaluator.evaluate_worker(worker)
+        >>> metrics, score, restarted, db_cfg, timing = evaluator.evaluate_worker(worker)
         >>> worker.update_metrics(metrics, score)
         """
         if not worker.db_config:
             raise ValueError(
                 f"[Worker-{worker.worker_id}] Missing db_config for evaluation"
             )
+
+        recorder = TimingRecorder()
 
         # Helper: wait at a named barrier (no-op when barriers is None/disabled).
         def _barrier(name: str) -> None:
@@ -774,7 +830,41 @@ class WorkloadOrchestrator:
                     knob_applicator=knob_applicator,
                     force_restart=force_restart,
                     generation=generation,
+                    restore_due=restore_due,
+                    recorder=recorder,
                 )
+
+                # ── B2a: Snapshot restore (when due) ────────────────────
+                if restore_due:
+                    worker.logger.debug(
+                        " Performing snapshot restore (serves as restart)..."
+                    )
+                    # Close connection before restore (instance will stop)
+                    self.disconnect(connection, worker_id=worker.worker_id)
+                    connection = None
+
+                    with recorder.span("snapshot_restore"):
+                        restored = self.env.restore_snapshot(worker.worker_id, quiet=True)
+                    if restored:
+                        restart_occurred = True
+                        worker.logger.info(
+                            " %s➤ Snapshot restore successful (restart via restore)%s",
+                            COLORS.italic,
+                            COLORS.reset,
+                        )
+                    else:
+                        # Attempt rebuild on restore failure
+                        worker.logger.error(
+                            "Snapshot restore failed for [Worker-%d]; attempting rebuild",
+                            worker.worker_id,
+                        )
+                        rebuilt = self.env.rebuild_worker_instance(worker.worker_id)
+                        if not rebuilt:
+                            raise RuntimeError(
+                                f"Snapshot restore and rebuild both failed for worker {worker.worker_id}"
+                            )
+                        restart_occurred = True
+
                 _barrier("config_applied")
                 last_completed_barrier = "config_applied"
 
@@ -806,7 +896,8 @@ class WorkloadOrchestrator:
             # ── B5: Verify configuration ─────────────────────────────
             if apply_config and worker.knob_config:
                 worker.logger.debug(" Verifying knob configuration...")
-                verification = knob_applicator.verify(worker.knob_config)
+                with recorder.span("knob_verify"):
+                    verification = knob_applicator.verify(worker.knob_config)
                 if verification.failed_params:
                     worker.logger.warning(
                         " ➤ Configuration verification failed for %d parameters: %s",
@@ -866,29 +957,31 @@ class WorkloadOrchestrator:
                     _barrier("warmup_done")
                     last_completed_barrier = "warmup_done"
 
-                    metrics = self.workload_executor.execute(
-                        db_config=worker.db_config,
-                        worker_id=worker.worker_id,
-                        random_seed=random_seed
-                        if random_seed is not None
-                        else self.config.random_seed,
-                        duration=self.config.measurement_duration,
-                        warmup=self.config.warmup_duration,
-                        warmup_passes=self.config.warmup_passes,
-                    )
+                    with recorder.span("workload", executor="benchmark"):
+                        metrics = self.workload_executor.execute(
+                            db_config=worker.db_config,
+                            worker_id=worker.worker_id,
+                            random_seed=random_seed
+                            if random_seed is not None
+                            else self.config.random_seed,
+                            duration=self.config.measurement_duration,
+                            warmup=self.config.warmup_duration,
+                            warmup_passes=self.config.warmup_passes,
+                        )
                 else:
                     # Internal workload executor: warmup then measurement.
                     # Warmup is run first, barrier, then measurement.
-                    metrics = self.workload_executor.execute(
-                        connection=connection,
-                        duration=self.config.measurement_duration,
-                        warmup=self.config.warmup_duration,
-                        worker_id=worker.worker_id,
-                        random_seed=random_seed
-                        if random_seed is not None
-                        else self.config.random_seed,
-                        pre_measurement_callback=lambda: _barrier("warmup_done"),
-                    )
+                    with recorder.span("workload", executor="internal"):
+                        metrics = self.workload_executor.execute(
+                            connection=connection,
+                            duration=self.config.measurement_duration,
+                            warmup=self.config.warmup_duration,
+                            worker_id=worker.worker_id,
+                            random_seed=random_seed
+                            if random_seed is not None
+                            else self.config.random_seed,
+                            pre_measurement_callback=lambda: _barrier("warmup_done"),
+                        )
                     last_completed_barrier = "warmup_done"
 
                 worker.logger.debug(
@@ -1020,7 +1113,7 @@ class WorkloadOrchestrator:
                     if next_name:
                         barriers.drain_remaining(next_name, worker_id=worker.worker_id)
                 _barriers_drained = True
-                return metrics, score, restart_occurred, actual_db_config
+                return metrics, score, restart_occurred, actual_db_config, recorder
 
             # ── B12: Collect system metrics ──────────────────────────
             system_metrics = self.collect_system_metrics(worker_id=worker.worker_id)
@@ -1068,10 +1161,11 @@ class WorkloadOrchestrator:
             last_completed_barrier = "vacuum_done"
 
             worker.logger.info(" Computing performance score...")
-            engine = self._get_scoring_engine()
-            score_breakdown = engine.compute_breakdown(
-                metrics, worker_logger=worker.logger
-            )
+            with recorder.span("score"):
+                engine = self._get_scoring_engine()
+                score_breakdown = engine.compute_breakdown(
+                    metrics, worker_logger=worker.logger
+                )
             worker.score_breakdown = score_breakdown
             score = score_breakdown.final_score
             _barrier("score_computed")
@@ -1079,7 +1173,7 @@ class WorkloadOrchestrator:
 
             worker.logger.info("➤ Evaluated successfully.")
 
-            return metrics, score, restart_occurred, actual_db_config
+            return metrics, score, restart_occurred, actual_db_config, recorder
 
         except Exception:
             # Top-level safety net: drain all remaining barriers.

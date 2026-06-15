@@ -21,7 +21,7 @@ import json
 import re
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 
 import psycopg2
@@ -34,6 +34,9 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.logger import get_logger, get_color_context
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
+
+if TYPE_CHECKING:
+    from src.utils.types import WorkerResourceAllocation
 
 try:
     import docker
@@ -90,6 +93,18 @@ class DockerEnvironment(DatabaseEnvironment):
         self._ready_timeout = 60
         self._restore_ready_timeout = self._derive_restore_ready_timeout()
         self._restore_api_timeout = self._derive_restore_api_timeout()
+        # ``_num_parallel_workers`` is set in ``setup_instances``; default
+        # to 1 so resource allocation queries before that call still work.
+        self._num_parallel_workers = 1
+
+        # Capture the Docker daemon version once at init so SessionEnvironment
+        # has it before setup_instances runs. Failures fall back to ``None``.
+        try:
+            version_info = self.client.version()
+            self.docker_version = version_info.get("Version") if version_info else None
+        except (docker_errors.DockerException, requests.RequestException, OSError) as exc:
+            LOGGER.debug("Failed to capture Docker version: %s", exc)
+            self.docker_version = None
 
         # Ensure network exists
         self.network_name = "pbt-network"
@@ -397,6 +412,13 @@ class DockerEnvironment(DatabaseEnvironment):
 
         Copies the snapshot's PGDATA directory into the worker's bind-mount
         directory using a container (to handle UID 999 ownership).
+
+        The freshly-written ``postgresql.auto.conf`` is preserved across the
+        wipe so the knob configuration applied by the orchestrator survives
+        a restore-as-restart. The snapshot itself was created with auto.conf
+        excluded (see ``create_snapshot``), so the post-copy state has only
+        the per-worker auto.conf the orchestrator just wrote — which is the
+        whole point of the apply_only -> restore-as-restart sequence.
         """
         snapshot_pgdata = self._snapshot_host_dir()
         if not snapshot_pgdata.exists():
@@ -407,7 +429,21 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return None
 
-        pgdata_dir = self._prepare_worker_pgdata_dir(worker_id, quiet=quiet)
+        # Do NOT wipe the destination from the host side: that would destroy
+        # the postgresql.auto.conf the orchestrator just wrote via apply_only.
+        # The wipe + preserve + copy + restore happens atomically inside the
+        # copy container (which runs as UID 999 and can manage postgres-owned
+        # files without chown errors).
+        pgdata_dir = self._worker_host_pgdata_dir(worker_id)
+        if not pgdata_dir.exists():
+            # Brand-new path (e.g. first restore on a fresh repo): create
+            # with permissive mode so the copy container can write into it.
+            pgdata_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(pgdata_dir, 0o777)
+        # If the dir already exists, don't mkdir or chmod — the host user
+        # may not own the contents (postgres UID 999 created them) and
+        # ``os.chmod`` would raise PermissionError. The copy container
+        # handles all in-directory mutation as 999:999.
 
         try:
             with self._with_timeout(self._restore_api_timeout):
@@ -415,7 +451,26 @@ class DockerEnvironment(DatabaseEnvironment):
                     self.image_name,
                     user="999:999",  # Copy as postgres user to avoid chown errors on exFAT/NTFS
                     entrypoint=["bash", "-lc"],
-                    command=["set -euo pipefail; cp -R /source/. /dest/"],
+                    command=[
+                        # 1. Preserve auto.conf if present (apply_only just
+                        #    wrote the worker's knobs there).
+                        # 2. Wipe everything in /dest (worker's stale PGDATA).
+                        # 3. Copy snapshot in (snapshot has no auto.conf).
+                        # 4. Restore preserved auto.conf if we saved one.
+                        # find -mindepth 1 -delete leaves /dest itself intact
+                        # but removes every child (regular files, dirs, dotfiles).
+                        "set -euo pipefail; "
+                        "PRESERVED=0; "
+                        "if [ -f /dest/postgresql.auto.conf ]; then "
+                        "  cp -p /dest/postgresql.auto.conf /tmp/auto.conf.preserve; "
+                        "  PRESERVED=1; "
+                        "fi; "
+                        "find /dest -mindepth 1 -delete; "
+                        "cp -R /source/. /dest/; "
+                        "if [ \"$PRESERVED\" = \"1\" ]; then "
+                        "  cp -p /tmp/auto.conf.preserve /dest/postgresql.auto.conf; "
+                        "fi"
+                    ],
                     volumes={
                         self._docker_bind_path(snapshot_pgdata): {
                             "bind": "/source",
@@ -520,6 +575,45 @@ class DockerEnvironment(DatabaseEnvironment):
                 exc,
             )
             return False
+
+    def get_resource_allocations(self) -> "List[WorkerResourceAllocation]":
+        """Return per-worker resource allocations enforced via cgroups.
+
+        Reads the same ``cpuset_cpus`` and ``mem_limit`` values that go
+        into ``_container_runtime_kwargs`` so the JSON record matches
+        what Docker actually applied.
+        """
+        from src.utils.types import WorkerResourceAllocation
+
+        worker_ids = sorted(self.instances.keys())
+        if not worker_ids:
+            # Fall back to a single-worker projection so the SessionEnvironment
+            # builder still has something useful when called before setup.
+            worker_ids = [0]
+        num_workers = len(worker_ids)
+        allocations: List[WorkerResourceAllocation] = []
+        per_worker_ram = (
+            int(self.worker_resources.ram_bytes)
+            if self.worker_resources is not None
+            else int(self.ram_bytes)
+        )
+        per_worker_cpu = (
+            int(self.worker_resources.cpu_cores)
+            if self.worker_resources is not None
+            else int(self.cpu_cores) if self.cpu_cores else 0
+        )
+        docker_mem_limit = self.ram_bytes if self.ram_bytes > 0 else None
+        for worker_id in worker_ids:
+            allocations.append(
+                WorkerResourceAllocation(
+                    worker_id=worker_id,
+                    cpu_cores=per_worker_cpu,
+                    cpuset_cpus=self._worker_cpuset_cpus(worker_id, num_workers),
+                    ram_bytes=per_worker_ram,
+                    docker_memory_limit_bytes=docker_mem_limit,
+                )
+            )
+        return allocations
 
     def setup_instances(
         self,
@@ -1165,7 +1259,9 @@ class DockerEnvironment(DatabaseEnvironment):
                     self.image_name,
                     user="999:999",  # Copy as postgres user to avoid chown errors on exFAT/NTFS
                     entrypoint=["bash", "-lc"],
-                    command=["set -euo pipefail; cp -R /source/. /dest/"],
+                    command=[
+                        "set -euo pipefail; cp -R /source/. /dest/ && rm -f /dest/postgresql.auto.conf"
+                    ],
                     volumes={
                         self._docker_bind_path(source_pgdata): {
                             "bind": "/source",
@@ -1348,7 +1444,9 @@ class DockerEnvironment(DatabaseEnvironment):
             # Build the copy command for all targets
             copy_commands = ["set -euo pipefail"]
             for target_id in target_worker_ids:
-                copy_commands.append(f"cp -R /source/. /dest_{target_id}/")
+                copy_commands.append(
+                    f"cp -R /source/. /dest_{target_id}/ && rm -f /dest_{target_id}/postgresql.auto.conf"
+                )
 
             volumes = {
                 self._docker_bind_path(source_pgdata): {

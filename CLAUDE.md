@@ -15,7 +15,7 @@ This is a research implementation of Population-Based Training (PBT) for Postgre
 ```bash
 # Setup environment (Recommended for Linux/macOS)
 # (Handles system dependencies, Python version checks, and GCC quirks)
-./setup.sh
+./scripts/bootstrap.sh
 source .venv/bin/activate
 
 # Alternative Setup: Conda (Best for avoiding C++ compilation)
@@ -46,7 +46,7 @@ python -m src.tuner.main --benchmark sysbench --sysbench-tables 4
 python -m src.tuner.main --benchmark tpch --scale-factor 1.0
 
 # Warm-Starting (Transfer Learning across hardware boundaries)
-python -m src.tuner.main --warm-start results/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuner.main --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 
 ### Evaluation Commands
@@ -89,62 +89,88 @@ The system follows a layered architecture:
 1. **Population Manager** (`src/tuner/core/population.py`): Orchestrates PBT algorithm
 2. **Worker** (`src/tuner/core/worker.py`): Individual configuration + performance state
 3. **Evolution** (`src/tuner/core/evolution.py`): Exploit-explore algorithms
-4. **Evaluator** (`src/tuner/evaluator/evaluator.py`): Workload execution and metric collection
-5. **Environment Factory** (`src/utils/environments/factory.py`): Docker/Bare-metal environment orchestration
-6. **Knob Space** (`src/tuner/config/knob_space.py`): Search space definition and sampling
+4. **Generation Barriers** (`src/tuner/core/barriers.py`): Lockstep B1–B17 synchronisation
+5. **Workload Orchestrator** (`src/tuner/benchmark/orchestrator.py`): Per-worker apply → run → measure pipeline (formerly "Evaluator")
+6. **Restart Policy** (`src/tuner/benchmark/restart_policy.py`): TuningMode-driven restart decisions
+7. **Environment Factory** (`src/utils/environments/factory.py`): Docker / bare-metal lifecycle
+8. **Knob Space** (`src/tuner/config/knob_space.py`): Search space definition and LHS sampling
+9. **Composite Scorer** (`src/utils/scoring/`): Feature-driven score = G × Σ(wᵢ × uᵢ)
+10. **Timing Recorder** (`src/utils/timing.py`, `src/utils/session_clock.py`): Monotonic-clock instrumentation (schema v1.1)
 
 ### Key Design Patterns
 
 - **Parallel Evaluation**: Each worker runs on a dedicated PostgreSQL instance (ports 5440+)
 - **Dual-Benchmarking**: Supports both internal JSON workloads and external C-binaries (sysbench/tpch)
 - **Snapshot Management**: Intelligent baseline snapshots for fast restarts
-- **Feature-Driven Scoring**: Workload-feature-conditioned weighting with compatibility policy and robust normalization
+- **Feature-Driven Scoring**: Workload-feature-conditioned weighting with reliability gate and quantile-anchored normalization
+- **Lockstep Generation Barriers**: B1–B17 synchronisation so every worker's measurement window experiences identical contention
+- **Hardware-Aware Encoding**: Knobs serialise as fractions of detected resources for cross-host portability
+- **Timing Instrumentation**: Three-layer (`bootstrap_timing`, `generation_timing`, per-worker) recorders aggregate into the session JSON
 
 ### Directory Structure
 
 ```text
 src/tuner/
-├── core/                # PBT algorithm implementation
-├── config/              # Configuration management
-├── evaluator/           # Performance evaluation
-└── main.py              # Entry point
+├── core/                # population, worker, evolution, barriers
+├── config/              # knob_space, knob_loader, tuner_config
+├── benchmark/           # orchestrator (was "evaluator"), restart_policy, workload
+└── main.py              # CLI entry point
 
 src/utils/
-├── environments/        # Docker/Bare-metal database environment backends
-├── logger/              # Logging setup and formatters
-├── metrics.py           # Performance metrics and scoring
-├── rescoring.py         # Shared post-hoc global score recalibration utilities
-└── restart_manager.py
+├── environments/        # base, docker, bare_metal, factory
+├── scoring/             # scorer, normalization, weights, policies, workload_features, contracts, constants, outlier_filtering
+├── logger/              # Colored logging + HTML output + adapters
+├── applicator.py        # KnobApplicator — ALTER SYSTEM + verify() read-back
+├── metrics.py           # PerformanceMetrics dataclass
+├── metric_instrumentation.py
+├── hardware_info.py     # WorkerResources detection
+├── rescoring.py         # Post-hoc global score recalibration utilities
+├── timing.py            # TimingRecorder + TimingRecord (schema v1.1, monotonic clock)
+├── session_clock.py     # session_timestamp() — wall-clock for filenames/log lines
+└── types.py
 
 src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
 ├── types.py             # Dataclasses: ComparisonConfig, RunResult, etc.
-├── loader.py            # load_tuning_session() — parse pbt_results JSON
+├── loader.py            # load_tuning_session() — schema-tolerant session JSON parser
 ├── statistics.py        # Wilcoxon + bootstrap CI + Holm-corrected secondary endpoints + Cohen's d
 ├── runner.py            # ComparisonRunner — main orchestrator
+├── exceptions.py        # Domain-specific exception hierarchy
 └── __main__.py          # CLI: python -m src.evaluation
 
-src/database/            # Database connection and management
-src/knobs/               # Knob metadata retrieval
-src/scripts/             # Utility scripts
+src/analysis/            # data_loader, importance, hardware_validator, tier_generator, timing_breakdown
+src/database/            # connection, data_loader, management
+src/knobs/               # knob_metadata, retrieval, preprocess_knobs, policy
+src/benchmarks/          # executor + sysbench/ + tpch/
+src/scripts/             # setup_database, cleanup_instances, analyze_knobs, analyze_knob_importance,
+                         # pbt_vs_bo_comarison (sic), bo_baseline/ subpackage
+src/visualization/       # plots, loaders, registry, theme, export, __main__
 docker/                  # Docker evaluation images
 ├── eval.Dockerfile      # PostgreSQL + sysbench + TPC-H dbgen
 ├── build_dbgen.sh       # TPC-H dbgen compilation
 └── run_power_test.sh    # TPC-H 22-query power test runner
-docs/                    # Documentation
+data/                    # Knob metadata, policy, tier CSVs
+├── knob_metadata.json
+├── knob_policy.json
+├── postgresql_all_knobs.csv
+├── expert_defined_knobs/  # minimal | core | standard | extensive CSVs
+└── data_driven_knobs/     # Workload-specific tiers from analysis pipeline
+docs/                    # Documentation (Diataxis: getting-started/guides/reference/architecture/research)
 results/                 # Optimization results
-├── olap/comparisons/    # evaluate_tuning output (JSON with statistics)
-└── oltp/comparisons/
-workloads/               # Workload definitions
-tests/                   # Test suite
+├── olap/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
+└── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
+workloads/               # Workload definitions (oltp.json, olap.json, mixed.json, custom)
+tests/                   # Test suite (unit/ — analysis, benchmarks, config, core, evaluation, knobs, scoring, scripts, utils)
 ```
 
 ## Common Development Tasks
 
 ### Adding New Knobs
 
-1. Update knob metadata in `src/knobs/knob_metadata.py`
-2. Add to appropriate tier in `src/tuner/config/knob_loader.py`
-3. Update perturbation logic in `src/tuner/core/evolution.py`
+1. Add the knob row to the appropriate tier CSV in `data/expert_defined_knobs/` (or generate via `data/data_driven_knobs/` for data-driven tiers)
+2. Ensure the knob is present in `data/knob_metadata.json` (run `python -m src.scripts.analyze_knobs --refresh-raw` if it isn't)
+3. If the knob has tuning constraints, update `data/knob_policy.json` and the policy logic in `src/knobs/policy.py`
+4. Knob retrieval is handled by `src/knobs/retrieval.py`; loading by `src/tuner/config/knob_loader.py`
+5. Update perturbation logic in `src/tuner/core/evolution.py` only if the knob needs special perturbation semantics
 
 ### Creating New Workloads
 
@@ -157,6 +183,8 @@ tests/                   # Test suite
 1. Core algorithm changes in `src/tuner/core/evolution.py`
 2. Population management in `src/tuner/core/population.py`
 3. Configuration in `src/tuner/config/tuner_config.py`
+4. Lockstep barriers (B1–B17) in `src/tuner/core/barriers.py`
+5. Per-worker evaluation flow in `src/tuner/benchmark/orchestrator.py`
 
 ### Testing Changes
 
@@ -179,10 +207,13 @@ python -m src.tuner.main --tier core --config standard --verbose DEBUG
 
 - `src/tuner/main.py` - Main orchestration and CLI
 - `src/tuner/core/population.py` - PBT algorithm implementation
-- `src/tuner/evaluator/evaluator.py` - Performance measurement
+- `src/tuner/benchmark/orchestrator.py` - WorkloadOrchestrator (apply → run → measure)
 - `src/tuner/config/knob_space.py` - Knob space management
 - `src/utils/environments/factory.py` - Environment backend selection and lifecycle
-- `docs/architecture/feature-driven-scoring.md` - Canonical reference for the scoring-v2 architecture and migration path
+- `src/utils/scoring/scorer.py` - CompositeScorer (S = G × Σ(wᵢ × uᵢ))
+- `src/utils/timing.py` - Timing instrumentation primitives (schema v1.1)
+- `docs/architecture/feature-driven-scoring.md` - Canonical reference for the scoring-v2 architecture
+- `docs/architecture/overview.md` - Top-level system map
 
 ## Research Context
 

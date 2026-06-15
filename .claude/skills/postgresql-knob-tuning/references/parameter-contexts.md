@@ -36,14 +36,17 @@ KnobApplicator.apply_configuration(config, postmaster_dict, sighup_dict):
 
 ## Restart Minimization Strategy
 
-The `RestartManager` class (`src/tuner/utils/restart_manager.py`) handles:
+The restart policy module (`src/tuner/benchmark/restart_policy.py`) handles:
 - Tracking which postmaster knobs have changed since last restart
 - Batching restarts to minimize service interruptions
 - Detecting when restart is actually needed (only if postmaster values differ)
+- Selectable behavior via `TuningMode` {ONLINE, OFFLINE, ADAPTIVE}
+  (exposed on the tuner CLI as `--tuning-mode`)
+
+The legacy `RestartCostModel` was archived to `prototypes/restart_cost_model/`.
 
 ## Multi-Instance Port Scheme
 
 Each PBT worker gets its own PostgreSQL instance:
-- Base port: 5440 (configurable via `--base-port`)
-- Worker i gets port: `5440 + worker_id`
+- Base port: 5440 (worker i gets port `5440 + worker_id`)
 - Data directory: `{pg_data_base}/worker_{worker_id}/`
