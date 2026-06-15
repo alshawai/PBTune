@@ -1,6 +1,6 @@
 # Contributing to PBT PostgreSQL Tuning
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-06-15
 
 See also: [Documentation Index](./docs/README.md)
 

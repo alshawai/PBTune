@@ -1,6 +1,6 @@
 # CLI Reference
 
-> Last reviewed: 2026-06-07
+> Last reviewed: 2026-06-15
 
 See also: [getting-started/quickstart](../getting-started/quickstart.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md), [guides/bo-baseline](../guides/bo-baseline.md), [guides/pbt-vs-bo-comparison](../guides/pbt-vs-bo-comparison.md)
 
@@ -14,7 +14,7 @@ python -m src.scripts.pbt_vs_bo_comarison  # cross-method comparison
 python -m src.visualization              # publication figure generation
 ```
 
-For the canonical authority on any flag's exact semantics, run the entry point with `--help`. This page reflects the flag set as of 2026-06-07.
+For the canonical authority on any flag's exact semantics, run the entry point with `--help`. This page reflects the flag set as of 2026-06-15.
 
 ---
 
@@ -50,7 +50,10 @@ The primary entry point. See [getting-started/quickstart](../getting-started/qui
 | `--population <int>` | from profile | Override the profile's worker count. |
 | `--generations <int>` | from profile | Override the profile's generation count. |
 | `--parallel-workers <int>` | population size | Number of workers running concurrently. Limits resource division — see [hardware-aware-normalization §7](../architecture/hardware-aware-normalization.md#7-docker-cpu-subset-enforcement). |
-| `--tuning-mode {online\|offline\|adaptive}` | `online` | Restart policy. See [workload-orchestrator §Restart policy](../architecture/workload-orchestrator.md#restart-policy-and-tuning-modes). |
+| `--worker-ram <str>` | auto | RAM per worker (e.g. `3G`, `512M`, `1073741824`). Bypasses auto-detection; total across all workers must not exceed host RAM. |
+| `--worker-cpus <int>` | auto | CPU cores per worker. Bypasses auto-detection; total across all workers must not exceed host cores. |
+| `--tuning-mode {online\|offline\|adaptive}` | `offline` | Restart policy. `online` = runtime knobs only, no restarts; `offline` = all knobs, restart every generation; `adaptive` = all knobs, restart every N generations. See [workload-orchestrator §Restart policy](../architecture/workload-orchestrator.md#restart-policy-and-tuning-modes). |
+| `--perturbation-factor <float>` | `0.2` | Perturbation spread factor for knob exploration. Range is `[1-X, 1+X]`. |
 | `--disable-early-stopping` | off | Run the full `--generations` even after the early-stopping patience expires. |
 | `--no-sync` | off | Disable lockstep barriers. **Reduces measurement fairness** — use only for single-worker debugging. See [generation-barriers](../architecture/generation-barriers.md). |
 
@@ -58,10 +61,10 @@ The primary entry point. See [getting-started/quickstart](../getting-started/qui
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--scoring-policy {fixed_v1\|feature_driven_v2}` | `feature_driven_v2` | Score formula. See [feature-driven-scoring](../architecture/feature-driven-scoring.md). |
-| `--scoring-policy-version <str>` | `2.0` | Pinned policy version recorded in session JSON. |
-| `--metric-reference-version <str>` | `v2` | Metric semantics version recorded in session JSON. |
-| `--scoring-calibration-evals <int>` | `50` | Evaluations before the quantile normaliser's first calibration. |
+| `--scoring-policy {fixed_v1\|feature_driven_v2}` | falls back to PBT config (`feature_driven_v2` for new runs) | Score formula. See [feature-driven-scoring](../architecture/feature-driven-scoring.md). |
+| `--scoring-policy-version <str>` | from policy | Pinned policy version recorded in session JSON. |
+| `--metric-reference-version <str>` | from policy | Metric semantics version recorded in session JSON. |
+| `--scoring-calibration-evals <int>` | `5` | Evaluations before the quantile normaliser's first calibration. |
 
 ### Workload
 
@@ -107,7 +110,7 @@ The primary entry point. See [getting-started/quickstart](../getting-started/qui
 | `--colocate-output` | off | Place HTML logs alongside session JSONs in the same directory. |
 | `--ablation-variable <str>` | none | Tag the session with an ablation variable name (recorded in JSON metadata). |
 | `--ablation-value <str>` | none | The value of the ablation variable (recorded in JSON metadata). |
-| `--verbose {QUIET\|NORMAL\|VERBOSE\|DEBUG}` | `NORMAL` | Logging verbosity. |
+| `--verbose {DEBUG\|INFO\|WARNING\|ERROR\|TRACE}` | `INFO` | Logging verbosity. |
 | `--no-color` | off | Disable ANSI colour in console output. |
 
 ---
@@ -118,8 +121,8 @@ Post-hoc evaluation suite. See [guides/evaluation-runbook](../guides/evaluation-
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--session <path>` | required | PBT session JSON to evaluate. Repeatable for multi-arm comparisons. |
-| `--bo-session <path>` | none | BO session JSON for direct comparison against the PBT session. |
+| `--session <path>` | required | PBT (or BO) session JSON to evaluate. |
+| `--bo-session <path>` | none | BO session JSON for 3-way Default vs BO vs PBT comparison alongside `--session`. |
 | `--benchmark {sysbench\|tpch}` | from session | Override the benchmark recorded in the session. |
 | `--repetitions <int>` | `5` | Number of paired (default, tuned) runs. |
 | `--seed <int>` | `50000` | Base seed; repetition `i` uses `seed + i - 1` for both default and tuned. |
@@ -130,10 +133,11 @@ Post-hoc evaluation suite. See [guides/evaluation-runbook](../guides/evaluation-
 | `--scoring-policy-version`, `--metric-reference-version` | from session | Pinned policy/metric versions. |
 | `--no-docker` | off | Bare-metal evaluation (reduced isolation; tagged in output JSON). |
 | `--data-dir` | `./.instances` | Worker PostgreSQL data directory root. |
-| `--docker-image <image>` | auto | Override the auto-resolved PostgreSQL image. |
+| `--docker-image <image>` | `pbt-eval` | Docker image name/tag for evaluation containers. |
 | `--output-dir` | `results` | Comparison artefact root. |
 | `--colocate-output` | off | Place comparison HTML alongside the JSON. |
-| `--verbose` | `INFO` | Logging verbosity. |
+| `--verbose {DEBUG\|INFO\|WARNING\|ERROR}` | `INFO` | Logging verbosity. |
+| `-v` | off | Shortcut for `--verbose DEBUG`. |
 
 ---
 

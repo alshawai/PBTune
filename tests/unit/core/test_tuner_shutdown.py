@@ -119,8 +119,9 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     """Recovery failures after connection errors should not escape evaluate_worker."""
     tuner = PBTTuner.__new__(PBTTuner)
     tuner.current_generation = 0
-    tuner._restarted_this_gen = False
+    tuner._restarted_this_generation = False
     tuner.restart_count = 0
+    tuner.population = MagicMock()
     from src.utils.scoring.contracts import ScoreBreakdown
 
     # metric_config now exposes compute_score() which returns a ScoreBreakdown

@@ -51,7 +51,7 @@ HARDWARE_RELATIVE_SPECS = {
 
 
 # Disk-Type-Conditional Ranges (absolute values, not fractions)
-DISK_TYPE_CONDITIONAL_RANGES = {
+DISK_TYPE_CONDITIONAL_RANGES: dict[str, dict[str, tuple[float, float]]] = {
     # SSD Range, HDD Range, Unknown Range
     "effective_io_concurrency": {"SSD": (100, 200), "HDD": (1, 4), "unknown": (1, 200)},
     "maintenance_io_concurrency": {
@@ -993,9 +993,9 @@ class KnobSpace:
                     else:
                         value = float(value)
                 else:
-                    value = knob_def.min_value + u * (
-                        knob_def.max_value - knob_def.min_value
-                    )  # type: ignore
+                    value = knob_def.min_value + u * (  # type: ignore[operator]
+                        knob_def.max_value - knob_def.min_value  # type: ignore[operator]
+                    )
 
                     if knob_def.knob_type == KnobType.INTEGER:
                         value = knob_def.normalize_value(value)

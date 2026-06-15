@@ -233,13 +233,14 @@ def _is_containerized() -> bool:
 def detect_worker_resources(
     max_parallel_workers: int = 1,
     data_path: Optional[Path] = None,
+    threshold: float = 0.8,
 ) -> WorkerResources:
     """
     Detect per-worker hardware resources.
 
     If in a container, uses cgroups via psutil limits.
     If bare-metal, divides system resources by max_parallel_workers.
-    Reserves 20% of resources for OS/tuning system.
+    Reserves (1 - threshold) of resources for OS/tuning system.
     If data_path is provided, detects disk type for that specific path.
     """
     if data_path is not None:
@@ -257,8 +258,8 @@ def detect_worker_resources(
         cpu_cores = psutil.cpu_count(logical=True) or 1
 
     # Total RAM and CPU seen are constrained to leave headroom for OS Essentials
-    usable_ram = int(ram_bytes * 0.8)
-    usable_cpu = cpu_cores * 0.8
+    usable_ram = int(ram_bytes * threshold)
+    usable_cpu = cpu_cores * threshold
 
     worker_ram = max(
         100 * 1024 * 1024, int(usable_ram / max_parallel_workers)

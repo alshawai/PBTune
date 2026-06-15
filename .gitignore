@@ -116,22 +116,12 @@ secrets.json
 .codebrush.json
 .env.local
 
-# Optimization results (ignore bulky timestamped traces and HTML logs)
-results/**/comparisons
-results/**/pbt_results_*.json
-results/**/bo_results_*.json
-results/**/best_config*.json
-results/**/bo_best_config*.json
-results/**/comparison_*.json
-results/**/intermediate_*.json
-results/**/*.html
-results/**/multi_arm_comparison_*
-results/oltp/comparisons/
-results/**/fanova_importance.json
-results/**/bo_runs/**/smac_output/
+# Optimization results (ignore all results by default)
+results/*
 
-# Ignore analysis outputs but we will force-push a sample
-results/analysis/
+# But keep the specific files we want to track
+!results/.gitignore
+!results/README.md
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
