@@ -46,6 +46,7 @@ import copy
 from src.tuner.config.knob_space import KnobSpace
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
+from src.utils.timing import TimingRecorder
 from src.config.database import DatabaseConfig
 from src.utils.logger import get_logger, get_color_context
 
@@ -151,6 +152,7 @@ class Worker:
     port: Optional[int] = None
     db_config: Optional[DatabaseConfig] = None
     force_restart_next_eval: bool = True
+    last_eval_timing: Optional[TimingRecorder] = None
 
     logger: Logger = field(init=False, repr=False)
 

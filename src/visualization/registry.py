@@ -16,7 +16,7 @@ LOGGER = get_logger("Registry")
 class FigureRegistry:
     """Catalog of all paper figures with metadata and generators."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._figures: dict[str, FigureSpec] = {}
 
     def register(self, spec: FigureSpec) -> None:

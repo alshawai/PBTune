@@ -8,6 +8,7 @@ from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import MetricConfig, PerformanceMetrics
+from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
 from src.scripts.bo_baseline.search_space import configspace_to_knobs
 from src.utils.logger import get_logger
@@ -30,7 +31,7 @@ def evaluate_config(
     Dict,
     Optional[PerformanceMetrics],
     float,
-    Optional[Dict],
+    Optional[ScoreBreakdown],
     bool,
     float,
     TimingRecorder,

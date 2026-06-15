@@ -4,6 +4,7 @@ Loader for ablation studies.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src.utils.logger import get_logger
 from src.utils.metrics import MetricConfig, PerformanceMetrics
@@ -94,7 +95,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     import json
 
     all_raw_metrics = []
-    shared_metadata = {}
+    shared_metadata: dict[str, Any] = {}
 
     for val_dir in value_dirs:
         tuning_dir = val_dir / "tuning_sessions"
