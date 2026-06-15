@@ -368,7 +368,7 @@ class Population:
 
     def evaluate_generation(
         self,
-        evaluate_fn: Callable[[Worker], tuple[PerformanceMetrics, float]],
+        evaluate_fn: Callable[..., tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         max_workers: Optional[int] = None,
         synchronize_workers: bool = False,
@@ -922,7 +922,7 @@ class Population:
 
     def train_generation(
         self,
-        evaluate_fn: Callable[[Worker], Tuple[PerformanceMetrics, float]],
+        evaluate_fn: Callable[..., Tuple[PerformanceMetrics, float]],
         parallel: bool = True,
         require_ready: bool = True,
         max_workers: Optional[int] = None,
@@ -1028,7 +1028,7 @@ class Population:
             )
 
             if self.env is not None and pairs_exploited:
-                clones_by_source = {}
+                clones_by_source: dict[int, list[int]] = {}
                 for poor_idx, elite_idx in pairs_exploited:
                     source_id = self.workers[elite_idx].worker_id
                     target_id = self.workers[poor_idx].worker_id
@@ -1164,7 +1164,7 @@ class Population:
         if ranges_expanded:
             LOGGER.debug(" ➤ Saturation/drift detected: expanded normalizer ranges")
 
-        weights_updated = self.orchestrator.maybe_update_feature_weights(
+        weights_updated = self.orchestrator.maybe_update_feature_weights(  # type: ignore
             self.current_generation,
             force=ranges_expanded,
             log_every=5,

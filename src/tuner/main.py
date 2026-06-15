@@ -183,7 +183,7 @@ def resolve_output_file_path(
         workload_name = sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD
         log_output_dir = base_output_dir / "oltp" / workload_name / "pbt_runs" / tier
     else:
-        workload_name = "olap" if benchmark == "tpch" else workload
+        workload_name = "olap" if benchmark == "tpch" else (workload or "olap")
         log_output_dir = base_output_dir / workload_name / "pbt_runs" / tier
 
     log_output_dir.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,7 @@ class PBTTuner:
             self.data_root = resolve_data_root()
 
         self.warm_start_path = kwargs.get("warm_start_path", None)
-        self.warm_start_provenance = {"enabled": False}
+        self.warm_start_provenance: dict[str, Any] = {"enabled": False}
 
         self.ablation_variable = kwargs.get("ablation_variable", None)
         self.ablation_value = kwargs.get("ablation_value", None)
@@ -359,7 +359,7 @@ class PBTTuner:
             table_size = self.pbt_config.benchmark_config.sysbench_table_size
             script = self.pbt_config.benchmark_config.sysbench_workload
 
-            workload_executor = SysbenchExecutor(
+            workload_executor: Any = SysbenchExecutor(
                 tables=tables,
                 table_size=table_size,
                 script=script,
@@ -518,7 +518,7 @@ class PBTTuner:
 
         # initialized at tuning start to accurately track wall clock time
         self.start_time: float = 0
-        self.generation_history = []
+        self.generation_history: list[dict[str, Any]] = []
 
         self.current_generation: int = 0
         self.restart_count: int = 0
@@ -715,7 +715,6 @@ class PBTTuner:
             worker.logger.info(
                 "Evaluating configuration on instance port %d...", worker.port or 0
             )
-            self.orchestrator.worker_id = f"Worker-{worker.worker_id}"
 
             # Check if snapshot restore is due this generation (set by Population).
             restore_due = getattr(self.population, "_restore_due_this_gen", False)
@@ -928,7 +927,7 @@ class PBTTuner:
                     ),
                     "timing": (
                         w.last_eval_timing.to_dict(include_summary=False)
-                        if getattr(w, "last_eval_timing", None) is not None
+                        if w.last_eval_timing is not None
                         else None
                     ),
                 }

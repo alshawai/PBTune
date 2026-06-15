@@ -26,7 +26,7 @@ class ImportanceData:
     shap_values: np.ndarray  # Full SHAP matrix (n_samples × n_features)
     pairwise_matrix: np.ndarray  # Interaction heatmap matrix
     pairwise_labels: list[str]  # Row/col labels for heatmap
-    correlation: float  # fANOVA–SHAP rank correlation
+    correlation: float | None  # fANOVA–SHAP rank correlation
     config_df: pd.DataFrame  # Raw configs for dependence plots
 
 

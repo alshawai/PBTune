@@ -1,7 +1,7 @@
 """Knob importance figure (fANOVA bars + SHAP beeswarm)."""
 
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, cast
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -222,7 +222,8 @@ def generate_knob_importance(
     with theme.apply():
         fig, axes = theme.subplots(nrows=2, ncols=1, size_hint="single", aspect=1.2)
         axes = np.ravel(axes)
-        bar_ax, swarm_ax = axes[0], axes[1]
+        bar_ax = cast(Axes, axes[0])
+        swarm_ax = cast(Axes, axes[1])
 
         bar_positions = np.arange(top_k) * label_gap
         bar_ax.barh(

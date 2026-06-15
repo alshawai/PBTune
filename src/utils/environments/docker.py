@@ -21,7 +21,7 @@ import json
 import re
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 
 import psycopg2
@@ -34,6 +34,9 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.utils.logger import get_logger, get_color_context
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
+
+if TYPE_CHECKING:
+    from src.utils.types import WorkerResourceAllocation
 
 try:
     import docker
@@ -573,7 +576,7 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return False
 
-    def get_resource_allocations(self):
+    def get_resource_allocations(self) -> "List[WorkerResourceAllocation]":
         """Return per-worker resource allocations enforced via cgroups.
 
         Reads the same ``cpuset_cpus`` and ``mem_limit`` values that go
