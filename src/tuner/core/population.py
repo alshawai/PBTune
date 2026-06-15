@@ -92,6 +92,7 @@ class PopulationConfig:
     disable_early_stopping: bool = False
     dead_config_threshold: float = 6.0
     resample_min_change_ratio: float = 0.6
+    resample_probability: float = 0.0
 
 
 @dataclass
@@ -1025,6 +1026,7 @@ class Population:
                 require_ready=require_ready,
                 dead_config_threshold=self.config.dead_config_threshold,
                 exclude_knobs=None,
+                resample_probability=self.config.resample_probability,
             )
 
             if self.env is not None and pairs_exploited:

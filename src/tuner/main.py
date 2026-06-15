@@ -489,6 +489,7 @@ class PBTTuner:
             early_stopping_patience=10,
             disable_early_stopping=self.disable_early_stopping,
             dead_config_threshold=self.pbt_config.dead_config_threshold,
+            resample_probability=self.pbt_config.resample_probability,
         )
 
         self.population = Population(
@@ -1629,6 +1630,12 @@ on your hardware, configuration, and workload/benchmark.
     )
 
     config_group.add_argument(
+        "--resample-probability",
+        type=float,
+        help="Probability of fully resampling a knob during exploration (default: 0.1)",
+    )
+
+    config_group.add_argument(
         "--worker-ram",
         type=str,
         default=None,
@@ -2053,6 +2060,11 @@ def main():
             args.enable_snapshots
             if args.enable_snapshots is not None
             else base_config.enable_snapshots
+        ),
+        resample_probability=(
+            args.resample_probability
+            if args.resample_probability is not None
+            else 0.1  # Default based on user preference
         ),
     )
 

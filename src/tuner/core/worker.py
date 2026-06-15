@@ -246,6 +246,7 @@ class Worker:
         current_generation: Optional[int] = None,
         seed: Optional[int] = None,
         exclude_knobs: Optional[List[str]] = None,
+        resample_probability: float = 0.0,
     ) -> None:
         """
         Perturb configuration (EXPLORE phase).
@@ -265,6 +266,10 @@ class Worker:
         exclude_knobs : Optional[List[str]]
             Knobs to exclude from perturbation (keep constant)
 
+        resample_probability : float
+            Probability of fully resampling a knob from its prior instead of perturbing it.
+            Default: 0.0
+
         Notes
         -----
         Without perturbation, all workers would eventually converge to the
@@ -277,6 +282,7 @@ class Worker:
             seed=seed,
             worker_id=self.worker_id,
             exclude_knobs=exclude_knobs,
+            resample_probability=resample_probability,
         )
 
         if self.config_history is not None and current_generation is not None:

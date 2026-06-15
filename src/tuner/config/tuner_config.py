@@ -140,6 +140,7 @@ class PBTConfig:
     metric_reference_version: Optional[str] = None
     scoring_calibration_evals: int = 5
     synchronize_workers: bool = True
+    resample_probability: float = 0.0
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -184,6 +185,9 @@ class PBTConfig:
         if self.scoring_calibration_evals < 1:
             raise ValueError("scoring_calibration_evals must be at least 1")
 
+        if not 0.0 <= self.resample_probability <= 1.0:
+            raise ValueError("resample_probability must be between 0.0 and 1.0")
+
     @property
     def num_workers_per_quantile(self) -> int:
         """
@@ -220,6 +224,7 @@ class PBTConfig:
             "metric_reference_version": self.metric_reference_version,
             "scoring_calibration_evals": self.scoring_calibration_evals,
             "synchronize_workers": self.synchronize_workers,
+            "resample_probability": self.resample_probability,
         }
 
     def __repr__(self) -> str:
@@ -242,7 +247,8 @@ class PBTConfig:
             f"  scoring_policy_version={self.scoring_policy_version},\n"
             f"  metric_reference_version={self.metric_reference_version},\n"
             f"  scoring_calibration_evals={self.scoring_calibration_evals},\n"
-            f"  synchronize_workers={self.synchronize_workers}\n"
+            f"  synchronize_workers={self.synchronize_workers},\n"
+            f"  resample_probability={self.resample_probability}\n"
             f")"
         )
 
