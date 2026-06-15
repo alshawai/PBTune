@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.config.database import DatabaseConfig
+from src.tuner.core.evolution import truncation_selection
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import (
@@ -412,3 +413,74 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
             "throughput", (1, old_thr_low, old_thr_high)
         )
         assert new_thr_low < old_thr_low
+
+
+def test_truncation_selection_rescues_dead_workers_before_ready_interval() -> None:
+    """Dead workers must enter the rescue pool even when no worker is ready.
+
+    Regression: previously ``truncation_selection`` returned ``[]`` whenever
+    fewer than two workers had ``step_count >= ready_interval``, which
+    silently skipped dead-worker rescue during the warm-up window of
+    presets like ``thorough`` (ready_interval=3).
+    """
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=3,
+        )
+        for idx in range(8)
+    ]
+
+    # Every worker has only 1 evaluation under its belt — none is "ready".
+    for worker in workers:
+        worker.step_count = 1
+
+    # Two workers crashed (score below the dead threshold); six are alive.
+    workers[4].performance_score = 0.0
+    workers[5].performance_score = 0.0
+    for idx in (0, 1, 2, 3, 6, 7):
+        workers[idx].performance_score = 80.0 + idx
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.2,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    poor_ids = {workers[poor_idx].worker_id for poor_idx, _ in pairs}
+    elite_ids = {workers[elite_idx].worker_id for _, elite_idx in pairs}
+
+    # Both dead workers must be paired for rescue.
+    assert {4, 5}.issubset(poor_ids)
+    # Elites must come from the alive pool, not from dead workers.
+    assert elite_ids.isdisjoint({4, 5})
+    # No worker should appear as both poor and elite in the same pairing.
+    assert poor_ids.isdisjoint(elite_ids)
+
+
+def test_truncation_selection_returns_empty_when_no_dead_and_no_ready() -> None:
+    """The early-return guard still fires when there is nothing to do."""
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=5,
+        )
+        for idx in range(4)
+    ]
+    for worker in workers:
+        worker.step_count = 1
+        worker.performance_score = 80.0  # all healthy, none ready
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.2,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    assert pairs == []
