@@ -36,7 +36,7 @@ What alternative approaches have you considered?
 
 If you have implementation ideas, describe them here:
 
-- Affected components: [e.g., Population, Evaluator, Evolution]
+- Affected components: [e.g., Population, WorkloadOrchestrator, Evolution]
 - API changes: ...
 - Configuration changes: ...
 

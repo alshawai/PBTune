@@ -19,9 +19,9 @@ Run full PBT pipeline with **5 random seeds**: `[42, 123, 456, 789, 1024]`
 # Each seed gets a separate run
 python -m src.tuner.main \
     --workload oltp --tier core \
-    --population-size 8 --generations 20 \
-    --seed 42 \
-    --output results/sysbench/pbt_runs/core/seed_42/
+    --population 8 --generations 20 \
+    --random-seed 42 \
+    --output-dir results/oltp/oltp_read_write/pbt_runs/core/seed_42/
 ```
 
 Report: mean ± std of best score across seeds, plus convergence curves.
@@ -32,16 +32,18 @@ config on TPC-H is *transfer learning*, not validation.
 
 ## Baseline Evaluation
 
-Run benchmark against **default PostgreSQL config** with **5 repetitions**:
+Run benchmark against **default PostgreSQL config** with **5 repetitions**
+via the post-hoc evaluation suite (`src/evaluation`):
 
 ```bash
-python -m src.tuner.main \
-    --workload oltp --tier minimal \
-    --baseline-only --repetitions 5 \
-    --output results/sysbench/baselines/
+python -m src.evaluation \
+    --session results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --repetitions 5
 ```
 
-Compute mean ± std for all metrics. This is the reference point for improvement%.
+The comparison runner evaluates both the default config and the tuned config
+under identical Docker isolation. Compute mean ± std for all metrics. This is
+the reference point for improvement%.
 
 ## Improvement Calculation
 ```
@@ -70,22 +72,19 @@ Compare on three axes:
 ## Results Directory Structure
 ```
 results/
-├── sysbench/
-│   ├── baselines/                    # Default PG config benchmarks
-│   │   └── baseline_{timestamp}.json
+├── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/
+│   ├── baselines/                         # Default PG config benchmarks
 │   ├── pbt_runs/
-│   │   ├── minimal/                  # By knob tier
-│   │   │   └── seed_{seed}/
-│   │   │       └── results_{timestamp}.json
-│   │   ├── core/
-│   │   ├── standard/
-│   │   └── extensive/
-│   └── bo_comparison/
-│       └── smac3_{timestamp}.json
-├── tpch/
-│   └── (same structure)
-└── best_configs/
-    └── best_config_{timestamp}.json  # For warm-start
+│   │   ├── {minimal,core,standard,extensive}/   # By knob tier
+│   │   │   ├── tuning_sessions/
+│   │   │   │   └── pbt_results_{timestamp}.json
+│   │   │   └── best_configs/
+│   │   │       └── best_config_{timestamp}.json # For warm-start
+│   ├── bo_runs/{tier}/
+│   └── comparisons/{tier}/
+├── olap/
+│   └── (same structure for TPC-H)
+└── analysis/{workload}/
 ```
 
 ## Results JSON Schema
@@ -111,7 +110,16 @@ Every results file MUST include:
 }
 ```
 
-Hardware provenance is captured via `src/tuner/utils/hardware_info.py`.
+Hardware provenance is captured via `src/utils/hardware_info.py`.
+
+## BO Baseline & Cross-Method Comparison
+
+This project ships an SMAC3-based BO baseline and a cross-method comparison script:
+
+```bash
+python -m src.scripts.bo_baseline        # Runs the SMAC3 baseline
+python -m src.scripts.pbt_vs_bo_comarison  # Cross-method comparison (filename typo intentional)
+```
 
 ## Citing Published Baselines
 

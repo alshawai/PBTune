@@ -254,7 +254,7 @@ RAPID_CONFIG = PBTConfig(
     ready_interval=1,
     num_parallel_workers=2,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
-    snapshot_restore_interval=1,  # Calibration: every gen so snapshot_restore records fire
+    snapshot_restore_interval=10,  # Infrequent snapshotting for speed
     verbose=True,
 )
 

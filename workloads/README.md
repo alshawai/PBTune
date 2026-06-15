@@ -1,6 +1,6 @@
 # Custom Workload Files
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-06-15
 
 See also: [Documentation Index](../docs/README.md)
 
@@ -120,7 +120,7 @@ python -m src.tuner.main --tier minimal --workload-file workloads/my_workload.ya
 
 ```python
 from src.tuner.main import PBTTuner
-from src.tuner.evaluator.metrics import WorkloadType
+from src.utils.metrics import WorkloadType
 
 tuner = PBTTuner(
     knob_tier="core",
@@ -252,4 +252,4 @@ pip install pyyaml
 - Check for typos in SQL statements
 - Verify database connection
 
-> Check `src/tuner/evaluator/evaluator.py` for implementation details and [`../docs/BENCHMARKING.md`](../docs/BENCHMARKING.md) for the full architecture overview.
+> Check `src/tuner/benchmark/orchestrator.py` for implementation details and [`../docs/reference/benchmarking.md`](../docs/reference/benchmarking.md) for the full architecture overview.

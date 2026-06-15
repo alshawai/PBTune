@@ -2,13 +2,11 @@
 name: benchmark-orchestration
 description: >
   Sysbench OLTP and TPC-H OLAP benchmark execution patterns, multi-instance PostgreSQL
-  management, snapshot management, the full WorkloadEvaluator pipeline, and performance
+  management, snapshot management, the full WorkloadOrchestrator pipeline, and performance
   measurement workflows. Use this skill when working on benchmark executors, evaluation
   pipeline, instance management, snapshot restoration, configuration application, restart
-  management, system metrics collection, or any code in src/benchmarks/,
-  src/tuner/evaluator/, src/tuner/utils/instance_manager.py,
-  src/tuner/utils/snapshot_manager.py, src/tuner/utils/restart_manager.py,
-  src/tuner/utils/applicator.py, or src/tuner/utils/postgres_instance.py.
+  policy, system metrics collection, or any code in src/benchmarks/, src/tuner/benchmark/,
+  src/utils/applicator.py, or src/utils/environments/.
 ---
 
 # Benchmark Orchestration Patterns
@@ -22,7 +20,7 @@ evaluate_worker(worker)
     ├── apply_configuration(worker.knob_config)
     │   ├── Separate knobs by context (postmaster vs sighup)
     │   ├── Write ALL knobs to postgresql.conf
-    │   ├── If postmaster knobs changed → _perform_restart()
+    │   ├── If postmaster knobs changed → restart via environment backend
     │   ├── Else if sighup knobs changed → pg_ctl reload
     │   └── _verify_configuration() via SELECT current_setting()
     ├── _ensure_benchmark_ready()
@@ -36,14 +34,18 @@ evaluate_worker(worker)
     └── Return (PerformanceMetrics, score)
 ```
 
-All of this is orchestrated by `WorkloadEvaluator` in `src/tuner/evaluator/evaluator.py`.
+All of this is orchestrated by `WorkloadOrchestrator` in `src/tuner/benchmark/orchestrator.py`.
+Per-worker timing is recorded via a `TimingRecorder` local to `evaluate_worker` and attached
+as `worker.last_eval_timing`.
 
 ## Sysbench OLTP
 
 - **CLI pattern:** `prepare → run (--warmup=N) → cleanup`
 - **Implementation:** Calls native `sysbench` binary via `subprocess.run()`
 - **Output parsing:** Regex extraction for TPS, p95 latency, error rate
-- **Location:** `src/benchmarks/sysbench/executor.py`
+- **Output partitioning:** Results split by workload mode under
+  `results/oltp/{sysbench_workload}/...`
+- **Location:** `src/benchmarks/sysbench/`
 
 ## TPC-H OLAP
 
@@ -52,7 +54,7 @@ All of this is orchestrated by `WorkloadEvaluator` in `src/tuner/evaluator/evalu
 - **Design choice:** No Throughput Test (consistent with OtterTune, CDBTune papers)
 - **Data generation:** `dbgen` → COPY into PostgreSQL tables
 - **Statement timeout:** Scales dynamically with `scale_factor` to prevent hangs
-- **Location:** `src/benchmarks/tpch/executor.py`
+- **Location:** `src/benchmarks/tpch/`
 
 ## Multi-Instance PostgreSQL Management
 
@@ -62,10 +64,12 @@ Each PBT worker gets a dedicated PostgreSQL instance to enable true parallel eva
 |-----------|--------|
 | **Port scheme** | `base_port + worker_id` (default base: 5440) |
 | **Data dirs** | `{pg_data_base}/worker_{worker_id}/` |
+| **Backends** | `DockerEnvironment` (with CPU subset isolation, ADR-004) or `BareMetalEnvironment` |
 | **Creation** | `initdb → configure postgresql.conf → pg_ctl start` |
 | **Auto-detect** | Finds `pg_ctl`/`initdb` via PATH or common install dirs |
 | **Reuse** | Reuses existing data dirs if already initialized |
-| **Location** | `src/tuner/utils/instance_manager.py` |
+| **Resource slicing** | Manual override via `--worker-ram` / `--worker-cpus` |
+| **Location** | `src/utils/environments/` |
 
 ## Snapshot Management
 
@@ -77,20 +81,30 @@ Prevents data drift between generations (sysbench DML modifies tables):
 | **shutil** (fallback) | `shutil.copytree()` | When rsync unavailable |
 
 - **Interval-based restore:** Configurable via `snapshot_restore_interval`
-- **Location:** `src/tuner/utils/snapshot_manager.py`
+- **Backend-managed:** Snapshots live alongside the worker data directory managed by the
+  `DatabaseEnvironment` backend.
 
 ## Configuration Application
 
-The `KnobApplicator` (`src/tuner/utils/applicator.py`) handles:
+The `KnobApplicator` (`src/utils/applicator.py`) handles:
 
 1. **Context-aware application:** Separates postmaster vs sighup knobs
 2. **Restart minimization:** Only restarts when postmaster values actually differ
 3. **Verification:** Confirms each knob via `SELECT current_setting()`
 4. **Fraction resolution:** Converts hardware fractions to absolute values
 
-The `RestartManager` (`src/tuner/utils/restart_manager.py`) tracks:
-- Which postmaster knobs changed since last restart
-- Whether a restart is actually needed (value diff check)
+## Restart Policy
+
+`src/tuner/benchmark/restart_policy.py` exposes the restart policy with three tuning modes:
+
+| `TuningMode` | Behavior |
+|--------------|----------|
+| `ONLINE` | Minimize restarts; favor reload-only changes |
+| `OFFLINE` | Restart freely between evaluations (default) |
+| `ADAPTIVE` | Decide per-cycle based on which knobs actually changed |
+
+Selected via `--tuning-mode {online,offline,adaptive}` on the tuner CLI. The legacy
+`RestartCostModel` was archived to `prototypes/restart_cost_model/`.
 
 ## System Metrics Collection
 
@@ -114,4 +128,4 @@ Dead worker penalty: Any worker with `failure_type is not None` gets score 0.0,
 preventing failed configs from contaminating normalization ranges.
 
 ## Reference Files
-- Read `references/execution-patterns.md` for sysbench CLI patterns, TPC-H query flow, and WorkloadEvaluator step-by-step
+- Read `references/execution-patterns.md` for sysbench CLI patterns, TPC-H query flow, and WorkloadOrchestrator step-by-step
