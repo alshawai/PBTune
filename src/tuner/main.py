@@ -1842,6 +1842,43 @@ on your hardware, configuration, and workload/benchmark.
         help="Force recreation of baseline snapshot (default: reuse existing)",
     )
 
+    instance_group.add_argument(
+        "--snapshot-restore-interval",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Restore each worker's PostgreSQL data directory from the baseline "
+            "snapshot every N generations (default: preset-defined; 1 for "
+            "thorough/research/extreme, 5 for standard, 10 for rapid). "
+            "Lower values reduce cross-generation contamination at the cost of "
+            "extra rsync time per restore window."
+        ),
+    )
+
+    snapshot_toggle = instance_group.add_mutually_exclusive_group()
+    snapshot_toggle.add_argument(
+        "--disable-snapshots",
+        dest="enable_snapshots",
+        action="store_false",
+        default=None,
+        help=(
+            "Disable per-generation snapshot restore. Workers keep state "
+            "across generations (faster, but writes from earlier generations "
+            "leak forward — use only with read-only workloads)."
+        ),
+    )
+    snapshot_toggle.add_argument(
+        "--enable-snapshots",
+        dest="enable_snapshots",
+        action="store_true",
+        default=None,
+        help=(
+            "Force-enable snapshot restore even if a preset would disable it "
+            "(rarely needed; presets enable snapshots by default)."
+        ),
+    )
+
     output_group = parser.add_argument_group("Output & Logging")
     output_group.add_argument(
         "--verbose",
@@ -2007,6 +2044,16 @@ def main():
         perturbation_factors=perturbation_factors,
         synchronize_workers=not args.no_sync,
         benchmark_config=benchmark_config,
+        snapshot_restore_interval=(
+            args.snapshot_restore_interval
+            if args.snapshot_restore_interval is not None
+            else base_config.snapshot_restore_interval
+        ),
+        enable_snapshots=(
+            args.enable_snapshots
+            if args.enable_snapshots is not None
+            else base_config.enable_snapshots
+        ),
     )
 
     workload_type = {
