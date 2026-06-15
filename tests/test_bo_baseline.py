@@ -393,8 +393,9 @@ class TestObjectiveEvaluation:
                 self.received_worker = None
                 self.config = DummyConfig()
 
-            def evaluate_worker(self, worker, apply_config=True, random_seed=None):
+            def evaluate_worker(self, worker, apply_config=True, random_seed=None, restore_due=False):
                 self.received_worker = worker
+                self.received_restore_due = restore_due
                 worker.score_breakdown = ScoreBreakdown(final_score=87.5)
                 from src.utils.timing import TimingRecorder
                 return expected_metrics, 87.5, False, {}, TimingRecorder()
