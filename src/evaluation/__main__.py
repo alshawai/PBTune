@@ -236,6 +236,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="pbt-eval",
         help="Docker image name/tag for evaluation containers (default: pbt-eval).",
     )
+    env_grp.add_argument(
+        "--force-recreate-baseline",
+        action="store_true",
+        default=False,
+        help="Force recreation of the baseline snapshot instead of reusing a cached one.",
+    )
 
     out_grp = parser.add_argument_group("output options")
     out_grp.add_argument(
@@ -320,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         bo_session_path=args.bo_session,
         data_dir=args.data_dir,
         colocate_output=args.colocate_output,
+        force_recreate_baseline=args.force_recreate_baseline,
     )
 
     try:

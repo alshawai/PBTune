@@ -197,6 +197,17 @@ class WorkloadOrchestrator:
 
         return self._scoring_engine
 
+    def reload_scoring_engine(self) -> None:
+        """
+        Invalidate the cached scoring engine and rebuild it.
+        This is typically called after the metric configuration ranges
+        have been recalibrated (e.g. after a pilot phase).
+        """
+        with self._scoring_engine_lock:
+            self._scoring_engine = None
+        self._get_scoring_engine()
+        LOGGER.info("Rebuilt scoring engine with calibrated normalizer")
+
     @property
     def scorer(self):
         return self._get_scoring_engine()
@@ -716,6 +727,7 @@ class WorkloadOrchestrator:
         apply_config: bool = True,
         generation: Optional[int] = None,
         barriers: Optional[GenerationBarrier] = None,
+        random_seed: Optional[int] = None,
         restore_due: bool = False,
     ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any], TimingRecorder]:
         """
@@ -949,7 +961,9 @@ class WorkloadOrchestrator:
                         metrics = self.workload_executor.execute(
                             db_config=worker.db_config,
                             worker_id=worker.worker_id,
-                            random_seed=self.config.random_seed,
+                            random_seed=random_seed
+                            if random_seed is not None
+                            else self.config.random_seed,
                             duration=self.config.measurement_duration,
                             warmup=self.config.warmup_duration,
                             warmup_passes=self.config.warmup_passes,
@@ -963,7 +977,9 @@ class WorkloadOrchestrator:
                             duration=self.config.measurement_duration,
                             warmup=self.config.warmup_duration,
                             worker_id=worker.worker_id,
-                            random_seed=self.config.random_seed,
+                            random_seed=random_seed
+                            if random_seed is not None
+                            else self.config.random_seed,
                             pre_measurement_callback=lambda: _barrier("warmup_done"),
                         )
                     last_completed_barrier = "warmup_done"

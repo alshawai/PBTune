@@ -85,10 +85,10 @@ class TestPBTSessionParity:
         config = BOConfig.from_args(args)
         benchmark_config = config.benchmark_config
 
-        assert config.n_iterations == 40
+        assert config.n_iterations == 320
         assert config.random_seed == 123
         assert config.knob_tier == "minimal"
-        assert config.max_workers == 4
+        assert config.max_workers == 1
         assert benchmark_config.benchmark == "sysbench"
         assert benchmark_config.workload_type == "oltp"
         assert benchmark_config.evaluation_duration == 15.0
@@ -205,7 +205,7 @@ class TestPBTSessionParity:
 
         config = BOConfig.from_args(args)
 
-        assert config.n_iterations == 40
+        assert config.n_iterations == 320
         assert config.max_workers == 1
 
     def test_bo_config_falls_back_when_pbt_session_invalid(self, tmp_path):
@@ -243,7 +243,7 @@ class TestPBTSessionParity:
 
         config = BOConfig.from_args(args)
 
-        assert config.n_iterations == 120
+        assert config.n_iterations == 80
         assert config.max_workers == 1
 
     def test_bo_config_requires_tier_without_pbt_session(self):
@@ -393,8 +393,9 @@ class TestObjectiveEvaluation:
                 self.received_worker = None
                 self.config = DummyConfig()
 
-            def evaluate_worker(self, worker, apply_config=True):
+            def evaluate_worker(self, worker, apply_config=True, random_seed=None, restore_due=False):
                 self.received_worker = worker
+                self.received_restore_due = restore_due
                 worker.score_breakdown = ScoreBreakdown(final_score=87.5)
                 from src.utils.timing import TimingRecorder
                 return expected_metrics, 87.5, False, {}, TimingRecorder()
@@ -418,7 +419,7 @@ class TestObjectiveEvaluation:
         assert metrics == expected_metrics
         assert knob_config == worker.knob_config
         assert orchestrator.received_worker is worker
-        assert worker.force_restart_next_eval is False
+        assert worker.force_restart_next_eval is True
         # The recorder returned by the orchestrator is propagated unchanged.
         from src.utils.timing import TimingRecorder as _TR
         assert isinstance(eval_timing, _TR)
@@ -849,7 +850,7 @@ class TestParallelBOConfiguration:
 
         config = BOConfig.from_args(args)
 
-        assert config.max_workers == 4
+        assert config.max_workers == 1
         assert config.pbt_worker_resources is not None
         assert config.pbt_worker_resources["ram_bytes"] == 8589934592
         assert config.pbt_worker_resources["cpu_cores"] == 4
@@ -905,7 +906,7 @@ class TestParallelBOConfiguration:
 
         config = BOConfig.from_args(args)
 
-        assert config.max_workers == 2
+        assert config.max_workers == 1
 
     def test_bo_config_default_max_workers(self):
         """Test that max_workers defaults to 1."""

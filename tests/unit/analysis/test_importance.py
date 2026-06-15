@@ -10,10 +10,7 @@ import sys
 import importlib
 from unittest.mock import MagicMock
 
-# Mock ConfigSpace and fanova
-mock_cs = MagicMock()
-sys.modules["ConfigSpace"] = mock_cs
-sys.modules["ConfigSpace.hyperparameters"] = MagicMock()
+# Mock fanova and shap
 
 
 class MockFANOVA:
