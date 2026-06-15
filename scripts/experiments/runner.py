@@ -151,7 +151,7 @@ class ExperimentRunner:
                         self._mark_status(bo_key, "failed", error="Missing PBT JSON")
                     else:
                         LOGGER.info(f"Phase 2/3: Running BO for {exp.id} (seed {seed})")
-                        cmd = self._build_bo_cmd(pbt_session_path, seed)
+                        cmd = self._build_bo_cmd(exp, pbt_session_path, seed)
                         self._mark_status(bo_key, "running", started_at=datetime.utcnow().isoformat() + "Z")
                         
                         start_time = time.time()
@@ -196,6 +196,67 @@ class ExperimentRunner:
             else:
                 LOGGER.info(f"Skipping EVAL (already done/failed)")
 
+    def _resolve_warm_start_path(self, exp: Experiment) -> Optional[Path]:
+        """Resolve the best_config.json path for a warm-start experiment.
+
+        The source experiment's PBT phase must have completed and recorded
+        a session_json in the manifest. The best_config.json lives as a
+        sibling of the session JSON: ``.../pbt_runs/<tier>/best_configs/
+        best_config_<timestamp>.json`` (vs ``.../pbt_runs/<tier>/
+        tuning_sessions/pbt_results_<timestamp>.json``).
+
+        Returns None if the source isn't ready (caller should fail fast).
+        """
+        if exp.warm_start_source is None or exp.warm_start_source_seed is None:
+            return None
+
+        source_key = self._get_run_key(
+            exp.warm_start_source, exp.warm_start_source_seed, "pbt"
+        )
+        source_run = self.manifest["runs"].get(source_key, {})
+        if source_run.get("status") != "done":
+            LOGGER.error(
+                "Warm-start source %s/seed_%d/pbt is not done (status=%s). "
+                "Run that experiment first, or remove --tier filtering so the "
+                "matrix runs in dependency order.",
+                exp.warm_start_source,
+                exp.warm_start_source_seed,
+                source_run.get("status", "missing"),
+            )
+            return None
+
+        session_json_str = source_run.get("session_json")
+        if not session_json_str:
+            LOGGER.error(
+                "Warm-start source %s recorded no session_json in manifest.",
+                source_key,
+            )
+            return None
+
+        session_path = PROJECT_ROOT / session_json_str
+        # Derive sibling best_config path. Filenames share the timestamp
+        # suffix; only the directory differs (tuning_sessions ↔ best_configs)
+        # and the prefix (pbt_results_ ↔ best_config_).
+        try:
+            best_config_path = (
+                session_path.parent.parent
+                / "best_configs"
+                / session_path.name.replace("pbt_results_", "best_config_", 1)
+            )
+        except Exception as e:
+            LOGGER.error("Failed to derive best_config path from %s: %s", session_path, e)
+            return None
+
+        if not best_config_path.exists():
+            LOGGER.error(
+                "Warm-start best_config not found at %s (session was %s)",
+                best_config_path,
+                session_path,
+            )
+            return None
+
+        return best_config_path
+
     def _build_pbt_cmd(self, exp: Experiment, seed: int) -> List[str]:
         cmd = [
             "python", "-m", "src.tuner.main",
@@ -205,13 +266,18 @@ class ExperimentRunner:
             "--benchmark", exp.benchmark,
             "--random-seed", str(seed),
             "--tuning-mode", exp.tuning_mode,
+            # Pin restore interval explicitly so the experiment is
+            # self-documenting and cannot drift if THOROUGH_CONFIG changes
+            # upstream. THOROUGH currently has interval=1; the explicit
+            # flag makes that contract part of the experiment record.
+            "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
             "--cleanup-instances",
             "--worker-ram", self.worker_ram,
             "--worker-cpus", str(self.worker_cpus),
-            "--verbose", "INFO"
+            "--verbose", "DEBUG"
         ]
-        
+
         if exp.sysbench_workload:
             cmd.extend(["--sysbench-workload", exp.sysbench_workload])
         if exp.scale_factor is not None:
@@ -233,19 +299,48 @@ class ExperimentRunner:
                 "--ablation-variable", exp.ablation_variable,
                 "--ablation-value", str(exp.ablation_value)
             ])
-            
+
+        # Warm-start: resolve upstream best_config.json from the manifest.
+        # If the source isn't ready, the resolver returns None and logs
+        # an error; we fall through without a flag so PBT runs without
+        # warm-start (LHS init only). Caller should check
+        # _resolve_warm_start_path before invoking when correctness matters.
+        if exp.warm_start_source is not None:
+            warm_path = self._resolve_warm_start_path(exp)
+            if warm_path is not None:
+                cmd.extend(["--warm-start", str(warm_path)])
+            elif self.dry_run:
+                cmd.extend(["--warm-start", "DRY_RUN_WARM_START_PATH.json"])
+
         return cmd
 
-    def _build_bo_cmd(self, pbt_session: Optional[Path], seed: int) -> List[str]:
+    def _build_bo_cmd(self, exp: Experiment, pbt_session: Optional[Path], seed: int) -> List[str]:
+        # BO inherits population/budget from the PBT session via
+        # --pbt-session, but every experiment-defining flag is passed
+        # explicitly so a stale or partial session JSON cannot silently
+        # change the workload shape. Anything that would mismatch the
+        # PBT run breaks the fair-comparison invariant the paper rests on.
         cmd = [
             "python", "-m", "src.scripts.bo_baseline",
+            "--config", exp.config_profile,
+            "--tier", exp.knob_tier,
+            "--knob-source", exp.knob_source,
+            "--benchmark", exp.benchmark,
             "--seed", str(seed),
+            "--tuning-mode", exp.tuning_mode,
+            "--enable-snapshots",
+            "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
             "--cleanup-instances",
             "--worker-ram", self.worker_ram,
             "--worker-cpus", str(self.worker_cpus),
-            "--verbose", "INFO"
+            "--verbose", "DEBUG"
         ]
+        if exp.sysbench_workload:
+            cmd.extend(["--sysbench-workload", exp.sysbench_workload])
+        if exp.scale_factor is not None:
+            cmd.extend(["--scale-factor", str(exp.scale_factor)])
+
         if pbt_session:
             cmd.extend(["--pbt-session", str(pbt_session)])
         elif self.dry_run:
