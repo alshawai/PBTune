@@ -67,7 +67,7 @@ class BenchmarkConfig:
     sysbench_table_size: int = 100000
     sysbench_workload: str = DEFAULT_SYSBENCH_WORKLOAD
     scale_factor: float = 0.1
-    tuning_mode: TuningMode = TuningMode.ONLINE
+    tuning_mode: TuningMode = TuningMode.OFFLINE
     adaptive_restart_interval: int = 10
 
     def __post_init__(self) -> None:
