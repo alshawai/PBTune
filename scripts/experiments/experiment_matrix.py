@@ -1,7 +1,6 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -9,8 +8,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # patch to one experiment cannot silently violate the cross-experiment
 # seed invariant the paper rests on. Tuples (not lists) so they remain
 # immutable and hashable.
-SEEDS_K5: Tuple[int, ...] = (42, 123, 456, 789, 1024)
-SEEDS_K1: Tuple[int, ...] = (42,)
+SEEDS_K5: tuple[int, ...] = (42, 123, 456, 789, 1024)
+SEEDS_K1: tuple[int, ...] = (42,)
 
 
 @dataclass(frozen=True)
@@ -19,33 +18,33 @@ class Experiment:
     tier: int                           # 1, 2, or 3
     description: str
     benchmark: str                      # "sysbench" | "tpch"
-    sysbench_workload: Optional[str]    # "oltp_read_write" | ...
-    scale_factor: Optional[float]       # TPC-H SF override
+    sysbench_workload: str | None    # "oltp_read_write" | ...
+    scale_factor: float | None       # TPC-H SF override
     config_profile: str                 # always "thorough"
     knob_tier: str                      # "extensive" | "minimal" | "core" | "standard"
     knob_source: str                    # "expert" | "data_driven"
     tuning_mode: str                    # "offline" | "online"
-    seeds: Tuple[int, ...]
+    seeds: tuple[int, ...]
     eval_repetitions: int               # 10 or 5
     run_bo: bool                        # True for Tier 1/2, False for Tier 3
-    population: Optional[int] = None
-    generations: Optional[int] = None
-    parallel_workers: Optional[int] = None
-    exploit_quantile: Optional[float] = None
-    scoring_policy: Optional[str] = None
-    perturbation_factor: Optional[float] = None
-    ablation_variable: Optional[str] = None
-    ablation_value: Optional[str] = None
+    population: int | None = None
+    generations: int | None = None
+    parallel_workers: int | None = None
+    exploit_quantile: float | None = None
+    scoring_policy: str | None = None
+    perturbation_factor: float | None = None
+    ablation_variable: str | None = None
+    ablation_value: str | None = None
     # Warm-start: when set, the runner resolves the best_config.json from
     # the manifest entry for ``(warm_start_source, warm_start_source_seed,
     # pbt)`` and passes it as ``--warm-start <path>``. The source
     # experiment must have completed its PBT phase before this experiment
     # runs.
-    warm_start_source: Optional[str] = None
-    warm_start_source_seed: Optional[int] = None
+    warm_start_source: str | None = None
+    warm_start_source_seed: int | None = None
 
 
-def get_data_driven_tier_experiments(workload_type: str = "oltp_read_write") -> List[Experiment]:
+def get_data_driven_tier_experiments(workload_type: str = "oltp_read_write") -> list[Experiment]:
     """Read data/data_driven_knobs/{workload_type}/data_driven_tiers.json
     and generate one ablation Experiment per non-empty tier.
     """
@@ -80,7 +79,7 @@ def get_data_driven_tier_experiments(workload_type: str = "oltp_read_write") -> 
     return experiments
 
 
-def build_all_experiments() -> List[Experiment]:
+def build_all_experiments() -> list[Experiment]:
     experiments = [
         # Tier 1 — primary, K=5 for Wilcoxon-grade significance
         Experiment(
@@ -239,10 +238,10 @@ def build_all_experiments() -> List[Experiment]:
 
     return experiments
 
-def get_experiments_by_tier(tier: int) -> List[Experiment]:
+def get_experiments_by_tier(tier: int) -> list[Experiment]:
     return [e for e in build_all_experiments() if e.tier == tier]
 
-def get_experiment_by_id(exp_id: str) -> Optional[Experiment]:
+def get_experiment_by_id(exp_id: str) -> Experiment | None:
     for e in build_all_experiments():
         if e.id == exp_id:
             return e

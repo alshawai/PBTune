@@ -4,10 +4,9 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
-from src.utils.hardware_info import detect_worker_resources
 from scripts.experiments.experiment_matrix import Experiment
+from src.utils.hardware_info import detect_worker_resources
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RESULTS_DIR = PROJECT_ROOT / "results"
@@ -34,7 +33,7 @@ class ExperimentRunner:
                 format="%(asctime)s [%(levelname)s] %(message)s"
             )
 
-    def _load_manifest(self) -> Dict:
+    def _load_manifest(self) -> dict:
         if MANIFEST_PATH.exists():
             return json.loads(MANIFEST_PATH.read_text())
         return {
@@ -48,7 +47,7 @@ class ExperimentRunner:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         MANIFEST_PATH.write_text(json.dumps(self.manifest, indent=2))
 
-    def _run_command(self, cmd: List[str], cwd: Path = PROJECT_ROOT) -> bool:
+    def _run_command(self, cmd: list[str], cwd: Path = PROJECT_ROOT) -> bool:
         if self.dry_run:
             LOGGER.info(f"DRY RUN: {' '.join(cmd)}")
             return True
@@ -82,7 +81,7 @@ class ExperimentRunner:
         except subprocess.CalledProcessError as e:
             LOGGER.error(f"Failed to commit/push results: {e}")
 
-    def _find_latest_session_json(self, output_dir: Path, prefix: str) -> Optional[Path]:
+    def _find_latest_session_json(self, output_dir: Path, prefix: str) -> Path | None:
         if not output_dir.exists():
             return None
         candidates = sorted(output_dir.rglob(f"{prefix}*.json"), key=lambda p: p.stat().st_mtime)
@@ -196,7 +195,7 @@ class ExperimentRunner:
             else:
                 LOGGER.info(f"Skipping EVAL (already done/failed)")
 
-    def _resolve_warm_start_path(self, exp: Experiment) -> Optional[Path]:
+    def _resolve_warm_start_path(self, exp: Experiment) -> Path | None:
         """Resolve the best_config.json path for a warm-start experiment.
 
         The source experiment's PBT phase must have completed and recorded
@@ -257,7 +256,7 @@ class ExperimentRunner:
 
         return best_config_path
 
-    def _build_pbt_cmd(self, exp: Experiment, seed: int) -> List[str]:
+    def _build_pbt_cmd(self, exp: Experiment, seed: int) -> list[str]:
         cmd = [
             "python", "-m", "src.tuner.main",
             "--config", exp.config_profile,
@@ -314,7 +313,7 @@ class ExperimentRunner:
 
         return cmd
 
-    def _build_bo_cmd(self, exp: Experiment, pbt_session: Optional[Path], seed: int) -> List[str]:
+    def _build_bo_cmd(self, exp: Experiment, pbt_session: Path | None, seed: int) -> list[str]:
         # BO inherits population/budget from the PBT session via
         # --pbt-session, but every experiment-defining flag is passed
         # explicitly so a stale or partial session JSON cannot silently
@@ -347,7 +346,7 @@ class ExperimentRunner:
             cmd.extend(["--pbt-session", "DRY_RUN_PBT_SESSION_PATH.json"])
         return cmd
 
-    def _build_eval_cmd(self, pbt_session: Optional[Path], bo_session: Optional[Path], repetitions: int, seed: int) -> List[str]:
+    def _build_eval_cmd(self, pbt_session: Path | None, bo_session: Path | None, repetitions: int, seed: int) -> list[str]:
         cmd = [
             "python", "-m", "src.evaluation",
             "--repetitions", str(repetitions),
