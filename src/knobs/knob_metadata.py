@@ -69,7 +69,7 @@ class TuningMetadata:
 
 def _load_metadata(path: str = "data/knob_metadata.json") -> Dict[str, TuningMetadata]:
     """Load knob tuning metadata from JSON and coerce values to TuningMetadata."""
-    path = Path(path)
+    path = str(Path(path))
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

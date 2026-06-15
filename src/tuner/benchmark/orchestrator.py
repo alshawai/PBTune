@@ -549,7 +549,7 @@ class WorkloadOrchestrator:
             active_connection = connection
             owns_connection = False
             try:
-                if active_connection is None or getattr(active_connection, "closed", 1):
+                if active_connection is None or getattr(active_connection, "closed", True):
                     active_connection = self.connect(
                         db_config, max_retries=2, retry_delay=1.0
                     )

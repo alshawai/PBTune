@@ -30,31 +30,3 @@ files = ["src", "scripts"]
 [[tool.mypy.overrides]]
 module = ["docker", "docker.*", "psycopg2", "psycopg2.*", "psutil"]
 ignore_missing_imports = true
-
-# Baselined modules that fail typecheck under the expanded scope.
-# Each entry is a follow-up task: drop the module from this list once
-# its type errors are addressed. Do not add new modules here — fix the
-# errors instead. See `make typecheck` for the live error list.
-[[tool.mypy.overrides]]
-module = [
-  "src.analysis.importance",
-  "src.analysis.tier_generator",
-  "src.benchmarks.tpch.setup_dbgen",
-  "src.knobs.knob_metadata",
-  "src.knobs.policy",
-  "src.scripts.bo_baseline.objective",
-  "src.tuner.benchmark.orchestrator",
-  "src.tuner.benchmark.workload",
-  "src.tuner.config.knob_space",
-  "src.tuner.core.population",
-  "src.tuner.main",
-  "src.utils.environments.docker",
-  "src.visualization.loaders.ablation",
-  "src.visualization.loaders.importance",
-  "src.visualization.loaders.session",
-  "src.visualization.plots.knob_dependence",
-  "src.visualization.plots.knob_importance",
-  "src.visualization.registry",
-  "src.visualization.utils",
-]
-ignore_errors = true

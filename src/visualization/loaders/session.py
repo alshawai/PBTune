@@ -5,7 +5,7 @@ Loader for Population-Based Training session JSONs.
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -121,7 +121,7 @@ def load_session(
     std_scores = np.zeros(n_gens)
     wall_clock_seconds = np.zeros(n_gens)
     generation_elapsed_seconds = np.zeros(n_gens)
-    worker_configs = [[] for _ in range(n_gens)]
+    worker_configs: list[list[dict]] = [[] for _ in range(n_gens)]
 
     # Collect all unique worker IDs to track individual traces
     worker_ids = set()
@@ -207,7 +207,7 @@ def load_sessions(directory: Path | str) -> list[SessionTrace]:
 
     # Pass 1: Gather ALL metrics from ALL files to form a super-global range
     super_global_metrics = []
-    shared_metadata = {}
+    shared_metadata: dict[str, Any] = {}
 
     for f in json_files:
         try:
