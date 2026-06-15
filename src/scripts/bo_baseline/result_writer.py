@@ -74,6 +74,9 @@ def write_bo_results(
     bootstrap_timing: Optional[TimingRecorder] = None,
     bo_timing: Optional[TimingRecorder] = None,
     run_timestamp: Optional[str] = None,
+    requested_iterations: Optional[int] = None,
+    requested_pilot_size: Optional[int] = None,
+    actual_pilot_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Serialize Bayesian Optimization results in PBT-compatible JSON format.
@@ -119,6 +122,18 @@ def write_bo_results(
     run_timestamp : Optional[str]
         Canonical session timestamp string. When omitted, falls back to
         :func:`format_session_id` so existing tests that pass none still work.
+    requested_iterations : Optional[int]
+        The user-requested total iteration budget (``config.n_iterations``).
+        Serialized as ``tuning_session.requested_iterations`` so analysis can
+        detect runs that were truncated relative to intent.
+    requested_pilot_size : Optional[int]
+        The user-requested bootstrap pilot size
+        (``min(range_update_interval, n_iterations)``). Serialized as
+        ``tuning_session.requested_pilot_size``.
+    actual_pilot_size : Optional[int]
+        The number of pilot configurations actually generated and evaluated.
+        With the backfill sampler this should match ``requested_pilot_size``;
+        the field is explicit so future regressions surface immediately.
 
     Returns
     -------
@@ -165,6 +180,16 @@ def write_bo_results(
         bo_overhead = iteration.get("bo_overhead_seconds", 0.0)
         bo_overhead_total += bo_overhead
 
+        # ``generation_elapsed_seconds`` is the wall-clock cost of producing
+        # this generation's observation: the per-evaluation work
+        # (``wall_clock_seconds`` — apply, run, measure, score) plus the
+        # BO control-loop overhead bracketed around it (ask + tell + drift +
+        # repair + relabel). Visualizers consume this as
+        # "time spent evaluating this generation"; emitting only the BO
+        # overhead would under-report it by 200-1000x.
+        wall_clock = iteration.get("wall_clock_seconds", 0.0)
+        generation_elapsed = wall_clock + bo_overhead
+
         iteration_timing = iteration.get("timing")
         if iteration_timing and isinstance(iteration_timing, dict):
             for rec in iteration_timing.get("records", []) or []:
@@ -198,7 +223,7 @@ def write_bo_results(
                 iteration.get("timestamp", 0.0)
             ).isoformat(),
             "wall_clock_seconds": iteration.get("wall_clock_seconds", 0.0),
-            "generation_elapsed_seconds": bo_overhead,
+            "generation_elapsed_seconds": generation_elapsed,
             "phase": iteration.get("phase", "bo"),
             "bo_overhead_seconds": bo_overhead,
             "worker_scores": [worker_score_entry],
@@ -225,6 +250,18 @@ def write_bo_results(
     # work that contributed to wall clock.
     if bo_timing is not None:
         session_timing.merge(bo_timing)
+
+    # Fold bootstrap-phase spans (instance setup, knob pruning, pilot
+    # generation, ConfigSpace/SMAC build, default-config seeding) into the
+    # session aggregate. ``bootstrap_breakdown`` (below) keeps a separate
+    # canonical view used by timing_breakdown.py — but other consumers that
+    # read ``timing_summary`` directly would otherwise see zero pre-tuning
+    # work. timing_breakdown.py reads ``bootstrap_breakdown`` independently
+    # (collapsed to a single ``bootstrap`` row per session — see
+    # src/analysis/timing_breakdown.py:142-156), so the merge here does NOT
+    # double-count in that tool.
+    if bootstrap_timing is not None:
+        session_timing.merge(bootstrap_timing)
 
     # Build result dictionary
     timestamp = run_timestamp or format_session_id()
@@ -253,6 +290,13 @@ def write_bo_results(
             "workload_type": config.benchmark_config.workload_type,
             "benchmark_name": config.benchmark_config.benchmark,
             "iterations": len(iteration_log),
+            "requested_iterations": (
+                requested_iterations
+                if requested_iterations is not None
+                else config.n_iterations
+            ),
+            "requested_pilot_size": requested_pilot_size,
+            "actual_pilot_size": actual_pilot_size,
             "seed": config.random_seed,
             "num_parallel_workers": config.max_workers,
             "total_generations": len(iteration_log),

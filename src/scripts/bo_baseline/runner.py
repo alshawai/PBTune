@@ -1,12 +1,13 @@
 """Main Bayesian Optimization baseline runner orchestrator."""
 
 from src.utils.metrics import PerformanceMetrics
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 
-from ConfigSpace import Configuration
+from ConfigSpace import Configuration, ConfigurationSpace
 from smac import BlackBoxFacade, HyperparameterOptimizationFacade
 from smac.initial_design import SobolInitialDesign
 from smac.random_design import ProbabilityRandomDesign
@@ -168,8 +169,11 @@ class BOBaselineRunner:
 
         # Metric config
         workload_type = WorkloadType(config.benchmark_config.workload_type)
+        metric_kwargs: Dict[str, Any] = {}
+        if config.scoring_policy is not None:
+            metric_kwargs["scoring_policy"] = config.scoring_policy
         self.metric_config = create_metric_config(
-            workload_type.value, scoring_policy=config.scoring_policy
+            workload_type.value, **metric_kwargs
         )
 
         self.logger.info(
@@ -348,12 +352,11 @@ class BOBaselineRunner:
         )
 
         for pilot_idx, sobol_config in enumerate(sobol_configs):
-            if (
+            restore_due = (
                 self.config.enable_snapshots
                 and pilot_idx > 0
                 and pilot_idx % self.config.snapshot_restore_interval == 0
-            ):
-                self._restore_snapshot_safe(worker)
+            )
 
             self.logger.info(
                 "Bootstrap %d/%d: starting evaluation...",
@@ -368,7 +371,7 @@ class BOBaselineRunner:
                     metrics,
                     score,
                     score_breakdown,
-                    _restarted,
+                    restarted,
                     wall_time,
                     eval_timing,
                 ) = evaluate_config(
@@ -377,6 +380,7 @@ class BOBaselineRunner:
                     orchestrator,
                     self.knob_space,
                     previous_engine_config,
+                    restore_due=restore_due,
                 )
                 previous_engine_config = dict(
                     configspace_to_knobs(sobol_config, self.knob_space)
@@ -404,6 +408,7 @@ class BOBaselineRunner:
                 score = 0.0
                 score_breakdown = None
                 wall_time = 0.0
+                restarted = False
                 status = StatusType.CRASHED
                 eval_timing = TimingRecorder()
 
@@ -441,7 +446,7 @@ class BOBaselineRunner:
                     "cost": cost,
                     "bo_overhead_seconds": tell_overhead,
                     "wall_clock_seconds": wall_time,
-                    "restarted": False,
+                    "restarted": restarted,
                     "timestamp": time.time(),
                     "timing": eval_timing.to_dict(include_summary=False),
                     "phase": "bootstrap",
@@ -469,6 +474,13 @@ class BOBaselineRunner:
                 )
 
         # ── Calibrate normalizer from all successful bootstrap observations ────
+        # Wrapped in a single ``bootstrap_calibration`` span so the cost of
+        # range-update + scoring-engine reload + history relabel + iteration_log
+        # rescore is visible to timing_breakdown analysis. The whole block fires
+        # once per session, between the bootstrap and BO phases — we tag it
+        # ``phase="bootstrap_calibration"`` to keep it distinct from per-eval
+        # work.
+        t_calibration = time.monotonic()
         self.logger.info("=== Bootstrap Calibration ===")
         successful_metrics = [
             r.raw_metrics
@@ -535,6 +547,14 @@ class BOBaselineRunner:
                 log_entry["score_breakdown"] = bd
                 log_entry["cost"] = max(0.0, min(100.0, 100.0 - bd.final_score))
 
+        calibration_elapsed = time.monotonic() - t_calibration
+        self.bo_timing.add(
+            "bootstrap_calibration",
+            calibration_elapsed,
+            phase="bootstrap_calibration",
+            n_observations=len(successful_metrics),
+        )
+
         incumbents = facade.intensifier.get_incumbents()
         assert len(incumbents) > 0, (
             "No incumbent found after bootstrap injection. "
@@ -565,12 +585,11 @@ class BOBaselineRunner:
         for bo_idx in range(remaining):
             iteration_count = pilot_size + bo_idx
 
-            if (
+            restore_due = (
                 self.config.enable_snapshots
                 and iteration_count > 0
                 and iteration_count % self.config.snapshot_restore_interval == 0
-            ):
-                self._restore_snapshot_safe(worker)
+            )
 
             try:
                 self.logger.debug(
@@ -600,6 +619,13 @@ class BOBaselineRunner:
                 )
                 break
 
+            # Per-iteration BO overhead accumulator. Starts with the ask
+            # cost, picks up the drift+repair+tell+relabel costs as we go.
+            # This is what gets stored in the iteration_log so each entry
+            # has an honest "total BO-attributable overhead I incurred"
+            # number — not just facade.ask/facade.tell.
+            iteration_bo_overhead = ask_overhead
+
             try:
                 (
                     cost,
@@ -617,6 +643,7 @@ class BOBaselineRunner:
                     self.knob_space,
                     previous_engine_config,
                     seed=trial_info.seed,
+                    restore_due=restore_due,
                 )
                 previous_engine_config = dict(
                     configspace_to_knobs(trial_info.config, self.knob_space)
@@ -634,7 +661,9 @@ class BOBaselineRunner:
                 ) = (100.0, {}, None, 0.0, None, False, 0.0)
                 eval_timing = TimingRecorder()
 
-            # Tell repaired (DB-quantized) config if it differs from asked config
+            # Drift check: bracket the comparison so timing_breakdown can
+            # see how much per-iteration cost the dedup/repair detection adds.
+            t_drift = time.monotonic()
             original_knob_config = configspace_to_knobs(
                 trial_info.config, self.knob_space
             )
@@ -652,9 +681,15 @@ class BOBaselineRunner:
                 configs_differ = bool(
                     get_config_drift(original_knob_config, knob_config)
                 )
+            drift_elapsed = time.monotonic() - t_drift
+            self.bo_timing.add(
+                "bo_drift_check", drift_elapsed, phase="optimize"
+            )
+            iteration_bo_overhead += drift_elapsed
 
             repaired_cs_config = None
             if configs_differ:
+                t_repair = time.monotonic()
                 try:
                     repaired_cs_config = knobs_to_configspace(
                         knob_config, self.knob_space, facade.scenario.configspace
@@ -671,6 +706,11 @@ class BOBaselineRunner:
                         knob_def_repr,
                         exc_info=True,
                     )
+                repair_elapsed = time.monotonic() - t_repair
+                self.bo_timing.add(
+                    "bo_repair_inject", repair_elapsed, phase="optimize"
+                )
+                iteration_bo_overhead += repair_elapsed
 
             bo_status = StatusType.SUCCESS
             effective_config = (
@@ -696,6 +736,7 @@ class BOBaselineRunner:
             self.bo_timing.add(
                 "bo_overhead_tell", tell_overhead, phase="optimize"
             )
+            iteration_bo_overhead += tell_overhead
 
             # Record in parallel history for potential future relabeling
             eval_history.append(
@@ -709,11 +750,16 @@ class BOBaselineRunner:
             )
 
             # ── Dynamic Range Expansion & Relabeling ─────────────────────────
+            # Wrapped in a single ``bo_relabel`` span: covers the conditional
+            # reload + SMAC RunHistory relabel + iteration_log retroactive
+            # update. These always co-occur; one span keeps the
+            # timing_summary readable.
             if metrics is not None:
                 ranges_expanded = self.metric_config.expand_ranges_for_metrics(
                     [metrics]
                 )
                 if ranges_expanded:
+                    t_relabel = time.monotonic()
                     orchestrator.reload_scoring_engine()
                     n_relabeled = self._relabel_smac_history(
                         facade, orchestrator, eval_history, worker
@@ -773,6 +819,14 @@ class BOBaselineRunner:
                         "best_score_so_far recalculated after relabeling: %.4f",
                         best_score_so_far,
                     )
+                    relabel_elapsed = time.monotonic() - t_relabel
+                    self.bo_timing.add(
+                        "bo_relabel",
+                        relabel_elapsed,
+                        phase="optimize",
+                        n_relabeled=n_relabeled,
+                    )
+                    iteration_bo_overhead += relabel_elapsed
 
             iteration_score = score if score is not None else 0.0
             iteration_log.append(
@@ -783,7 +837,7 @@ class BOBaselineRunner:
                     "score": iteration_score,
                     "score_breakdown": score_breakdown,
                     "cost": cost,
-                    "bo_overhead_seconds": ask_overhead + tell_overhead,
+                    "bo_overhead_seconds": iteration_bo_overhead,
                     "wall_clock_seconds": wall_time,
                     "restarted": restarted,
                     "timestamp": time.time(),
@@ -924,6 +978,113 @@ class BOBaselineRunner:
         smac_root.mkdir(parents=True, exist_ok=True)
         return smac_root
 
+    def _generate_pilot_configs(
+        self,
+        configspace: ConfigurationSpace,
+        pilot_size: int,
+    ) -> list[Configuration]:
+        """Sample exactly ``pilot_size`` unique, constraint-valid configurations.
+
+        ConfigSpace's ``NotEqualsCondition`` and ``Forbidden*`` clauses
+        (declared in :func:`KnobSpace.configspace_constraints`) reject most
+        Sobol points in high-dimensional spaces; SMAC's internal dedup then
+        collapses survivors further. With the 179-knob extensive tier, a
+        single ``SobolInitialDesign(n_configs=pilot_size * 5)`` pass has
+        been observed to return as few as 7 configs when 10 were requested.
+        That silently truncates the user's iteration budget and creates
+        gaps in the iteration log.
+
+        Strategy:
+            1. Sobol pass with ``n_configs = pilot_size * 5``.
+            2. If short, up to 3 more Sobol passes, each doubling the
+               request and using a derived seed, deduped against everything
+               already accepted via a canonical dict key.
+            3. If still short, fall back to
+               ``ConfigurationSpace.sample_configuration(size=remaining)``
+               which loops internally until it has the requested number of
+               valid configurations
+               (see :file:`ConfigSpace/configuration_space.py:531-623`).
+
+        The fallback path emits an INFO-level log so it's visible whenever
+        the search space's constraint density forces it.
+        """
+        if pilot_size <= 0:
+            return []
+
+        accepted: list[Configuration] = []
+        seen: set[str] = set()
+
+        def _key(cfg: Configuration) -> str:
+            # Canonical JSON encoding of the resolved dict makes a stable
+            # hashable identity that survives ConfigSpace value reordering.
+            return json.dumps(dict(cfg), sort_keys=True, default=str)
+
+        max_sobol_passes = 4
+        for attempt in range(max_sobol_passes):
+            if len(accepted) >= pilot_size:
+                break
+            n_request = pilot_size * 5 * (2**attempt)
+            pass_seed = self.config.random_seed + attempt
+            scenario = Scenario(
+                configspace=configspace,
+                n_trials=n_request,
+                seed=pass_seed,
+                n_workers=1,
+                output_directory=(
+                    self._build_smac_output_root()
+                    / f"_sobol_gen_attempt_{attempt}"
+                ),
+            )
+            design = SobolInitialDesign(
+                scenario=scenario,
+                n_configs=n_request,
+                max_ratio=1.0,
+            )
+            for cfg in design.select_configurations():
+                k = _key(cfg)
+                if k in seen:
+                    continue
+                seen.add(k)
+                accepted.append(cfg)
+                if len(accepted) >= pilot_size:
+                    break
+
+        if len(accepted) < pilot_size:
+            shortfall = pilot_size - len(accepted)
+            self.logger.info(
+                "Sobol exhausted after %d passes with %d/%d unique-valid "
+                "configs; falling back to ConfigurationSpace.sample_configuration() "
+                "for the remaining %d. The search space is constraint-dense.",
+                max_sobol_passes,
+                len(accepted),
+                pilot_size,
+                shortfall,
+            )
+            extras = configspace.sample_configuration(size=shortfall)
+            if isinstance(extras, Configuration):
+                # ConfigSpace returns a single Configuration when size=1.
+                extras = [extras]
+            for cfg in extras:
+                k = _key(cfg)
+                if k in seen:
+                    # Rare in a 179-D space, but defend against it: keep
+                    # sampling one-at-a-time until we have enough.
+                    continue
+                seen.add(k)
+                accepted.append(cfg)
+            # If sampling collided enough to still leave a deficit, top up
+            # one configuration at a time (sample_configuration's internal
+            # rejection sampling guarantees a valid Configuration each call).
+            while len(accepted) < pilot_size:
+                cfg = configspace.sample_configuration()
+                k = _key(cfg)
+                if k in seen:
+                    continue
+                seen.add(k)
+                accepted.append(cfg)
+
+        return accepted[:pilot_size]
+
     def _build_log_output_file(self, timestamp: str) -> Path:
         """Create the HTML log output file under results."""
 
@@ -1021,9 +1182,10 @@ class BOBaselineRunner:
 
             # Build ConfigSpace
             self.logger.info("Building ConfigSpace...")
-            configspace = build_configspace(
-                self.knob_space, seed=self.config.random_seed
-            )
+            with self.bootstrap_timing.span("configspace_build"):
+                configspace = build_configspace(
+                    self.knob_space, seed=self.config.random_seed
+                )
             self.logger.debug(
                 "ConfigSpace initialized with %d dimensions",
                 len(configspace.get_hyperparameters()),
@@ -1033,9 +1195,10 @@ class BOBaselineRunner:
             iteration_log: list = []
 
             # Pilot phase size
-            pilot_size = min(
+            requested_pilot_size = min(
                 self.config.range_update_interval, self.config.n_iterations
             )
+            pilot_size = requested_pilot_size
 
             # Pre-generate Sobol configs BEFORE creating the facade.
             #
@@ -1047,80 +1210,81 @@ class BOBaselineRunner:
             self.logger.info(
                 "Pre-generating %d Sobol pilot configurations...", pilot_size
             )
-            # Temporary scenario used only for Sobol generation (same seed/space).
-            # We request 5x more trials so we can filter out invalid configs and still
-            # guarantee exactly `pilot_size` valid configurations.
-            _sobol_scenario = Scenario(
-                configspace=configspace,
-                n_trials=pilot_size * 5,
-                seed=self.config.random_seed,
-                n_workers=1,
-                output_directory=self._build_smac_output_root() / "_sobol_gen",
-            )
-            _sobol_design = SobolInitialDesign(
-                scenario=_sobol_scenario,
-                n_configs=pilot_size * 5,
-                max_ratio=1.0,  # Prevent SMAC from limiting pilot to 25% of n_trials
-            )
-            sobol_configs = _sobol_design.select_configurations()
-
-            # Inject the default configuration as the first pilot observation
-            base_default_config = configspace.get_default_configuration()
-            base_knobs = configspace_to_knobs(base_default_config, self.knob_space)
-
-            # Fetch real defaults from the active DB using Applicator
-            from src.utils.applicator import KnobApplicator
-            from src.scripts.bo_baseline.search_space import get_config_drift
-
-            applicator = KnobApplicator(
-                db_config=self.env.get_db_config(0), worker_id=0
-            )
-            try:
-                verify_result = applicator.verify(expected_config=base_knobs)
-            except Exception as exc:
-                self.logger.warning(
-                    "KnobApplicator.verify() failed (%s); "
-                    "using static ConfigSpace defaults as pilot seed",
-                    exc,
-                )
-                verify_result = type("_FakeVerify", (), {"db_config": {}})()  # type: ignore[assignment]
-
-            # Log drift between static ConfigSpace defaults and live DB values
-            default_drift = get_config_drift(base_knobs, verify_result.db_config)
-            if default_drift:
-                drift_preview = dict(list(default_drift.items())[:10])
-                self.logger.info(
-                    "Live DB defaults differ from ConfigSpace defaults in %d knob(s): %s%s",
-                    len(default_drift),
-                    drift_preview,
-                    " ..." if len(default_drift) > 10 else "",
-                )
-            else:
-                self.logger.debug(
-                    "Live DB defaults match ConfigSpace defaults exactly."
+            with self.bootstrap_timing.span(
+                "pilot_generation", requested=pilot_size
+            ):
+                sobol_configs = self._generate_pilot_configs(
+                    configspace, pilot_size
                 )
 
-            # Update base_knobs with the true active database values
-            base_knobs.update(verify_result.db_config)
+            # Inject the default configuration as the first pilot observation.
+            # Wrapped in a bootstrap span so the cost of querying live DB defaults
+            # is visible to timing_breakdown analysis.
+            with self.bootstrap_timing.span("default_config_seed"):
+                base_default_config = configspace.get_default_configuration()
+                base_knobs = configspace_to_knobs(base_default_config, self.knob_space)
 
-            try:
-                real_default_config = knobs_to_configspace(
-                    base_knobs,
-                    self.knob_space,
-                    configspace,
-                )
-            except Exception as e:
-                self.logger.warning(
-                    "Could not build real default config, falling back to static defaults: %s",
-                    e,
-                )
-                real_default_config = base_default_config
+                # Fetch real defaults from the active DB using Applicator
+                from src.utils.applicator import KnobApplicator
+                from src.scripts.bo_baseline.search_space import get_config_drift
 
-            # Prepend default, remove any exact duplicates, and slice to requested pilot size
-            sobol_configs = [real_default_config] + [
-                c for c in sobol_configs if c != real_default_config
-            ]
-            sobol_configs = sobol_configs[:pilot_size]
+                applicator = KnobApplicator(
+                    db_config=self.env.get_db_config(0), worker_id=0
+                )
+                try:
+                    verify_result = applicator.verify(expected_config=base_knobs)
+                except Exception as exc:
+                    self.logger.warning(
+                        "KnobApplicator.verify() failed (%s); "
+                        "using static ConfigSpace defaults as pilot seed",
+                        exc,
+                    )
+                    verify_result = type("_FakeVerify", (), {"db_config": {}})()  # type: ignore[assignment]
+
+                # Log drift between static ConfigSpace defaults and live DB values
+                default_drift = get_config_drift(base_knobs, verify_result.db_config)
+                if default_drift:
+                    drift_preview = dict(list(default_drift.items())[:10])
+                    self.logger.info(
+                        "Live DB defaults differ from ConfigSpace defaults in %d knob(s): %s%s",
+                        len(default_drift),
+                        drift_preview,
+                        " ..." if len(default_drift) > 10 else "",
+                    )
+                else:
+                    self.logger.debug(
+                        "Live DB defaults match ConfigSpace defaults exactly."
+                    )
+
+                # Update base_knobs with the true active database values
+                base_knobs.update(verify_result.db_config)
+
+                try:
+                    real_default_config = knobs_to_configspace(
+                        base_knobs,
+                        self.knob_space,
+                        configspace,
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        "Could not build real default config, falling back to static defaults: %s",
+                        e,
+                    )
+                    real_default_config = base_default_config
+
+                # Prepend default, remove any exact duplicates, and slice to requested pilot size
+                sobol_configs = [real_default_config] + [
+                    c for c in sobol_configs if c != real_default_config
+                ]
+                sobol_configs = sobol_configs[:pilot_size]
+
+            # Rebind ``pilot_size`` to the actually-generated count so the
+            # Phase 2 ``remaining`` calculation honors the user's full
+            # iteration budget. With the backfill sampler above this should
+            # equal ``requested_pilot_size``; the rebind is defensive against
+            # future regressions.
+            actual_pilot_size = len(sobol_configs)
+            pilot_size = actual_pilot_size
 
             self.logger.info(
                 "Generated %d pilot configs (including real DB default configuration)",
@@ -1139,56 +1303,57 @@ class BOBaselineRunner:
                 "Creating SMAC scenario with generous budget for %d iterations...",
                 self.config.n_iterations,
             )
-            scenario = Scenario(
-                configspace=configspace,
-                n_trials=self.config.n_iterations * 3,
-                seed=self.config.random_seed,
-                deterministic=False,
-                n_workers=1,
-                output_directory=(
-                    self._build_smac_output_root()
-                    / f"run_{self.run_timestamp}_{self.config.random_seed}"
-                ),
-            )
+            with self.bootstrap_timing.span("smac_scenario_build"):
+                scenario = Scenario(
+                    configspace=configspace,
+                    n_trials=self.config.n_iterations * 3,
+                    seed=self.config.random_seed,
+                    deterministic=False,
+                    n_workers=1,
+                    output_directory=(
+                        self._build_smac_output_root()
+                        / f"run_{self.run_timestamp}_{self.config.random_seed}"
+                    ),
+                )
 
-            # The facade is created with an EMPTY initial design (n_configs=0).
-            # The pilot observations are injected via facade.tell() in Phase 3,
-            # which primes the surrogate.  Phase 4's first ask() therefore enters
-            # BO (acquisition) mode immediately — no duplicate Sobol suggestions.
-            empty_design = SobolInitialDesign(scenario=scenario, n_configs=0)
+                # The facade is created with an EMPTY initial design (n_configs=0).
+                # The pilot observations are injected via facade.tell() in Phase 3,
+                # which primes the surrogate.  Phase 4's first ask() therefore enters
+                # BO (acquisition) mode immediately — no duplicate Sobol suggestions.
+                empty_design = SobolInitialDesign(scenario=scenario, n_configs=0)
 
-            # Select facade based on surrogate arg
-            num_knobs = len(self.knob_space.knobs)
-            if self.config.bo_surrogate.lower() == "gp":
-                self.logger.info(
-                    "Using BlackBoxFacade (GP) for %d knobs, pilot_size=%d",
-                    num_knobs,
-                    pilot_size,
-                )
-                facade = BlackBoxFacade(
-                    scenario,
-                    objective,
-                    initial_design=empty_design,
-                    logging_level=False,
-                )
-                bo_surrogate = "gp"
-            else:
-                self.logger.info(
-                    "Using HyperparameterOptimizationFacade (RF) for %d knobs, pilot_size=%d",
-                    num_knobs,
-                    pilot_size,
-                )
-                random_design = ProbabilityRandomDesign(
-                    probability=0.2, seed=self.config.random_seed
-                )
-                facade = HyperparameterOptimizationFacade(
-                    scenario,
-                    objective,
-                    initial_design=empty_design,
-                    random_design=random_design,
-                    logging_level=False,
-                )
-                bo_surrogate = "rf"
+                # Select facade based on surrogate arg
+                num_knobs = len(self.knob_space.knobs)
+                if self.config.bo_surrogate.lower() == "gp":
+                    self.logger.info(
+                        "Using BlackBoxFacade (GP) for %d knobs, pilot_size=%d",
+                        num_knobs,
+                        pilot_size,
+                    )
+                    facade = BlackBoxFacade(
+                        scenario,
+                        objective,
+                        initial_design=empty_design,
+                        logging_level=False,
+                    )
+                    bo_surrogate = "gp"
+                else:
+                    self.logger.info(
+                        "Using HyperparameterOptimizationFacade (RF) for %d knobs, pilot_size=%d",
+                        num_knobs,
+                        pilot_size,
+                    )
+                    random_design = ProbabilityRandomDesign(
+                        probability=0.2, seed=self.config.random_seed
+                    )
+                    facade = HyperparameterOptimizationFacade(
+                        scenario,
+                        objective,
+                        initial_design=empty_design,
+                        random_design=random_design,
+                        logging_level=False,
+                    )
+                    bo_surrogate = "rf"
 
             # ── Pre-run session summary ───────────────────────────────────────
             self.logger.info(
@@ -1249,10 +1414,16 @@ class BOBaselineRunner:
             tuning_time = time.time() - self.tuning_start_time
             total_time = time.time() - start_time
 
+            # ``population_size`` is borrowed from PBT semantics where it
+            # equals the parallel worker count. BO is strictly sequential
+            # with a single worker, so the only honest value is 1. Using
+            # ``config.n_iterations`` here (the prior behavior) conflated
+            # iterations with workers and broke any consumer that treats
+            # population_size as parallelism.
             session_environment = build_session_environment(
                 env=self.env,
                 num_parallel_workers=self.config.max_workers,
-                population_size=self.config.n_iterations,
+                population_size=1,
                 system_info=self.system_info,
                 use_docker=self.config.use_docker,
             )
@@ -1274,6 +1445,9 @@ class BOBaselineRunner:
                 bootstrap_timing=self.bootstrap_timing,
                 bo_timing=self.bo_timing,
                 run_timestamp=self.run_timestamp,
+                requested_iterations=self.config.n_iterations,
+                requested_pilot_size=requested_pilot_size,
+                actual_pilot_size=actual_pilot_size,
             )
 
             self.logger.info("BO tuning completed in %.2f seconds", total_time)
@@ -1289,22 +1463,6 @@ class BOBaselineRunner:
                     self.env.cleanup()
                 except Exception as e:
                     self.logger.warning("Error during cleanup: %s", e)
-
-    def _restore_snapshot_safe(self, worker: Worker) -> None:
-        """Attempt snapshot restoration with error handling."""
-        self.logger.info(
-            "Restoring database snapshot for worker %d...", worker.worker_id
-        )
-        try:
-            restored = self.env.restore_snapshot(worker.worker_id)
-            if not restored:
-                self.logger.error(
-                    "Snapshot restore failed for worker %d", worker.worker_id
-                )
-            else:
-                self.logger.info("✓ Database snapshot restored successfully")
-        except Exception as exc:
-            self.logger.error("Failed to restore database from snapshot: %s", exc)
 
 
 def main():
@@ -1534,7 +1692,8 @@ def main():
         "--scoring-policy",
         type=str,
         default=None,
-        help="Scoring policy to use. Options: 'fixed_v1', 'feature_driven_v2' (default: preset value per workload)",
+        choices=["fixed_v1", "feature_driven_v2"],
+        help="Scoring policy to use (default: feature_driven_v2 via per-workload config)",
     )
     parser.add_argument(
         "--enable-snapshots",

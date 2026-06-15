@@ -311,6 +311,19 @@ def configspace_to_knobs(
         name = knob_def.name
 
         if name not in cs_config:
+            # The hyperparameter was deactivated by a Condition for this
+            # sample (e.g. ``summarize_wal`` is gated on
+            # ``wal_level != 'minimal'``). We MUST still emit a value: every
+            # iteration's ``apply_only`` rewrites postgresql.auto.conf, and
+            # any knob omitted here keeps whatever stale value a prior
+            # iteration persisted. That stale value can be incompatible with
+            # the current iteration's parent (e.g. ``summarize_wal=on``
+            # surviving alongside ``wal_level=minimal``), causing the
+            # postmaster to refuse to start. Fall back to the CSV default —
+            # it is by construction safe with the parent value that
+            # deactivated this child.
+            if knob_def.default is not None:
+                config_dict[name] = knob_def.default
             continue
 
         value = cs_config[name]

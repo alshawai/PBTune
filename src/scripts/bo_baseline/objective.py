@@ -27,6 +27,7 @@ def evaluate_config(
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
     seed: Optional[int] = None,
+    restore_due: bool = False,
 ) -> Tuple[
     Optional[float],
     Dict,
@@ -61,6 +62,16 @@ def evaluate_config(
         Previous configuration for restart detection
     seed : Optional[int]
         Optional random seed for reproducibility.
+    restore_due : bool
+        When True, the orchestrator will perform a snapshot restore after
+        ``apply_only`` (the restore serves as the restart). This mirrors
+        PBT's per-generation snapshot-restore flow: write new knobs to
+        ``postgresql.auto.conf`` first, then restore PGDATA (auto.conf is
+        excluded from the rsync), so the restored instance starts with
+        the new knobs already in place. Calling restore *before* apply
+        causes PG to start with stale auto.conf knobs from the previous
+        iteration, which can crash the postmaster on incompatible
+        combinations (e.g. ``wal_level=minimal`` + ``summarize_wal=true``).
 
     Returns
     -------
@@ -116,7 +127,7 @@ def evaluate_config(
     worker.force_restart_next_eval = force_restart
 
     metrics, score, restarted, actual_db_config, eval_timing = orchestrator.evaluate_worker(
-        worker, apply_config=True, random_seed=seed
+        worker, apply_config=True, random_seed=seed, restore_due=restore_due
     )
 
     # The orchestrator already verified the config and read back the true

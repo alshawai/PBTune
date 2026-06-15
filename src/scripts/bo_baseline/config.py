@@ -77,7 +77,9 @@ class BOConfig:
     # Available options:
     # - "fixed_v1": Legacy static weights based on workload type (OLTP/OLAP/MIXED)
     # - "feature_driven_v2": Dynamic weights based on workload features evaluating variance, tail amplification, and DB stats
-    scoring_policy: str = "default"
+    # When ``None``, the per-workload base config picks the canonical default
+    # (``DEFAULT_SCORING_POLICY`` = ``feature_driven_v2``), matching PBT.
+    scoring_policy: Optional[str] = None
 
     # Early stopping — stop the BO loop if the incumbent does not improve for
     # `early_stopping_patience` consecutive iterations.  Scales with budget.
