@@ -67,10 +67,16 @@ def write_bo_results(
     output_dir: Path,
     metric_config: MetricConfig,
     bo_surrogate: str = "gp",
+    early_stopped: bool = False,
+    stale_counter: int = 0,
     session_environment: Optional[SessionEnvironment] = None,
     tuning_time_seconds: Optional[float] = None,
     bootstrap_timing: Optional[TimingRecorder] = None,
+    bo_timing: Optional[TimingRecorder] = None,
     run_timestamp: Optional[str] = None,
+    requested_iterations: Optional[int] = None,
+    requested_pilot_size: Optional[int] = None,
+    actual_pilot_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Serialize Bayesian Optimization results in PBT-compatible JSON format.
@@ -95,6 +101,10 @@ def write_bo_results(
         The metric configuration for scoring policy metadata
     bo_surrogate : str
         Surrogate model type (gp or rf)
+    early_stopped : bool
+        Whether the run terminated via early stopping
+    stale_counter : int
+        Number of consecutive non-improving iterations at termination
     session_environment : Optional[SessionEnvironment]
         Canonical environment snapshot for the run.
     tuning_time_seconds : Optional[float]
@@ -104,9 +114,26 @@ def write_bo_results(
     bootstrap_timing : Optional[TimingRecorder]
         Bootstrap-phase recorder. Serialized as ``bootstrap_breakdown`` when
         provided.
+    bo_timing : Optional[TimingRecorder]
+        BO control-loop recorder collecting facade.ask / facade.tell spans.
+        Mirrors PBT's per-generation ``generation_timing`` — its records are
+        merged into the session-level ``timing_summary`` so cross-iteration
+        BO overhead is visible alongside per-evaluation work.
     run_timestamp : Optional[str]
         Canonical session timestamp string. When omitted, falls back to
         :func:`format_session_id` so existing tests that pass none still work.
+    requested_iterations : Optional[int]
+        The user-requested total iteration budget (``config.n_iterations``).
+        Serialized as ``tuning_session.requested_iterations`` so analysis can
+        detect runs that were truncated relative to intent.
+    requested_pilot_size : Optional[int]
+        The user-requested bootstrap pilot size
+        (``min(range_update_interval, n_iterations)``). Serialized as
+        ``tuning_session.requested_pilot_size``.
+    actual_pilot_size : Optional[int]
+        The number of pilot configurations actually generated and evaluated.
+        With the backfill sampler this should match ``requested_pilot_size``;
+        the field is explicit so future regressions surface immediately.
 
     Returns
     -------
@@ -146,11 +173,22 @@ def write_bo_results(
         if score > best_score_so_far:
             best_score_so_far = score
 
-        # Use the REAL bracketed BO overhead recorded by the runner. The
-        # previous ``wall_clock_seconds * 0.05`` placeholder was a fabricated
-        # proxy — see docs/research/timing-instrumentation-plan.md Phase 2D.
+        # Use the REAL bracketed BO overhead (ask + tell time) recorded by the
+        # runner. The previous ``wall_clock_seconds * 0.05`` placeholder was a
+        # fabricated proxy — see docs/research/timing-instrumentation-plan.md
+        # Phase 2D.
         bo_overhead = iteration.get("bo_overhead_seconds", 0.0)
         bo_overhead_total += bo_overhead
+
+        # ``generation_elapsed_seconds`` is the wall-clock cost of producing
+        # this generation's observation: the per-evaluation work
+        # (``wall_clock_seconds`` — apply, run, measure, score) plus the
+        # BO control-loop overhead bracketed around it (ask + tell + drift +
+        # repair + relabel). Visualizers consume this as
+        # "time spent evaluating this generation"; emitting only the BO
+        # overhead would under-report it by 200-1000x.
+        wall_clock = iteration.get("wall_clock_seconds", 0.0)
+        generation_elapsed = wall_clock + bo_overhead
 
         iteration_timing = iteration.get("timing")
         if iteration_timing and isinstance(iteration_timing, dict):
@@ -185,7 +223,8 @@ def write_bo_results(
                 iteration.get("timestamp", 0.0)
             ).isoformat(),
             "wall_clock_seconds": iteration.get("wall_clock_seconds", 0.0),
-            "generation_elapsed_seconds": bo_overhead,
+            "generation_elapsed_seconds": generation_elapsed,
+            "phase": iteration.get("phase", "bo"),
             "bo_overhead_seconds": bo_overhead,
             "worker_scores": [worker_score_entry],
             "worker_configs": [
@@ -204,6 +243,25 @@ def write_bo_results(
         # single source of truth; mirroring would double-count when the
         # analysis script aggregates both layers.
         generation_history.append(generation_entry)
+
+    # Fold BO control-loop spans (facade.ask / facade.tell across the run)
+    # into the session aggregate so ``timing_summary`` has the same shape as
+    # PBT's: per-component mean/std/n/min/max/total covering every layer of
+    # work that contributed to wall clock.
+    if bo_timing is not None:
+        session_timing.merge(bo_timing)
+
+    # Fold bootstrap-phase spans (instance setup, knob pruning, pilot
+    # generation, ConfigSpace/SMAC build, default-config seeding) into the
+    # session aggregate. ``bootstrap_breakdown`` (below) keeps a separate
+    # canonical view used by timing_breakdown.py — but other consumers that
+    # read ``timing_summary`` directly would otherwise see zero pre-tuning
+    # work. timing_breakdown.py reads ``bootstrap_breakdown`` independently
+    # (collapsed to a single ``bootstrap`` row per session — see
+    # src/analysis/timing_breakdown.py:142-156), so the merge here does NOT
+    # double-count in that tool.
+    if bootstrap_timing is not None:
+        session_timing.merge(bootstrap_timing)
 
     # Build result dictionary
     timestamp = run_timestamp or format_session_id()
@@ -232,6 +290,13 @@ def write_bo_results(
             "workload_type": config.benchmark_config.workload_type,
             "benchmark_name": config.benchmark_config.benchmark,
             "iterations": len(iteration_log),
+            "requested_iterations": (
+                requested_iterations
+                if requested_iterations is not None
+                else config.n_iterations
+            ),
+            "requested_pilot_size": requested_pilot_size,
+            "actual_pilot_size": actual_pilot_size,
             "seed": config.random_seed,
             "num_parallel_workers": config.max_workers,
             "total_generations": len(iteration_log),
@@ -253,6 +318,9 @@ def write_bo_results(
             ),
             "reference_pbt_knobs": list(config.pbt_knob_names or ()),
             "resource_equalization": config.pbt_worker_resources is not None,
+            "early_stopped": early_stopped,
+            "early_stopping_patience": config.early_stopping_patience,
+            "early_stopping_enabled": config.early_stopping_enabled,
         },
         "scoring_policy": metric_config.scoring_policy,
         "scoring_policy_version": metric_config.scoring_policy_version,
@@ -283,8 +351,10 @@ def write_bo_results(
         ),
         "timing_summary": session_timing.aggregate(),
         "convergence": {
-            "converged": False,
-            "generations_without_improvement": 0,
+            "converged": early_stopped,
+            "generations_without_improvement": stale_counter,
+            "early_stopped": early_stopped,
+            "early_stopping_patience": config.early_stopping_patience,
         },
         "system_info": system_info,
     }

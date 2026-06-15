@@ -1,23 +1,23 @@
 """Objective function wrapper for SMAC3 Bayesian Optimization."""
 
 import time
-from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Optional, Tuple, TYPE_CHECKING
 from ConfigSpace import Configuration
 
 from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
-from src.utils.metrics import MetricConfig, PerformanceMetrics
+from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
-from src.scripts.bo_baseline.search_space import configspace_to_knobs
+from src.scripts.bo_baseline.search_space import configspace_to_knobs, get_config_drift
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("Objective")
 
 if TYPE_CHECKING:
     # Import only for type-checkers to avoid runtime import cycles
-    from src.utils.environments import DatabaseEnvironment
+    pass
 
 
 def evaluate_config(
@@ -26,11 +26,13 @@ def evaluate_config(
     orchestrator: WorkloadOrchestrator,
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
+    seed: Optional[int] = None,
+    restore_due: bool = False,
 ) -> Tuple[
-    float,
+    Optional[float],
     Dict,
     Optional[PerformanceMetrics],
-    float,
+    Optional[float],
     Optional[ScoreBreakdown],
     bool,
     float,
@@ -58,23 +60,45 @@ def evaluate_config(
         Knob space for configuration repair
     previous_config : Optional[Dict]
         Previous configuration for restart detection
+    seed : Optional[int]
+        Optional random seed for reproducibility.
+    restore_due : bool
+        When True, the orchestrator will perform a snapshot restore after
+        ``apply_only`` (the restore serves as the restart). This mirrors
+        PBT's per-generation snapshot-restore flow: write new knobs to
+        ``postgresql.auto.conf`` first, then restore PGDATA (auto.conf is
+        excluded from the rsync), so the restored instance starts with
+        the new knobs already in place. Calling restore *before* apply
+        causes PG to start with stale auto.conf knobs from the previous
+        iteration, which can crash the postmaster on incompatible
+        combinations (e.g. ``wal_level=minimal`` + ``summarize_wal=true``).
 
     Returns
     -------
-    Tuple[float, Dict, Optional[PerformanceMetrics], float, Optional[Dict], bool, float, TimingRecorder]
-        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing)
+    Tuple[Optional[float], Dict, Optional[PerformanceMetrics], Optional[float], Optional[ScoreBreakdown], bool, float, TimingRecorder]
+        (cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing).
         ``knob_config`` contains the *true* applied values after read-back.
+        ``cost`` and ``score`` are 100.0 / 0.0 on failure.
         ``eval_timing`` is the per-evaluation recorder returned by
         ``WorkloadOrchestrator.evaluate_worker``; callers may serialize it
         directly via ``eval_timing.to_dict()``.
     """
     t_start = time.time()
 
-    knob_config = configspace_to_knobs(config, knob_space)
-    knob_config = knob_space.repair_config_dependencies(knob_config)
+    bo_suggested_config = configspace_to_knobs(config, knob_space)
+    knob_config = knob_space.repair_config_dependencies(dict(bo_suggested_config))
+
+    repair_drift = get_config_drift(bo_suggested_config, knob_config)
+
+    if repair_drift:
+        drift_str = ", ".join(
+            f"{k}: {v1} -> {v2}" for k, (v1, v2) in repair_drift.items()
+        )
+        LOGGER.info(f"➤ BO Suggestion Repaired: {drift_str}")
 
     # Detect if restart is needed
     force_restart = False
+    trigger_knob: str | None = None
     if previous_config is not None:
         for knob_def in knob_space.knobs.values():
             if knob_def.restart_required:
@@ -82,19 +106,41 @@ def evaluate_config(
                 curr_val = knob_config.get(knob_def.name)
                 if prev_val != curr_val:
                     force_restart = True
+                    trigger_knob = knob_def.name
                     break
+    else:
+        # Very first evaluation: must restart to guarantee DB state matches config
+        force_restart = True
 
-    worker.knob_config = knob_config
+    if force_restart:
+        if trigger_knob is not None:
+            LOGGER.debug(
+                "Restart required — knob '%s' changed: %r → %r",
+                trigger_knob,
+                previous_config.get(trigger_knob) if previous_config else None,
+                knob_config.get(trigger_knob),
+            )
+        else:
+            LOGGER.debug("Restart required — first evaluation, forcing clean DB state")
+
+    worker.knob_config = knob_config.copy()
     worker.force_restart_next_eval = force_restart
 
     metrics, score, restarted, actual_db_config, eval_timing = orchestrator.evaluate_worker(
-        worker, apply_config=True
+        worker, apply_config=True, random_seed=seed, restore_due=restore_due
     )
 
     # The orchestrator already verified the config and read back the true
     # DB values.  Merge them into knob_config so the surrogate model sees
     # the actual quantized values PostgreSQL is using.
     if actual_db_config:
+        db_drift = get_config_drift(knob_config, actual_db_config)
+        if db_drift:
+            drift_str = ", ".join(
+                f"{k}: {v1} -> {v2}" for k, (v1, v2) in db_drift.items()
+            )
+            LOGGER.info(f"➤ DB Internal Quantization: {drift_str}")
+
         knob_config.update(actual_db_config)
         LOGGER.debug(
             "Merged %d actual DB values from evaluate_worker into knob_config",
@@ -107,6 +153,13 @@ def evaluate_config(
         cost = 100.0
         score = 0.0
         score_breakdown = None
+        LOGGER.warning(
+            "evaluate_config returning failure result (cost=100, score=0): "
+            "metrics=%s, score=%s, wall_time=%.2fs",
+            "None" if metrics is None else "present",
+            score,
+            wall_time,
+        )
     else:
         cost = max(0.0, min(100.0, 100.0 - score))
         score_breakdown = worker.score_breakdown
@@ -126,189 +179,3 @@ def evaluate_config(
         wall_time,
         eval_timing,
     )
-
-
-def create_objective(
-    orchestrator: WorkloadOrchestrator,
-    worker: Worker,
-    knob_space: KnobSpace,
-    metric_config: MetricConfig,
-    iteration_log: List[Dict],
-    pilot_phase_size: int = 10,
-    env: Optional["DatabaseEnvironment"] = None,
-    enable_snapshots: bool = False,
-    snapshot_restore_interval: int = 1,
-) -> Callable[[Configuration, int], float]:
-    """
-    Create an objective function for SMAC3 with Pilot+Freeze normalization.
-
-    The objective uses default fallback ranges during the pilot phase (first
-    `pilot_phase_size` iterations). At the end of the pilot, it calibrates
-    normalization bounds from observed metrics exactly once, then freezes them
-    for the remainder of the run. This keeps the surrogate model's training
-    signal stable.
-
-    Parameters
-    ----------
-    orchestrator : WorkloadOrchestrator
-        The orchestrator for computing performance metrics
-    worker : Worker
-        The worker to evaluate
-    knob_space : KnobSpace
-        The knob space for configuration repair
-    metric_config : MetricConfig
-        Metric configuration for scoring
-    iteration_log : List[Dict]
-        Mutable list for tracking convergence
-    pilot_phase_size : int
-        Number of initial iterations before freezing normalization ranges
-    env : Optional[DatabaseEnvironment]
-        Database environment for snapshot restoration
-    enable_snapshots : bool
-        Whether to enable snapshot restoration
-    snapshot_restore_interval : int
-        Restore snapshots every N iterations
-
-    Returns
-    -------
-    Callable[[Configuration, int], float]
-        Objective function for SMAC3 (minimizes cost)
-    """
-    from typing import Dict, Any
-
-    state: Dict[str, Any] = {
-        "previous_config": None,
-        "iteration_count": 0,
-        "ranges_frozen": False,
-        # Monotonic timestamp of the previous iteration's end. The gap
-        # between iter[N].end and iter[N+1].start is the BO overhead
-        # (facade.ask + facade.tell + SMAC bookkeeping) that produced
-        # the next configuration. We attribute that gap back to iter[N].
-        "last_iter_end_monotonic": None,
-    }
-
-    def objective(config: Configuration, seed: int = 0) -> float:
-        """
-        Evaluate a configuration and return cost (lower is better).
-
-        Parameters
-        ----------
-        config : Configuration
-            ConfigSpace configuration to evaluate
-        seed : int
-            Random seed (unused, for SMAC compatibility)
-
-        Returns
-        -------
-        float
-            Cost value (100 - score), with penalties for failures
-        """
-        try:
-            # Measure the BO overhead that occurred between the previous
-            # iteration's end and this call: facade.ask + facade.tell +
-            # SMAC's surrogate update. Attribute it to the PREVIOUS
-            # iteration (whose return triggered the ask/tell that
-            # produced *this* configuration). The very first iteration
-            # has no predecessor — its incoming overhead is captured by
-            # the runner's pre-optimize bracket if any.
-            iter_start_monotonic = time.monotonic()
-            if (
-                state["last_iter_end_monotonic"] is not None
-                and iteration_log
-            ):
-                inter_call_gap = (
-                    iter_start_monotonic - state["last_iter_end_monotonic"]
-                )
-                if inter_call_gap > 0:
-                    iteration_log[-1]["bo_overhead_seconds"] = inter_call_gap
-
-            # Handle snapshot restoration before evaluating the config
-            if (
-                enable_snapshots
-                and env is not None
-                and state["iteration_count"] > 0
-                and state["iteration_count"] % snapshot_restore_interval == 0
-            ):
-                LOGGER.info(
-                    "Restoring database snapshot for iteration %d (interval: %d)",
-                    state["iteration_count"],
-                    snapshot_restore_interval,
-                )
-                try:
-                    restored = env.restore_snapshot(worker.worker_id)
-                    if not restored:
-                        LOGGER.error(
-                            "Snapshot restore failed for worker %d", worker.worker_id
-                        )
-                    else:
-                        LOGGER.info("✓ Database snapshot restored successfully")
-                except Exception as e:
-                    LOGGER.error("Failed to restore database from snapshot: %s", e)
-
-            cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing = (
-                evaluate_config(
-                    config, worker, orchestrator, knob_space, state["previous_config"]
-                )
-            )
-
-            iteration_entry = {
-                "iteration": state["iteration_count"],
-                "config": knob_config,
-                "metrics": metrics.to_dict() if metrics is not None else {},
-                "score": score if score is not None else 0.0,
-                "score_breakdown": score_breakdown,
-                "cost": cost,
-                "wall_clock_seconds": wall_time,
-                "restarted": restarted,
-                "timestamp": time.time(),
-                "timing": eval_timing.to_dict(include_summary=False),
-                # In sequential mode this is updated retroactively when the
-                # NEXT objective() call begins — the inter-call gap captures
-                # facade.ask + facade.tell + SMAC bookkeeping. The final
-                # iteration of a session keeps the 0.0 default since it
-                # has no successor. Parallel mode populates this directly
-                # in runner.py from explicit ask/tell brackets.
-                "bo_overhead_seconds": 0.0,
-            }
-            iteration_log.append(iteration_entry)
-
-            # Pilot+Freeze: calibrate ranges exactly once after pilot phase
-            if (
-                not state["ranges_frozen"]
-                and state["iteration_count"] >= pilot_phase_size - 1
-            ):
-                all_metrics = [
-                    PerformanceMetrics(**entry["metrics"])
-                    for entry in iteration_log
-                    if entry["metrics"]
-                ]
-                if all_metrics:
-                    metric_config.update_ranges(all_metrics)
-                    LOGGER.info(
-                        "Normalization ranges frozen after %d pilot iterations",
-                        state["iteration_count"] + 1,
-                    )
-                state["ranges_frozen"] = True
-
-            state["previous_config"] = knob_config
-            state["iteration_count"] += 1
-
-            LOGGER.debug(
-                f"Iteration {state['iteration_count']}: score={score:.2f}, cost={cost:.2f}, "
-                f"wall_time={wall_time:.2f}s, frozen={state['ranges_frozen']}"
-            )
-
-            # Stamp this iteration's end so the NEXT objective() call can
-            # measure the BO overhead gap and attribute it to this entry.
-            state["last_iter_end_monotonic"] = time.monotonic()
-
-            return cost
-
-        except Exception as e:
-            LOGGER.error(f"Error evaluating configuration: {e}", exc_info=True)
-            # Still stamp so the next overhead measurement isn't polluted
-            # by error-path time.
-            state["last_iter_end_monotonic"] = time.monotonic()
-            return 100.0
-
-    return objective

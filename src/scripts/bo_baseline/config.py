@@ -50,7 +50,9 @@ class BOConfig:
     colocate_output: bool = False
     verbose: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
-    # Pilot+Freeze: number of initial design iterations before freezing ranges
+    # Bootstrap size: number of initial Sobol iterations evaluated before the
+    # normalizer is first calibrated and SMAC history is relabeled.
+    # After calibration the normalizer continues to expand dynamically.
     range_update_interval: int = 10
 
     # SMAC surrogate model
@@ -64,9 +66,8 @@ class BOConfig:
     enable_snapshots: bool = True
     snapshot_restore_interval: int = 1
 
-    # Parallel BO configuration
+    # Worker configuration (strictly sequential — single worker)
     max_workers: int = 1
-    batched_bo: bool = False
     pbt_worker_resources: Optional[Dict[str, Any]] = None
     resource_division: int = 1
     worker_ram: Optional[str] = None
@@ -76,7 +77,14 @@ class BOConfig:
     # Available options:
     # - "fixed_v1": Legacy static weights based on workload type (OLTP/OLAP/MIXED)
     # - "feature_driven_v2": Dynamic weights based on workload features evaluating variance, tail amplification, and DB stats
-    scoring_policy: str = "default"
+    # When ``None``, the per-workload base config picks the canonical default
+    # (``DEFAULT_SCORING_POLICY`` = ``feature_driven_v2``), matching PBT.
+    scoring_policy: Optional[str] = None
+
+    # Early stopping — stop the BO loop if the incumbent does not improve for
+    # `early_stopping_patience` consecutive iterations.  Scales with budget.
+    early_stopping_enabled: bool = True
+    early_stopping_patience: int = 20  # default overridden by presets
 
     @staticmethod
     def _load_pbt_session(path: Path) -> Dict[str, Any]:
@@ -173,13 +181,29 @@ class BOConfig:
         )
         if set_iteration_budget:
             population_size = int(session.get("population_size", 0) or 0)
-            total_generations = int(session.get("total_generations", 0) or 0)
-            if population_size > 0 and total_generations > 0:
-                self.n_iterations = population_size * total_generations
+
+            if population_size > 0:
+                base_iterations = self.n_iterations
+                self.n_iterations = population_size * base_iterations
+                LOGGER.info(
+                    "PBT session provided: pop_size=%d × preset_iterations=%d → n_iterations=%d",
+                    population_size,
+                    base_iterations,
+                    self.n_iterations,
+                )
             else:
                 LOGGER.warning(
-                    "PBT session is missing positive population_size or "
-                    "total_generations; keeping configured BO iteration budget"
+                    "PBT session is missing positive population_size; "
+                    "keeping preset BO iteration budget"
+                )
+
+            # Auto-scale early stopping patience to ~50% of the resolved budget
+            if self.early_stopping_enabled:
+                self.early_stopping_patience = max(10, int(self.n_iterations * 0.50))
+                LOGGER.info(
+                    "Auto-scaled early_stopping_patience to %d (50%% of %d iterations)",
+                    self.early_stopping_patience,
+                    self.n_iterations,
                 )
 
         best_configuration = payload.get("best_configuration", {})
@@ -210,18 +234,41 @@ class BOConfig:
 
         if self.enable_snapshots and "snapshot_restore_interval" in session:
             # PBT restores every N generations.
-            # Translate to BO iterations by multiplying by population_size.
+            # BO now operates per-generation as well, so no pop_size multiplier.
             pbt_interval = int(session["snapshot_restore_interval"])
-            pop_size = int(session.get("population_size", 1))
-            self.snapshot_restore_interval = pbt_interval * pop_size
+            self.snapshot_restore_interval = pbt_interval
             LOGGER.info(
-                f"Extracted PBT snapshot interval ({pbt_interval} gens * {pop_size} pop) "
+                f"Extracted PBT snapshot interval ({pbt_interval} gens) "
                 f"-> BO interval: {self.snapshot_restore_interval} iterations"
             )
 
         # Extract scoring policy from PBT session if present
         if "scoring_policy" in session:
             self.scoring_policy = str(session["scoring_policy"])
+
+        # ── Consolidated summary of everything copied from the PBT session ──
+        LOGGER.info(
+            "Applied PBT session '%s':\n"
+            "  tier=%s, knob_source=%s, benchmark=%s/%s\n"
+            "  tuning_mode=%s, eval=%.0fs, warmup=%.0fs\n"
+            "  n_iterations=%d, knob_filter=%d knob(s), resource_division=%d\n"
+            "  snapshots=%s (interval=%d), scoring_policy=%s",
+            path.name,
+            self.knob_tier,
+            self.knob_source,
+            self.benchmark_config.benchmark,
+            self.benchmark_config.sysbench_workload
+            or self.benchmark_config.workload_type,
+            self.benchmark_config.tuning_mode,
+            self.benchmark_config.evaluation_duration,
+            self.benchmark_config.warmup_duration,
+            self.n_iterations,
+            len(self.pbt_knob_names) if self.pbt_knob_names else 0,
+            self.resource_division,
+            self.enable_snapshots,
+            self.snapshot_restore_interval,
+            self.scoring_policy,
+        )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "BOConfig":
@@ -271,13 +318,25 @@ class BOConfig:
             else benchmark_preset.warmup_passes,
         )
 
+        # Resolve early stopping settings
+        early_stopping_enabled = base_config.early_stopping_enabled
+        if hasattr(args, "disable_early_stopping") and args.disable_early_stopping:
+            early_stopping_enabled = False
+
+        early_stopping_patience = (
+            args.early_stopping_patience
+            if hasattr(args, "early_stopping_patience")
+            and args.early_stopping_patience is not None
+            else base_config.early_stopping_patience
+        )
+
         config = replace(
             base_config,
             n_iterations=args.iterations
             if args.iterations is not None
             else base_config.n_iterations,
             random_seed=args.seed if args.seed is not None else base_config.random_seed,
-            knob_tier=args.tier or base_config.knob_tier,
+            knob_tier=getattr(args, "tier", None) or base_config.knob_tier,
             knob_source=getattr(args, "knob_source", None) or base_config.knob_source,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
@@ -298,9 +357,6 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
-            batched_bo=args.batched_bo
-            if hasattr(args, "batched_bo") and args.batched_bo is not None
-            else base_config.batched_bo,
             resource_division=args.resource_division
             if hasattr(args, "resource_division") and args.resource_division is not None
             else base_config.resource_division,
@@ -314,6 +370,8 @@ class BOConfig:
             if hasattr(args, "snapshot_restore_interval")
             and args.snapshot_restore_interval is not None
             else base_config.snapshot_restore_interval,
+            early_stopping_enabled=early_stopping_enabled,
+            early_stopping_patience=early_stopping_patience,
             worker_ram=args.worker_ram if hasattr(args, "worker_ram") else None,
             worker_cpus=args.worker_cpus if hasattr(args, "worker_cpus") else None,
         )
@@ -332,7 +390,7 @@ class BOConfig:
                     f"Falling back to default or CLI-provided settings."
                 )
 
-        config.max_workers = config.resource_division if config.batched_bo else 1
+        config.max_workers = 1  # Always sequential
 
         # Explicit CLI overrides session / defaults
         if getattr(args, "knob_source", None) is not None:
@@ -342,28 +400,33 @@ class BOConfig:
 
 
 RAPID_BO_CONFIG = BOConfig(
-    n_iterations=10,
-    range_update_interval=5,
+    n_iterations=40,
+    range_update_interval=10,
+    early_stopping_patience=20,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
 )
 STANDARD_BO_CONFIG = BOConfig(
     n_iterations=80,
     range_update_interval=10,
+    early_stopping_patience=50,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
 )
 THOROUGH_BO_CONFIG = BOConfig(
     n_iterations=400,
-    range_update_interval=20,
+    range_update_interval=15,
+    early_stopping_patience=200,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
 )
 RESEARCH_BO_CONFIG = BOConfig(
-    n_iterations=1200,
-    range_update_interval=40,
+    n_iterations=1600,
+    range_update_interval=20,
+    early_stopping_patience=800,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
 )
 EXTREME_BO_CONFIG = BOConfig(
     n_iterations=3200,
-    range_update_interval=80,
+    range_update_interval=25,
+    early_stopping_patience=1600,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
 )
 

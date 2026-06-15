@@ -299,6 +299,77 @@ class KnobSpace:
         self.knobs = {knob.name: knob for knob in knob_definitions}
         self.worker_resources: Optional[WorkerResources] = None
 
+    @property
+    def non_zero_knobs(self) -> set[str]:
+        """Knobs that mathematically can be 0 but should be minimum 1 during BO tuning."""
+        return {
+            "commit_timestamp_buffers",
+            "subtransaction_buffers",
+            "transaction_buffers",
+        }
+
+    @property
+    def configspace_constraints(self) -> List[Dict[str, Any]]:
+        """
+        Generic declarative constraints for hyperparameter spaces.
+        Format:
+        [
+            {"type": "not_equals", "child": "archive_mode", "parent": "wal_level", "value": "minimal"},
+            {"type": "forbidden_and_in_equals", "knob1": "huge_pages", "values1": ["on", "try"], "knob2": "shared_memory_type", "value2": "sysv"},
+            {"type": "forbidden_less_than", "left": "max_worker_processes", "right": "max_parallel_workers"},
+            {"type": "forbidden_greater_than", "left": "min_wal_size", "right": "max_wal_size"}
+        ]
+        """
+        return [
+            {
+                "type": "not_equals",
+                "child": "archive_mode",
+                "parent": "wal_level",
+                "value": "minimal",
+            },
+            {
+                "type": "not_equals",
+                "child": "max_wal_senders",
+                "parent": "wal_level",
+                "value": "minimal",
+            },
+            {
+                "type": "not_equals",
+                "child": "summarize_wal",
+                "parent": "wal_level",
+                "value": "minimal",
+            },
+            {
+                "type": "forbidden_and_in_equals",
+                "knob1": "huge_pages",
+                "values1": ["on", "try"],
+                "knob2": "shared_memory_type",
+                "value2": "sysv",
+            },
+            {
+                "type": "forbidden_less_than",
+                "left": "max_worker_processes",
+                "right": "max_parallel_workers",
+            },
+            {
+                "type": "forbidden_less_than",
+                "left": "max_worker_processes",
+                "right": "max_logical_replication_workers",
+            },
+            {
+                "type": "forbidden_less_than",
+                "left": "max_worker_processes",
+                "right": "max_parallel_maintenance_workers",
+            },
+            {
+                "type": "forbidden_greater_than",
+                "left": "min_wal_size",
+                "right": "max_wal_size",
+            },
+            # Prevent sampling huge_pages="on" which crashes without OS-level allocation
+            {"type": "forbidden_equals", "knob": "huge_pages", "value": "on"},
+        ]
+
     def create_online_view(self) -> "KnobSpace":
         """Return a filtered KnobSpace containing only runtime-safe knobs.
 
@@ -678,28 +749,22 @@ class KnobSpace:
 
         wal_level = repaired.get("wal_level")
         if wal_level == "minimal":
-            if repaired.get("archive_mode") in {"on", "always"}:
+            if repaired.get("archive_mode") != "off":
                 if not quiet:
                     worker_logger.debug(
-                        "%s Corrected 'archive_mode' from '%s' to 'off' "
+                        "%s Corrected 'archive_mode' to 'off' "
                         "because wal_level is 'minimal'%s",
                         COLORS.italic,
-                        repaired["archive_mode"],
                         COLORS.reset,
                     )
                 repaired["archive_mode"] = "off"
 
-            max_wal_senders = repaired.get("max_wal_senders")
-            if (
-                isinstance(max_wal_senders, (int, np.integer, float, np.floating))
-                and max_wal_senders > 0
-            ):
+            if repaired.get("max_wal_senders") != 0:
                 if not quiet:
                     worker_logger.debug(
-                        "%s Corrected 'max_wal_senders' from %s to 0 "
+                        "%s Corrected 'max_wal_senders' to 0 "
                         "because wal_level is 'minimal'%s",
                         COLORS.italic,
-                        repaired["max_wal_senders"],
                         COLORS.reset,
                     )
                 repaired["max_wal_senders"] = 0
@@ -744,23 +809,29 @@ class KnobSpace:
                     )
                 repaired["huge_pages"] = "try"
 
-        # Handle max_worker_processes vs max_parallel_workers constraints
+        # Clamp all worker-pool knobs to max_worker_processes (PostgreSQL hard constraint)
         max_worker = repaired.get("max_worker_processes")
-        max_parallel = repaired.get("max_parallel_workers")
-        if isinstance(max_worker, (int, float, np.number)) and isinstance(
-            max_parallel, (int, float, np.number)
-        ):
-            if max_worker < max_parallel:
-                if not quiet:
-                    worker_logger.debug(
-                        "%s Corrected 'max_parallel_workers' from %s to %s "
-                        "because it cannot exceed 'max_worker_processes'%s",
-                        COLORS.italic,
-                        max_parallel,
-                        max_worker,
-                        COLORS.reset,
-                    )
-                repaired["max_parallel_workers"] = int(max_worker)
+        if isinstance(max_worker, (int, float, np.number)):
+            max_worker_int = int(max_worker)
+            _worker_bounded_knobs = (
+                "max_parallel_workers",
+                "max_logical_replication_workers",
+                "max_parallel_maintenance_workers",
+            )
+            for bounded_knob in _worker_bounded_knobs:
+                val = repaired.get(bounded_knob)
+                if isinstance(val, (int, float, np.number)) and max_worker_int < val:
+                    if not quiet:
+                        worker_logger.debug(
+                            "%s Corrected '%s' from %s to %s "
+                            "because it cannot exceed 'max_worker_processes'%s",
+                            COLORS.italic,
+                            bounded_knob,
+                            val,
+                            max_worker_int,
+                            COLORS.reset,
+                        )
+                    repaired[bounded_knob] = max_worker_int
 
         # Handle min_wal_size vs max_wal_size constraint
         min_wal = repaired.get("min_wal_size")

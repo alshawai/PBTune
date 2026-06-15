@@ -8,9 +8,6 @@ import pandas as pd
 import pytest
 
 # Mock heavy dependencies before importing the analysis modules.
-mock_cs = MagicMock()
-sys.modules.setdefault("ConfigSpace", mock_cs)
-sys.modules.setdefault("ConfigSpace.hyperparameters", MagicMock())
 mock_fanova = MagicMock()
 mock_fanova.fANOVA = MagicMock()
 sys.modules.setdefault("fanova", mock_fanova)
