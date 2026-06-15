@@ -10,7 +10,7 @@
 │  3. FOR generation = 1..max_generations:                        │
 │     └── run_generation(generation)                              │
 │         ├── population.evaluate_generation(evaluate_fn)         │
-│         │   └── ThreadPoolExecutor(max_workers=pop_size)        │
+│         │   └── ThreadPoolExecutor(max_workers=parallel_workers)        │
 │         │       └── evaluate_worker(worker) × N                 │
 │         │           ├── apply_configuration(worker.knob_config) │
 │         │           ├── _ensure_benchmark_ready()               │

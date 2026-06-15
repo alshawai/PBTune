@@ -58,7 +58,7 @@ def repair_config_dependencies(config):
 
 ## HardwareInfo Detection
 
-`src/tuner/utils/hardware_info.py` captures:
+`src/utils/hardware_info.py` captures:
 - Total RAM (bytes)
 - CPU core count (physical)
 - Disk type (SSD/HDD)

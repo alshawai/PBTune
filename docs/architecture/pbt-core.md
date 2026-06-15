@@ -1,6 +1,6 @@
 # PBT Core Components
 
-> Last reviewed: 2026-06-07
+> Last reviewed: 2026-06-15
 
 See also: [Documentation Index](../README.md), [Generation Barriers](generation-barriers.md), [Performance Evaluation](performance-evaluation.md), [Workload Orchestrator](workload-orchestrator.md)
 
@@ -100,7 +100,7 @@ class Worker:
     metrics: Optional[PerformanceMetrics] = None
     score_breakdown: Optional[ScoreBreakdown] = None
     step_count: int = 0
-    ready_interval: int = 3
+    ready_interval: int = 1
     parent_id: Optional[int] = None
     generation_created: int = 0
     # ... see source for full attribute set

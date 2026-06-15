@@ -1,6 +1,6 @@
 # Adding a New Tunable Knob
 
-> Last reviewed: 2026-06-07
+> Last reviewed: 2026-06-15
 
 See also: [configuration-management](../architecture/configuration-management.md), [postgresql-connection-and-knobs](../architecture/postgresql-connection-and-knobs.md), [autotuning-knob-policy](../reference/autotuning-knob-policy.md), [knob-importance-analysis](../architecture/knob-importance-analysis.md)
 
@@ -234,7 +234,7 @@ If empirical analysis ([knob-importance-analysis](../architecture/knob-importanc
 2. Re-run `python -m src.scripts.analyze_knobs`.
 3. Verify the diff is the expected single-knob promotion.
 
-The fANOVA + TreeSHAP pipeline can also produce **data-driven tier overlays** under `data/data_driven_knobs/{workload}/` — these are workload-specific and live alongside the expert-defined tiers without overwriting them. Use `--source data_driven --workload <label>` on the tuner CLI to load those instead.
+The fANOVA + TreeSHAP pipeline can also produce **data-driven tier overlays** under `data/data_driven_knobs/{workload}/` — these are workload-specific and live alongside the expert-defined tiers without overwriting them. Use `--knob-source data_driven --workload <label>` on the tuner CLI to load those instead.
 
 ## Common mistakes
 

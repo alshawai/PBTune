@@ -2,7 +2,7 @@
 
 This repository includes files copied from third-party open-source projects. Their original licenses apply to those files and are reproduced or referenced below.
 
-> Last updated: 2026-03-13
+> Last updated: 2026-06-15
 ---
 
 ## 1. github/awesome-copilot
@@ -19,36 +19,21 @@ Files under `.github/` listed in the table below were copied unchanged from the 
 
 | File | Upstream path | Description |
 |------|--------------|-------------|
-| `debug.agent.md` | `agents/debug.agent.md` | Debug your application to find and fix a bug |
 | `implementation-plan.agent.md` | `agents/implementation-plan.agent.md` | Generate an implementation plan for new features or refactoring existing code |
 | `polyglot-test-generator.agent.md` | `agents/polyglot-test-generator.agent.md` | Orchestrates comprehensive test generation using Research-Plan-Implement pipeline |
 | `postgresql-dba.agent.md` | `agents/postgresql-dba.agent.md` | Work with PostgreSQL databases using the PostgreSQL extension |
 | `prd.agent.md` | `agents/prd.agent.md` | Generate a comprehensive Product Requirements Document (PRD) in Markdown |
-| `principal-software-engineer.agent.md` | `agents/principal-software-engineer.agent.md` | Provide principal-level software engineering guidance with focus on engineering excellence |
 | `research-technical-spike.agent.md` | `agents/research-technical-spike.agent.md` | Systematically research and validate technical spike documents through exhaustive investigation |
-| `scientific-paper-research.agent.md` | `agents/scientific-paper-research.agent.md` | Research agent that searches scientific papers and retrieves structured experimental data |
-| `se-technical-writer.agent.md` | `agents/se-technical-writer.agent.md` | Technical writing specialist for creating developer documentation, technical blogs, and tutorials |
 
 #### Instructions (`.github/instructions/`)
 
 | File | Upstream path | Description |
 |------|--------------|-------------|
-| `code-review-generic.instructions.md` | `instructions/code-review-generic.instructions.md` | Generic code review instructions that can be customized for any project using GitHub Copilot |
 | `context-engineering.instructions.md` | `instructions/context-engineering.instructions.md` | Guidelines for structuring code and projects to maximize GitHub Copilot effectiveness |
 | `markdown.instructions.md` | `instructions/markdown.instructions.md` | Documentation and content creation standards |
 | `memory-bank.instructions.md` | `instructions/memory-bank.instructions.md` | Context retention and memory bank workflow across sessions |
-| `performance-optimization.instructions.md` | `instructions/performance-optimization.instructions.md` | Performance optimization best practices for all languages, frameworks, and stacks |
-| `prompt.instructions.md` | `instructions/prompt.instructions.md` | Guidelines for creating high-quality prompt files for GitHub Copilot |
 | `shell.instructions.md` | `instructions/shell.instructions.md` | Shell scripting best practices and conventions for bash, sh, zsh, and other shells |
 | `spec-driven-workflow-v1.instructions.md` | `instructions/spec-driven-workflow-v1.instructions.md` | Specification-Driven Workflow v1 — structured approach to software development |
-| `task-implementation.instructions.md` | `instructions/task-implementation.instructions.md` | Instructions for implementing task plans with progressive tracking and change record |
-| `update-docs-on-code-change.instructions.md` | `instructions/update-docs-on-code-change.instructions.md` | Automatically update README.md and documentation files when application code changes |
-
-#### Prompts (`.github/prompts/`)
-
-| File | Upstream path | Description |
-|------|--------------|-------------|
-| `unit-test-generation.prompt.md` | `skills/polyglot-test-agent/unit-test-generation.prompt.md` | Best practices and guidelines for generating comprehensive, parameterized unit tests with 80% code coverage |
 
 ### MIT License (awesome-copilot)
 
