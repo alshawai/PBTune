@@ -197,11 +197,13 @@ def test_resolve_manual_worker_resources_valid(
 ):
     class MockMem:
         total = 16 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         def cpu_affinity(self):
             return list(range(8))
+
     mock_process.return_value = MockProcess()
     mock_cpu_count.return_value = 8
 
@@ -223,11 +225,13 @@ def test_resolve_manual_worker_resources_exceeds_ram(
 ):
     class MockMem:
         total = 16 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         def cpu_affinity(self):
             return list(range(8))
+
     mock_process.return_value = MockProcess()
     mock_cpu_count.return_value = 8
 
@@ -249,11 +253,13 @@ def test_resolve_manual_worker_resources_exceeds_cpu(
 ):
     class MockMem:
         total = 16 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         def cpu_affinity(self):
             return list(range(8))
+
     mock_process.return_value = MockProcess()
     mock_cpu_count.return_value = 8
 
@@ -275,15 +281,19 @@ def test_resolve_manual_worker_resources_partial_override(
 ):
     class MockMem:
         total = 16 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         def cpu_affinity(self):
             return list(range(8))
+
     mock_process.return_value = MockProcess()
     mock_cpu_count.return_value = 8
 
-    wr = resolve_manual_worker_resources(worker_ram="2G", worker_cpus=None, num_workers=4)
+    wr = resolve_manual_worker_resources(
+        worker_ram="2G", worker_cpus=None, num_workers=4
+    )
     expected_auto_cpu = max(1, int((8 * 0.8) / 4))
     assert wr.ram_bytes == 2 * 1024**3
     assert wr.cpu_cores == expected_auto_cpu
@@ -301,14 +311,19 @@ def test_resolve_manual_worker_resources_disk_type_always_inferred(
 ):
     class MockMem:
         total = 16 * 1024**3
+
     mock_virtual_memory.return_value = MockMem()
 
     class MockProcess:
         def cpu_affinity(self):
             return list(range(8))
+
     mock_process.return_value = MockProcess()
     mock_cpu_count.return_value = 8
 
     from pathlib import Path
-    wr = resolve_manual_worker_resources(worker_ram="2G", worker_cpus=1, num_workers=4, data_path=Path("/tmp/data"))
+
+    wr = resolve_manual_worker_resources(
+        worker_ram="2G", worker_cpus=1, num_workers=4, data_path=Path("/tmp/data")
+    )
     assert wr.disk_type == "HDD"

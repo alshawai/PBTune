@@ -285,10 +285,10 @@ def parse_ram_value(value: str) -> int:
     match = re.match(r"^(\d+)\s*([KMGTPE]?)[B]?$", value)
     if not match:
         raise ValueError(f"Invalid RAM value format: {value}")
-    
+
     number = int(match.group(1))
     suffix = match.group(2)
-    
+
     multipliers = {
         "": 1,
         "K": 1024,
@@ -309,7 +309,7 @@ def resolve_manual_worker_resources(
 ) -> WorkerResources:
     """
     Resolve manual worker resources and validate against host limits.
-    
+
     Allows up to 95% of host capacity. Warns if > 80% is used.
     Falls back entirely to auto-detection if > 95% is requested.
     """
@@ -364,7 +364,9 @@ def resolve_manual_worker_resources(
             auto_cpu,
             disk_type,
         )
-        return WorkerResources(ram_bytes=auto_ram, cpu_cores=auto_cpu, disk_type=disk_type)
+        return WorkerResources(
+            ram_bytes=auto_ram, cpu_cores=auto_cpu, disk_type=disk_type
+        )
 
     # Warning logic (> 80% and <= 95%)
     ram_warn = total_req_ram > (total_ram * 0.80)
@@ -376,14 +378,16 @@ def resolve_manual_worker_resources(
             "This may bottleneck the host machine and tuning processes. "
             "Proceeding with requested allocation."
         )
-        
+
     LOGGER.info(
         "Using manual worker resources: RAM=%s bytes, CPU=%s cores, Disk=%s",
         resolved_ram,
         resolved_cpu,
         disk_type,
     )
-    return WorkerResources(ram_bytes=resolved_ram, cpu_cores=resolved_cpu, disk_type=disk_type)
+    return WorkerResources(
+        ram_bytes=resolved_ram, cpu_cores=resolved_cpu, disk_type=disk_type
+    )
 
 
 def _detect_disk_type_linux(device_path: Optional[str] = None) -> str:

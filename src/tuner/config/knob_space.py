@@ -352,6 +352,16 @@ class KnobSpace:
                 "right": "max_parallel_workers",
             },
             {
+                "type": "forbidden_less_than",
+                "left": "max_worker_processes",
+                "right": "max_logical_replication_workers",
+            },
+            {
+                "type": "forbidden_less_than",
+                "left": "max_worker_processes",
+                "right": "max_parallel_maintenance_workers",
+            },
+            {
                 "type": "forbidden_greater_than",
                 "left": "min_wal_size",
                 "right": "max_wal_size",
@@ -799,23 +809,29 @@ class KnobSpace:
                     )
                 repaired["huge_pages"] = "try"
 
-        # Handle max_worker_processes vs max_parallel_workers constraints
+        # Clamp all worker-pool knobs to max_worker_processes (PostgreSQL hard constraint)
         max_worker = repaired.get("max_worker_processes")
-        max_parallel = repaired.get("max_parallel_workers")
-        if isinstance(max_worker, (int, float, np.number)) and isinstance(
-            max_parallel, (int, float, np.number)
-        ):
-            if max_worker < max_parallel:
-                if not quiet:
-                    worker_logger.debug(
-                        "%s Corrected 'max_parallel_workers' from %s to %s "
-                        "because it cannot exceed 'max_worker_processes'%s",
-                        COLORS.italic,
-                        max_parallel,
-                        max_worker,
-                        COLORS.reset,
-                    )
-                repaired["max_parallel_workers"] = int(max_worker)
+        if isinstance(max_worker, (int, float, np.number)):
+            max_worker_int = int(max_worker)
+            _worker_bounded_knobs = (
+                "max_parallel_workers",
+                "max_logical_replication_workers",
+                "max_parallel_maintenance_workers",
+            )
+            for bounded_knob in _worker_bounded_knobs:
+                val = repaired.get(bounded_knob)
+                if isinstance(val, (int, float, np.number)) and max_worker_int < val:
+                    if not quiet:
+                        worker_logger.debug(
+                            "%s Corrected '%s' from %s to %s "
+                            "because it cannot exceed 'max_worker_processes'%s",
+                            COLORS.italic,
+                            bounded_knob,
+                            val,
+                            max_worker_int,
+                            COLORS.reset,
+                        )
+                    repaired[bounded_knob] = max_worker_int
 
         # Handle min_wal_size vs max_wal_size constraint
         min_wal = repaired.get("min_wal_size")

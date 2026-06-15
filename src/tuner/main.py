@@ -315,7 +315,7 @@ class PBTTuner:
             self.pbt_config.num_parallel_workers,
             COLORS.reset,
         )
-        
+
         worker_ram_str = kwargs.get("worker_ram")
         worker_cpus = kwargs.get("worker_cpus")
 

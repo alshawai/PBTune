@@ -1,5 +1,6 @@
 """Main Bayesian Optimization baseline runner orchestrator."""
 
+from src.utils.metrics import PerformanceMetrics
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,7 +31,12 @@ from src.utils.hardware_info import (
     resolve_manual_worker_resources,
     WorkerResources,
 )
-from src.utils.logger import setup_logging, get_logger, log_section_header
+from src.utils.logger import (
+    setup_logging,
+    get_logger,
+    log_section_header,
+    log_worker_metrics_table,
+)
 from src.config.database import get_db_config
 from src.config.data_root import resolve_data_root
 from src.database.connection import get_connection
@@ -51,17 +57,17 @@ LOGGER = get_logger("Runner")
 
 
 @dataclass
-class PilotResult:
-    """Container for an un-scored pilot observation.
+class EvalRecord:
+    """Parallel history entry used for dynamic SMAC cost relabeling.
 
-    Stores both the raw SMAC suggestion and the resolved (DB-quantized)
-    configuration so that Phase 3 can inject ground-truth values into the
-    surrogate model after Phase 2 calibration.
+    Every evaluated configuration is stored here so that when the
+    normalization bounds expand, all past costs can be recomputed and
+    overwritten in SMAC's RunHistory via ``force_update=True``.
     """
 
-    raw_config: Configuration  # raw suggestion from smac.ask()
-    resolved_config: Configuration  # actual executed params (valid Configuration)
-    raw_metrics: dict  # PerformanceMetrics.to_dict() output
+    config: Configuration  # resolved (DB-quantized) ConfigSpace config
+    raw_metrics: "PerformanceMetrics | None"  # raw metrics object (None on crash)
+    trial_info: TrialInfo  # TrialInfo used in the matching tell() call
     eval_time: float  # wall-clock seconds
     status: StatusType = field(default=StatusType.SUCCESS)
 
@@ -202,8 +208,64 @@ class BOBaselineRunner:
             supported_knobs = {str(row[0]) for row in cursor.fetchall()}
             return supported_knobs, server_version
         except Exception as e:
-            self.logger.error("BO setup/execution failed: %s", e, exc_info=True)
+            self.logger.error(
+                "Failed to query pg_settings from worker %d "
+                "(DB may be unreachable or not yet started): %s",
+                worker_id,
+                e,
+                exc_info=True,
+            )
             raise
+
+    def _relabel_smac_history(
+        self,
+        facade,
+        orchestrator,
+        eval_history: list,
+        worker,
+    ) -> int:
+        """Rescore every past evaluation and overwrite SMAC costs.
+
+        Called immediately after ``metric_config.expand_ranges_for_metrics()``
+        returns True so the surrogate model retrains on a consistent landscape.
+
+        Returns
+        -------
+        int
+            Number of entries relabeled.
+        """
+        engine = orchestrator._get_scoring_engine()
+        relabeled = 0
+        for record in eval_history:
+            if record.status != StatusType.SUCCESS or record.raw_metrics is None:
+                continue
+            breakdown = engine.compute_breakdown(
+                record.raw_metrics, worker_logger=worker.logger
+            )
+            new_cost = max(0.0, min(100.0, 100.0 - breakdown.final_score))
+            self.logger.debug(
+                "  Relabeling entry %d: new_cost=%.4f (score=%.4f)",
+                relabeled + 1,
+                new_cost,
+                breakdown.final_score,
+            )
+            facade.runhistory.add(
+                config=record.config,
+                cost=new_cost,
+                time=record.eval_time,
+                status=record.status,
+                instance=record.trial_info.instance,
+                seed=record.trial_info.seed,
+                force_update=True,
+            )
+            relabeled += 1
+        skipped = len(eval_history) - relabeled
+        self.logger.debug(
+            "Relabeling complete: %d updated, %d skipped (CRASHED/None metrics)",
+            relabeled,
+            skipped,
+        )
+        return relabeled
 
     def _run_sequential_optimization(
         self,
@@ -215,32 +277,27 @@ class BOBaselineRunner:
         sobol_configs: list,
     ) -> tuple[bool, int]:
         """
-        Run sequential BO optimization using a four-phase bootstrapping architecture.
+        Run sequential BO optimization with Dynamic Relabeling.
 
-        Phase 1 — Pilot Collection:
-            Iterate the pre-generated Sobol configs (passed in as ``sobol_configs``).
-            Evaluate each to get raw metrics but do NOT score them and do NOT touch
-            the facade.  Accumulate ``PilotResult`` objects.
+        Phase 1 — Bootstrap:
+            Evaluate the pre-generated Sobol configs using fallback normalizer
+            anchors (QuantileUtilityNormalizer already ships sensible defaults).
+            Each evaluation is immediately injected into SMAC via ``tell()``
+            (unsolicited observations — no prior ``ask()`` needed) so the
+            surrogate is primed from the first iteration.
 
-            Why we do NOT use ``facade.ask()`` here: calling ``ask()`` without a
-            matching ``tell()`` leaves the intensifier with ghost "running" trials.
-            With ``n_workers=1``, SMAC will refuse further asks until those trials
-            are closed, which would block Phase 4 entirely.
+            After all bootstrap configs are evaluated, the normalizer is
+            calibrated from those observations and all bootstrap entries in
+            SMAC's RunHistory are rewritten via ``force_update=True``.
 
-        Phase 2 — Calibration:
-            Fit normalization ranges from all successful pilot observations exactly
-            once. Reload the scoring engine so Phases 3 and 4 use frozen ranges.
+        Phase 2 — Adaptive BO Loop:
+            Standard ``facade.ask()`` / ``evaluate_config()`` / ``facade.tell()``
+            for the remaining iterations.  After every evaluation, the normalizer
+            checks whether the new metrics exceed the current bounds.  If so,
+            the scoring engine is reloaded and the entire history is relabeled
+            before the next ``ask()`` so the surrogate retrains on a consistent
+            landscape.
 
-        Phase 3 — Warm-Start Injection:
-            Re-score each successful pilot result with the frozen engine. Inject
-            via ``facade.tell()`` using the *resolved* config (unsolicited
-            observations — no prior ``ask()`` needed).  This primes the surrogate.
-
-        Phase 4 — BO Loop:
-            Standard ``facade.ask()`` / ``facade.tell()`` for the remaining
-            iterations.  The facade's initial design is empty (``n_configs=0``),
-            so the first ``ask()`` immediately enters BO (acquisition) mode.
-            ``update_ranges()`` is NEVER called again.
             Early stopping: if the incumbent score does not improve for
             ``early_stopping_patience`` consecutive iterations, the loop exits.
 
@@ -255,7 +312,7 @@ class BOBaselineRunner:
         iteration_log : list
             Mutable iteration log shared with the caller
         pilot_size : int
-            Number of pilot configurations (== len(sobol_configs))
+            Number of bootstrap configurations (== len(sobol_configs))
         sobol_configs : list[Configuration]
             Pre-generated Sobol configurations from
             ``SobolInitialDesign.select_configurations()``
@@ -266,17 +323,16 @@ class BOBaselineRunner:
             (early_stopped, stale_counter) — whether early stopping fired and
             how many consecutive non-improving iterations were recorded.
         """
-        from src.utils.metrics import PerformanceMetrics
 
         previous_engine_config = None
+        # Parallel history for dynamic relabeling
+        eval_history: list[EvalRecord] = []
 
-        # ── Phase 1: Pilot Collection ─────────────────────────────────────────
+        # ── Phase 1: Bootstrap ────────────────────────────────────────────────
         self.logger.info(
-            "=== Phase 1: Pilot Collection (%d iterations) ===", pilot_size
+            "=== Phase 1: Bootstrap (%d iterations, fallback anchors) ===", pilot_size
         )
-        pilot_results: list[PilotResult] = []
 
-        # Iterate the pre-generated Sobol configs — facade is NOT touched here.
         for pilot_idx, sobol_config in enumerate(sobol_configs):
             if (
                 self.config.enable_snapshots
@@ -285,13 +341,19 @@ class BOBaselineRunner:
             ):
                 self._restore_snapshot_safe(worker)
 
+            self.logger.info(
+                "Bootstrap %d/%d: starting evaluation...",
+                pilot_idx + 1,
+                pilot_size,
+            )
+
             try:
                 (
-                    _cost,  # None — scoring deferred
+                    cost,
                     knob_config,
                     metrics,
-                    _score,  # None — scoring deferred
-                    _breakdown,  # None — scoring deferred
+                    score,
+                    score_breakdown,
                     _restarted,
                     wall_time,
                 ) = evaluate_config(
@@ -300,7 +362,6 @@ class BOBaselineRunner:
                     orchestrator,
                     self.knob_space,
                     previous_engine_config,
-                    skip_scoring=True,
                 )
                 previous_engine_config = dict(
                     configspace_to_knobs(sobol_config, self.knob_space)
@@ -314,64 +375,115 @@ class BOBaselineRunner:
                     )
                     status = StatusType.SUCCESS
                 else:
-                    resolved_cs_config = sobol_config  # fallback
+                    resolved_cs_config = sobol_config
                     status = StatusType.CRASHED
-
-                pilot_results.append(
-                    PilotResult(
-                        raw_config=sobol_config,
-                        resolved_config=resolved_cs_config,
-                        raw_metrics=metrics.to_dict() if metrics is not None else {},
-                        eval_time=wall_time,
-                        status=status,
-                    )
-                )
+                    cost = 100.0
 
             except Exception as exc:
                 self.logger.error(
-                    "Pilot iteration %d failed: %s", pilot_idx, exc, exc_info=True
+                    "Bootstrap iteration %d failed: %s", pilot_idx, exc, exc_info=True
                 )
-                pilot_results.append(
-                    PilotResult(
-                        raw_config=sobol_config,
-                        resolved_config=sobol_config,
-                        raw_metrics={},
-                        eval_time=0.0,
-                        status=StatusType.CRASHED,
-                    )
+                resolved_cs_config = sobol_config
+                metrics = None
+                cost = 100.0
+                score = 0.0
+                score_breakdown = None
+                wall_time = 0.0
+                status = StatusType.CRASHED
+
+            trial_info = TrialInfo(
+                config=resolved_cs_config, seed=self.config.random_seed
+            )
+            t_tell = time.time()
+            facade.tell(
+                trial_info,
+                TrialValue(cost=cost, time=wall_time, status=status),
+            )
+            tell_overhead = time.time() - t_tell
+
+            eval_history.append(
+                EvalRecord(
+                    config=resolved_cs_config,
+                    raw_metrics=metrics,
+                    trial_info=trial_info,
+                    eval_time=wall_time,
+                    status=status,
                 )
+            )
+
+            iteration_score = score if score is not None else 0.0
+            iteration_log.append(
+                {
+                    "iteration": pilot_idx,
+                    "config": configspace_to_knobs(resolved_cs_config, self.knob_space),
+                    "metrics": metrics.to_dict() if metrics is not None else {},
+                    "score": iteration_score,
+                    "score_breakdown": score_breakdown,
+                    "cost": cost,
+                    "bo_overhead_seconds": tell_overhead,
+                    "wall_clock_seconds": wall_time,
+                    "restarted": False,
+                    "timestamp": time.time(),
+                    "phase": "bootstrap",
+                }
+            )
 
             self.logger.info(
-                "Pilot %d/%d: status=%s, wall_time=%.2fs",
+                "Bootstrap %d/%d: status=%s, score=%.2f, wall_time=%.2fs",
                 pilot_idx + 1,
                 pilot_size,
-                pilot_results[-1].status.name,
-                pilot_results[-1].eval_time,
+                status.name,
+                iteration_score,
+                wall_time,
             )
 
-        # ── Phase 2: Calibration ──────────────────────────────────────────────
-        self.logger.info("=== Phase 2: Calibration ===")
+            # ── Per-iteration metrics table (Bootstrap) ───────────────────────
+            if metrics is not None:
+                metrics_with_score = metrics.to_dict()
+                metrics_with_score["score"] = iteration_score
+                log_worker_metrics_table(
+                    self.logger,
+                    [metrics_with_score],
+                    worker_labels=[f"Bootstrap-{pilot_idx + 1}"],
+                    title=f"\n🔷 Bootstrap {pilot_idx + 1}/{pilot_size} Metrics 🔷",
+                )
 
-        successful_pilots = [
-            r for r in pilot_results if r.status == StatusType.SUCCESS and r.raw_metrics
+        # ── Calibrate normalizer from all successful bootstrap observations ────
+        self.logger.info("=== Bootstrap Calibration ===")
+        successful_metrics = [
+            r.raw_metrics
+            for r in eval_history
+            if r.status == StatusType.SUCCESS and r.raw_metrics is not None
         ]
+        crash_count = sum(1 for r in eval_history if r.status == StatusType.CRASHED)
+        if crash_count > 0:
+            self.logger.warning(
+                "Bootstrap phase had %d/%d CRASHED iteration(s) — "
+                "calibration quality is reduced. Check DB/benchmark logs above.",
+                crash_count,
+                pilot_size,
+            )
 
-        if len(successful_pilots) == 0:
+        if len(successful_metrics) == 0:
             raise RuntimeError(
-                "Zero pilot evaluations succeeded. Cannot calibrate normalization ranges. "
+                "Zero bootstrap evaluations succeeded. Cannot calibrate normalization ranges. "
                 "Check database connectivity and benchmark configuration."
             )
-        elif len(successful_pilots) < 3:
+        elif len(successful_metrics) < 3:
             self.logger.warning(
-                "Only %d pilot evaluation(s) succeeded (minimum 3 recommended for reliable normalization). "
+                "Only %d successful bootstrap evaluation(s) (minimum 3 recommended). "
                 "Continuing with degraded calibration.",
-                len(successful_pilots),
+                len(successful_metrics),
             )
 
-        all_metrics = [PerformanceMetrics(**r.raw_metrics) for r in successful_pilots]
-        self.metric_config.update_ranges(all_metrics)
+        self.metric_config.update_ranges(successful_metrics)
         self.logger.info(
-            "Normalization ranges frozen from %d pilot observations", len(all_metrics)
+            "Normalizer calibrated from %d bootstrap observations",
+            len(successful_metrics),
+        )
+        self.logger.debug(
+            "Calibrated metric ranges: %s",
+            getattr(self.metric_config, "ranges", "(not exposed by metric_config)"),
         )
         try:
             orchestrator.reload_scoring_engine()
@@ -381,76 +493,48 @@ class BOBaselineRunner:
             )
             raise
 
-        # ── Phase 3: Warm-Start Injection ─────────────────────────────────────
-        self.logger.info(
-            "=== Phase 3: Warm-Start Injection (%d observations) ===",
-            len(successful_pilots),
+        # Relabel all bootstrap entries with calibrated scores
+        n_relabeled = self._relabel_smac_history(
+            facade, orchestrator, eval_history, worker
         )
+        self.logger.info(
+            "Bootstrap relabeling: %d/%d entries updated in SMAC RunHistory",
+            n_relabeled,
+            len(eval_history),
+        )
+
+        # Update iteration_log bootstrap entries to reflect calibrated scores
         engine = orchestrator._get_scoring_engine()
-
-        for idx, result in enumerate(pilot_results):
-            if result.status != StatusType.SUCCESS or not result.raw_metrics:
-                self.logger.debug("Skipping failed pilot %d during injection", idx)
-                continue
-
-            pilot_metrics = PerformanceMetrics(**result.raw_metrics)
-            score_breakdown = engine.compute_breakdown(
-                pilot_metrics, worker_logger=worker.logger
-            )
-            score = score_breakdown.final_score
-            cost = max(0.0, min(100.0, 100.0 - score))
-
-            t_tell = time.time()
-            facade.tell(
-                TrialInfo(config=result.resolved_config, seed=self.config.random_seed),
-                TrialValue(cost=cost, time=result.eval_time, status=result.status),
-            )
-            tell_overhead = time.time() - t_tell
-            self.logger.debug(
-                "Injected pilot %d: score=%.2f, cost=%.2f", idx, score, cost
-            )
-
-            iteration_log.append(
-                {
-                    "iteration": idx,
-                    "config": configspace_to_knobs(
-                        result.resolved_config,
-                        self.knob_space,
-                    ),
-                    "metrics": result.raw_metrics,
-                    "score": score,
-                    "score_breakdown": score_breakdown,
-                    "cost": cost,
-                    "bo_overhead_seconds": tell_overhead,
-                    "wall_clock_seconds": result.eval_time,
-                    "restarted": False,
-                    "timestamp": time.time(),
-                    "phase": "pilot",
-                }
-            )
+        log_bootstrap = [e for e in iteration_log if e["phase"] == "bootstrap"]
+        for log_entry, record in zip(log_bootstrap, eval_history, strict=False):
+            if record.status == StatusType.SUCCESS and record.raw_metrics is not None:
+                bd = engine.compute_breakdown(
+                    record.raw_metrics, worker_logger=worker.logger
+                )
+                log_entry["score"] = bd.final_score
+                log_entry["score_breakdown"] = bd
+                log_entry["cost"] = max(0.0, min(100.0, 100.0 - bd.final_score))
 
         incumbents = facade.intensifier.get_incumbents()
         assert len(incumbents) > 0, (
-            "No incumbent found after pilot injection. "
+            "No incumbent found after bootstrap injection. "
             "Verify that StatusType and Configuration identity are correct."
         )
         self.logger.info(
-            "Phase 3 complete: %d incumbent(s), %d observations injected",
+            "Bootstrap complete: %d incumbent(s), %d observations injected",
             len(incumbents),
-            len(successful_pilots),
+            len(eval_history),
         )
 
-        # ── Phase 4: BO Optimization Loop ─────────────────────────────────────
+        # ── Phase 2: Adaptive BO Loop ─────────────────────────────────────────
         remaining = self.config.n_iterations - pilot_size
         self.logger.info(
-            "=== Phase 4: BO Loop (%d iterations, early_stopping=%s, patience=%d) ===",
+            "=== Phase 2: Adaptive BO Loop (%d iterations, early_stopping=%s, patience=%d) ===",
             remaining,
             self.config.early_stopping_enabled,
             self.config.early_stopping_patience,
         )
-        # update_ranges() is NEVER called again — scoring engine stays frozen.
 
-        # Early stopping state
         early_stopped = False
         stale_counter = 0
         best_score_so_far = max(
@@ -469,12 +553,27 @@ class BOBaselineRunner:
                 self._restore_snapshot_safe(worker)
 
             try:
+                self.logger.debug(
+                    "Calling facade.ask() for iteration %d/%d...",
+                    iteration_count + 1,
+                    self.config.n_iterations,
+                )
                 t_ask = time.time()
                 trial_info = facade.ask()
                 ask_overhead = time.time() - t_ask
+                self.logger.debug(
+                    "facade.ask() returned in %.3fs (seed=%s)",
+                    ask_overhead,
+                    trial_info.seed,
+                )
             except StopIteration:
                 self.logger.warning(
-                    "SMAC exhausted its n_trials budget. Stopping BO loop early."
+                    "SMAC exhausted its n_trials budget at iteration %d/%d "
+                    "(n_trials=%d, budget_multiplier=3x). "
+                    "Consider increasing n_iterations or the 3x multiplier in the scenario.",
+                    iteration_count + 1,
+                    self.config.n_iterations,
+                    self.config.n_iterations * 3,
                 )
                 break
 
@@ -510,43 +609,142 @@ class BOBaselineRunner:
                     wall_time,
                 ) = (100.0, {}, None, 0.0, None, False, 0.0)
 
-            # Inject repaired (DB-quantized) config via facade.tell() if it differs
+            # Tell repaired (DB-quantized) config if it differs from asked config
             original_knob_config = configspace_to_knobs(
                 trial_info.config, self.knob_space
             )
-
             from src.scripts.bo_baseline.search_space import get_config_drift
 
-            configs_differ = bool(get_config_drift(original_knob_config, knob_config))
+            # Guard: if evaluation crashed with empty knob_config, skip drift/repair
+            if not knob_config and metrics is None:
+                self.logger.warning(
+                    "Iteration %d: evaluation crashed with empty knob_config — "
+                    "skipping repaired config injection to avoid corrupting SMAC surrogate",
+                    iteration_count + 1,
+                )
+                configs_differ = False
+            else:
+                configs_differ = bool(
+                    get_config_drift(original_knob_config, knob_config)
+                )
 
             repaired_cs_config = None
             if configs_differ:
                 try:
                     repaired_cs_config = knobs_to_configspace(
-                        knob_config,
-                        self.knob_space,
-                        facade.scenario.configspace,
+                        knob_config, self.knob_space, facade.scenario.configspace
                     )
                 except Exception as exc:
-                    self.logger.warning("Failed to inject repaired config: %s", exc)
+                    knob_def_repr = {
+                        k: str(self.knob_space.knobs.get(k)) for k in knob_config
+                    }
+                    self.logger.warning(
+                        "Failed to build repaired CS config at iteration %d: %s. "
+                        "Knob definitions involved: %s",
+                        iteration_count + 1,
+                        exc,
+                        knob_def_repr,
+                        exc_info=True,
+                    )
+
+            bo_status = StatusType.SUCCESS
+            effective_config = (
+                repaired_cs_config
+                if repaired_cs_config is not None
+                else trial_info.config
+            )
+            effective_trial_info = TrialInfo(
+                config=effective_config, seed=trial_info.seed
+            )
 
             t_tell = time.time()
             if repaired_cs_config is not None:
-                # Tell the repaired config first so it becomes incumbent in case of a tie
                 facade.tell(
-                    TrialInfo(config=repaired_cs_config, seed=trial_info.seed),
-                    TrialValue(cost=cost, time=wall_time, status=StatusType.SUCCESS),
+                    effective_trial_info,
+                    TrialValue(cost=cost, time=wall_time, status=bo_status),
                 )
-                self.logger.debug(
-                    "Injected repaired config via facade.tell() (quantized values differ)"
-                )
-
-            # Then tell the raw config (so SMAC knows the asked trial finished)
             facade.tell(
                 trial_info,
-                TrialValue(cost=cost, time=wall_time, status=StatusType.SUCCESS),
+                TrialValue(cost=cost, time=wall_time, status=bo_status),
             )
             tell_overhead = time.time() - t_tell
+
+            # Record in parallel history for potential future relabeling
+            eval_history.append(
+                EvalRecord(
+                    config=effective_config,
+                    raw_metrics=metrics,
+                    trial_info=effective_trial_info,
+                    eval_time=wall_time,
+                    status=bo_status if metrics is not None else StatusType.CRASHED,
+                )
+            )
+
+            # ── Dynamic Range Expansion & Relabeling ─────────────────────────
+            if metrics is not None:
+                ranges_expanded = self.metric_config.expand_ranges_for_metrics(
+                    [metrics]
+                )
+                if ranges_expanded:
+                    orchestrator.reload_scoring_engine()
+                    n_relabeled = self._relabel_smac_history(
+                        facade, orchestrator, eval_history, worker
+                    )
+                    # Recompute current iteration cost/score with updated engine
+                    new_engine = orchestrator._get_scoring_engine()
+                    new_bd = new_engine.compute_breakdown(
+                        metrics, worker_logger=worker.logger
+                    )
+                    cost = max(0.0, min(100.0, 100.0 - new_bd.final_score))
+                    score = new_bd.final_score
+                    score_breakdown = new_bd
+                    self.logger.info(
+                        "🔄 Normalization ranges expanded — %d/%d history entries relabeled "
+                        "(scores recalibrated on updated bounds)",
+                        n_relabeled,
+                        len(eval_history),
+                    )
+
+                    # ── Retroactively update iteration_log entries ────────────
+                    # SMAC RunHistory was updated by _relabel_smac_history() above.
+                    # Mirror the same fix to iteration_log so the result JSON
+                    # reflects the rescaled scores (mirrors bootstrap pattern on
+                    # lines 500-508).  eval_history and iteration_log are kept
+                    # in lock-step: eval_history[i] corresponds to
+                    # iteration_log[i] for every successfully recorded entry.
+                    log_relabeled = 0
+                    for log_entry, record in zip(
+                        iteration_log, eval_history, strict=False
+                    ):
+                        if (
+                            record.status == StatusType.SUCCESS
+                            and record.raw_metrics is not None
+                        ):
+                            bd = new_engine.compute_breakdown(
+                                record.raw_metrics, worker_logger=worker.logger
+                            )
+                            log_entry["score"] = bd.final_score
+                            log_entry["score_breakdown"] = bd
+                            log_entry["cost"] = max(
+                                0.0, min(100.0, 100.0 - bd.final_score)
+                            )
+                            log_relabeled += 1
+                    self.logger.debug(
+                        "iteration_log retroactive update: %d/%d entries rescored",
+                        log_relabeled,
+                        len(iteration_log),
+                    )
+
+                    # Recompute best_score_so_far from the updated log so that
+                    # early stopping comparisons use the rescaled landscape.
+                    best_score_so_far = max(
+                        (e.get("score", 0.0) or 0.0 for e in iteration_log),
+                        default=0.0,
+                    )
+                    self.logger.debug(
+                        "best_score_so_far recalculated after relabeling: %.4f",
+                        best_score_so_far,
+                    )
 
             iteration_score = score if score is not None else 0.0
             iteration_log.append(
@@ -574,24 +772,52 @@ class BOBaselineRunner:
                 wall_time,
             )
 
-            # ── Early Stopping Check ─────────────────────────────────────────
-            if self.config.early_stopping_enabled:
-                if iteration_score > best_score_so_far:
-                    best_score_so_far = iteration_score
-                    stale_counter = 0
-                else:
-                    stale_counter += 1
+            # ── Per-iteration metrics table (BO) ──────────────────────────────
+            if metrics is not None:
+                metrics_with_score = metrics.to_dict()
+                metrics_with_score["score"] = iteration_score
+                log_worker_metrics_table(
+                    self.logger,
+                    [metrics_with_score],
+                    worker_labels=[f"Iter-{iteration_count + 1}"],
+                    title=f"\n🔷 BO Iteration {iteration_count + 1}/{self.config.n_iterations} Metrics 🔷",
+                )
 
-                if stale_counter >= self.config.early_stopping_patience:
-                    self.logger.warning(
-                        "Early stopping triggered: no improvement for %d consecutive "
-                        "iterations (patience=%d). Best score=%.4f.",
-                        stale_counter,
-                        self.config.early_stopping_patience,
-                        best_score_so_far,
-                    )
-                    early_stopped = True
-                    break
+            # ── Early Stopping Check + Best/Stale Status ──────────────────────
+            is_new_best = iteration_score > best_score_so_far
+            if is_new_best:
+                best_score_so_far = iteration_score
+                stale_counter = 0
+                self.logger.info(
+                    "✅ New best score: %.4f  (iteration %d/%d)",
+                    best_score_so_far,
+                    iteration_count + 1,
+                    self.config.n_iterations,
+                )
+            else:
+                stale_counter += 1 if self.config.early_stopping_enabled else 0
+                self.logger.info(
+                    "⏸  No improvement — best stays %.4f  (stale=%d/%s)",
+                    best_score_so_far,
+                    stale_counter,
+                    self.config.early_stopping_patience
+                    if self.config.early_stopping_enabled
+                    else "∞",
+                )
+
+            if (
+                self.config.early_stopping_enabled
+                and stale_counter >= self.config.early_stopping_patience
+            ):
+                self.logger.warning(
+                    "Early stopping triggered: no improvement for %d consecutive "
+                    "iterations (patience=%d). Best score=%.4f.",
+                    stale_counter,
+                    self.config.early_stopping_patience,
+                    best_score_so_far,
+                )
+                early_stopped = True
+                break
 
         return early_stopped, stale_counter
 
@@ -809,11 +1035,35 @@ class BOBaselineRunner:
 
             # Fetch real defaults from the active DB using Applicator
             from src.utils.applicator import KnobApplicator
+            from src.scripts.bo_baseline.search_space import get_config_drift
 
             applicator = KnobApplicator(
                 db_config=self.env.get_db_config(0), worker_id=0
             )
-            verify_result = applicator.verify(expected_config=base_knobs)
+            try:
+                verify_result = applicator.verify(expected_config=base_knobs)
+            except Exception as exc:
+                self.logger.warning(
+                    "KnobApplicator.verify() failed (%s); "
+                    "using static ConfigSpace defaults as pilot seed",
+                    exc,
+                )
+                verify_result = type("_FakeVerify", (), {"db_config": {}})()  # type: ignore[assignment]
+
+            # Log drift between static ConfigSpace defaults and live DB values
+            default_drift = get_config_drift(base_knobs, verify_result.db_config)
+            if default_drift:
+                drift_preview = dict(list(default_drift.items())[:10])
+                self.logger.info(
+                    "Live DB defaults differ from ConfigSpace defaults in %d knob(s): %s%s",
+                    len(default_drift),
+                    drift_preview,
+                    " ..." if len(default_drift) > 10 else "",
+                )
+            else:
+                self.logger.debug(
+                    "Live DB defaults match ConfigSpace defaults exactly."
+                )
 
             # Update base_knobs with the true active database values
             base_knobs.update(verify_result.db_config)
@@ -904,6 +1154,41 @@ class BOBaselineRunner:
                     logging_level=False,
                 )
                 bo_surrogate = "rf"
+
+            # ── Pre-run session summary ───────────────────────────────────────
+            self.logger.info(
+                "=== BO Session Summary ===\n"
+                "  Tier:              %s (%d knobs)\n"
+                "  Surrogate:         %s\n"
+                "  Total iterations:  %d  (pilot=%d, BO=%d)\n"
+                "  Early stopping:    %s  (patience=%d)\n"
+                "  Snapshots:         %s  (interval=%d)\n"
+                "  Tuning mode:       %s\n"
+                "  Benchmark:         %s / %s\n"
+                "  Warmup / Eval:     %.0fs / %.0fs\n"
+                "  Resource division: %d\n"
+                "  Seed:              %d",
+                self.config.knob_tier,
+                len(self.knob_space.knobs),
+                bo_surrogate,
+                self.config.n_iterations,
+                pilot_size,
+                self.config.n_iterations - pilot_size,
+                self.config.early_stopping_enabled,
+                self.config.early_stopping_patience,
+                self.config.enable_snapshots,
+                self.config.snapshot_restore_interval,
+                self.config.benchmark_config.tuning_mode,
+                self.config.benchmark_config.benchmark,
+                (
+                    self.config.benchmark_config.sysbench_workload
+                    or self.config.benchmark_config.workload_type
+                ),
+                self.config.benchmark_config.warmup_duration,
+                self.config.benchmark_config.evaluation_duration,
+                self.config.resource_division,
+                self.config.random_seed,
+            )
 
             # Run optimization
             self.logger.info("Starting Bayesian Optimization...")
