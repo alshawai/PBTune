@@ -333,7 +333,7 @@ class ExperimentRunner:
             "--cleanup-instances",
             "--worker-ram", self.worker_ram,
             "--worker-cpus", str(self.worker_cpus),
-            "--verbose", "DEBUG"
+            "--verbose", "INFO"
         ]
         if exp.sysbench_workload:
             cmd.extend(["--sysbench-workload", exp.sysbench_workload])
