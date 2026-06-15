@@ -179,6 +179,11 @@ def create_objective(
         "previous_config": None,
         "iteration_count": 0,
         "ranges_frozen": False,
+        # Monotonic timestamp of the previous iteration's end. The gap
+        # between iter[N].end and iter[N+1].start is the BO overhead
+        # (facade.ask + facade.tell + SMAC bookkeeping) that produced
+        # the next configuration. We attribute that gap back to iter[N].
+        "last_iter_end_monotonic": None,
     }
 
     def objective(config: Configuration, seed: int = 0) -> float:
@@ -198,6 +203,24 @@ def create_objective(
             Cost value (100 - score), with penalties for failures
         """
         try:
+            # Measure the BO overhead that occurred between the previous
+            # iteration's end and this call: facade.ask + facade.tell +
+            # SMAC's surrogate update. Attribute it to the PREVIOUS
+            # iteration (whose return triggered the ask/tell that
+            # produced *this* configuration). The very first iteration
+            # has no predecessor — its incoming overhead is captured by
+            # the runner's pre-optimize bracket if any.
+            iter_start_monotonic = time.monotonic()
+            if (
+                state["last_iter_end_monotonic"] is not None
+                and iteration_log
+            ):
+                inter_call_gap = (
+                    iter_start_monotonic - state["last_iter_end_monotonic"]
+                )
+                if inter_call_gap > 0:
+                    iteration_log[-1]["bo_overhead_seconds"] = inter_call_gap
+
             # Handle snapshot restoration before evaluating the config
             if (
                 enable_snapshots
@@ -238,8 +261,12 @@ def create_objective(
                 "restarted": restarted,
                 "timestamp": time.time(),
                 "timing": eval_timing.to_dict(include_summary=False),
-                # Sequential mode does not bracket ask/tell — see runner.py for
-                # the parallel-mode path that breaks these out.
+                # In sequential mode this is updated retroactively when the
+                # NEXT objective() call begins — the inter-call gap captures
+                # facade.ask + facade.tell + SMAC bookkeeping. The final
+                # iteration of a session keeps the 0.0 default since it
+                # has no successor. Parallel mode populates this directly
+                # in runner.py from explicit ask/tell brackets.
                 "bo_overhead_seconds": 0.0,
             }
             iteration_log.append(iteration_entry)
@@ -270,10 +297,17 @@ def create_objective(
                 f"wall_time={wall_time:.2f}s, frozen={state['ranges_frozen']}"
             )
 
+            # Stamp this iteration's end so the NEXT objective() call can
+            # measure the BO overhead gap and attribute it to this entry.
+            state["last_iter_end_monotonic"] = time.monotonic()
+
             return cost
 
         except Exception as e:
             LOGGER.error(f"Error evaluating configuration: {e}", exc_info=True)
+            # Still stamp so the next overhead measurement isn't polluted
+            # by error-path time.
+            state["last_iter_end_monotonic"] = time.monotonic()
             return 100.0
 
     return objective
