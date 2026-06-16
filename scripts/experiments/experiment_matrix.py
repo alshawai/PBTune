@@ -161,25 +161,25 @@ def build_all_experiments() -> list[Experiment]:
             scoring_policy="fixed_v1", ablation_variable="scoring_pipeline", ablation_value="fixed_v1"
         ),
         Experiment(
-            id="t3_exploit_020", tier=3, description="Ablation: Exploit 0.20 (Pop 12)",
+            id="t3_exploit_020", tier=3, description="Ablation: Exploit 0.20 (Pop 12, cohort=2)",
             benchmark="sysbench", sysbench_workload="oltp_read_write", scale_factor=None,
             config_profile="thorough", knob_tier="extensive", knob_source="expert", tuning_mode="offline",
             seeds=SEEDS_K1, eval_repetitions=5, run_bo=False,
             population=12, parallel_workers=6, exploit_quantile=0.20, ablation_variable="exploit_quantile", ablation_value="0.20"
         ),
         Experiment(
-            id="t3_exploit_025", tier=3, description="Ablation: Exploit 0.25 (Pop 12)",
+            id="t3_exploit_025", tier=3, description="Ablation: Exploit 0.25 (Pop 12, cohort=3)",
             benchmark="sysbench", sysbench_workload="oltp_read_write", scale_factor=None,
             config_profile="thorough", knob_tier="extensive", knob_source="expert", tuning_mode="offline",
             seeds=SEEDS_K1, eval_repetitions=5, run_bo=False,
             population=12, parallel_workers=6, exploit_quantile=0.25, ablation_variable="exploit_quantile", ablation_value="0.25"
         ),
         Experiment(
-            id="t3_exploit_030", tier=3, description="Ablation: Exploit 0.30 (Pop 12)",
+            id="t3_exploit_040", tier=3, description="Ablation: Exploit 0.40 (Pop 12, cohort=4)",
             benchmark="sysbench", sysbench_workload="oltp_read_write", scale_factor=None,
             config_profile="thorough", knob_tier="extensive", knob_source="expert", tuning_mode="offline",
             seeds=SEEDS_K1, eval_repetitions=5, run_bo=False,
-            population=12, parallel_workers=6, exploit_quantile=0.30, ablation_variable="exploit_quantile", ablation_value="0.30"
+            population=12, parallel_workers=6, exploit_quantile=0.40, ablation_variable="exploit_quantile", ablation_value="0.40"
         ),
         Experiment(
             id="t3_tier_minimal", tier=3, description="Ablation: Knob tier minimal",
