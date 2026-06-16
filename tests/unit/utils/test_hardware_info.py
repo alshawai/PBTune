@@ -410,6 +410,79 @@ def test_heuristic_disk_budget_falls_back_to_unknown():
         assert budget[key] > 0
 
 
+def test_resolve_parent_block_device_walks_partition_to_disk(tmp_path):
+    """Partition device nodes must resolve to the parent disk node.
+
+    Regression: cgroup v2 io.max is enforced on the parent disk, not on
+    individual partitions. Writing rbps to /dev/sda3 raises ENODEV
+    ("no such device") because the kernel I/O scheduler lives on /dev/sda.
+    """
+    from src.utils.hardware_info import _resolve_parent_block_device
+
+    # Build a fake sysfs layout that mirrors the partition->disk topology.
+    sys_class_block = tmp_path / "sys" / "class" / "block"
+    sys_devices = tmp_path / "sys" / "devices" / "pci0000:00" / "sda"
+    sys_devices_part = sys_devices / "sda3"
+    sys_devices_part.mkdir(parents=True)
+    (sys_devices_part / "partition").write_text("3\n")
+    sys_class_block.mkdir(parents=True)
+    # /sys/class/block/sda3 -> ../../devices/.../sda/sda3
+    (sys_class_block / "sda3").symlink_to(sys_devices_part)
+    (sys_class_block / "sda").symlink_to(sys_devices)
+
+    # Mock the sysfs path used by _resolve_parent_block_device.
+    fake_dev_node = tmp_path / "dev"
+    fake_dev_node.mkdir()
+    (fake_dev_node / "sda").touch()
+    (fake_dev_node / "sda3").touch()
+
+    with patch("src.utils.hardware_info.Path") as mock_path:
+
+        def _path_factory(arg):
+            arg_str = str(arg)
+            if arg_str.startswith("/sys/class/block/"):
+                return sys_class_block / arg_str.split("/")[-1]
+            if arg_str.startswith("/dev/"):
+                return fake_dev_node / arg_str.split("/")[-1]
+            from pathlib import Path as RealPath
+
+            return RealPath(arg)
+
+        mock_path.side_effect = _path_factory
+
+        resolved = _resolve_parent_block_device("/dev/sda3")
+
+    assert resolved == "/dev/sda"
+
+
+def test_resolve_parent_block_device_passes_through_whole_disk(tmp_path):
+    """Whole-disk device nodes (no 'partition' marker) pass through unchanged."""
+    from src.utils.hardware_info import _resolve_parent_block_device
+
+    # No /sys/class/block/<name>/partition file => not a partition.
+    sys_class_block = tmp_path / "sys" / "class" / "block"
+    sys_devices = tmp_path / "sys" / "devices" / "pci0000:00" / "nvme0n1"
+    sys_devices.mkdir(parents=True)
+    sys_class_block.mkdir(parents=True)
+    (sys_class_block / "nvme0n1").symlink_to(sys_devices)
+
+    with patch("src.utils.hardware_info.Path") as mock_path:
+
+        def _path_factory(arg):
+            arg_str = str(arg)
+            if arg_str.startswith("/sys/class/block/"):
+                return sys_class_block / arg_str.split("/")[-1]
+            from pathlib import Path as RealPath
+
+            return RealPath(arg)
+
+        mock_path.side_effect = _path_factory
+
+        resolved = _resolve_parent_block_device("/dev/nvme0n1")
+
+    assert resolved == "/dev/nvme0n1"
+
+
 @patch("src.utils.hardware_info._resolve_host_disk_budget")
 @patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
 @patch("src.utils.hardware_info.psutil.virtual_memory")

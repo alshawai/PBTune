@@ -122,13 +122,56 @@ def _normalize_dev_basename(device_path: str) -> str:
     return os.path.basename(os.path.realpath(device_path))
 
 
+def _resolve_parent_block_device(device_path: str) -> str:
+    """Walk a partition device node up to its parent disk node.
+
+    cgroup v2 ``io.max`` (and cgroup v1 ``blkio.throttle.*``) are
+    enforced on the parent block device, not on individual partitions.
+    Writing ``"8:3 rbps=..."`` to ``io.max`` for partition ``/dev/sda3``
+    raises ``ENODEV`` ("no such device") because the kernel's I/O
+    scheduler lives on the parent disk (``/dev/sda``, ``8:0``).
+
+    For partitions (``/sys/class/block/<name>/partition`` exists), this
+    walks ``/sys/class/block/<name>/..`` to the parent disk basename.
+    For non-partition block devices (whole disks, dm-X, md-X), returns
+    the input unchanged.
+    """
+    dev_basename = os.path.basename(device_path)
+    sys_block_link = Path(f"/sys/class/block/{dev_basename}")
+    if not sys_block_link.exists():
+        return device_path
+
+    partition_marker = sys_block_link / "partition"
+    if not partition_marker.exists():
+        # Whole disk, dm-X, md-X, etc. — no parent walk needed.
+        return device_path
+
+    try:
+        # /sys/class/block/sda3 -> /sys/devices/.../sda/sda3
+        # parent dir basename gives us "sda".
+        resolved = sys_block_link.resolve(strict=True)
+        parent_basename = resolved.parent.name
+    except OSError:
+        return device_path
+
+    if not parent_basename:
+        return device_path
+
+    parent_node = f"/dev/{parent_basename}"
+    if Path(parent_node).exists():
+        return parent_node
+    return device_path
+
+
 def _resolve_block_device_node(target_path: Path) -> Optional[str]:
     """Return the host block-device node path (``/dev/sdX`` or ``/dev/nvmeXnY``)
     whose filesystem contains ``target_path``.
 
     Needed because Docker's ``device_*_bps`` kwargs require a device-node
     path (the daemon resolves it to ``(major, minor)`` for the cgroup
-    write). Returns ``None`` when the path can't be resolved (non-Linux,
+    write). Always returns the **parent disk** rather than a partition,
+    so the cgroup write targets the device the I/O scheduler is bound to.
+    Returns ``None`` when the path can't be resolved (non-Linux,
     bind-mount from a container, etc.).
     """
     if platform.system() != "Linux":
@@ -144,11 +187,12 @@ def _resolve_block_device_node(target_path: Path) -> Optional[str]:
     # daemon sees a stable device node.
     try:
         resolved = os.path.realpath(device)
-        if resolved.startswith("/dev/"):
-            return resolved
+        if not resolved.startswith("/dev/"):
+            resolved = device
     except OSError:
-        pass
-    return device
+        resolved = device
+
+    return _resolve_parent_block_device(resolved)
 
 
 def _is_usb_attached(dev_basename: str) -> bool:
