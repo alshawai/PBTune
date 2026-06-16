@@ -234,7 +234,7 @@ def build_all_experiments() -> list[Experiment]:
     ]
 
     # Add dynamic data-driven tier experiments
-    experiments.extend(get_data_driven_tier_experiments())
+    # experiments.extend(get_data_driven_tier_experiments())
 
     return experiments
 

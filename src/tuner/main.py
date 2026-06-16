@@ -1777,6 +1777,18 @@ on your hardware, configuration, and workload/benchmark.
         ),
     )
 
+    config_group.add_argument(
+        "--exploit-quantile",
+        type=float,
+        default=None,
+        help=(
+            "Exploit/explore quantile for the evolution phase "
+            "(must satisfy 0 < q < 0.5; default: profile-dependent, typically 0.2). "
+            "Bottom q-fraction of ready workers copy from the top q-fraction. "
+            "E.g., 0.2 -> bottom 20%% exploits top 20%%."
+        ),
+    )
+
     scoring_group = parser.add_argument_group("Scoring & Normalization")
     scoring_group.add_argument(
         "--scoring-policy",
@@ -2088,6 +2100,12 @@ def main():
             round(1.0 + args.perturbation_factor, 4)
         )
 
+    if args.exploit_quantile is not None and not 0.0 < args.exploit_quantile < 0.5:
+        parser_error_msg = (
+            f"--exploit-quantile must be in (0, 0.5); got {args.exploit_quantile}"
+        )
+        raise SystemExit(parser_error_msg)
+
     pbt_config = replace(
         base_config,
         population_size=(
@@ -2104,6 +2122,11 @@ def main():
             args.parallel_workers
             if args.parallel_workers is not None
             else base_config.num_parallel_workers
+        ),
+        exploit_quantile=(
+            args.exploit_quantile
+            if args.exploit_quantile is not None
+            else base_config.exploit_quantile
         ),
         scoring_policy=(
             args.scoring_policy
