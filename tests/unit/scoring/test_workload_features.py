@@ -116,6 +116,49 @@ class TestSysbenchFeatureExtraction:
             features_high["concurrency_pressure"] > features_low["concurrency_pressure"]
         )
 
+    def test_extract_sysbench_8_threads_above_singlethread_cutoff(self):
+        """Regression: 8-thread sysbench must clear the 0.15 single-thread cutoff.
+
+        The CompositeScorer strips ``throughput_variance`` whenever
+        ``concurrency_pressure < 0.15`` (treating the workload as
+        effectively single-threaded). The previous formula
+        ``min(threads/cpu_cores, 8) / 8`` produced exactly 0.125 for the
+        balanced 8-thread / 8-core case, falsely tripping that cutoff.
+        Aligning with the template-features scale (``threads / 16``)
+        keeps multi-threaded sysbench runs above the threshold.
+        """
+        extractor = WorkloadFeatureExtractor()
+
+        features = extractor.extract_sysbench_features(
+            script="oltp_read_write",
+            threads=8,
+            cpu_cores=8,
+            table_size=1_000_000,
+            tables=4,
+        )
+
+        assert features["concurrency_pressure"] >= 0.15
+        assert features["concurrency_pressure"] == pytest.approx(0.5)
+
+    def test_extract_sysbench_singlethread_below_cutoff(self):
+        """A 1-thread sysbench run must remain below the single-thread cutoff.
+
+        The throughput-variance metric is mathematically zero for a
+        single client thread, so the scorer's bypass should still fire
+        when ``--threads=1``.
+        """
+        extractor = WorkloadFeatureExtractor()
+
+        features = extractor.extract_sysbench_features(
+            script="oltp_read_write",
+            threads=1,
+            cpu_cores=8,
+            table_size=1_000_000,
+            tables=4,
+        )
+
+        assert features["concurrency_pressure"] < 0.15
+
     def test_extract_sysbench_working_set_impact(self):
         """Test working set size calculation."""
         extractor = WorkloadFeatureExtractor()
