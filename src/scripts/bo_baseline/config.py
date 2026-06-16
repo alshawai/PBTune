@@ -87,7 +87,9 @@ class BOConfig:
     scoring_policy: Optional[str] = None
 
     # Early stopping — stop the BO loop if the incumbent does not improve for
-    # `early_stopping_patience` consecutive iterations.  Scales with budget.
+    # `early_stopping_patience` consecutive iterations. When applied via
+    # ``apply_pbt_session(set_iteration_budget=True)``, patience is set to a
+    # flat cap (50) rather than scaled to the budget; see that method.
     early_stopping_enabled: bool = True
     early_stopping_patience: int = 20  # default overridden by presets
 
@@ -187,26 +189,43 @@ class BOConfig:
         if set_iteration_budget:
             population_size = int(session.get("population_size", 0) or 0)
 
-            if population_size > 0:
-                base_iterations = self.n_iterations
-                self.n_iterations = population_size * base_iterations
+            generation_history = payload.get("generation_history")
+            if isinstance(generation_history, list) and generation_history:
+                actual_generations = len(generation_history)
+            else:
+                # Legacy session without generation_history; fall back to the
+                # configured target. Will overshoot when PBT early-stopped,
+                # but that is preferable to silently swapping in the preset.
+                actual_generations = int(session.get("total_generations", 0) or 0)
+
+            if population_size > 0 and actual_generations > 0:
+                preset_iterations = self.n_iterations
+                self.n_iterations = population_size * actual_generations
                 LOGGER.info(
-                    "PBT session provided: pop_size=%d × preset_iterations=%d → n_iterations=%d",
+                    "PBT session: pop_size=%d × actual_generations=%d → "
+                    "n_iterations=%d (replaces preset=%d for equal-evaluation budget)",
                     population_size,
-                    base_iterations,
+                    actual_generations,
                     self.n_iterations,
+                    preset_iterations,
                 )
             else:
                 LOGGER.warning(
-                    "PBT session is missing positive population_size; "
-                    "keeping preset BO iteration budget"
+                    "PBT session is missing population_size or generation_history; "
+                    "keeping preset BO iteration budget (pop=%d, gens=%d)",
+                    population_size,
+                    actual_generations,
                 )
 
-            # Auto-scale early stopping patience to ~50% of the resolved budget
+            # Flat patience cap: BO's GP overhead grows with iteration count,
+            # so scaling patience with the budget pours cycles into a
+            # saturated GP. 50 iterations is enough to detect a true
+            # convergence plateau without burning compute on a saturated
+            # surrogate.
             if self.early_stopping_enabled:
-                self.early_stopping_patience = max(10, int(self.n_iterations * 0.50))
+                self.early_stopping_patience = min(50, self.n_iterations)
                 LOGGER.info(
-                    "Auto-scaled early_stopping_patience to %d (50%% of %d iterations)",
+                    "Set early_stopping_patience=%d (flat cap, budget=%d iterations)",
                     self.early_stopping_patience,
                     self.n_iterations,
                 )
