@@ -71,6 +71,7 @@ class DockerEnvironment(DatabaseEnvironment):
         base_dir: Path = Path("./.instances"),
         container_prefix: str = "pbt-worker",
         force_recreate_baseline: bool = False,
+        data_device_node: Optional[str] = None,
     ):
         """Initialize Docker environment with configuration."""
         super().__init__(
@@ -86,6 +87,7 @@ class DockerEnvironment(DatabaseEnvironment):
         self.base_port = base_port
         self.base_dir = base_dir
         self.container_prefix = container_prefix
+        self.data_device_node = data_device_node
 
         self.client = docker.from_env(timeout=30)
         self.instances: Dict[int, InstanceConfig] = {}
@@ -212,6 +214,31 @@ class DockerEnvironment(DatabaseEnvironment):
             "network": self.network_name,
             "detach": True,
         }
+
+        # Per-worker disk I/O bandwidth + IOPS limits via cgroup blkio /
+        # cgroup v2 io.max. Only emit kwargs when (a) the worker resources
+        # carry a non-zero budget for that field and (b) we have a device
+        # node to target -- omitting the kwargs entirely is the safe
+        # default (Docker treats absence as unlimited).
+        wr = self.worker_resources
+        device_node = self.data_device_node
+        if wr is not None and device_node:
+            if getattr(wr, "disk_read_bps", 0) > 0:
+                kwargs["device_read_bps"] = [
+                    {"Path": device_node, "Rate": int(wr.disk_read_bps)}
+                ]
+            if getattr(wr, "disk_write_bps", 0) > 0:
+                kwargs["device_write_bps"] = [
+                    {"Path": device_node, "Rate": int(wr.disk_write_bps)}
+                ]
+            if getattr(wr, "disk_read_iops", 0) > 0:
+                kwargs["device_read_iops"] = [
+                    {"Path": device_node, "Rate": int(wr.disk_read_iops)}
+                ]
+            if getattr(wr, "disk_write_iops", 0) > 0:
+                kwargs["device_write_iops"] = [
+                    {"Path": device_node, "Rate": int(wr.disk_write_iops)}
+                ]
 
         if volumes is not None:
             kwargs["volumes"] = volumes
@@ -603,6 +630,11 @@ class DockerEnvironment(DatabaseEnvironment):
             else int(self.cpu_cores) if self.cpu_cores else 0
         )
         docker_mem_limit = self.ram_bytes if self.ram_bytes > 0 else None
+        wr = self.worker_resources
+        per_worker_disk_read_bps = int(getattr(wr, "disk_read_bps", 0)) if wr else 0
+        per_worker_disk_write_bps = int(getattr(wr, "disk_write_bps", 0)) if wr else 0
+        per_worker_disk_read_iops = int(getattr(wr, "disk_read_iops", 0)) if wr else 0
+        per_worker_disk_write_iops = int(getattr(wr, "disk_write_iops", 0)) if wr else 0
         for worker_id in worker_ids:
             allocations.append(
                 WorkerResourceAllocation(
@@ -611,6 +643,11 @@ class DockerEnvironment(DatabaseEnvironment):
                     cpuset_cpus=self._worker_cpuset_cpus(worker_id, num_workers),
                     ram_bytes=per_worker_ram,
                     docker_memory_limit_bytes=docker_mem_limit,
+                    disk_read_bps=per_worker_disk_read_bps,
+                    disk_write_bps=per_worker_disk_write_bps,
+                    disk_read_iops=per_worker_disk_read_iops,
+                    disk_write_iops=per_worker_disk_write_iops,
+                    disk_device_path=self.data_device_node,
                 )
             )
         return allocations

@@ -327,3 +327,180 @@ def test_resolve_manual_worker_resources_disk_type_always_inferred(
         worker_ram="2G", worker_cpus=1, num_workers=4, data_path=Path("/tmp/data")
     )
     assert wr.disk_type == "HDD"
+
+
+# ---------------------------------------------------------------------------
+# Disk bandwidth detection + partitioning
+# ---------------------------------------------------------------------------
+
+
+@patch("src.utils.hardware_info._resolve_host_disk_budget")
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_disk_budget_partitioning_divides_by_workers(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+    mock_resolve_host_budget,
+):
+    """Per-worker disk budget should be (host * 0.8) / num_workers."""
+
+    class MockMem:
+        total = 16 * 1024**3
+
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    # NVMe PCIe 4.0 ceilings
+    mock_resolve_host_budget.return_value = (
+        {
+            "read_bps": 6 * 1024 * 1024 * 1024,
+            "write_bps": 4 * 1024 * 1024 * 1024,
+            "read_iops": 700_000,
+            "write_iops": 600_000,
+        },
+        "nvme_pcie4",
+    )
+
+    wr = detect_worker_resources(max_parallel_workers=4)
+
+    expected_read = int(6 * 1024 * 1024 * 1024 * 0.8 / 4)
+    expected_write = int(4 * 1024 * 1024 * 1024 * 0.8 / 4)
+    assert wr.disk_read_bps == expected_read
+    assert wr.disk_write_bps == expected_write
+    assert wr.disk_read_iops == int(700_000 * 0.8 / 4)
+    assert wr.disk_write_iops == int(600_000 * 0.8 / 4)
+    assert wr.disk_class == "nvme_pcie4"
+
+
+@patch("shutil.which", return_value=None)
+def test_probe_disk_returns_none_without_fio(_mock_which, tmp_path):
+    """When fio is not on PATH, the probe falls back gracefully."""
+    from src.utils.hardware_info import _probe_disk_with_fio
+
+    assert _probe_disk_with_fio(tmp_path) is None
+
+
+def test_heuristic_disk_budget_usb_caps_media():
+    """USB attachment caps the underlying SATA-SSD media throughput."""
+    from src.utils.hardware_info import _heuristic_disk_budget, _DISK_CLASS_BUDGETS
+
+    usb_budget = _heuristic_disk_budget("usb_external")
+    sata_budget = _DISK_CLASS_BUDGETS["sata_ssd"]
+    usb_caps = _DISK_CLASS_BUDGETS["usb_external"]
+    for key in ("read_bps", "write_bps", "read_iops", "write_iops"):
+        assert usb_budget[key] == min(usb_caps[key], sata_budget[key])
+
+
+def test_heuristic_disk_budget_falls_back_to_unknown():
+    """Unknown classes still return a non-empty conservative budget."""
+    from src.utils.hardware_info import _heuristic_disk_budget
+
+    budget = _heuristic_disk_budget("definitely-not-a-class")
+    for key in ("read_bps", "write_bps", "read_iops", "write_iops"):
+        assert budget[key] > 0
+
+
+@patch("src.utils.hardware_info._resolve_host_disk_budget")
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_disk_overrides_take_precedence(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+    mock_resolve_host_budget,
+):
+    """Per-field manual disk overrides win over auto-detected values."""
+    from src.utils.hardware_info import resolve_manual_worker_resources
+
+    class MockMem:
+        total = 16 * 1024**3
+
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    mock_resolve_host_budget.return_value = (
+        {
+            "read_bps": 6 * 1024 * 1024 * 1024,
+            "write_bps": 4 * 1024 * 1024 * 1024,
+            "read_iops": 700_000,
+            "write_iops": 600_000,
+        },
+        "nvme_pcie4",
+    )
+
+    wr = resolve_manual_worker_resources(
+        num_workers=2,
+        worker_disk_write_bps=50_000_000,
+        worker_disk_read_iops=10_000,
+    )
+
+    # Overrides preserved verbatim
+    assert wr.disk_write_bps == 50_000_000
+    assert wr.disk_read_iops == 10_000
+    # Non-overridden fields auto-detected
+    assert wr.disk_read_bps == int(6 * 1024 * 1024 * 1024 * 0.8 / 2)
+    assert wr.disk_write_iops == int(600_000 * 0.8 / 2)
+
+
+@patch("src.utils.hardware_info._resolve_host_disk_budget")
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_disk_overflow_falls_back(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+    mock_resolve_host_budget,
+):
+    """Overrides exceeding 95% of host capacity fall back to auto-detected."""
+    from src.utils.hardware_info import resolve_manual_worker_resources
+
+    class MockMem:
+        total = 16 * 1024**3
+
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    host_budget = {
+        "read_bps": 1_000_000_000,
+        "write_bps": 1_000_000_000,
+        "read_iops": 100_000,
+        "write_iops": 100_000,
+    }
+    mock_resolve_host_budget.return_value = (host_budget, "sata_ssd")
+
+    # 600M/worker × 2 workers = 1200M > 95% × 1G
+    wr = resolve_manual_worker_resources(
+        num_workers=2,
+        worker_disk_write_bps=600_000_000,
+    )
+
+    # Falls back to auto-detected
+    assert wr.disk_write_bps == int(1_000_000_000 * 0.8 / 2)

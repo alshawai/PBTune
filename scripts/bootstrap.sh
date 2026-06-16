@@ -66,22 +66,22 @@ install_system_packages() {
             sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 build-essential libpq-dev libreadline-dev zlib1g-dev \
-                libxml2-dev libssl-dev libffi-dev swig g++ curl
+                libxml2-dev libssl-dev libffi-dev swig g++ curl fio
             ;;
         dnf|yum)
             sudo $pm install -y \
                 gcc gcc-c++ make postgresql-devel readline-devel zlib-devel \
-                libxml2-devel openssl-devel libffi-devel swig curl
+                libxml2-devel openssl-devel libffi-devel swig curl fio
             ;;
         pacman)
             sudo pacman -Sy --noconfirm --needed \
                 base-devel postgresql-libs readline zlib \
-                libxml2 openssl libffi swig curl
+                libxml2 openssl libffi swig curl fio
             ;;
         zypper)
             sudo zypper install -y \
                 gcc gcc-c++ make postgresql-devel readline-devel zlib-devel \
-                libxml2-devel libopenssl-devel libffi-devel swig curl
+                libxml2-devel libopenssl-devel libffi-devel swig curl fio
             ;;
     esac
 }

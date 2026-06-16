@@ -724,6 +724,11 @@ class ComparisonRunner:
             ram_bytes=session.worker_resources.ram_bytes,
             cpu_cores=session.worker_resources.cpu_cores,
             disk_type=session.worker_resources.disk_type,
+            disk_read_bps=session.worker_resources.disk_read_bps,
+            disk_write_bps=session.worker_resources.disk_write_bps,
+            disk_read_iops=session.worker_resources.disk_read_iops,
+            disk_write_iops=session.worker_resources.disk_write_iops,
+            disk_class=session.worker_resources.disk_class,
         )
         knob_space.resolve_hardware_ranges(runtime_resources)
         resolved = knob_space.fractions_to_config(session.best_knobs)

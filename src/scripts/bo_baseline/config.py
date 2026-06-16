@@ -72,6 +72,11 @@ class BOConfig:
     resource_division: int = 1
     worker_ram: Optional[str] = None
     worker_cpus: Optional[int] = None
+    worker_disk_read_bps: Optional[int] = None
+    worker_disk_write_bps: Optional[int] = None
+    worker_disk_read_iops: Optional[int] = None
+    worker_disk_write_iops: Optional[int] = None
+    probe_disk: bool = True
 
     # Scoring policy
     # Available options:
@@ -374,6 +379,27 @@ class BOConfig:
             early_stopping_patience=early_stopping_patience,
             worker_ram=args.worker_ram if hasattr(args, "worker_ram") else None,
             worker_cpus=args.worker_cpus if hasattr(args, "worker_cpus") else None,
+            worker_disk_read_bps=(
+                args.worker_disk_read_bps
+                if hasattr(args, "worker_disk_read_bps")
+                else None
+            ),
+            worker_disk_write_bps=(
+                args.worker_disk_write_bps
+                if hasattr(args, "worker_disk_write_bps")
+                else None
+            ),
+            worker_disk_read_iops=(
+                args.worker_disk_read_iops
+                if hasattr(args, "worker_disk_read_iops")
+                else None
+            ),
+            worker_disk_write_iops=(
+                args.worker_disk_write_iops
+                if hasattr(args, "worker_disk_write_iops")
+                else None
+            ),
+            probe_disk=args.probe_disk if hasattr(args, "probe_disk") else True,
         )
 
         if args.pbt_session:
