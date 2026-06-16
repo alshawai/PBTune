@@ -484,3 +484,91 @@ def test_truncation_selection_returns_empty_when_no_dead_and_no_ready() -> None:
     )
 
     assert pairs == []
+
+
+def test_truncation_selection_uses_whole_population_as_quantile_basis() -> None:
+    """Quantile is computed against the entire population (Jaderberg 2017 §4.1.1).
+
+    Regression: previously the basis was ``ready_workers`` when any
+    worker was ready, shrinking the quantile cohort when the population
+    was only partially warmed up. The paper ranks ALL agents.
+    """
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=2,
+        )
+        for idx in range(12)
+    ]
+
+    # Mark 8 of 12 ready; the other 4 are still warming up.
+    for idx in range(8):
+        workers[idx].step_count = 2
+    for idx in range(8, 12):
+        workers[idx].step_count = 1
+
+    # Spread distinct scores so ranking is deterministic.
+    for idx, worker in enumerate(workers):
+        worker.performance_score = 10.0 + idx  # all non-dead
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.25,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    # Whole-population basis: int(12 * 0.25) = 3 elites, bottom 3 candidates.
+    # Bottom 3 worker_ids by score are {0, 1, 2}; all three have step_count=2
+    # and is_ready(), so all three should pair this generation.
+    poor_ids = {workers[poor_idx].worker_id for poor_idx, _ in pairs}
+    elite_ids = {workers[elite_idx].worker_id for _, elite_idx in pairs}
+
+    assert poor_ids == {0, 1, 2}
+    # Elites: top 3 of the whole population = {9, 10, 11}.
+    assert elite_ids.issubset({9, 10, 11})
+    assert len(pairs) == 3
+
+
+def test_truncation_selection_elite_can_be_unready_when_ranked_top() -> None:
+    """Elites are drawn from any non-dead worker, regardless of readiness.
+
+    The paper's truncation rule samples the top quantile from the
+    population ranking — readiness gates whether a poor worker exploits
+    this generation, not whether a high-scorer is a valid donor.
+    """
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=3,
+        )
+        for idx in range(10)
+    ]
+
+    # Bottom 5 are ready, top 5 are NOT ready (still warming).
+    for idx in range(5):
+        workers[idx].step_count = 3  # ready
+        workers[idx].performance_score = 10.0 + idx  # 10..14
+    for idx in range(5, 10):
+        workers[idx].step_count = 1  # not ready
+        workers[idx].performance_score = 50.0 + idx  # 55..59
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.2,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    # int(10 * 0.2) = 2. Elites = top 2 of all = {8, 9} (unready but high).
+    # Poor pool = bottom 2 of all = {0, 1}, both ready.
+    elite_ids = {workers[elite_idx].worker_id for _, elite_idx in pairs}
+    poor_ids = {workers[poor_idx].worker_id for poor_idx, _ in pairs}
+
+    assert elite_ids.issubset({8, 9})
+    assert poor_ids == {0, 1}
+    assert len(pairs) == 2

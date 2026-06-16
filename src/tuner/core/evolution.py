@@ -49,9 +49,15 @@ def truncation_selection(
     """
     Identify which workers should exploit (copy from) which elite workers.
 
-    This implements the "truncation selection" strategy from the PBT paper.
-    Workers are ranked by performance, and poor performers are paired with
-    elite performers for exploitation.
+    Paper-aligned implementation of truncation selection from
+    Jaderberg et al. (2017), §4.1.1: "rank all agents in the population by
+    [score]. If the current agent is in the bottom 20% of the population, we
+    sample another agent uniformly from the top 20% of the population, and
+    copy its weights and hyperparameters." Both the bottom and top quantiles
+    are computed against the **whole population**; ``require_ready`` is the
+    per-member eligibility gate that decides whether a bottom-quantile
+    worker actually undergoes exploit-and-explore in this generation, not a
+    basis-resizing knob.
 
     Parameters
     ----------
@@ -59,17 +65,19 @@ def truncation_selection(
         The population of workers
 
     exploit_quantile : float
-        Fraction of population to exploit/be exploited
-        Default: 0.2 (bottom 20% copy from top 20%)
+        Fraction of the whole population that defines the bottom/top
+        quantile bands. Default: 0.2 (bottom 20% copies from top 20%).
+        Cohort size per generation is ``max(1, int(len(workers) * q))``.
 
     require_ready : bool
-        If True, only consider ready workers for exploitation
-        Default: True (prevents exploiting workers still warming up)
+        If True, a non-dead worker enters the poor pool only when it is in
+        the bottom quantile AND ``is_ready()``. Dead workers bypass this
+        gate and are always rescued. Default: True.
 
     dead_config_threshold : float
         Score threshold below which a worker is treated as a dead config.
-        Dead workers are always included in rescue (poor pool), bypassing
-        ready gating and quantile limits.
+        Dead workers are always added to the poor pool (rescue), and are
+        never selected as elites.
 
     Returns
     -------
@@ -91,73 +99,54 @@ def truncation_selection(
         return []
 
     dead_workers = [w for w in workers if w.performance_score < dead_config_threshold]
-
-    if require_ready:
-        ready_workers = [w for w in workers if w.is_ready()]
-    else:
-        ready_workers = workers
-
-    # Dead workers are always eligible for rescue, even before they (or any
-    # donor) reach ``ready_interval``. Returning here would skip rescue
-    # entirely during the warm-up window and leave broken instances in
-    # place until the population coincidentally has enough ready members.
-    # The elite-fallback below already promotes non-ready non-dead workers
-    # when no ready elites exist.
-    if len(ready_workers) < 2 and not dead_workers:
-        return []
-
-    quantile_basis = ready_workers if ready_workers else workers
-    quantile_size = max(1, int(len(quantile_basis) * exploit_quantile))
-
-    ready_non_dead = [
-        w for w in ready_workers if w.performance_score >= dead_config_threshold
+    non_dead_workers = [
+        w for w in workers if w.performance_score >= dead_config_threshold
     ]
-    elite_candidates = ready_non_dead.copy()
 
-    if not elite_candidates:
-        elite_candidates = [
-            w for w in workers if w.performance_score >= dead_config_threshold
-        ]
-        if require_ready and elite_candidates:
-            LOGGER.warning(
-                "No ready non-dead workers available for elites; "
-                "falling back to non-dead workers regardless of readiness"
-            )
-
-    if not elite_candidates:
+    if not non_dead_workers:
         LOGGER.warning("No non-dead workers available; skipping exploit-explore rescue")
         return []
 
-    sorted_elites = sorted(
-        elite_candidates, key=lambda w: w.performance_score, reverse=True
-    )
-    elite_workers = sorted_elites[: min(quantile_size, len(sorted_elites))]
+    if require_ready:
+        ready_non_dead = [w for w in non_dead_workers if w.is_ready()]
+    else:
+        ready_non_dead = non_dead_workers
 
-    normal_poor_workers: List[Worker] = []
-    normal_quantile_size = 0
-    if ready_non_dead:
-        normal_quantile_size = quantile_size
-        sorted_ready_non_dead = sorted(
-            ready_non_dead, key=lambda w: w.performance_score, reverse=False
-        )
-        normal_poor_workers = sorted_ready_non_dead[:normal_quantile_size]
+    # Nothing to do if there's neither a dead worker to rescue nor a ready
+    # candidate to enter the bottom quantile.
+    if not dead_workers and not ready_non_dead:
+        return []
+
+    # Paper-aligned basis: rank against the WHOLE population, not the ready
+    # subset. Jaderberg et al. (2017), §4.1.1: "rank all agents in the
+    # population ... bottom 20% ... top 20%". The ready gate is a per-member
+    # eligibility filter on the poor side, not a basis-resizing knob.
+    quantile_size = max(1, int(len(workers) * exploit_quantile))
+
+    # Top quantile: drawn from any non-dead worker, regardless of readiness.
+    # The paper picks elites from the whole-population ranking; with a dead
+    # threshold added on top, we exclude crashed workers so we never copy
+    # from a broken donor.
+    sorted_non_dead_desc = sorted(
+        non_dead_workers, key=lambda w: w.performance_score, reverse=True
+    )
+    elite_workers = sorted_non_dead_desc[: min(quantile_size, len(sorted_non_dead_desc))]
+
+    # Bottom quantile: rank ALL workers ascending and take the bottom
+    # quantile_size. A worker is eligible to exploit only if it is also
+    # ready and non-dead (paper requires ``ready`` per-member eligibility).
+    # Dead workers are always rescued regardless of where they rank.
+    sorted_all_asc = sorted(workers, key=lambda w: w.performance_score)
+    bottom_quantile_ids = {w.worker_id for w in sorted_all_asc[:quantile_size]}
+    poor_normal = [
+        w for w in ready_non_dead if w.worker_id in bottom_quantile_ids
+    ]
 
     elite_worker_ids = {w.worker_id for w in elite_workers}
     poor_workers: List[Worker] = []
-    seen_worker_ids = set()
+    seen_worker_ids: set = set()
 
-    target_poor_count = max(len(dead_workers), normal_quantile_size)
-    candidate_workers = dead_workers.copy()
-
-    if len(candidate_workers) < target_poor_count:
-        for worker in normal_poor_workers:
-            if worker.worker_id in {w.worker_id for w in candidate_workers}:
-                continue
-            candidate_workers.append(worker)
-            if len(candidate_workers) >= target_poor_count:
-                break
-
-    for worker in candidate_workers:
+    for worker in list(dead_workers) + poor_normal:
         if worker.worker_id in seen_worker_ids:
             continue
         if worker.worker_id in elite_worker_ids:
