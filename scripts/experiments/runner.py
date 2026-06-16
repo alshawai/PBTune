@@ -10,15 +10,55 @@ from src.utils.hardware_info import detect_worker_resources
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RESULTS_DIR = PROJECT_ROOT / "results"
-MANIFEST_PATH = RESULTS_DIR / "experiment_manifest.json"
+DEFAULT_MANIFEST_DIR = RESULTS_DIR / "manifests"
+LEGACY_MANIFEST_PATH = RESULTS_DIR / "experiment_manifest.json"
+# Back-compat alias: legacy callers (e.g. __main__'s --status) import
+# MANIFEST_PATH directly. The runner no longer writes here by default.
+MANIFEST_PATH = LEGACY_MANIFEST_PATH
 
 LOGGER = logging.getLogger("ExperimentRunner")
 
+
+def _empty_manifest() -> dict:
+    return {
+        "started_at": datetime.utcnow().isoformat() + "Z",
+        "runs": {},
+    }
+
+
 class ExperimentRunner:
-    def __init__(self, dry_run: bool = False, no_push: bool = False):
+    def __init__(
+        self,
+        dry_run: bool = False,
+        no_push: bool = False,
+        manifest_dir: Path | None = None,
+        manifest_path: Path | None = None,
+    ):
+        """Run experiments and persist progress to per-experiment manifests.
+
+        Parameters
+        ----------
+        manifest_dir
+            Directory holding one ``<experiment_id>.json`` per experiment.
+            Defaults to ``results/manifests/``.
+        manifest_path
+            Explicit single-file override. When set, every experiment
+            shares this file (legacy single-manifest behavior). Takes
+            precedence over ``manifest_dir``.
+        """
         self.dry_run = dry_run
         self.no_push = no_push
-        self.manifest = self._load_manifest()
+        self.manifest_dir = manifest_dir or DEFAULT_MANIFEST_DIR
+        self.manifest_path_override = manifest_path
+
+        # Active experiment's manifest, populated by run_experiment().
+        self._active_manifest_path: Path | None = None
+        self._active_manifest: dict = _empty_manifest()
+
+        # Read-only cross-manifest index for warm-start lookups (a source
+        # experiment may live in a different manifest file, possibly
+        # written by a peer machine and pulled via git).
+        self._cross_manifest_index = self._build_cross_manifest_index()
         
         # Calculate resources once
         resources = detect_worker_resources(max_parallel_workers=8, threshold=0.95)
@@ -33,19 +73,73 @@ class ExperimentRunner:
                 format="%(asctime)s [%(levelname)s] %(message)s"
             )
 
-    def _load_manifest(self) -> dict:
-        if MANIFEST_PATH.exists():
-            return json.loads(MANIFEST_PATH.read_text())
-        return {
-            "started_at": datetime.utcnow().isoformat() + "Z",
-            "runs": {}
-        }
+    def _resolve_manifest_path(self, exp_id: str) -> Path:
+        """Resolve the manifest path for ``exp_id``.
+
+        Precedence: ``--manifest`` override > per-experiment derived
+        path under ``manifest_dir``.
+        """
+        if self.manifest_path_override is not None:
+            return self.manifest_path_override
+        return self.manifest_dir / f"{exp_id}.json"
+
+    def _paths_to_stage(self, exp_id: str) -> list[str]:
+        """Compute the git pathspecs to stage for ``exp_id``'s commit.
+
+        Returns paths relative to ``RESULTS_DIR``. Restricting to these
+        avoids ``git add -A`` picking up an in-flight peer-machine write
+        — the original source of merge conflicts on the results repo.
+        """
+        paths: list[str] = []
+        if self._active_manifest_path is not None:
+            try:
+                paths.append(
+                    str(self._active_manifest_path.relative_to(RESULTS_DIR))
+                )
+            except ValueError:
+                # Manifest path lives outside RESULTS_DIR (legacy override
+                # pointing elsewhere). Skip — caller will still commit
+                # the per-experiment result subtree.
+                pass
+        # Experiment id is also the conventional result-subtree prefix.
+        paths.append(exp_id)
+        return paths
+
+    def _load_manifest(self, path: Path) -> dict:
+        if path.exists():
+            return json.loads(path.read_text())
+        return _empty_manifest()
 
     def _save_manifest(self) -> None:
-        if self.dry_run:
+        if self.dry_run or self._active_manifest_path is None:
             return
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        MANIFEST_PATH.write_text(json.dumps(self.manifest, indent=2))
+        self._active_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        self._active_manifest_path.write_text(
+            json.dumps(self._active_manifest, indent=2)
+        )
+
+    def _build_cross_manifest_index(self) -> dict:
+        """Aggregate every manifest's ``runs`` for read-only lookups.
+
+        Used by warm-start resolution. We never write through this
+        index — the active experiment's manifest is the only file the
+        runner mutates, so peer machines never collide on writes.
+        """
+        merged: dict = {}
+        if LEGACY_MANIFEST_PATH.exists():
+            try:
+                legacy = json.loads(LEGACY_MANIFEST_PATH.read_text())
+                merged.update(legacy.get("runs", {}))
+            except (json.JSONDecodeError, OSError) as exc:
+                LOGGER.warning("Could not read legacy manifest: %s", exc)
+        if self.manifest_dir.exists():
+            for path in sorted(self.manifest_dir.glob("*.json")):
+                try:
+                    data = json.loads(path.read_text())
+                    merged.update(data.get("runs", {}))
+                except (json.JSONDecodeError, OSError) as exc:
+                    LOGGER.warning("Could not read manifest %s: %s", path, exc)
+        return merged
 
     def _run_command(self, cmd: list[str], cwd: Path = PROJECT_ROOT) -> bool:
         if self.dry_run:
@@ -65,7 +159,7 @@ class ExperimentRunner:
             return
             
         try:
-            subprocess.run(["git", "add", "-A"], cwd=RESULTS_DIR, check=True)
+            subprocess.run(["git", "add", "--", *self._paths_to_stage(exp_id)], cwd=RESULTS_DIR, check=True)
             status = subprocess.run(
                 ["git", "diff", "--cached", "--quiet"], 
                 cwd=RESULTS_DIR
@@ -91,7 +185,7 @@ class ExperimentRunner:
         return f"{exp_id}/seed_{seed}/{phase}"
 
     def _is_done(self, key: str, retry_failed: bool = False) -> bool:
-        run_data = self.manifest["runs"].get(key, {})
+        run_data = self._active_manifest["runs"].get(key, {})
         status = run_data.get("status")
         if status == "done":
             return True
@@ -100,14 +194,23 @@ class ExperimentRunner:
         return False
 
     def _mark_status(self, key: str, status: str, **kwargs) -> None:
-        if key not in self.manifest["runs"]:
-            self.manifest["runs"][key] = {}
-        self.manifest["runs"][key]["status"] = status
-        self.manifest["runs"][key].update(kwargs)
+        if key not in self._active_manifest["runs"]:
+            self._active_manifest["runs"][key] = {}
+        self._active_manifest["runs"][key]["status"] = status
+        self._active_manifest["runs"][key].update(kwargs)
         self._save_manifest()
 
     def run_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
         LOGGER.info(f"Starting experiment {exp.id} (Tier {exp.tier})")
+
+        # Activate this experiment's own manifest. All writes during
+        # this call go to a single file owned by this experiment, so
+        # peer machines running other experiments never compete on it.
+        self._active_manifest_path = self._resolve_manifest_path(exp.id)
+        self._active_manifest = self._load_manifest(self._active_manifest_path)
+        # Refresh the cross-manifest index so the active experiment's
+        # own writes don't shadow peer manifests pulled since startup.
+        self._cross_manifest_index = self._build_cross_manifest_index()
         
         for seed in exp.seeds:
             LOGGER.info(f"=== {exp.id} | Seed {seed} ===")
@@ -138,7 +241,7 @@ class ExperimentRunner:
                     continue
             else:
                 LOGGER.info(f"Skipping PBT (already done/failed)")
-                json_str = self.manifest["runs"][pbt_key].get("session_json")
+                json_str = self._active_manifest["runs"][pbt_key].get("session_json")
                 pbt_session_path = PROJECT_ROOT / json_str if json_str else None
 
             # 2. BO Phase (only if enabled)
@@ -169,7 +272,7 @@ class ExperimentRunner:
                             continue
                 else:
                     LOGGER.info(f"Skipping BO (already done/failed)")
-                    json_str = self.manifest["runs"].get(bo_key, {}).get("session_json")
+                    json_str = self._active_manifest["runs"].get(bo_key, {}).get("session_json")
                     bo_session_path = PROJECT_ROOT / json_str if json_str else None
             
             # 3. EVAL Phase
@@ -212,7 +315,9 @@ class ExperimentRunner:
         source_key = self._get_run_key(
             exp.warm_start_source, exp.warm_start_source_seed, "pbt"
         )
-        source_run = self.manifest["runs"].get(source_key, {})
+        # Cross-manifest read: source experiment may live in its own
+        # per-experiment manifest (possibly pulled from a peer machine).
+        source_run = self._cross_manifest_index.get(source_key, {})
         if source_run.get("status") != "done":
             LOGGER.error(
                 "Warm-start source %s/seed_%d/pbt is not done (status=%s). "
