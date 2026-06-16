@@ -227,6 +227,12 @@ class ComparisonRunner:
                 eval_ref_version,
             )
 
+        # Score both arms (default vs tuned) under the STATIC workload-feature
+        # prior, not the PBT session's drifted vector. PBT refines features
+        # via EMA every generation; using its drifted vector to grade the
+        # head-to-head bakes whatever direction PBT happened to drift into
+        # the rubric, which is asymmetric since the default arm never had a
+        # chance to influence those features.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -234,7 +240,7 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
-            workload_features=session.workload_features,
+            workload_features=None,
         )
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
@@ -375,6 +381,13 @@ class ComparisonRunner:
             [r for arm_runs in runs_by_arm.values() for r in arm_runs],
             key=lambda r: (r.run_number, r.order_in_pair, r.config_type),
         )
+        # Multi-arm head-to-head: score every arm under the SAME static
+        # workload-feature prior. Using the PBT session's drifted vector
+        # (refined via EMA every generation during PBT training) would
+        # give PBT a co-adapted rubric while BO is graded on a vector it
+        # never trained against. workload_features=None falls back to the
+        # workload-type-conditioned base prior in create_metric_config,
+        # which is symmetric across arms.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -382,7 +395,7 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
-            workload_features=pbt_session.workload_features,
+            workload_features=None,
         )
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
