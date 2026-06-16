@@ -111,6 +111,22 @@ class BOBaselineRunner:
                 ram_bytes=int(config.pbt_worker_resources.get("ram_bytes", 0)),
                 cpu_cores=int(config.pbt_worker_resources.get("cpu_cores", 1)),
                 disk_type=str(config.pbt_worker_resources.get("disk_type", "unknown")),
+                disk_read_bps=int(
+                    config.pbt_worker_resources.get("disk_read_bps", 0) or 0
+                ),
+                disk_write_bps=int(
+                    config.pbt_worker_resources.get("disk_write_bps", 0) or 0
+                ),
+                disk_read_iops=int(
+                    config.pbt_worker_resources.get("disk_read_iops", 0) or 0
+                ),
+                disk_write_iops=int(
+                    config.pbt_worker_resources.get("disk_write_iops", 0) or 0
+                ),
+                disk_class=str(
+                    config.pbt_worker_resources.get("disk_class", "unknown")
+                    or "unknown"
+                ),
             )
             self.logger.info(
                 "Using PBT-derived per-worker resources: %d cores, %.1f GB RAM",
@@ -120,12 +136,25 @@ class BOBaselineRunner:
             self.logger.debug(
                 "PBT-derived worker resources object: %s", self.worker_resources
             )
-        elif config.worker_ram is not None or config.worker_cpus is not None:
+        elif config.worker_ram is not None or config.worker_cpus is not None or any(
+            v is not None
+            for v in (
+                config.worker_disk_read_bps,
+                config.worker_disk_write_bps,
+                config.worker_disk_read_iops,
+                config.worker_disk_write_iops,
+            )
+        ):
             self.worker_resources = resolve_manual_worker_resources(
                 worker_ram=config.worker_ram,
                 worker_cpus=config.worker_cpus,
                 num_workers=config.resource_division,
                 data_path=self.data_root,
+                worker_disk_read_bps=config.worker_disk_read_bps,
+                worker_disk_write_bps=config.worker_disk_write_bps,
+                worker_disk_read_iops=config.worker_disk_read_iops,
+                worker_disk_write_iops=config.worker_disk_write_iops,
+                probe_disk=config.probe_disk,
             )
             self.logger.info(
                 "Using manual per-worker resources: "
@@ -134,7 +163,9 @@ class BOBaselineRunner:
             )
         else:
             self.worker_resources = detect_worker_resources(
-                max_parallel_workers=config.resource_division, data_path=self.data_root
+                max_parallel_workers=config.resource_division,
+                data_path=self.data_root,
+                probe_disk=config.probe_disk,
             )
             self.logger.info(
                 "Dividing host resources by %s: %d cores, %.1f GB RAM per instance",
@@ -1687,6 +1718,51 @@ def main():
             "When set, bypasses auto-detection. Total across all workers must "
             "not exceed host physical CPU cores."
         ),
+    )
+    parser.add_argument(
+        "--worker-disk-read-bps",
+        type=int,
+        default=None,
+        help=(
+            "Per-worker disk read bandwidth in bytes/sec (cgroup blkio / io.max). "
+            "When unset, auto-detected via fio probe (when available) or heuristic."
+        ),
+    )
+    parser.add_argument(
+        "--worker-disk-write-bps",
+        type=int,
+        default=None,
+        help="Per-worker disk write bandwidth in bytes/sec.",
+    )
+    parser.add_argument(
+        "--worker-disk-read-iops",
+        type=int,
+        default=None,
+        help="Per-worker disk read IOPS ceiling.",
+    )
+    parser.add_argument(
+        "--worker-disk-write-iops",
+        type=int,
+        default=None,
+        help="Per-worker disk write IOPS ceiling.",
+    )
+    probe_group = parser.add_mutually_exclusive_group()
+    probe_group.add_argument(
+        "--probe-disk",
+        dest="probe_disk",
+        action="store_true",
+        default=True,
+        help=(
+            "Run a short fio probe at startup to calibrate per-worker disk "
+            "I/O budget. Falls back to heuristic when fio is unavailable. "
+            "Default: enabled."
+        ),
+    )
+    probe_group.add_argument(
+        "--no-probe-disk",
+        dest="probe_disk",
+        action="store_false",
+        help="Skip the fio probe and use heuristic disk I/O budget directly.",
     )
     parser.add_argument(
         "--scoring-policy",

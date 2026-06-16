@@ -112,6 +112,11 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         ram_bytes=int(wr_raw["ram_bytes"]),
         cpu_cores=int(wr_raw["cpu_cores"]),
         disk_type=str(wr_raw["disk_type"]),
+        disk_read_bps=int(wr_raw.get("disk_read_bps", 0) or 0),
+        disk_write_bps=int(wr_raw.get("disk_write_bps", 0) or 0),
+        disk_read_iops=int(wr_raw.get("disk_read_iops", 0) or 0),
+        disk_write_iops=int(wr_raw.get("disk_write_iops", 0) or 0),
+        disk_class=str(wr_raw.get("disk_class", "unknown") or "unknown"),
     )
 
     if worker_resources.ram_bytes <= 0:
