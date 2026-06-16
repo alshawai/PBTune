@@ -76,7 +76,7 @@ class ExperimentRunner:
                 
             msg = f"results({exp_id}): {phase} seed={seed}"
             subprocess.run(["git", "commit", "-m", msg], cwd=RESULTS_DIR, check=True)
-            subprocess.run(["git", "push", "main", "main"], cwd=RESULTS_DIR, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=RESULTS_DIR, check=True)
             LOGGER.info(f"Successfully pushed {msg} to PBTune-experiments")
         except subprocess.CalledProcessError as e:
             LOGGER.error(f"Failed to commit/push results: {e}")
