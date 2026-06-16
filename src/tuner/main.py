@@ -1106,9 +1106,27 @@ class PBTTuner:
                     "Initializing %d workers configurations",
                     self.pbt_config.population_size,
                 )
-                initial_configs = self.full_knob_space.sample_diverse_configs(
-                    num_samples=self.pbt_config.population_size, seed=self.random_seed
+                # Mirror BO's pilot-seed convention: worker 0 starts from
+                # the PostgreSQL default config so both algorithms share the
+                # same known-reasonable anchor. Without this, BO has a free
+                # default-config pilot observation (bo_baseline/runner.py
+                # prepends it to its Sobol pilot) while PBT's LHS gives no
+                # such guarantee. Slot 0 is consumed by the default; the
+                # remaining (population_size - 1) slots are filled by LHS
+                # for diverse coverage.
+                default_config = self.full_knob_space.get_default_config()
+                lhs_configs = self.full_knob_space.sample_diverse_configs(
+                    num_samples=self.pbt_config.population_size,
+                    seed=self.random_seed,
                 )
+                # Prepend default, drop any LHS sample that exactly matches
+                # it (defensive — extremely unlikely under continuous LHS
+                # but possible with all-categorical knob subsets), slice to
+                # the requested population size.
+                initial_configs = [default_config] + [
+                    c for c in lhs_configs if c != default_config
+                ]
+                initial_configs = initial_configs[: self.pbt_config.population_size]
                 self.population.initialize(
                     initial_configs=initial_configs, random_seed=self.random_seed
                 )
