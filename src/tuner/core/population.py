@@ -219,6 +219,13 @@ class Population:
         self._restore_due_this_gen: bool = False
 
         self._ranges_calibrated: bool = False
+        # One-shot flag: True for the single train_generation cycle in which
+        # the normalizer transitions from uncalibrated to calibrated. Set
+        # inside update_metric_ranges_if_needed(); consumed (and reset) by
+        # _finalize_scores() to force a rescore so historical worker scores
+        # — computed against the pre-calibration normalizer — are realigned
+        # to the freshly-fit anchors.
+        self._just_calibrated: bool = False
         self._features_refined: bool = False
 
         LOGGER.info(
@@ -780,6 +787,7 @@ class Population:
                 LOGGER.warning("➤ Failed to update metric ranges: %s", e)
 
         self._ranges_calibrated = True
+        self._just_calibrated = True
         LOGGER.info("➤ Metric normalization ranges updated successfully")
 
     def _build_worker_metric_payload_from_metrics(
@@ -1166,13 +1174,21 @@ class Population:
         if ranges_expanded:
             LOGGER.debug(" ➤ Saturation/drift detected: expanded normalizer ranges")
 
+        # First-time calibration is a stronger event than incremental range
+        # expansion: every worker's recorded score was computed against the
+        # pre-calibration normalizer, so we must force a rescore to realign
+        # them with the freshly-fit anchors. Treat it as a ranges-changed
+        # signal for the weights-update path as well.
+        just_calibrated = self._just_calibrated
+        self._just_calibrated = False  # consume the one-shot flag
+
         weights_updated = self.orchestrator.maybe_update_feature_weights(  # type: ignore
             self.current_generation,
-            force=ranges_expanded,
+            force=ranges_expanded or just_calibrated,
             log_every=5,
         )
 
-        if not (ranges_expanded or weights_updated):
+        if not (ranges_expanded or weights_updated or just_calibrated):
             self._determine_overall_best(best_current)
 
             LOGGER.debug(
@@ -1183,11 +1199,13 @@ class Population:
             return
 
         LOGGER.debug(
-            " %sRescoring required%s - ranges_expanded=%s, features_refined=%s, ",
+            " %sRescoring required%s - ranges_expanded=%s, features_refined=%s, "
+            "just_calibrated=%s",
             COLORS.bold,
             COLORS.reset,
             ranges_expanded,
             weights_updated,
+            just_calibrated,
         )
         significant_changes = 0
         engine = self.orchestrator.scorer  # type: ignore
