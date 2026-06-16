@@ -171,8 +171,6 @@ class WorkloadFeatureExtractor:
             "oltp_write_only": (0.10, 0.90),
         }.get(mode, (0.75, 0.25))
 
-        cpu = max(float(cpu_cores), 1.0)
-        concurrency = max(float(threads), 1.0) / cpu
         total_rows = float(max(table_size, 1) * max(tables, 1))
 
         return {
@@ -182,7 +180,7 @@ class WorkloadFeatureExtractor:
             "join_intensity": 0.0,
             "aggregation_intensity": 0.05,
             "sort_intensity": 0.10,
-            "concurrency_pressure": float(min(concurrency, 8.0) / 8.0),
+            "concurrency_pressure": float(min(max(threads, 1) / 16.0, 1.0)),
             "working_set_millions": total_rows / 1_000_000.0,
             "query_mix_entropy": 0.50,
             "tail_latency_sensitivity": 0.55,

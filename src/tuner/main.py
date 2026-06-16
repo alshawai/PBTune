@@ -390,18 +390,19 @@ class PBTTuner:
                 script=script,
             )
 
+            sysbench_threads = int(getattr(workload_executor, "threads", 8))
             LOGGER.info(
                 "Extracting workload features from Sysbench (script='%s', threads=%d, "
                 "cpu_cores=%d, tables=%d, table_size=%d)",
                 script,
-                self.pbt_config.num_parallel_workers,
+                sysbench_threads,
                 int(self.worker_resources.cpu_cores or 1),
                 tables,
                 table_size,
             )
             self.workload_features = self.feature_extractor.extract_sysbench_features(
                 script=script,
-                threads=self.pbt_config.num_parallel_workers,
+                threads=sysbench_threads,
                 cpu_cores=int(self.worker_resources.cpu_cores or 1),
                 table_size=table_size,
                 tables=tables,
