@@ -51,6 +51,7 @@ def _make_environment() -> DockerEnvironment:
     env.base_dir = Path("/tmp")
     env.container_prefix = "pbt-worker"
     env.force_recreate_baseline = False
+    env.data_device_node = None
     env.instances = {
         0: InstanceConfig(
             worker_id=0, port=5440, data_dir=Path("/tmp/worker_0"), running=True
@@ -111,6 +112,70 @@ def test_worker_cpuset_cpus_uses_budget_only(mock_cpu_count: MagicMock) -> None:
     # Batch 2: workers 2-3 (sequential to batch 1, so they cycle back to same CPUs)
     assert env._worker_cpuset_cpus(worker_id=2, num_workers=4) == "0,1"
     assert env._worker_cpuset_cpus(worker_id=3, num_workers=4) == "2,3"
+
+
+def test_container_runtime_kwargs_includes_blkio_when_resources_set() -> None:
+    """blkio kwargs are emitted when worker_resources carry a non-zero budget."""
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+        disk_read_bps=20_000_000,
+        disk_write_bps=10_000_000,
+        disk_read_iops=5_000,
+        disk_write_iops=3_000,
+        disk_class="sata_ssd",
+    )
+    env.data_device_node = "/dev/sda"
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert kwargs["device_read_bps"] == [{"Path": "/dev/sda", "Rate": 20_000_000}]
+    assert kwargs["device_write_bps"] == [{"Path": "/dev/sda", "Rate": 10_000_000}]
+    assert kwargs["device_read_iops"] == [{"Path": "/dev/sda", "Rate": 5_000}]
+    assert kwargs["device_write_iops"] == [{"Path": "/dev/sda", "Rate": 3_000}]
+
+
+def test_container_runtime_kwargs_omits_blkio_when_zero_budget() -> None:
+    """blkio kwargs absent when WorkerResources keeps disk fields at default 0."""
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+    )
+    env.data_device_node = "/dev/sda"
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert "device_read_bps" not in kwargs
+    assert "device_write_bps" not in kwargs
+    assert "device_read_iops" not in kwargs
+    assert "device_write_iops" not in kwargs
+
+
+def test_container_runtime_kwargs_omits_blkio_when_no_device_node() -> None:
+    """Never emit blkio kwargs when the device node couldn't be resolved.
+
+    This is the safe path on tmpfs / overlayfs / non-Linux hosts where
+    Docker would otherwise reject the kwarg with an unparseable Path.
+    """
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+        disk_write_bps=10_000_000,
+    )
+    env.data_device_node = None
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert "device_read_bps" not in kwargs
+    assert "device_write_bps" not in kwargs
+    assert "device_read_iops" not in kwargs
+    assert "device_write_iops" not in kwargs
 
 
 def test_restore_snapshot_returns_false_when_image_missing() -> None:

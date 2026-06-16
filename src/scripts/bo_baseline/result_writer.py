@@ -344,6 +344,11 @@ def write_bo_results(
             "ram_bytes": worker_resources.ram_bytes,
             "cpu_cores": worker_resources.cpu_cores,
             "disk_type": worker_resources.disk_type,
+            "disk_read_bps": worker_resources.disk_read_bps,
+            "disk_write_bps": worker_resources.disk_write_bps,
+            "disk_read_iops": worker_resources.disk_read_iops,
+            "disk_write_iops": worker_resources.disk_write_iops,
+            "disk_class": worker_resources.disk_class,
         },
         "generation_history": generation_history,
         "bootstrap_breakdown": (

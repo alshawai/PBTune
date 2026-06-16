@@ -320,18 +320,43 @@ class PBTTuner:
 
         worker_ram_str = kwargs.get("worker_ram")
         worker_cpus = kwargs.get("worker_cpus")
+        worker_disk_read_bps = kwargs.get("worker_disk_read_bps")
+        worker_disk_write_bps = kwargs.get("worker_disk_write_bps")
+        worker_disk_read_iops = kwargs.get("worker_disk_read_iops")
+        worker_disk_write_iops = kwargs.get("worker_disk_write_iops")
+        probe_disk = bool(kwargs.get("probe_disk", True))
 
-        if worker_ram_str is not None or worker_cpus is not None:
+        manual_disk_provided = any(
+            v is not None
+            for v in (
+                worker_disk_read_bps,
+                worker_disk_write_bps,
+                worker_disk_read_iops,
+                worker_disk_write_iops,
+            )
+        )
+
+        if (
+            worker_ram_str is not None
+            or worker_cpus is not None
+            or manual_disk_provided
+        ):
             self.worker_resources = resolve_manual_worker_resources(
                 worker_ram=worker_ram_str,
                 worker_cpus=worker_cpus,
                 num_workers=self.pbt_config.num_parallel_workers,
                 data_path=self.data_root,
+                worker_disk_read_bps=worker_disk_read_bps,
+                worker_disk_write_bps=worker_disk_write_bps,
+                worker_disk_read_iops=worker_disk_read_iops,
+                worker_disk_write_iops=worker_disk_write_iops,
+                probe_disk=probe_disk,
             )
         else:
             self.worker_resources = detect_worker_resources(
                 self.pbt_config.num_parallel_workers,
                 data_path=self.data_root,
+                probe_disk=probe_disk,
             )
 
         LOGGER.info(
@@ -1327,6 +1352,11 @@ class PBTTuner:
                 "ram_bytes": worker_resources.ram_bytes,  # type: ignore
                 "cpu_cores": worker_resources.cpu_cores,  # type: ignore
                 "disk_type": worker_resources.disk_type,  # type: ignore
+                "disk_read_bps": worker_resources.disk_read_bps,  # type: ignore
+                "disk_write_bps": worker_resources.disk_write_bps,  # type: ignore
+                "disk_read_iops": worker_resources.disk_read_iops,  # type: ignore
+                "disk_write_iops": worker_resources.disk_write_iops,  # type: ignore
+                "disk_class": worker_resources.disk_class,  # type: ignore
             },
             "warm_start": self.warm_start_provenance,
             "generation_history": convert_numpy_types(self.generation_history),
@@ -1654,6 +1684,52 @@ on your hardware, configuration, and workload/benchmark.
             "When set, bypasses auto-detection. Total across all workers must "
             "not exceed host physical CPU cores."
         ),
+    )
+
+    config_group.add_argument(
+        "--worker-disk-read-bps",
+        type=int,
+        default=None,
+        help=(
+            "Per-worker disk read bandwidth in bytes/sec (cgroup blkio / io.max). "
+            "When unset, auto-detected via fio probe (when available) or heuristic."
+        ),
+    )
+    config_group.add_argument(
+        "--worker-disk-write-bps",
+        type=int,
+        default=None,
+        help="Per-worker disk write bandwidth in bytes/sec.",
+    )
+    config_group.add_argument(
+        "--worker-disk-read-iops",
+        type=int,
+        default=None,
+        help="Per-worker disk read IOPS ceiling.",
+    )
+    config_group.add_argument(
+        "--worker-disk-write-iops",
+        type=int,
+        default=None,
+        help="Per-worker disk write IOPS ceiling.",
+    )
+    probe_group = config_group.add_mutually_exclusive_group()
+    probe_group.add_argument(
+        "--probe-disk",
+        dest="probe_disk",
+        action="store_true",
+        default=True,
+        help=(
+            "Run a short fio probe at startup to calibrate per-worker disk "
+            "I/O budget. Falls back to heuristic when fio is unavailable. "
+            "Default: enabled."
+        ),
+    )
+    probe_group.add_argument(
+        "--no-probe-disk",
+        dest="probe_disk",
+        action="store_false",
+        help="Skip the fio probe and use heuristic disk I/O budget directly.",
     )
 
     config_group.add_argument(
@@ -2128,6 +2204,11 @@ def main():
             ablation_value=args.ablation_value,
             worker_ram=args.worker_ram,
             worker_cpus=args.worker_cpus,
+            worker_disk_read_bps=args.worker_disk_read_bps,
+            worker_disk_write_bps=args.worker_disk_write_bps,
+            worker_disk_read_iops=args.worker_disk_read_iops,
+            worker_disk_write_iops=args.worker_disk_write_iops,
+            probe_disk=args.probe_disk,
         )
 
         tuner.run()
