@@ -110,6 +110,11 @@ def fake_tuner(tmp_path):
         ram_bytes=8 * 1024**3,
         cpu_cores=4,
         disk_type="SSD",
+        disk_read_bps=100_000_000,
+        disk_write_bps=50_000_000,
+        disk_read_iops=10_000,
+        disk_write_iops=8_000,
+        disk_class="sata_ssd",
     )
 
     env = SimpleNamespace(

@@ -183,6 +183,19 @@ class WorkerResourceAllocation:
         Per-worker RAM budget in bytes.
     docker_memory_limit_bytes
         ``mem_limit`` enforced via Docker, or ``None`` for bare-metal.
+    disk_read_bps
+        Per-worker disk read bandwidth in bytes/sec enforced via cgroup
+        ``blkio``/``io.max``. ``0`` means unlimited.
+    disk_write_bps
+        Per-worker disk write bandwidth in bytes/sec. ``0`` means unlimited.
+    disk_read_iops
+        Per-worker disk read IOPS ceiling. ``0`` means unlimited.
+    disk_write_iops
+        Per-worker disk write IOPS ceiling. ``0`` means unlimited.
+    disk_device_path
+        Device node (e.g. ``/dev/sda`` or ``/dev/nvme0n1``) the blkio
+        limits target. ``None`` when blkio enforcement is unavailable
+        (bare-metal or device-node resolution failed).
     """
 
     worker_id: int
@@ -190,6 +203,11 @@ class WorkerResourceAllocation:
     cpuset_cpus: Optional[str]
     ram_bytes: int
     docker_memory_limit_bytes: Optional[int]
+    disk_read_bps: int = 0
+    disk_write_bps: int = 0
+    disk_read_iops: int = 0
+    disk_write_iops: int = 0
+    disk_device_path: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON output."""
@@ -199,6 +217,11 @@ class WorkerResourceAllocation:
             "cpuset_cpus": self.cpuset_cpus,
             "ram_bytes": self.ram_bytes,
             "docker_memory_limit_bytes": self.docker_memory_limit_bytes,
+            "disk_read_bps": self.disk_read_bps,
+            "disk_write_bps": self.disk_write_bps,
+            "disk_read_iops": self.disk_read_iops,
+            "disk_write_iops": self.disk_write_iops,
+            "disk_device_path": self.disk_device_path,
         }
 
 
