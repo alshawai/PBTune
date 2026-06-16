@@ -271,7 +271,6 @@ class ExperimentRunner:
             # flag makes that contract part of the experiment record.
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--cleanup-instances",
             "--worker-ram", self.worker_ram,
             "--worker-cpus", str(self.worker_cpus),
             "--verbose", "DEBUG"
@@ -330,7 +329,6 @@ class ExperimentRunner:
             "--enable-snapshots",
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--cleanup-instances",
             "--worker-ram", self.worker_ram,
             "--worker-cpus", str(self.worker_cpus),
             "--verbose", "INFO"
