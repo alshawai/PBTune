@@ -83,8 +83,32 @@ class ExperimentRunner:
             return self.manifest_path_override
         return self.manifest_dir / f"{exp_id}.json"
 
-    def _paths_to_stage(self, exp_id: str) -> list[str]:
-        """Compute the git pathspecs to stage for ``exp_id``'s commit.
+    def _workload_subtree(self, exp: Experiment) -> str:
+        """Return the workload-keyed result subdirectory (relative to
+        ``RESULTS_DIR``) where this experiment's PBT, BO, and eval
+        outputs land.
+
+        Matches the on-disk convention used by ``src.tuner.main``,
+        ``src.scripts.bo_baseline``, and ``src.evaluation``:
+
+        - ``benchmark="sysbench"`` → ``oltp/<sysbench_workload>``
+        - ``benchmark="tpch"``     → ``olap``
+
+        The previous implementation staged ``exp.id`` directly, which
+        ``git add`` rejected because the experiment id is a label
+        (e.g. ``t2_sysbench_ro``) — never a directory on disk.
+        """
+        if exp.benchmark == "tpch":
+            return "olap"
+        if exp.benchmark == "sysbench":
+            return f"oltp/{exp.sysbench_workload or 'oltp_read_write'}"
+        raise ValueError(
+            f"Cannot derive workload subtree for experiment {exp.id!r}: "
+            f"unknown benchmark {exp.benchmark!r}"
+        )
+
+    def _paths_to_stage(self, exp: Experiment) -> list[str]:
+        """Compute the git pathspecs to stage for ``exp``'s commit.
 
         Returns paths relative to ``RESULTS_DIR``. Restricting to these
         avoids ``git add -A`` picking up an in-flight peer-machine write
@@ -99,10 +123,10 @@ class ExperimentRunner:
             except ValueError:
                 # Manifest path lives outside RESULTS_DIR (legacy override
                 # pointing elsewhere). Skip — caller will still commit
-                # the per-experiment result subtree.
+                # the workload subtree below.
                 pass
-        # Experiment id is also the conventional result-subtree prefix.
-        paths.append(exp_id)
+        # Workload subtree is where every phase's output file lands.
+        paths.append(self._workload_subtree(exp))
         return paths
 
     def _load_manifest(self, path: Path) -> dict:
@@ -154,21 +178,21 @@ class ExperimentRunner:
             LOGGER.error(f"Command failed with exit code {e.returncode}: {' '.join(cmd)}")
             return False
 
-    def _commit_and_push(self, exp_id: str, seed: int, phase: str) -> None:
+    def _commit_and_push(self, exp: Experiment, seed: int, phase: str) -> None:
         if self.dry_run or self.no_push:
             return
-            
+
         try:
-            subprocess.run(["git", "add", "--", *self._paths_to_stage(exp_id)], cwd=RESULTS_DIR, check=True)
+            subprocess.run(["git", "add", "--", *self._paths_to_stage(exp)], cwd=RESULTS_DIR, check=True)
             status = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"], 
+                ["git", "diff", "--cached", "--quiet"],
                 cwd=RESULTS_DIR
             )
             if status.returncode == 0:
                 LOGGER.info("No changes to commit in results repo.")
                 return
-                
-            msg = f"results({exp_id}): {phase} seed={seed}"
+
+            msg = f"results({exp.id}): {phase} seed={seed}"
             subprocess.run(["git", "commit", "-m", msg], cwd=RESULTS_DIR, check=True)
             subprocess.run(["git", "push", "origin", "main"], cwd=RESULTS_DIR, check=True)
             LOGGER.info(f"Successfully pushed {msg} to PBTune-experiments")
@@ -233,7 +257,7 @@ class ExperimentRunner:
                     json_path = self._find_latest_session_json(RESULTS_DIR, "pbt_results_")
                     json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
                     self._mark_status(pbt_key, "done", duration_s=duration, session_json=json_str)
-                    self._commit_and_push(exp.id, seed, "pbt")
+                    self._commit_and_push(exp, seed, "pbt")
                     pbt_session_path = json_path
                 else:
                     self._mark_status(pbt_key, "failed", duration_s=duration)
@@ -264,7 +288,7 @@ class ExperimentRunner:
                             json_path = self._find_latest_session_json(RESULTS_DIR, "bo_results_")
                             json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
                             self._mark_status(bo_key, "done", duration_s=duration, session_json=json_str)
-                            self._commit_and_push(exp.id, seed, "bo")
+                            self._commit_and_push(exp, seed, "bo")
                             bo_session_path = json_path
                         else:
                             self._mark_status(bo_key, "failed", duration_s=duration)
@@ -292,7 +316,7 @@ class ExperimentRunner:
                     
                     if success:
                         self._mark_status(eval_key, "done", duration_s=duration)
-                        self._commit_and_push(exp.id, seed, "eval")
+                        self._commit_and_push(exp, seed, "eval")
                     else:
                         self._mark_status(eval_key, "failed", duration_s=duration)
             else:
