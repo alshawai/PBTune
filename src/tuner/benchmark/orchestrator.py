@@ -606,7 +606,10 @@ class WorkloadOrchestrator:
         return None
 
     def _vacuum_after_dml(
-        self, db_config: DatabaseConfig, worker_logger: Optional[logging.Logger] = None
+        self,
+        db_config: DatabaseConfig,
+        worker_logger: Optional[logging.Logger] = None,
+        next_eval_will_restore: bool = False,
     ) -> None:
         """
         Run bounded post-workload maintenance after DML-heavy workloads.
@@ -614,11 +617,30 @@ class WorkloadOrchestrator:
         Full-database VACUUM ANALYZE is too expensive for short sysbench-style
         generations and frequently times out while scanning toast/system tables.
         Instead, analyze only user tables that were actually modified.
+
+        When ``next_eval_will_restore`` is True, the caller has guaranteed the
+        next evaluation begins with a baseline snapshot restore (PGDATA copied
+        over from the post-prepare baseline, which already contains a clean
+        VACUUM ANALYZE). Any per-eval VACUUM we run now is:
+          1. Too late to influence the just-collected metrics — those are
+             captured at B12 before this method is reached.
+          2. About to be discarded by the next restore.
+        Skipping eliminates 20–60s of dead wall-clock per generation on
+        sysbench RW/WO with high table/row counts.
         """
         # Skip for read-only workloads (OLAP, TPC-H)
         if self.config.workload_type.value in ("olap", "tpch"):
             return
         worker_logger = worker_logger or LOGGER
+
+        if next_eval_will_restore:
+            worker_logger.debug(
+                " ➤ Skipping post-workload VACUUM ANALYZE %s(next eval restores"
+                " baseline snapshot)%s",
+                COLORS.italic,
+                COLORS.reset,
+            )
+            return
 
         timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
         if timeout_seconds <= 0:
@@ -729,6 +751,7 @@ class WorkloadOrchestrator:
         barriers: Optional[GenerationBarrier] = None,
         random_seed: Optional[int] = None,
         restore_due: bool = False,
+        next_eval_will_restore: bool = False,
     ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any], TimingRecorder]:
         """
         Evaluate a Worker's configuration.
@@ -765,6 +788,14 @@ class WorkloadOrchestrator:
             the normal activate step. The snapshot restore serves as the
             restart (instance stops, PGDATA restored preserving auto.conf,
             instance starts with new knobs).
+        next_eval_will_restore : bool, default=False
+            When True, the *next* eval on this worker is guaranteed to begin
+            with a baseline snapshot restore. Skips the post-workload VACUUM
+            ANALYZE because its on-disk effects would be wiped by the next
+            restore (and it cannot influence the metrics we just collected).
+            For PBT with ``snapshot_restore_interval=1`` this is always True
+            after generation 0; for BO with the same interval it is always
+            True after the first iteration.
 
         Returns
         -------
@@ -1156,7 +1187,11 @@ class WorkloadOrchestrator:
             worker.logger.debug(
                 " Running post-workload maintenance (VACUUM ANALYZE) if needed..."
             )
-            self._vacuum_after_dml(worker.db_config, worker_logger=worker.logger)
+            self._vacuum_after_dml(
+                worker.db_config,
+                worker_logger=worker.logger,
+                next_eval_will_restore=next_eval_will_restore,
+            )
             _barrier("vacuum_done")
             last_completed_barrier = "vacuum_done"
 

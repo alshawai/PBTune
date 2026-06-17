@@ -28,6 +28,7 @@ def evaluate_config(
     previous_config: Optional[Dict],
     seed: Optional[int] = None,
     restore_due: bool = False,
+    next_eval_will_restore: bool = False,
 ) -> Tuple[
     Optional[float],
     Dict,
@@ -72,6 +73,12 @@ def evaluate_config(
         causes PG to start with stale auto.conf knobs from the previous
         iteration, which can crash the postmaster on incompatible
         combinations (e.g. ``wal_level=minimal`` + ``summarize_wal=true``).
+    next_eval_will_restore : bool
+        When True, the *next* BO iteration on this worker is guaranteed
+        to begin with a baseline snapshot restore. Lets the orchestrator
+        skip the post-workload VACUUM ANALYZE, since the restore will
+        wipe its on-disk effects (and it cannot influence the metrics
+        we just collected).
 
     Returns
     -------
@@ -127,7 +134,11 @@ def evaluate_config(
     worker.force_restart_next_eval = force_restart
 
     metrics, score, restarted, actual_db_config, eval_timing = orchestrator.evaluate_worker(
-        worker, apply_config=True, random_seed=seed, restore_due=restore_due
+        worker,
+        apply_config=True,
+        random_seed=seed,
+        restore_due=restore_due,
+        next_eval_will_restore=next_eval_will_restore,
     )
 
     # The orchestrator already verified the config and read back the true

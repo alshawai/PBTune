@@ -745,6 +745,14 @@ class PBTTuner:
 
             # Check if snapshot restore is due this generation (set by Population).
             restore_due = getattr(self.population, "_restore_due_this_gen", False)
+            # Next-generation restore predicate: when True, the post-workload
+            # VACUUM ANALYZE we'd run at the end of THIS eval is wasted —
+            # the next generation will wipe its on-disk effects via the
+            # baseline snapshot restore. Skipping saves ~20-60s/gen on
+            # sysbench RW/WO with high table/row counts.
+            next_eval_will_restore = getattr(
+                self.population, "_restore_due_next_gen", False
+            )
 
             metrics, score, restart_occurred, _actual_db_config, eval_timing = (
                 self.orchestrator.evaluate_worker(
@@ -753,6 +761,7 @@ class PBTTuner:
                     generation=self.current_generation,
                     barriers=barriers,
                     restore_due=restore_due,
+                    next_eval_will_restore=next_eval_will_restore,
                 )
             )
 
