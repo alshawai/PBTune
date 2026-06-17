@@ -992,6 +992,19 @@ class Population:
             and self.current_generation % self.restore_interval == 0
         )
 
+        # Predicate the orchestrator reads to skip the post-workload
+        # VACUUM ANALYZE: when the *next* generation's eval is guaranteed
+        # to begin with a baseline snapshot restore, any VACUUM we run
+        # now is wiped before it can affect anything. The +1 mirrors the
+        # ``current_generation % restore_interval == 0`` test above,
+        # shifted by one step.
+        next_gen = self.current_generation + 1
+        self._restore_due_next_gen = bool(
+            self.enable_snapshots
+            and next_gen > 0
+            and next_gen % self.restore_interval == 0
+        )
+
         if self._restore_due_this_gen:
             log_section_header(
                 LOGGER,

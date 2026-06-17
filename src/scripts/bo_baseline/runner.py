@@ -388,6 +388,16 @@ class BOBaselineRunner:
                 and pilot_idx > 0
                 and pilot_idx % self.config.snapshot_restore_interval == 0
             )
+            # Symmetric predicate for the next iteration. Same shape as
+            # restore_due, shifted by one step. The post-workload VACUUM
+            # would otherwise run only to have its on-disk effects wiped
+            # by the next snapshot restore.
+            next_idx = pilot_idx + 1
+            next_eval_will_restore = (
+                self.config.enable_snapshots
+                and next_idx > 0
+                and next_idx % self.config.snapshot_restore_interval == 0
+            )
 
             self.logger.info(
                 "Bootstrap %d/%d: starting evaluation...",
@@ -412,6 +422,7 @@ class BOBaselineRunner:
                     self.knob_space,
                     previous_engine_config,
                     restore_due=restore_due,
+                    next_eval_will_restore=next_eval_will_restore,
                 )
                 previous_engine_config = dict(
                     configspace_to_knobs(sobol_config, self.knob_space)
@@ -621,6 +632,13 @@ class BOBaselineRunner:
                 and iteration_count > 0
                 and iteration_count % self.config.snapshot_restore_interval == 0
             )
+            # Symmetric predicate for the next iteration (see pilot loop).
+            next_iter = iteration_count + 1
+            next_eval_will_restore = (
+                self.config.enable_snapshots
+                and next_iter > 0
+                and next_iter % self.config.snapshot_restore_interval == 0
+            )
 
             try:
                 self.logger.debug(
@@ -675,6 +693,7 @@ class BOBaselineRunner:
                     previous_engine_config,
                     seed=trial_info.seed,
                     restore_due=restore_due,
+                    next_eval_will_restore=next_eval_will_restore,
                 )
                 previous_engine_config = dict(
                     configspace_to_knobs(trial_info.config, self.knob_space)
