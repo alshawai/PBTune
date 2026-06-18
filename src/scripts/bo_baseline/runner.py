@@ -1023,6 +1023,7 @@ class BOBaselineRunner:
             output_dir=self.effective_output_dir,
             benchmark_config=self.config.benchmark_config,
             knob_tier=self.config.knob_tier,
+            knob_source=self.config.knob_source,
         )
         smac_root = bo_root / "smac_output"
         smac_root.mkdir(parents=True, exist_ok=True)
@@ -1150,6 +1151,7 @@ class BOBaselineRunner:
             output_dir=eff_output_dir,
             benchmark_config=self.config.benchmark_config,
             knob_tier=self.config.knob_tier,
+            knob_source=self.config.knob_source,
         )
         log_dir = bo_root / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
