@@ -267,6 +267,26 @@ def test_load_pbt_results_empty_history(tmp_path):
     dataset = load_pbt_results(data_dir)
     assert dataset.config_df.empty
     assert dataset.n_observations == 0
+    # Empty payload still exposes session/generation index series so SCALPEL
+    # can rely on the field always being present.
+    assert dataset.session_index.empty
+    assert dataset.generation_index.empty
+
+
+def test_loaded_data_has_session_and_generation_index_aligned_with_rows(
+    mock_pbt_directory,
+):
+    """SCALPEL builds sample_groups from these; alignment must be 1:1 with rows."""
+    dataset = load_pbt_results(mock_pbt_directory)
+    assert len(dataset.session_index) == dataset.n_observations
+    assert len(dataset.generation_index) == dataset.n_observations
+    # All three series share a RangeIndex(0, n)
+    assert dataset.config_df.index.equals(dataset.session_index.index)
+    assert dataset.config_df.index.equals(dataset.generation_index.index)
+    # Each row's session_index points at a valid metadata entry
+    assert dataset.session_index.between(0, len(dataset.metadata) - 1).all()
+    # Generation indices are non-negative integers
+    assert (dataset.generation_index >= 0).all()
 
 
 def test_metadata_and_rescoring_checks(mock_pbt_directory):
@@ -299,10 +319,16 @@ def test_knob_bounds_hardware_relative(mock_get_knob_space, mock_pbt_directory):
 
     dataset = load_pbt_results(mock_pbt_directory)
 
-    # The loader must recognize it as hardware-relative and lookup HARDWARE_RELATIVE_SPECS
+    # The loader recognises the knob as hardware-relative and seeds bounds from
+    # HARDWARE_RELATIVE_SPECS["shared_buffers"] = (0.15, 0.40), then widens
+    # them to enclose every observed value in the dataset (the post-loader
+    # invariant: every observed sample sits inside the configured bounds).
     assert "shared_buffers" in dataset.knob_bounds
-    # HARDWARE_RELATIVE_SPECS["shared_buffers"] is (0.15, 0.40)
-    assert dataset.knob_bounds["shared_buffers"] == (0.15, 0.40)
+    b_min, b_max = dataset.knob_bounds["shared_buffers"]
+    observed = dataset.config_df["shared_buffers"]
+    assert b_min <= 0.15
+    assert b_min <= float(observed.min())
+    assert b_max >= float(observed.max())
 
 
 def test_load_pbt_results_mixed_version_metadata(tmp_path):
@@ -698,7 +724,11 @@ def test_load_pbt_results_coerces_worker_resources_dict(mock_get_knob_space, tmp
     assert resolved_resources.ram_bytes == 1_073_741_824
     assert resolved_resources.cpu_cores == 2
     assert resolved_resources.disk_type == "SSD"
-    assert _.knob_bounds["shared_buffers"] == (10.0, 20.0)
+    # Bounds enclose both the curated (10, 20) range and every observed value.
+    b_min, b_max = _.knob_bounds["shared_buffers"]
+    assert b_min <= 10.0
+    assert b_max >= 20.0
+    assert b_max >= float(_.config_df["shared_buffers"].max())
 
 
 def test_sysbench_workload_promotion():
