@@ -49,27 +49,54 @@ results/{workload}/pbt_runs/extensive/tuning_sessions/
                 │       • combined RF with hardware features (ram_bytes, cpu_cores, disk_type)
                 │
                 ▼
-        tier_generator.assign_tiers(importances)
-                │  • Jenks Natural Breaks (silhouette-selected k)
-                │  • second pass projects onto canonical 4 tiers
-                │  • conservative across hardware: final_tier = max(tier_per_hardware)
+        tier_generator.export_data_driven_tiers(scalpel_result=…)
+                │  • SCALPEL — see docs/architecture/scalpel.md
+                │  • significance gate (BORUTA + BH-FDR) → coverage
+                │    cuts (Lorenz @ 50 / 80 %) → cluster-resampled
+                │    stability → DBA-prior audit → diagnostics
+                │  • hardware_validator's combined-export path uses
+                │    the lossy Lorenz fallback
+                │    (lorenz_tier_from_importances) because it only
+                │    has a precomputed importance dict
                 ▼
         data/data_driven_knobs/{workload}/
             data_driven_tiers.json
+            scalpel_diagnostics.json     # full per-knob payload
             minimal_knobs.csv
             core_knobs.csv
             standard_knobs.csv
-            extensive_knobs.csv
+            extensive_knobs.csv          # always present; non-extensive
+                                         # CSVs are skipped when SCALPEL
+                                         # confirmed nothing for them
                 │
                 ▼  load_data_driven_tiers() in src/knobs/knob_metadata.py
                 ▼  get_knob_space(tier, source="data_driven", workload=...)
+                │       walks DOWN the canonical order to the next
+                │       broader tier whose CSV exists when SCALPEL
+                │       left the requested tier empty
                 ▼
         Next PBT/BO session uses the data-driven tiers
 ```
 
 The pipeline is invoked end-to-end by [`python -m src.scripts.analyze_knob_importance`](../../src/scripts/analyze_knob_importance.py). Use `--export-tiers` to write the `data_driven_*` artifacts; without it the script only prints diagnostics and saves the importance JSON for visualization.
 
+The tier-generation algorithm is [SCALPEL](scalpel.md). The legacy
+silhouette + Jenks pipeline is gone; a thin Lorenz fallback remains
+for the cross-hardware combined-export path that only retains a
+precomputed importance dict. See
+[ADR-005](decisions/ADR-005-scalpel-tier-generation.md) for the
+failure mode the replacement addresses, and the
+[rollout guide](../guides/scalpel-rollout.md) for the operator
+playbook.
+
 ## `data_driven_tiers.json` Schema
+
+For the canonical schema (including the new `metadata.algorithm`,
+`metadata.scalpel_version`, and `metadata.diagnostics` fields), see
+the [SCALPEL diagnostics reference](../reference/scalpel-diagnostics.md).
+Below is the legacy schema captured pre-SCALPEL — every field that
+follows is preserved on disk, and SCALPEL adds new ones under
+`metadata`.
 
 ```json
 {
@@ -123,9 +150,13 @@ The fANOVA implementation relies on `pyrfr`, a C++-backed Random Forest library 
 - `hardware_validator.py` groups results by hardware profile, computes
   Kendall's tau stability, derives conservative tiers, and can train a
   combined model with hardware features.
-- `tier_generator.py` applies Jenks Natural Breaks with silhouette-based
-  selection, reports agreement with expert tiers, and falls back to
-  quantile breaks when `jenkspy` is unavailable.
+- `tier_generator.py` carries the legacy-shape `generate_tiers` wrapper
+  (delegates to SCALPEL's Lorenz fallback for callers with only a
+  precomputed importance dict) and the canonical
+  `export_data_driven_tiers` writer.
+- `scalpel.py`, `scalpel_significance.py`, `scalpel_stability.py`
+  implement the full SCALPEL pipeline — see
+  [scalpel.md](scalpel.md).
 - `__init__.py` exposes the analysis APIs for downstream scripts.
 
 ## Method Selection Rationale
