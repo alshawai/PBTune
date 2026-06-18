@@ -378,6 +378,22 @@ def preprocess_and_save_knobs(
         tier_df = tier_df.sort_values(["tuning_priority", "name"])
 
         csv_path = output_path / f"{tier_name}_knobs.csv"
+        if tier_name != "extensive" and tier_df.empty:
+            # SCALPEL produces empty 'core' or 'standard' lists when the
+            # importance distribution is sharply concentrated. Writing a
+            # header-only CSV would crash the tuner at LHS sample time, so
+            # we skip the file and let `load_knob_space_for_tier` walk
+            # down to the next-broader non-empty tier with a warning.
+            if csv_path.exists():
+                try:
+                    csv_path.unlink()
+                except OSError:
+                    pass
+            print(
+                f"  ⚠ {tier_name.upper()}: SCALPEL produced 0 knobs — skipping CSV"
+            )
+            continue
+
         tier_df.to_csv(csv_path, index=False)
         saved_paths[tier_name] = str(csv_path)
 
