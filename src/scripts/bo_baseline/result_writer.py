@@ -39,13 +39,26 @@ def convert_numpy_types(obj: Any) -> Any:
 
 
 def resolve_bo_output_root(
-    output_dir: Path, benchmark_config: BenchmarkConfig, knob_tier: str
+    output_dir: Path,
+    benchmark_config: BenchmarkConfig,
+    knob_tier: str,
+    knob_source: str = "expert",
 ) -> Path:
-    """Resolve the base BO output directory under results."""
+    """Resolve the base BO output directory under results.
+
+    When ``knob_source == "data_driven"``, the tier slug is suffixed with
+    ``@scalpel-v1`` to keep post-SCALPEL artifacts from colliding with
+    pre-SCALPEL Jenks-era results that contained a different knob set
+    under the same canonical tier name.
+    """
     if benchmark_config.benchmark == "sysbench":
         benchmark_key = benchmark_config.sysbench_workload
     else:
         benchmark_key = benchmark_config.benchmark
+
+    tier_slug = knob_tier
+    if str(knob_source) == "data_driven":
+        tier_slug = f"{knob_tier}@scalpel-v1"
 
     output_dir = Path(output_dir)
     return (
@@ -53,7 +66,7 @@ def resolve_bo_output_root(
         / benchmark_config.workload_type
         / benchmark_key
         / "bo_runs"
-        / knob_tier
+        / tier_slug
     )
 
 
@@ -372,6 +385,7 @@ def write_bo_results(
         output_dir=output_dir,
         benchmark_config=config.benchmark_config,
         knob_tier=config.knob_tier,
+        knob_source=config.knob_source,
     )
     bo_dir = bo_root / "baseline_sessions"
     bo_dir.mkdir(parents=True, exist_ok=True)

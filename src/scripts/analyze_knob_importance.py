@@ -2,14 +2,21 @@
 Knob Importance Analysis CLI
 ============================
 
-CLI entry point for analyzing PBT knob importance using fANOVA and SHAP.
+CLI entry point for analyzing PBT knob importance using fANOVA and SHAP
+and emitting data-driven tier assignments via SCALPEL.
+
+See :mod:`src.analysis.scalpel` for the tier-generation algorithm and
+``/home/eima40x4c/.claude/plans/distributed-toasting-sparrow.md`` for
+the full design.
 """
 
 import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Optional
+
+import pandas as pd
 
 from src.analysis.data_loader import load_pbt_results, LoadedData
 from src.analysis.hardware_validator import (
@@ -17,11 +24,18 @@ from src.analysis.hardware_validator import (
     build_hardware_profile_key,
 )
 from src.analysis.importance import ImportanceResult, analyze_knob_importance
+from src.analysis.scalpel import (
+    SCALPELHyperparameters,
+    SCALPELResult,
+    SCALPEL_ALGORITHM_SLUG,
+    scalpel_tier,
+)
 from src.analysis.tier_generator import (
     TierResult,
     generate_tiers,
     export_data_driven_tiers,
 )
+from src.knobs.knob_metadata import KNOB_TUNING_METADATA
 from src.utils.logger import get_logger
 from src.utils.logger.setup import setup_logging
 
@@ -107,24 +121,138 @@ def parse_args() -> argparse.Namespace:
         help="Compare two previously generated importance_results.json files across workloads",
     )
 
+    # SCALPEL pipeline knobs (see /home/eima40x4c/.claude/plans/distributed-toasting-sparrow.md)
+    parser.add_argument(
+        "--algorithm",
+        choices=["scalpel", "legacy"],
+        default="scalpel",
+        help=(
+            "Tier-generation algorithm. 'scalpel' (default) runs the full "
+            "BORUTA + Lorenz + stability pipeline. 'legacy' uses the Lorenz "
+            "fallback only — equivalent to the importance-dict-only path "
+            "used by hardware_validator (no significance gate, no stability)."
+        ),
+    )
+    parser.add_argument(
+        "--scalpel-base-seed",
+        type=int,
+        default=42,
+        help="Base seed; per-workload seeds are derived as hash((seed, workload)).",
+    )
+    parser.add_argument(
+        "--scalpel-fdr-q",
+        type=float,
+        default=0.10,
+        help="BH-FDR target for the BORUTA significance gate.",
+    )
+    parser.add_argument(
+        "--scalpel-boruta-iter",
+        type=int,
+        default=100,
+        help="Number of BORUTA shadow iterations.",
+    )
+    parser.add_argument(
+        "--scalpel-stability-b",
+        type=int,
+        default=100,
+        help="Number of group-clustered stability subsamples.",
+    )
+    parser.add_argument(
+        "--scalpel-coverage-minimal",
+        type=float,
+        default=0.50,
+        help="Cumulative-mass cut for the data-driven 'minimal' tier.",
+    )
+    parser.add_argument(
+        "--scalpel-coverage-core",
+        type=float,
+        default=0.80,
+        help="Cumulative-mass cut for the data-driven 'core' tier.",
+    )
+    parser.add_argument(
+        "--scalpel-rf-trees",
+        type=int,
+        default=500,
+        help="Random Forest n_estimators for SCALPEL surrogate.",
+    )
+    parser.add_argument(
+        "--scalpel-nuisance-overrides",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated list of knobs that should NOT be filtered "
+            "by IMPORTANCE_NUISANCE_EXCLUSIONS / PREFIXES."
+        ),
+    )
+
+    # Multi-workload rollout — replaces a standalone regenerate script.
+    parser.add_argument(
+        "--all-workloads",
+        type=Path,
+        default=None,
+        metavar="RESULTS_ROOT",
+        help=(
+            "Glob the given root for tuning-session directories under "
+            "'<root>/*/pbt_runs/extensive/tuning_sessions' and run the "
+            "analysis pipeline per discovered workload. Failures on one "
+            "workload are logged and skipped, never fatal. Overrides "
+            "--results-dir / --workload-label."
+        ),
+    )
+    parser.add_argument(
+        "--results-glob",
+        type=str,
+        default="*/pbt_runs/extensive/tuning_sessions",
+        help=(
+            "Glob (relative to --all-workloads) used to discover "
+            "tuning-session directories. Default targets the canonical "
+            "extensive subtree so SCALPEL operates on the broadest tunable space."
+        ),
+    )
+
     return parser.parse_args()
 
 
 def _print_comparison_report(data_a: dict[str, Any], data_b: dict[str, Any]) -> None:
-    """Print a cross-workload comparison report for two importance results."""
+    """Print a cross-workload comparison report for two importance results.
+
+    Robust to SCALPEL outputs where ``tier_assignments`` contains only
+    confirmed knobs — non-confirmed entries print as ``not_confirmed``
+    rather than crashing on a missing key.
+    """
     imp_a = data_a.get("marginal_importances", {})
     imp_b = data_b.get("marginal_importances", {})
-    tier_a = data_a.get("tier_assignments", {})
-    tier_b = data_b.get("tier_assignments", {})
+    tier_block_a = data_a.get("tier_generation", {}).get("tier_assignments")
+    tier_block_b = data_b.get("tier_generation", {}).get("tier_assignments")
+    tier_a = tier_block_a if tier_block_a is not None else data_a.get(
+        "tier_assignments", {}
+    )
+    tier_b = tier_block_b if tier_block_b is not None else data_b.get(
+        "tier_assignments", {}
+    )
+
+    algo_a = data_a.get("tier_generation", {}).get("metadata", {}).get(
+        "algorithm", "unknown"
+    )
+    algo_b = data_b.get("tier_generation", {}).get("metadata", {}).get(
+        "algorithm", "unknown"
+    )
+    if algo_a != algo_b:
+        LOGGER.warning(
+            "Cross-algorithm comparison: A used '%s', B used '%s'. "
+            "Tier-name semantics may differ.",
+            algo_a,
+            algo_b,
+        )
 
     all_knobs = sorted(set(imp_a.keys()) | set(imp_b.keys()))
 
     LOGGER.info("Cross-Workload Comparison Report:")
     print(
         f"{'Knob':<40} | {'Rank A':<8} | {'Rank B':<8} | "
-        f"{'Shift':<6} | {'Tier A':<10} | {'Tier B':<10}"
+        f"{'Shift':<6} | {'Tier A':<14} | {'Tier B':<14}"
     )
-    print("-" * 95)
+    print("-" * 105)
 
     sorted_a = sorted(imp_a.keys(), key=lambda k: imp_a[k], reverse=True)
     rank_a = {k: idx + 1 for idx, k in enumerate(sorted_a)}
@@ -141,12 +269,12 @@ def _print_comparison_report(data_a: dict[str, Any], data_b: dict[str, Any]) -> 
             shift = int(ra) - int(rb)  # positive means it moved up in B
             shift_str = f"+{shift}" if shift > 0 else str(shift)
 
-        ta = tier_a.get(knob, "N/A")
-        tb = tier_b.get(knob, "N/A")
+        ta = tier_a.get(knob, "not_confirmed")
+        tb = tier_b.get(knob, "not_confirmed")
 
         print(
             f"{knob:<40} | {str(ra):<8} | {str(rb):<8} | "
-            f"{shift_str:<6} | {ta:<10} | {tb:<10}"
+            f"{shift_str:<6} | {ta:<14} | {tb:<14}"
         )
 
 
@@ -190,9 +318,26 @@ def _save_analysis_results(
     actual_workload: str,
     importance_result: ImportanceResult,
     tier_result: TierResult,
+    *,
+    scalpel_result: Optional[SCALPELResult] = None,
 ) -> None:
-    """Serialize the analysis outcomes to a JSON file."""
+    """Serialize the analysis outcomes to a JSON file.
+
+    The ``tier_generation`` block carries legacy-shape fields plus a new
+    ``metadata`` sub-block exposing SCALPEL provenance / diagnostics so
+    downstream readers (e.g., the tier-diagnostics visualization) can
+    surface BORUTA hits, BH-adjusted p-values, and stability scores.
+    """
     out_json = out_dir / "importance_results.json"
+    tier_metadata: dict[str, Any] = {
+        "algorithm": SCALPEL_ALGORITHM_SLUG if scalpel_result else "lorenz_fallback",
+    }
+    if scalpel_result is not None:
+        tier_metadata["scalpel_version"] = scalpel_result.diagnostics_full().get(
+            "scalpel_version"
+        )
+        tier_metadata["diagnostics"] = scalpel_result.diagnostics_pruned()
+
     result_dict = {
         "workload_type": actual_workload,
         "model_r2": importance_result.model_r2,
@@ -206,6 +351,7 @@ def _save_analysis_results(
         },
         "shap_importances": importance_result.shap_importances,
         "tier_generation": {
+            "metadata": tier_metadata,
             "optimal_k": tier_result.optimal_k,
             "silhouette_scores": tier_result.silhouette_scores,
             "tier_assignments": tier_result.tier_assignments,
@@ -228,7 +374,12 @@ def _print_analysis_summary(
     importance_result: ImportanceResult,
     tier_result: TierResult,
 ) -> None:
-    """Print a summary of the analyzed importance and tier assignments."""
+    """Print a summary of the analyzed importance and tier assignments.
+
+    Knobs absent from ``tier_assignments`` (under SCALPEL: not BORUTA-
+    confirmed) are labeled ``not_confirmed`` rather than ``unknown`` to
+    surface the algorithmic verdict explicitly.
+    """
     print("\nKnob Importance Summary:")
     print("========================")
     print(f"Workload: {actual_workload}")
@@ -241,7 +392,7 @@ def _print_analysis_summary(
 
     top_knobs = list(importance_result.marginal_importances.items())[:10]
     for idx, (knob, imp) in enumerate(top_knobs, start=1):
-        tier = tier_result.tier_assignments.get(knob, "unknown")
+        tier = tier_result.tier_assignments.get(knob, "not_confirmed")
         print(f"  {idx:2d}. {knob:<35} {imp:.4f}  (Tier: {tier})")
 
 
@@ -284,28 +435,96 @@ def _group_files_by_hardware(
     return groups, first_workload
 
 
-def run_analysis_pipeline(args: argparse.Namespace) -> None:
-    """Execute the full end-to-end analysis pipeline."""
-    if not args.results_dir:
+def _run_scalpel_for_profile(
+    args: argparse.Namespace,
+    loaded_data: LoadedData,
+    actual_workload: str,
+) -> Optional[SCALPELResult]:
+    """Run SCALPEL on a single hardware profile's loaded PBT data.
+
+    Returns ``None`` when SCALPEL preflight rejects the input (too few
+    samples, too few clusters, etc.) so the caller can fall back to the
+    legacy Lorenz-from-importances path without crashing the pipeline.
+    """
+    if loaded_data.config_df.empty:
+        LOGGER.warning(
+            "SCALPEL: empty config_df for %s; skipping pipeline.", actual_workload
+        )
+        return None
+
+    # Numpy-backed concatenation defends against pandas index-misalignment;
+    # the loader builds session_index/generation_index on the same
+    # RangeIndex(0, n_observations) as config_df/scores, but we never
+    # rely on pandas alignment to derive sample_groups.
+    sample_groups = pd.Series(
+        (
+            loaded_data.session_index.to_numpy().astype(str)
+            + ":"
+            + loaded_data.generation_index.to_numpy().astype(str)
+        ),
+        name="sample_groups",
+    )
+    hp = SCALPELHyperparameters.from_args(args, workload_label=actual_workload)
+    LOGGER.info(
+        "Running SCALPEL pipeline for %s (n=%d, p=%d, clusters=%d, seed=%d)",
+        actual_workload,
+        loaded_data.config_df.shape[0],
+        loaded_data.config_df.shape[1],
+        sample_groups.nunique(),
+        hp.seed,
+    )
+    result = scalpel_tier(
+        loaded_data.config_df,
+        loaded_data.scores,
+        sample_groups=sample_groups,
+        hp=hp,
+        knob_metadata=KNOB_TUNING_METADATA,
+        knob_bounds=loaded_data.knob_bounds,
+    )
+    if result.is_degenerate:
+        LOGGER.warning(
+            "SCALPEL preflight rejected %s: %s",
+            actual_workload,
+            result.preflight_reason,
+        )
+    return result
+
+
+def run_analysis_pipeline(
+    args: argparse.Namespace,
+    *,
+    results_dir: Optional[Path] = None,
+    workload_label_override: Optional[str] = None,
+) -> None:
+    """Execute the full end-to-end analysis pipeline for ONE workload.
+
+    ``results_dir`` and ``workload_label_override`` are populated by the
+    ``--all-workloads`` loop; when omitted, the function falls back to
+    ``args.results_dir`` and ``args.workload_label`` (single-workload
+    invocation).
+    """
+    if results_dir is None:
+        results_dir = args.results_dir
+    if not results_dir:
         LOGGER.error("--results-dir is required when not using --compare")
         sys.exit(1)
 
-    # First, group files and optionally auto-detect the workload type
-    groups, auto_workload = _group_files_by_hardware(args.results_dir)
+    workload_arg = workload_label_override or args.workload_label
 
-    initial_workload = (
-        args.workload_label if args.workload_label != "auto" else auto_workload
-    )
+    # First, group files and optionally auto-detect the workload type
+    groups, auto_workload = _group_files_by_hardware(results_dir)
+
+    initial_workload = workload_arg if workload_arg != "auto" else auto_workload
 
     temp_out_dir = args.output_dir or Path(f"results/analysis/{initial_workload}/")
     temp_out_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(verbosity="INFO", output_file=temp_out_dir / "analysis_log.html")
 
     LOGGER.info("Starting Knob Importance Analysis")
-    LOGGER.info("Loading and grouping data from %s", args.results_dir)
+    LOGGER.info("Loading and grouping data from %s", results_dir)
 
     if not groups:
-        LOGGER.error("No valid JSON results found in %s", args.results_dir)
+        LOGGER.error("No valid JSON results found in %s", results_dir)
         sys.exit(1)
 
     LOGGER.info("Found %d distinct hardware profile(s).", len(groups))
@@ -317,6 +536,7 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
     final_actual_workload = initial_workload
     final_base_out_dir = temp_out_dir
     hw_val_res = None
+    primary_scalpel_result: Optional[SCALPELResult] = None
 
     for hw_key, (file_paths, wr) in groups.items():
         LOGGER.info(
@@ -325,14 +545,14 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
             len(file_paths),
         )
         loaded_data = load_pbt_results(
-            args.results_dir,
+            results_dir,
             default_workload_type=initial_workload,
             file_paths=file_paths,
         )
 
         actual_workload, base_out_dir = _resolve_workload_and_output_dir(
             loaded_data=loaded_data,
-            workload_label=args.workload_label,
+            workload_label=workload_arg,
             output_dir=args.output_dir,
         )
 
@@ -363,17 +583,38 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
             skip_shap=args.skip_shap,
         )
 
-        LOGGER.info("Running tier generation for %s...", hw_key)
-        tier_result = generate_tiers(
-            marginal_importances=importance_result.marginal_importances,
-            workload_label=actual_workload,
-        )
+        scalpel_result: Optional[SCALPELResult] = None
+        if args.algorithm == "scalpel":
+            scalpel_result = _run_scalpel_for_profile(args, loaded_data, actual_workload)
 
-        _save_analysis_results(out_dir, actual_workload, importance_result, tier_result)
+        if scalpel_result is not None and not scalpel_result.is_degenerate:
+            tier_result = scalpel_result.to_tier_result(workload_label=actual_workload)
+            LOGGER.info(
+                "SCALPEL: confirmed=%d tentative=%d rejected=%d nuisance_dropped=%d",
+                len(scalpel_result.confirmed),
+                len(scalpel_result.tentative),
+                len(scalpel_result.rejected),
+                len(scalpel_result.nuisance_dropped),
+            )
+        else:
+            LOGGER.info("Running tier generation (Lorenz fallback) for %s...", hw_key)
+            tier_result = generate_tiers(
+                marginal_importances=importance_result.marginal_importances,
+                workload_label=actual_workload,
+            )
+
+        _save_analysis_results(
+            out_dir,
+            actual_workload,
+            importance_result,
+            tier_result,
+            scalpel_result=scalpel_result,
+        )
 
         # Only print summary for the first group to avoid extreme console spam
         if len(profile_results) == 0:
             _print_analysis_summary(actual_workload, importance_result, tier_result)
+            primary_scalpel_result = scalpel_result
 
         profile_results.append((importance_result, wr))
         combined_data_list.append((loaded_data, wr))
@@ -393,7 +634,9 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
                 "Successfully built combined fANOVA model across all hardware profiles."
             )
 
-            # Save the combined model outputs to the root analysis dir
+            # Save the combined model outputs to the root analysis dir.
+            # Combined-hardware uses Lorenz fallback because hardware_validator
+            # only retains a precomputed importance dict (no X/y available).
             combined_tier = generate_tiers(
                 marginal_importances=hw_val_res.combined_importances.marginal_importances,
                 workload_label=final_actual_workload,
@@ -421,6 +664,9 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
             "shifting_knobs": hw_val_res.shifting_knobs,
             "conservative_tiers": hw_val_res.conservative_tiers,
             "kendall_taus": json_taus,
+            "stable_knobs_semantics": "intersection_of_confirmed_sets"
+            if args.algorithm == "scalpel"
+            else "intersection_of_labelled_sets",
         }
 
         try:
@@ -439,28 +685,74 @@ def run_analysis_pipeline(args: argparse.Namespace) -> None:
             )
 
     if args.export_tiers:
-        if hw_val_res and hw_val_res.combined_importances:
-            export_importances = hw_val_res.combined_importances.marginal_importances
-        elif profile_results:
-            export_importances = profile_results[0][0].marginal_importances
-        else:
-            LOGGER.error("No importance results available to export.")
-            return
-
-        # Resolve the output path:
-        # - Path("auto") means the flag was given without an explicit path →
-        #   let export_data_driven_tiers() derive the workload-specific default.
-        # - Any other Path means the user specified an explicit destination.
         explicit_path: Path | None = (
             None if args.export_tiers == Path("auto") else args.export_tiers
         )
+        if (
+            args.algorithm == "scalpel"
+            and primary_scalpel_result is not None
+            and not primary_scalpel_result.is_degenerate
+            and len(groups) == 1
+        ):
+            export_data_driven_tiers(
+                workload_label=final_actual_workload,
+                output_path=explicit_path,
+                source_results=str(results_dir),
+                scalpel_result=primary_scalpel_result,
+                write_diagnostics=True,
+            )
+        else:
+            if hw_val_res and hw_val_res.combined_importances:
+                export_importances = (
+                    hw_val_res.combined_importances.marginal_importances
+                )
+            elif profile_results:
+                export_importances = profile_results[0][0].marginal_importances
+            else:
+                LOGGER.error("No importance results available to export.")
+                return
+            export_data_driven_tiers(
+                marginal_importances=export_importances,
+                workload_label=final_actual_workload,
+                output_path=explicit_path,
+                source_results=str(results_dir),
+            )
 
-        export_data_driven_tiers(
-            marginal_importances=export_importances,
-            workload_label=final_actual_workload,
-            output_path=explicit_path,
-            source_results=str(args.results_dir),
-        )
+
+def _discover_workloads(
+    results_root: Path,
+    glob_pattern: str,
+) -> list[tuple[str, Path]]:
+    """Discover ``(workload_label, tuning_sessions_dir)`` pairs under ``results_root``.
+
+    The workload label is derived from the first path segment under
+    ``results_root`` — matching the layout
+    ``results/<workload>/pbt_runs/<tier>/tuning_sessions``.
+    Empty discovery results are signalled by returning ``[]``.
+    """
+    if not results_root.is_dir():
+        return []
+    discovered: list[tuple[str, Path]] = []
+    for path in sorted(results_root.glob(glob_pattern)):
+        if not path.is_dir():
+            continue
+        # Skip empty directories — refusing to overwrite a prior good
+        # data_driven_tiers.json with empty SCALPEL output is by design.
+        if not any(path.glob("pbt_results_*.json")):
+            LOGGER.warning(
+                "Skipping %s: no pbt_results_*.json files found.", path
+            )
+            continue
+        try:
+            relative = path.relative_to(results_root)
+            workload_label = relative.parts[0]
+        except (ValueError, IndexError):
+            LOGGER.warning(
+                "Could not derive workload label from %s; skipping.", path
+            )
+            continue
+        discovered.append((workload_label, path))
+    return discovered
 
 
 def main() -> None:
@@ -470,8 +762,47 @@ def main() -> None:
     if args.compare:
         setup_logging(verbosity="INFO")
         compare_results(args.compare[0], args.compare[1])
-    else:
-        run_analysis_pipeline(args)
+        return
+
+    if args.all_workloads:
+        discovered = _discover_workloads(args.all_workloads, args.results_glob)
+        if not discovered:
+            LOGGER.error(
+                "No workloads discovered under %s with glob '%s'.",
+                args.all_workloads,
+                args.results_glob,
+            )
+            sys.exit(1)
+        LOGGER.info(
+            "Discovered %d workload(s) under %s", len(discovered), args.all_workloads
+        )
+        failures: list[tuple[str, str]] = []
+        for workload_label, results_dir in discovered:
+            LOGGER.info(
+                "=== Processing workload '%s' (%s) ===", workload_label, results_dir
+            )
+            try:
+                run_analysis_pipeline(
+                    args,
+                    results_dir=results_dir,
+                    workload_label_override=workload_label,
+                )
+            except Exception as exc:  # pragma: no cover - rollout helper
+                LOGGER.exception(
+                    "Workload '%s' failed; continuing rollout.", workload_label
+                )
+                failures.append((workload_label, str(exc)))
+        if failures:
+            LOGGER.warning(
+                "Completed --all-workloads with %d failure(s): %s",
+                len(failures),
+                ", ".join(f"{w}({e[:60]})" for w, e in failures),
+            )
+        else:
+            LOGGER.info("Completed --all-workloads with no failures.")
+        return
+
+    run_analysis_pipeline(args)
 
 
 if __name__ == "__main__":
