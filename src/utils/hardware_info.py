@@ -65,6 +65,16 @@ class WorkerResources:
 _DISK_MIN_BPS_PER_WORKER = 1 * 1024 * 1024
 _DISK_MIN_IOPS_PER_WORKER = 100
 
+# Trust threshold for the fio probe. When the probed sustained throughput
+# falls below this fraction of the disk-class heuristic, we treat the
+# probe as unreliable (cold cache, burst-credit starvation on cloud PDs,
+# concurrent I/O during startup) and fall back to the heuristic instead.
+# 0.25 = "if the probe says you're getting <25% of what your disk class
+# is normally capable of, the probe is the suspect, not the disk." Tuned
+# against GCP pd-ssd noise where the first 5-10s of probing can return
+# <5% of true sustained capacity on a freshly attached volume.
+_DISK_PROBE_TRUST_FLOOR = 0.25
+
 # Heuristic sustained-throughput ceilings per disk class.
 # Values reflect realistic sustained (not peak-burst) numbers for the
 # 4k-random write workloads PostgreSQL produces. Read budgets are larger
@@ -288,15 +298,23 @@ def _heuristic_disk_budget(disk_class: str) -> Dict[str, int]:
 
 
 def _probe_disk_with_fio(
-    data_path: Path, timeout_s: int = 8
+    data_path: Path, timeout_s: int = 20
 ) -> Optional[Dict[str, int]]:
-    """Measure host disk bandwidth and IOPS with a short ``fio`` probe.
+    """Measure host disk bandwidth and IOPS with an ``fio`` probe.
 
     Runs a sequential write at 1 MiB blocks for sustained-bps and a
     4k random read for IOPS. The probe file is created under
     ``data_path`` so the measurement reflects the filesystem the
     workers actually write to. Returns ``None`` when fio is missing or
     any probe fails — callers fall back to the heuristic.
+
+    Probe runtimes (8s write, 5s read) are tuned to outlast the
+    burst-credit + cold-cache window on cloud-attached block storage
+    (GCP Persistent Disk, AWS EBS gp3). Shorter runs can land entirely
+    inside a credit-starved moment and report a small fraction of true
+    sustained capacity. The host_budget validator in
+    ``_resolve_host_disk_budget`` provides a second layer of defence
+    against pathological probe results.
     """
     fio_bin = shutil.which("fio")
     if not fio_bin:
@@ -343,7 +361,7 @@ def _probe_disk_with_fio(
                 "--name=write_probe",
                 "--rw=write",
                 "--bs=1M",
-                "--runtime=3",
+                "--runtime=8",
                 "--ioengine=psync",
                 "--direct=0",
                 "--fsync_on_close=1",
@@ -355,7 +373,7 @@ def _probe_disk_with_fio(
                 "--name=read_probe",
                 "--rw=randread",
                 "--bs=4k",
-                "--runtime=2",
+                "--runtime=5",
                 "--ioengine=psync",
                 "--direct=0",
             ]
@@ -383,31 +401,87 @@ def _probe_disk_with_fio(
         return None
 
 
+def _probe_passes_trust_floor(
+    probed: Dict[str, int],
+    heuristic: Dict[str, int],
+    *,
+    floor: float = _DISK_PROBE_TRUST_FLOOR,
+) -> tuple[bool, list[str]]:
+    """Decide whether an fio probe is plausible relative to the class
+    heuristic.
+
+    Cloud-attached block storage (GCP PD, AWS EBS) can return wildly
+    pessimistic short-burst readings during the first few seconds after
+    attach — credit-starvation, cold cache, concurrent container I/O.
+    A probe that says "your SATA-SSD-class disk delivers 2 MB/s" is far
+    more likely to be a broken measurement than a real ceiling.
+
+    Returns (passes, reasons). When ``passes`` is False, ``reasons`` is
+    the list of fields that fell below the trust floor — fed to the
+    caller's log message so the operator can diagnose why their probe
+    was rejected.
+    """
+    fields = ("read_bps", "write_bps", "read_iops", "write_iops")
+    failed: list[str] = []
+    for key in fields:
+        threshold = heuristic[key] * floor
+        if probed[key] < threshold:
+            failed.append(key)
+    return (not failed), failed
+
+
 def _resolve_host_disk_budget(
     data_path: Optional[Path],
     *,
     probe_disk: bool,
 ) -> tuple[Dict[str, int], str]:
-    """Resolve host-level disk budget plus the disk class label used."""
+    """Resolve host-level disk budget plus the disk class label used.
+
+    Probe results that fall below ``_DISK_PROBE_TRUST_FLOOR`` of the
+    class heuristic on any metric are rejected and the heuristic is
+    used instead — fio's 5-10s window can hit a credit-starved or
+    cold-cache moment on a cloud PD and return a tiny fraction of
+    sustained capacity, which would then bottleneck every worker for
+    the rest of the session.
+    """
     device = None
     if data_path is not None:
         device = _resolve_block_device_node(data_path)
     disk_class = _detect_disk_class(device)
+    heuristic = _heuristic_disk_budget(disk_class)
 
     if probe_disk and data_path is not None:
         probed = _probe_disk_with_fio(data_path)
         if probed is not None:
-            LOGGER.debug(
-                "  ➤ Disk probe via fio: read=%.1f MB/s, write=%.1f MB/s, "
-                "read_iops=%d, write_iops=%d",
+            passes, failed_fields = _probe_passes_trust_floor(probed, heuristic)
+            if passes:
+                LOGGER.debug(
+                    "  ➤ Disk probe via fio: read=%.1f MB/s, write=%.1f MB/s, "
+                    "read_iops=%d, write_iops=%d",
+                    probed["read_bps"] / (1024 * 1024),
+                    probed["write_bps"] / (1024 * 1024),
+                    probed["read_iops"],
+                    probed["write_iops"],
+                )
+                return probed, disk_class
+            LOGGER.warning(
+                "  ➤ Disk probe via fio returned implausibly low values "
+                "(below %d%% of %s-class heuristic on %s): "
+                "read=%.1f MB/s, write=%.1f MB/s, read_iops=%d, write_iops=%d. "
+                "Falling back to heuristic. Cloud-attached PDs (GCP, AWS) "
+                "can return short-burst credit-starved readings during the "
+                "first few seconds after attach — re-run after the host has "
+                "been idle for ~60s if the heuristic is itself wrong for "
+                "this disk.",
+                int(_DISK_PROBE_TRUST_FLOOR * 100),
+                disk_class,
+                ", ".join(failed_fields),
                 probed["read_bps"] / (1024 * 1024),
                 probed["write_bps"] / (1024 * 1024),
                 probed["read_iops"],
                 probed["write_iops"],
             )
-            return probed, disk_class
 
-    heuristic = _heuristic_disk_budget(disk_class)
     LOGGER.debug(
         "  ➤ Disk budget via heuristic (class=%s): read=%.1f MB/s, write=%.1f MB/s",
         disk_class,
