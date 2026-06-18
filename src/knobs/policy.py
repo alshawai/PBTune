@@ -26,7 +26,34 @@ def _load_policy(path: str = "data/knob_policy.json") -> Dict[str, tuple[str, st
     return {k: tuple(v) for k, v in raw_policy.items()}
 
 
+def _load_section(
+    section: str,
+    path: str = "data/knob_policy.json",
+) -> Dict[str, tuple[str, str]]:
+    """Load a top-level section of the policy file (knob/prefix → (code, msg))."""
+    path = str(Path(path))
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    raw = data.get(section, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {k: tuple(v) for k, v in raw.items()}
+
+
 AUTOTUNING_SOURCE_EXCLUSIONS: Dict[str, tuple[str, str]] = _load_policy()
+
+#: SCALPEL nuisance filter: exact knob-name matches.
+IMPORTANCE_NUISANCE_EXCLUSIONS: Dict[str, tuple[str, str]] = _load_section(
+    "IMPORTANCE_NUISANCE_EXCLUSIONS"
+)
+
+#: SCALPEL nuisance filter: knob-name prefix matches.
+IMPORTANCE_NUISANCE_PREFIXES: Dict[str, tuple[str, str]] = _load_section(
+    "IMPORTANCE_NUISANCE_PREFIXES"
+)
 
 SOURCE_POLICY_COLUMNS = (
     "eligible_for_autotuning",
