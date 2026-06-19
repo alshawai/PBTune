@@ -288,8 +288,10 @@ n ≈ 2 000 / p ≈ 180:
 | `fdr_q` | 0.10 | Plan default; tightens the all-relevant set without collapsing it. |
 | `coverage_minimal` | 0.50 | Pareto / Juran "vital few" cut. |
 | `coverage_core` | 0.80 | 80/20 cut on the confirmed subset. |
-| `n_stability_subsamples` | 100 | Layer 3 budget. |
+| `n_stability_subsamples` | 50 | Layer 3 budget (Meinshausen & Bühlmann 2010, lower end of B ∈ [50, 100]). |
 | `stability_subsample_frac` | 0.5 | Drop half the clusters per subsample. |
+| `stability_boruta_iter` | `None` → falls through to `boruta_iter` | BORUTA iter count *inside* each stability subsample. Match the primary or BH-FDR null is mis-calibrated. |
+| `stability_jobs` | 4 | Parallel `ProcessPoolExecutor` workers for stability subsamples. |
 | `min_samples` | 200 | Below this the surrogate is unstable. |
 | `min_clusters` | 4 | Cluster-permutation null is degenerate below this. |
 | `seed` | 42 (per-workload-derived) | See "per-workload seeds" above. |
@@ -388,6 +390,38 @@ results/<workload>/pbt_runs/<tier>/tuning_sessions/
         results/<workload>/pbt_runs/<tier>@scalpel-v1/
         results/<workload>/bo_runs/<tier>@scalpel-v1/
 ```
+
+## v1.1 — q-sensitivity sweep
+
+Layer 1's confirmed set depends on a single FDR target (`fdr_q=0.10`).
+A reviewer who wants to know "how stable is the tier boundary if we
+tighten or loosen that knob?" historically had to re-run the whole
+pipeline at multiple `q` values. In v1.1, the primary BORUTA pass
+records its per-knob hit counts once, and the sweep partitions those
+same counts at `q ∈ {0.05, 0.10, 0.20, 0.30}`. Because BH-adjusted
+p-values are q-independent (only the verdict at a given threshold
+changes), the sweep costs four Lorenz partitions — milliseconds total
+on top of the multi-minute primary pass.
+
+The sweep guarantees a **monotone-nested** confirmed set:
+`confirmed(q=0.05) ⊆ confirmed(q=0.10) ⊆ confirmed(q=0.20) ⊆ confirmed(q=0.30)`.
+A knob present at the tightest threshold is always present at the looser
+ones, so the sweep gives reviewers a clear "as we relax FDR, these
+additional knobs become candidates" diagnostic without re-fitting any RFs.
+
+Output shape:
+
+- `data_driven_tiers.json` `metadata.diagnostics.q_sensitivity_summary`
+  carries `{q_str: n_confirmed}` — the lightweight at-a-glance counts.
+- `scalpel_diagnostics.json` `q_sensitivity[q_str]` carries the full
+  partition: `confirmed`, `tentative`, `rejected`, `tier_assignments`,
+  `n_confirmed` for each `q ∈ Q_SWEEP`. The primary pipeline's tier
+  assignment is the one at `fdr_q = hp.fdr_q` (the default 0.10).
+
+The sweep is operator-invisible: there is no CLI flag to disable it
+because the cost is negligible and the diagnostic is high-value. If
+the primary pass returns no confirmed knobs (the degenerate path), the
+sweep is skipped and `q_sensitivity` is empty.
 
 ## Cross-references
 
