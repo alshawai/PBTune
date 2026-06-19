@@ -154,8 +154,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scalpel-stability-b",
         type=int,
-        default=100,
-        help="Number of group-clustered stability subsamples.",
+        default=50,
+        help=(
+            "Number of group-clustered stability subsamples. Default 50 "
+            "(Meinshausen and Buhlmann 2010 B in [50, 100], matches "
+            "stabs::stabsel default)."
+        ),
+    )
+    parser.add_argument(
+        "--scalpel-stability-iter",
+        type=int,
+        default=None,
+        help=(
+            "BORUTA iteration count inside each stability subsample. "
+            "When omitted, falls through to --scalpel-boruta-iter so "
+            "the binomial null is calibrated against the same iteration "
+            "count as the primary pass."
+        ),
+    )
+    parser.add_argument(
+        "--scalpel-stability-jobs",
+        type=int,
+        default=4,
+        help=(
+            "Worker processes for parallel stability subsamples. "
+            "1 keeps the historical sequential path."
+        ),
     )
     parser.add_argument(
         "--scalpel-coverage-minimal",
