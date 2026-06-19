@@ -291,6 +291,7 @@ def write_bo_results(
     result = {
         "tuning_session": {
             "timing_schema_version": "1.1",
+            "tuning_strategy": "bo",
             "optimizer": "bayesian_optimization",
             "bo_library": "smac3",
             "bo_surrogate": bo_surrogate,

@@ -239,6 +239,30 @@ def _extract_knob_bounds(
     return bounds
 
 
+def _infer_tuning_strategy(
+    session_meta: dict[str, Any],
+    file_path: Path,
+) -> str:
+    """Resolve the tuning_strategy label for a session file.
+
+    Prefers the explicit ``tuning_session.tuning_strategy`` field. Falls back
+    to a path heuristic for legacy sessions written before the field existed:
+    ``/pbt_runs/`` -> ``"pbt"``, ``/bo_runs/`` -> ``"bo"``, ``/lhs_runs/`` ->
+    ``"lhs"``. Returns ``"unknown"`` when neither path nor field resolves.
+    """
+    explicit = session_meta.get("tuning_strategy")
+    if explicit:
+        return str(explicit)
+    path_str = str(file_path)
+    if "/pbt_runs/" in path_str:
+        return "pbt"
+    if "/bo_runs/" in path_str:
+        return "bo"
+    if "/lhs_runs/" in path_str:
+        return "lhs"
+    return "unknown"
+
+
 def _build_session_metadata(
     file_path: Path,
     session_meta: dict[str, Any],
@@ -250,6 +274,7 @@ def _build_session_metadata(
         "file_name": file_path.name,
         "workload_type": session_meta.get("workload_type", default_workload_type),
         "benchmark_name": session_meta.get("benchmark_name", "unknown"),
+        "tuning_strategy": _infer_tuning_strategy(session_meta, file_path),
         "system_info": data.get("system_info", {}),
         "worker_resources": data.get("worker_resources", {}),
     }
@@ -264,7 +289,7 @@ def _build_session_metadata(
 
     # Preserve all additional session_meta fields (e.g., sysbench_workload, scale_factor)
     for key, value in session_meta.items():
-        if key not in {"workload_type", "benchmark_name"}:
+        if key not in {"workload_type", "benchmark_name", "tuning_strategy"}:
             metadata[key] = value
 
     # Also grab scoring overrides from the root data object if present
