@@ -132,3 +132,44 @@ field and fall back to a path heuristic (`/pbt_runs/`, `/bo_runs/`,
 3. **No shared base; copy the whole PBT scaffold into the LHS tuner.**
    Rejected: that is exactly the duplication this ADR exists to bound, and it
    would immediately drift like PBT/BO already have.
+
+## Addendum (2026-06-19): `LHSDesignTuner` — the first concrete strategy
+
+[`src/tuners/lhs_design.py`](../../src/tuners/lhs_design.py) is the first
+concrete `BaseTuner`. It evaluates a **fixed** Latin Hypercube Sampling design
+over the knob space — no evolution, no exploit/explore, no perturbation:
+
+1. **One design, drawn once.** `KnobSpace.sample_diverse_configs(design_size)`
+   produces a space-filling sample; slot 0 is anchored to the PostgreSQL
+   default config (mirroring PBT/BO's pilot-seed convention).
+2. **Swept in parallel batches.** The design is sliced into batches of
+   `num_parallel_workers`. Each batch is evaluated concurrently under the same
+   `GenerationBarrier` lockstep PBT uses, so every configuration's measurement
+   window experiences identical contention. `max_generations` is therefore
+   `ceil(design_size / num_parallel_workers)` — each "generation" in the
+   `BaseTuner` loop is one batch.
+3. **No feedback.** Because there is no optimizer reacting to scores, every
+   knob varies independently of performance. That independence is exactly what
+   SCALPEL needs: applied to this design the per-knob importance signal is
+   wide enough to tier; applied to PBT's optimization *trajectory* the variance
+   collapses (see [`docs/guides/scalpel-rollout.md`](../../docs/guides/scalpel-rollout.md)).
+
+The tuner *composes* PBT's environment, orchestrator, and `Worker` machinery
+for the actual apply→run→measure step, but drives them through the
+strategy-agnostic `BaseTuner` lifecycle rather than PBT's `Population`
+evolution loop. PBT and BO remain unmodified.
+
+A run is launched via either entry point:
+
+```bash
+python -m src.tuners.lhs_design --tier core --benchmark sysbench \
+    --sysbench-workload oltp_read_write --design-size 64 --parallel-workers 4
+# equivalently:
+python -m src.tuners --tier core --benchmark sysbench --design-size 64
+```
+
+Output lands at
+`results/{workload}/[{sysbench_workload}/]lhs_runs/{tier}/tuning_sessions/lhs_results_*.json`,
+carrying `tuning_strategy: "lhs"` and a `design_records` array (one entry per
+design point with its config fractions, metrics, and score breakdown) that the
+SCALPEL pipeline consumes.
