@@ -278,3 +278,36 @@ There is no CLI flag — the sweep is mandatory, the cost is negligible,
 and the diagnostic is high-value. The degenerate path (no confirmed
 knobs at the primary `fdr_q`) skips the sweep and emits
 `q_sensitivity = {}`.
+
+## Addendum (v1.1) — pairwise-interaction fused signal
+
+v1.0 drove the Lorenz partition with fANOVA marginals only. A knob
+whose marginal mass was modest but whose strongest pairwise
+interaction lifted the response surface was demoted unfairly. v1.1
+fuses the two:
+
+```
+lorenz_input[k] = marginal[k] + alpha * max_interaction[k]
+max_interaction[k] = max_j fanova((k, j)).individual_importance
+```
+
+The interaction signal is computed only on the top-K marginal knobs
+(K=20 default) to keep the cost at O(K·p) instead of O(p²). The
+default `alpha = 0.5` lets a unit-mass interaction matter only when
+the marginal is at least half its size; `--scalpel-interaction-alpha
+0.0` recovers the marginal-only baseline.
+
+`compute_fanova_marginals` is now a thin shim around the new
+`compute_fanova_importance` which returns
+`FanovaImportance(marginals, max_interactions, top_k_marginals)`.
+The shim preserves backward compatibility for the stability-layer
+closure (which only needs marginals) and for `hardware_validator`'s
+cross-hardware export.
+
+`SCALPELResult` gains `marginal_importances`, `max_interactions`,
+`lorenz_input_importances`, `top_k_marginals`. The diagnostics JSON
+emits all four so reviewers can see the full attribution chain.
+
+New CLI flags: `--scalpel-interaction-alpha`,
+`--scalpel-interaction-top-k`. Set the latter to 0 to skip pairwise
+queries entirely (useful for quick smoke runs).

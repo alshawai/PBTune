@@ -156,6 +156,29 @@ def _build_fanova_config_space(
     return config_space
 
 
+@dataclass
+class FanovaImportance:
+    """fANOVA pass output: marginals + pairwise interactions.
+
+    Attributes
+    ----------
+    marginals : dict[str, float]
+        Per-knob individual (marginal) importance, identical to the
+        legacy ``compute_fanova_marginals`` payload.
+    max_interactions : dict[str, float]
+        Per-knob ``max_j fanova((i, j)).individual_importance`` over the
+        top-K marginal knobs. Knobs outside the top-K (or knobs in the
+        top-K whose best interaction is below 0) get 0.0.
+    top_k_marginals : list[str]
+        Knobs by descending marginal importance, the search frontier
+        used to compute pairwise interactions.
+    """
+
+    marginals: dict[str, float]
+    max_interactions: dict[str, float]
+    top_k_marginals: list[str]
+
+
 def compute_fanova_marginals(
     X: pd.DataFrame,
     y: pd.Series,
@@ -168,7 +191,53 @@ def compute_fanova_marginals(
     bootstrap: bool = True,
     random_state: int = 42,
 ) -> dict[str, float]:
-    """Run an fANOVA pass and return per-knob marginal importances.
+    """Backward-compatible thin wrapper returning only marginal importances.
+
+    Used by the stability-layer closure and by callers that do not need
+    pairwise interactions. New code should call
+    :func:`compute_fanova_importance` directly to access the richer
+    payload (max interactions, top-K marginals).
+    """
+    result = compute_fanova_importance(
+        X,
+        y,
+        knob_bounds=knob_bounds,
+        n_estimators=n_estimators,
+        min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,
+        max_features=max_features,
+        bootstrap=bootstrap,
+        random_state=random_state,
+        interaction_top_k=0,  # skip interaction work in the wrapper
+    )
+    return dict(result.marginals)
+
+
+def compute_fanova_importance(
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    knob_bounds: Optional[Mapping[str, tuple[float, float]]] = None,
+    n_estimators: int = 500,
+    min_samples_split: int = 5,
+    min_samples_leaf: int = 3,
+    max_features: float | int | str | None = "sqrt",
+    bootstrap: bool = True,
+    random_state: int = 42,
+    interaction_top_k: int = 20,
+) -> FanovaImportance:
+    """Run an fANOVA pass and return marginals + pairwise interactions.
+
+    Parameters
+    ----------
+    interaction_top_k : int, default 20
+        Cap on the search frontier for pairwise interactions. The full
+        ``O(p^2)`` interaction matrix is prohibitively expensive on
+        ~180-knob inputs; we restrict to the top-K marginals because
+        the fused signal ``marginal + alpha * max_interaction`` only
+        helps knobs whose marginal is competitive. Set to 0 to skip
+        interaction computation entirely (used by the
+        :func:`compute_fanova_marginals` shim).
 
     Notes
     -----
@@ -181,7 +250,7 @@ def compute_fanova_marginals(
     BORUTA-confirmed subset to avoid the v0 circularity blocker.
     """
     if X.empty:
-        return {}
+        return FanovaImportance(marginals={}, max_interactions={}, top_k_marginals=[])
 
     # Local import: fANOVA / pyrfr wheels are heavy and the import time
     # has historically caused test-collection slowdowns.
@@ -228,7 +297,38 @@ def compute_fanova_marginals(
         for idx, col in enumerate(X.columns):
             res = fanova_model.quantify_importance((idx,))
             importances[col] = float(res[(idx,)]["individual importance"])
-    return importances
+
+        max_interactions: dict[str, float] = {col: 0.0 for col in X.columns}
+        top_k_marginals: list[str] = []
+        if interaction_top_k > 0:
+            ranked = sorted(
+                importances.items(), key=lambda item: (-item[1], item[0])
+            )
+            top_cols = [col for col, _ in ranked[:interaction_top_k]]
+            top_k_marginals = list(top_cols)
+            col_to_idx = {col: i for i, col in enumerate(X.columns)}
+            for col_a in top_cols:
+                idx_a = col_to_idx[col_a]
+                best = 0.0
+                for col_b in top_cols:
+                    if col_a == col_b:
+                        continue
+                    idx_b = col_to_idx[col_b]
+                    pair = (min(idx_a, idx_b), max(idx_a, idx_b))
+                    try:
+                        res = fanova_model.quantify_importance(pair)
+                        contrib = float(res[pair]["individual importance"])
+                    except Exception:
+                        continue
+                    if contrib > best:
+                        best = contrib
+                max_interactions[col_a] = best
+
+    return FanovaImportance(
+        marginals=importances,
+        max_interactions=max_interactions,
+        top_k_marginals=top_k_marginals,
+    )
 
 
 # ---------------------------------------------------------------------------

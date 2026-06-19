@@ -43,6 +43,7 @@ from src.analysis.scalpel_stability import (
     apply_nuisance_filter,
     assign_lorenz_tiers,
     audit_dba_prior,
+    compute_fanova_importance,
     compute_fanova_marginals,
     group_clustered_stability,
 )
@@ -90,6 +91,25 @@ class SCALPELHyperparameters:
     # Layer 2 — coverage
     coverage_minimal: float = 0.50
     coverage_core: float = 0.80
+
+    # Layer 2 — fused signal: marginal + alpha * max_interaction
+    #
+    # ``interaction_alpha`` mixes the fANOVA marginal mass with the
+    # best pairwise-interaction contribution per knob. A knob whose
+    # marginal mass is modest but whose strongest interaction lifts
+    # the response surface should still land in the confirmed tier
+    # system. The default 0.5 was chosen so a unit-mass interaction
+    # only matters if the marginal is at least half its size. Set
+    # ``--scalpel-interaction-alpha 0.0`` to recover the marginal-only
+    # baseline.
+    #
+    # ``interaction_top_k`` caps the search frontier: only the K knobs
+    # with the largest marginals get pairwise queries. The full O(p^2)
+    # interaction matrix on ~180 knobs would dominate runtime; in
+    # practice the fused signal only helps knobs whose marginal is
+    # already competitive.
+    interaction_alpha: float = 0.5
+    interaction_top_k: int = 20
 
     # Layer 3 — stability
     #
@@ -153,6 +173,8 @@ class SCALPELHyperparameters:
             fdr_q=float(getattr(args, "scalpel_fdr_q", 0.10)),
             coverage_minimal=float(getattr(args, "scalpel_coverage_minimal", 0.50)),
             coverage_core=float(getattr(args, "scalpel_coverage_core", 0.80)),
+            interaction_alpha=float(getattr(args, "scalpel_interaction_alpha", 0.5)),
+            interaction_top_k=int(getattr(args, "scalpel_interaction_top_k", 20)),
             n_stability_subsamples=int(getattr(args, "scalpel_stability_b", 50)),
             stability_subsample_frac=float(
                 getattr(args, "scalpel_stability_frac", 0.5)
@@ -194,6 +216,10 @@ class SCALPELResult:
     preflight_reason: Optional[str] = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     q_sensitivity: dict[str, dict[str, Any]] = field(default_factory=dict)
+    marginal_importances: dict[str, float] = field(default_factory=dict)
+    max_interactions: dict[str, float] = field(default_factory=dict)
+    lorenz_input_importances: dict[str, float] = field(default_factory=dict)
+    top_k_marginals: list[str] = field(default_factory=list)
 
     @property
     def is_successful(self) -> bool:
@@ -290,6 +316,10 @@ class SCALPELResult:
             "dba_prior_violations": list(self.dba_prior_violations),
             "diagnostics": dict(self.diagnostics),
             "q_sensitivity": {q: dict(payload) for q, payload in self.q_sensitivity.items()},
+            "marginal_importances": dict(self.marginal_importances),
+            "max_interactions": dict(self.max_interactions),
+            "lorenz_input_importances": dict(self.lorenz_input_importances),
+            "top_k_marginals": list(self.top_k_marginals),
         }
 
 
@@ -400,6 +430,8 @@ def _hp_dict(hp: SCALPELHyperparameters) -> dict[str, Any]:
         "fdr_q": hp.fdr_q,
         "coverage_minimal": hp.coverage_minimal,
         "coverage_core": hp.coverage_core,
+        "interaction_alpha": hp.interaction_alpha,
+        "interaction_top_k": hp.interaction_top_k,
         "n_stability_subsamples": hp.n_stability_subsamples,
         "stability_subsample_frac": hp.stability_subsample_frac,
         "stability_boruta_iter": (
@@ -573,8 +605,8 @@ def scalpel_tier(
         random_state=hp.seed,
     )
 
-    # Step 6: fANOVA on the FULL cleaned feature set
-    full_importances = compute_fanova_marginals(
+    # Step 6: fANOVA on the FULL cleaned feature set (marginals + pairwise interactions)
+    fanova_result = compute_fanova_importance(
         X_clean,
         y_clean,
         knob_bounds=knob_bounds,
@@ -582,7 +614,14 @@ def scalpel_tier(
         min_samples_leaf=hp.rf_min_samples_leaf,
         max_features=hp.rf_max_features,
         random_state=hp.seed,
+        interaction_top_k=hp.interaction_top_k,
     )
+    full_importances = dict(fanova_result.marginals)
+    fused_importances: dict[str, float] = {
+        knob: float(full_importances.get(knob, 0.0))
+        + hp.interaction_alpha * float(fanova_result.max_interactions.get(knob, 0.0))
+        for knob in full_importances
+    }
 
     if not boruta.confirmed:
         wall = time.perf_counter() - started
@@ -603,7 +642,7 @@ def scalpel_tier(
 
     # Step 7: Lorenz cuts on confirmed subset
     lorenz = assign_lorenz_tiers(
-        full_importances,
+        fused_importances,
         confirmed=boruta.confirmed,
         coverage_minimal=hp.coverage_minimal,
         coverage_core=hp.coverage_core,
@@ -625,7 +664,7 @@ def scalpel_tier(
         )
         if q_result.confirmed:
             q_lorenz = assign_lorenz_tiers(
-                full_importances,
+                fused_importances,
                 confirmed=q_result.confirmed,
                 coverage_minimal=hp.coverage_minimal,
                 coverage_core=hp.coverage_core,
@@ -658,7 +697,7 @@ def scalpel_tier(
     violations = audit_dba_prior(lorenz.tier_assignments, knob_metadata)
 
     confirmed_importances = {
-        knob: float(full_importances.get(knob, 0.0)) for knob in boruta.confirmed
+        knob: float(fused_importances.get(knob, 0.0)) for knob in boruta.confirmed
     }
 
     wall = time.perf_counter() - started
@@ -693,4 +732,8 @@ def scalpel_tier(
         preflight_reason=None,
         hyperparameters=_hp_dict(hp),
         q_sensitivity=q_sensitivity,
+        marginal_importances=dict(fanova_result.marginals),
+        max_interactions=dict(fanova_result.max_interactions),
+        lorenz_input_importances=dict(fused_importances),
+        top_k_marginals=list(fanova_result.top_k_marginals),
     )
