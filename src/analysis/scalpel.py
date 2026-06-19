@@ -86,8 +86,23 @@ class SCALPELHyperparameters:
     coverage_core: float = 0.80
 
     # Layer 3 — stability
-    n_stability_subsamples: int = 100
+    #
+    # ``n_stability_subsamples`` is 50 (Meinshausen & Bühlmann 2010 recommend
+    # B ∈ [50, 100]; the R ``stabs::stabsel`` default is 50). Halved from the
+    # v1.0 default of 100 to bring the wall-clock down without invalidating the
+    # selection-probability estimator. Combined with ``stability_jobs`` > 1
+    # the layer is the dominant runtime cost so parallelism is a hard
+    # requirement, not an option.
+    #
+    # ``stability_boruta_iter`` is the BORUTA iteration count *inside* every
+    # stability subsample. When None, falls through to ``boruta_iter`` so the
+    # binomial null is calibrated against the same iteration count as the
+    # primary pass — the v1.0 code path capped this at 50 against a primary
+    # of 100, biasing ``stability_probability`` downward for borderline knobs.
+    n_stability_subsamples: int = 50
     stability_subsample_frac: float = 0.5
+    stability_boruta_iter: Optional[int] = None
+    stability_jobs: int = 4
 
     # Preflight gates
     min_samples: int = 200
@@ -132,10 +147,12 @@ class SCALPELHyperparameters:
             fdr_q=float(getattr(args, "scalpel_fdr_q", 0.10)),
             coverage_minimal=float(getattr(args, "scalpel_coverage_minimal", 0.50)),
             coverage_core=float(getattr(args, "scalpel_coverage_core", 0.80)),
-            n_stability_subsamples=int(getattr(args, "scalpel_stability_b", 100)),
+            n_stability_subsamples=int(getattr(args, "scalpel_stability_b", 50)),
             stability_subsample_frac=float(
                 getattr(args, "scalpel_stability_frac", 0.5)
             ),
+            stability_boruta_iter=getattr(args, "scalpel_stability_iter", None),
+            stability_jobs=int(getattr(args, "scalpel_stability_jobs", 4)),
             seed=seed,
             workload_label=workload_label,
             nuisance_overrides=overrides,
@@ -225,6 +242,8 @@ class SCALPELResult:
             "boruta_iter": self.hyperparameters.get("boruta_iter"),
             "fdr_q": self.hyperparameters.get("fdr_q"),
             "n_stability_subsamples": self.hyperparameters.get("n_stability_subsamples"),
+            "stability_boruta_iter": self.hyperparameters.get("stability_boruta_iter"),
+            "stability_jobs": self.hyperparameters.get("stability_jobs"),
             "wall_clock_s": d.get("wall_clock_s"),
             "preflight_reason": self.preflight_reason,
             "is_degenerate": self.is_degenerate,
@@ -371,6 +390,12 @@ def _hp_dict(hp: SCALPELHyperparameters) -> dict[str, Any]:
         "coverage_core": hp.coverage_core,
         "n_stability_subsamples": hp.n_stability_subsamples,
         "stability_subsample_frac": hp.stability_subsample_frac,
+        "stability_boruta_iter": (
+            hp.stability_boruta_iter
+            if hp.stability_boruta_iter is not None
+            else hp.boruta_iter
+        ),
+        "stability_jobs": hp.stability_jobs,
         "min_samples": hp.min_samples,
         "min_features": hp.min_features,
         "min_clusters": hp.min_clusters,
@@ -385,10 +410,14 @@ def _stability_tier_fn(hp: SCALPELHyperparameters):
     """Closure that re-runs Layers 1+2 on a cluster subsample.
 
     Each subsample regenerates its own shadow features (no cached null);
-    the BORUTA RF parameters are inherited from ``hp`` but the stability
-    iteration uses a smaller iteration count to keep runtime bounded.
+    the BORUTA RF parameters are inherited from ``hp``. The iteration
+    count defaults to ``hp.boruta_iter`` so the BH-FDR binomial null is
+    calibrated against the same iteration count as the primary pass —
+    a separate ``--scalpel-stability-iter`` flag lets operators trade
+    statistical precision for runtime when they deliberately want a
+    looser stability audit.
     """
-    sub_iter = max(20, min(hp.boruta_iter, 50))
+    sub_iter = hp.stability_boruta_iter if hp.stability_boruta_iter is not None else hp.boruta_iter
 
     def _inner(
         X_sub: pd.DataFrame,
@@ -577,6 +606,8 @@ def scalpel_tier(
         subsample_frac=hp.stability_subsample_frac,
         random_state=hp.seed,
         tier_fn=_stability_tier_fn(hp),
+        n_jobs=hp.stability_jobs,
+        hp=hp,
     )
 
     # Step 9: DBA-prior audit

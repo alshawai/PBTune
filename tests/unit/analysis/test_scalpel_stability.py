@@ -160,3 +160,72 @@ def test_group_clustered_stability_returns_probabilities_in_unit_interval():
     for knob, prob in result.selection_probability.items():
         assert 0.0 <= prob <= 1.0
         assert knob in {"a", "b", "c", "d"}
+
+
+def test_stability_tier_fn_honors_boruta_iter_by_default():
+    """With stability_boruta_iter=None the sub-iter equals boruta_iter.
+
+    Regression guard for the v1.0 bug where _stability_tier_fn capped
+    sub-iter at 50 against a primary of 100, biasing the BH-FDR null
+    for borderline knobs.
+    """
+    from src.analysis.scalpel import (
+        SCALPELHyperparameters,
+        _stability_tier_fn,
+    )
+    import src.analysis.scalpel as scalpel_mod
+
+    hp = SCALPELHyperparameters(boruta_iter=100, stability_boruta_iter=None)
+    captured: dict[str, int] = {}
+
+    def fake_boruta(*args, **kwargs):
+        captured["n_iterations"] = kwargs["n_iterations"]
+
+        class _Fake:
+            confirmed: list[str] = []
+            tentative: list[str] = []
+            rejected: list[str] = []
+
+        return _Fake()
+
+    closure = _stability_tier_fn(hp)
+    orig = scalpel_mod.boruta_with_group_perm
+    scalpel_mod.boruta_with_group_perm = fake_boruta
+    try:
+        closure(pd.DataFrame({"a": [0.1]}), pd.Series([0.0]), pd.Series([0]), seed=1)
+    finally:
+        scalpel_mod.boruta_with_group_perm = orig
+
+    assert captured["n_iterations"] == 100
+
+
+def test_stability_tier_fn_honors_explicit_stability_iter():
+    """Explicit stability_boruta_iter overrides the primary budget."""
+    from src.analysis.scalpel import (
+        SCALPELHyperparameters,
+        _stability_tier_fn,
+    )
+    import src.analysis.scalpel as scalpel_mod
+
+    hp = SCALPELHyperparameters(boruta_iter=100, stability_boruta_iter=40)
+    captured: dict[str, int] = {}
+
+    def fake_boruta(*args, **kwargs):
+        captured["n_iterations"] = kwargs["n_iterations"]
+
+        class _Fake:
+            confirmed: list[str] = []
+            tentative: list[str] = []
+            rejected: list[str] = []
+
+        return _Fake()
+
+    closure = _stability_tier_fn(hp)
+    orig = scalpel_mod.boruta_with_group_perm
+    scalpel_mod.boruta_with_group_perm = fake_boruta
+    try:
+        closure(pd.DataFrame({"a": [0.1]}), pd.Series([0.0]), pd.Series([0]), seed=1)
+    finally:
+        scalpel_mod.boruta_with_group_perm = orig
+
+    assert captured["n_iterations"] == 40

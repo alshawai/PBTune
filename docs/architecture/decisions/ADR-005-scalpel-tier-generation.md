@@ -197,3 +197,54 @@ For the rollout playbook, see
 [../../docs/guides/scalpel-rollout.md](../guides/scalpel-rollout.md)
 and the reference at
 [../../docs/reference/scalpel-diagnostics.md](../reference/scalpel-diagnostics.md).
+
+## Addendum (v1.1) — stability calibration + parallelization
+
+A production run on ~2 000 PBT samples for `oltp_read_write` exposed
+two issues that v1.0 left undefended:
+
+1. **Stability sub-iter mismatch.** The `_stability_tier_fn` closure
+   capped the BORUTA iteration count inside every stability subsample
+   at 50 (`sub_iter = max(20, min(hp.boruta_iter, 50))`) while the
+   primary pass ran at 100. The BH-FDR binomial null is calibrated
+   against the iteration count: at `n=50` the two-sided binomial p
+   for `hits=35` is roughly 7.7e-4; at `n=100` for the analogous
+   `hits=70` it is roughly 5.4e-5. Borderline knobs that passed the
+   primary cutoff routinely failed inside subsamples, depressing
+   `stability_probability` and making the layer look noisier than it
+   is.
+2. **Wall-clock.** 100 stability subsamples × ~110 s each = ~3 h, run
+   strictly sequentially, dominated the runtime of every analysis
+   invocation.
+
+v1.1 fixes both:
+
+- `SCALPELHyperparameters` gains `stability_boruta_iter`
+  (`Optional[int]`, default `None` → falls through to `boruta_iter`)
+  and `stability_jobs` (default 4). The hard-coded cap is gone.
+- The `n_stability_subsamples` default drops from 100 → 50 — the
+  lower end of the canonical B ∈ [50, 100] range from
+  Meinshausen & Bühlmann (2010) and the default of R's
+  `stabs::stabsel`.
+- `group_clustered_stability` accepts `n_jobs` and `hp` parameters.
+  When `n_jobs > 1`, it dispatches subsamples to a
+  `ProcessPoolExecutor`; the worker re-imports
+  `_stability_tier_fn(hp)` locally because the closure captures
+  `hp` and is not picklable across the process boundary. The
+  sequential path (`n_jobs == 1`) is unchanged.
+- The fANOVA "data ordering" warning is silenced inside
+  `compute_fanova_marginals` via a scoped `warnings.filterwarnings`.
+  SCALPEL alphabetizes `X.columns` early, and the ConfigSpace built
+  in `_build_fanova_config_space` iterates `X.columns` in the same
+  order — so the warning is a false positive triggered by the
+  unlabeled NumPy array argument.
+- Operator-facing CLI flags on `analyze_knob_importance`:
+  `--scalpel-stability-iter`, `--scalpel-stability-jobs`, plus the
+  default change to `--scalpel-stability-b 50`.
+
+Combined math: 50 subsamples × 4 parallel × ~110 s each ≈ 23 min,
+even with `stability_boruta_iter` matching the primary at 100.
+
+The pruned diagnostics block now also emits `stability_boruta_iter`
+(the resolved value, not the raw input) and `stability_jobs` so a
+downstream reviewer can confirm which budget actually ran.

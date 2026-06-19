@@ -22,6 +22,9 @@ Provides the building blocks the orchestrator stitches together:
 
 from __future__ import annotations
 
+import os
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Optional
 
@@ -197,22 +200,34 @@ def compute_fanova_marginals(
         fanova_max_features = None
 
     config_space = _build_fanova_config_space(X, knob_bounds)
-    fanova_model = fANOVA(
-        X=X.to_numpy(),
-        Y=y.to_numpy(),
-        config_space=config_space,
-        n_trees=n_estimators,
-        seed=random_state,
-        min_samples_split=min_samples_split,
-        min_samples_leaf=min_samples_leaf,
-        max_features=fanova_max_features,
-        bootstrapping=bootstrap,
-    )
+    # SCALPEL alphabetizes columns before this point; the ConfigSpace built
+    # above iterates ``X.columns`` in the same order, so fANOVA's column
+    # order matches ``config_space.get_hyperparameter_names()`` by
+    # construction. The library emits the "data ordering" warning
+    # unconditionally when the caller passes a NumPy array (no labels), so
+    # we suppress the noise rather than fight the heuristic.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*expects data to be ordered.*",
+            module=r"fanova\.fanova",
+        )
+        fanova_model = fANOVA(
+            X=X.to_numpy(),
+            Y=y.to_numpy(),
+            config_space=config_space,
+            n_trees=n_estimators,
+            seed=random_state,
+            min_samples_split=min_samples_split,
+            min_samples_leaf=min_samples_leaf,
+            max_features=fanova_max_features,
+            bootstrapping=bootstrap,
+        )
 
-    importances: dict[str, float] = {}
-    for idx, col in enumerate(X.columns):
-        res = fanova_model.quantify_importance((idx,))
-        importances[col] = float(res[(idx,)]["individual importance"])
+        importances: dict[str, float] = {}
+        for idx, col in enumerate(X.columns):
+            res = fanova_model.quantify_importance((idx,))
+            importances[col] = float(res[(idx,)]["individual importance"])
     return importances
 
 
@@ -339,15 +354,45 @@ SubsampleTierFn = Callable[
 ]
 
 
+def _run_one_subsample(
+    payload: tuple[Any, Any, Any, list[str], int, Any],
+) -> Optional[dict[str, str]]:
+    """Worker entry point invoked inside each stability subsample process.
+
+    The closure produced by :func:`scalpel._stability_tier_fn` captures
+    ``SCALPELHyperparameters`` and is not picklable. To dispatch work to
+    a ``ProcessPoolExecutor`` we send raw NumPy arrays + column names +
+    seed + hyperparameters across the process boundary and reconstruct
+    the closure inside the worker.
+    """
+    from src.analysis.scalpel import _stability_tier_fn  # local import — breaks cycle
+
+    X_arr, y_arr, groups_arr, columns, seed, hp = payload
+    X_sub = pd.DataFrame(X_arr, columns=columns)
+    y_sub = pd.Series(y_arr)
+    groups_sub = pd.Series(groups_arr)
+    tier_fn = _stability_tier_fn(hp)
+    try:
+        result = tier_fn(X_sub, y_sub, groups_sub, seed)
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.debug("Stability subsample failed in worker: %s", exc)
+        return None
+    if not result:
+        return None
+    return dict(result)
+
+
 def group_clustered_stability(
     X: pd.DataFrame,
     y: pd.Series,
     sample_groups: pd.Series,
     *,
-    n_subsamples: int = 100,
+    n_subsamples: int = 50,
     subsample_frac: float = 0.5,
     random_state: int = 42,
     tier_fn: SubsampleTierFn,
+    n_jobs: int = 1,
+    hp: Optional[Any] = None,
 ) -> StabilityResult:
     """Repeat the SCALPEL pipeline on cluster subsamples.
 
@@ -355,8 +400,12 @@ def group_clustered_stability(
     ----------
     X, y, sample_groups : pd.DataFrame / pd.Series
         Same shape as the inputs to the orchestrator.
-    n_subsamples : int, default 100
+    n_subsamples : int, default 50
         Number of cluster subsamples (B in Meinshausen & Bühlmann).
+        Halved from the v1.0 default of 100 to bring SCALPEL wall-clock
+        from ~3 h to ~20 min on the 2000-sample dataset; the lower end
+        of the canonical B ∈ [50, 100] range and matches the R
+        ``stabs::stabsel`` default.
     subsample_frac : float, default 0.5
         Fraction of unique clusters to retain per subsample.
     random_state : int, default 42
@@ -364,7 +413,17 @@ def group_clustered_stability(
     tier_fn : callable
         Function taking ``(X_sub, y_sub, groups_sub, seed)`` and returning
         a tier-assignment mapping for the subsample (or None on failure).
-        The orchestrator passes a closure that re-runs Layers 1+2.
+        Used in the ``n_jobs == 1`` path; the parallel path reconstructs
+        the closure inside each worker from ``hp`` to avoid pickling it.
+    n_jobs : int, default 1
+        Number of worker processes. ``1`` preserves historical sequential
+        behavior; values > 1 dispatch subsamples to a
+        :class:`ProcessPoolExecutor`. When ``hp`` is ``None``, the parallel
+        path falls back to sequential (the worker cannot rebuild the
+        closure without ``hp``).
+    hp : SCALPELHyperparameters, optional
+        Required when ``n_jobs > 1``. Passed to each worker so it can
+        rebuild ``_stability_tier_fn(hp)`` locally.
 
     Returns
     -------
@@ -394,32 +453,76 @@ def group_clustered_stability(
 
     target_size = max(1, int(round(subsample_frac * unique_groups.size)))
 
-    # tier_distribution[knob][tier] holds the count of subsamples that
-    # assigned `knob` to `tier`. Knobs that never appear in any subsample
-    # tier_assignments dict end up with an empty inner dict.
-    counts: dict[str, dict[str, int]] = {}
-    successful = 0
-
-    for it in range(n_subsamples):
+    # Pre-materialize every subsample slice + seed so the parallel path
+    # can dispatch them without holding the RNG across processes. Stays
+    # in the same order as the sequential path for reproducibility.
+    columns = list(X.columns)
+    subsamples: list[tuple[np.ndarray, np.ndarray, np.ndarray, list[str], int]] = []
+    for _ in range(n_subsamples):
         sample = rng.choice(unique_groups, size=target_size, replace=False)
         mask = np.isin(groups_arr, sample)
         if not mask.any():
             continue
-        X_sub = X.loc[mask].reset_index(drop=True)
-        y_sub = y.loc[mask].reset_index(drop=True)
-        groups_sub = sample_groups.loc[mask].reset_index(drop=True)
         seed = int(rng.integers(0, 2**31 - 1))
-        try:
-            assignment = tier_fn(X_sub, y_sub, groups_sub, seed)
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.debug("Stability subsample %d failed: %s", it, exc)
-            continue
-        if not assignment:
-            continue
-        successful += 1
-        for knob, tier in assignment.items():
-            counts.setdefault(knob, {}).setdefault(tier, 0)
-            counts[knob][tier] += 1
+        subsamples.append(
+            (
+                X.loc[mask].to_numpy(),
+                y.loc[mask].to_numpy(),
+                sample_groups.loc[mask].to_numpy(),
+                columns,
+                seed,
+            )
+        )
+
+    use_parallel = n_jobs > 1 and hp is not None and len(subsamples) > 1
+    counts: dict[str, dict[str, int]] = {}
+    successful = 0
+
+    if use_parallel:
+        max_workers = max(1, min(n_jobs, len(subsamples), os.cpu_count() or 1))
+        LOGGER.info(
+            "Stability: dispatching %d subsamples across %d worker processes",
+            len(subsamples),
+            max_workers,
+        )
+        payloads = [
+            (X_arr, y_arr, groups_arr_sub, cols, seed, hp)
+            for (X_arr, y_arr, groups_arr_sub, cols, seed) in subsamples
+        ]
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_run_one_subsample, payload): idx
+                for idx, payload in enumerate(payloads)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    assignment = future.result()
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOGGER.debug("Stability subsample %d failed: %s", idx, exc)
+                    continue
+                if not assignment:
+                    continue
+                successful += 1
+                for knob, tier in assignment.items():
+                    counts.setdefault(knob, {}).setdefault(tier, 0)
+                    counts[knob][tier] += 1
+    else:
+        for it, (X_arr, y_arr, groups_arr_sub, cols, seed) in enumerate(subsamples):
+            X_sub = pd.DataFrame(X_arr, columns=cols)
+            y_sub = pd.Series(y_arr)
+            groups_sub = pd.Series(groups_arr_sub)
+            try:
+                assignment = tier_fn(X_sub, y_sub, groups_sub, seed)
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.debug("Stability subsample %d failed: %s", it, exc)
+                continue
+            if not assignment:
+                continue
+            successful += 1
+            for knob, tier in assignment.items():
+                counts.setdefault(knob, {}).setdefault(tier, 0)
+                counts[knob][tier] += 1
 
     if successful == 0:
         return StabilityResult(
