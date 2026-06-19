@@ -28,6 +28,44 @@ operator playbook.
   Pre-existing tier CSVs in that directory will be regenerated when
   `preprocess_knobs` is rerun.
 
+## Generating the importance-design trace (LHS)
+
+SCALPEL attributes importance best over a **space-filling design** where every
+knob varies independently of performance feedback. A PBT trace works, but its
+trajectory variance is narrow — the optimizer collapses the per-knob spread it
+needs. The [`LHSDesignTuner`](../../src/tuners/lhs_design.py) produces a clean
+substrate instead: a fixed Latin Hypercube design swept once, with no
+evolution.
+
+```bash
+# 64-point design over the extensive tier, 4 instances in parallel
+python -m src.tuners.lhs_design \
+  --benchmark sysbench \
+  --sysbench-workload oltp_read_write \
+  --tier extensive \
+  --design-size 64 \
+  --parallel-workers 4
+# → results/oltp/oltp_read_write/lhs_runs/extensive/tuning_sessions/lhs_results_*.json
+```
+
+`python -m src.tuners` is an alias for the same CLI. The session JSON carries
+`tuning_strategy: "lhs"` and a `design_records` array — one entry per design
+point with its config fractions, metrics, and score breakdown. Point SCALPEL
+at the `lhs_runs/.../tuning_sessions` directory exactly as you would a PBT
+trace:
+
+```bash
+python -m src.scripts.analyze_knob_importance \
+  --algorithm scalpel \
+  --results-dir results/oltp/oltp_read_write/lhs_runs/extensive/tuning_sessions \
+  --workload-label oltp_read_write \
+  --export-tiers auto
+```
+
+Pick `--design-size` for the budget you have: larger designs give SCALPEL more
+rows to attribute over (tighter FDR control) at linear wall-clock cost. 64–128
+points is a reasonable starting range for the extensive tier.
+
 ## Single workload
 
 Quick run with default budgets (~5–10 min on n ≈ 2 000, p ≈ 180):
