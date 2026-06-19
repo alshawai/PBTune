@@ -1345,6 +1345,7 @@ class PBTTuner:
         results = {
             "tuning_session": {
                 "timing_schema_version": "1.1",
+                "tuning_strategy": "pbt",
                 "knob_tier": self.knob_tier,
                 "knob_source": self.knob_source,
                 "num_knobs": len(self.full_knob_space),
