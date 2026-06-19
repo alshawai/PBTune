@@ -189,6 +189,62 @@ def _fit_outer_rf(
     return rf, oob_r2
 
 
+def partition_boruta_hits(
+    hit_counts: np.ndarray,
+    knobs: list[str],
+    n_iterations: int,
+    *,
+    fdr_q: float,
+) -> BorutaResult:
+    """Partition pre-computed BORUTA hit counts at a given FDR target.
+
+    Pure function: takes already-computed hit counts and returns a
+    confirmed/tentative/rejected verdict at ``fdr_q``. Used by the primary
+    BORUTA pass and by the q-sensitivity sweep, which reuses the same
+    hit counts at multiple thresholds without re-fitting RFs.
+    """
+    if len(knobs) == 0 or n_iterations == 0:
+        return BorutaResult(
+            confirmed=[],
+            tentative=[],
+            rejected=[],
+            hit_counts={k: int(hit_counts[i]) for i, k in enumerate(knobs)},
+            p_values={k: 1.0 for k in knobs},
+            p_values_bh={k: 1.0 for k in knobs},
+            n_iterations=n_iterations,
+        )
+
+    p_values = np.empty(len(knobs))
+    for i, hits in enumerate(hit_counts):
+        p_values[i] = float(
+            stats.binomtest(int(hits), n=n_iterations, p=0.5, alternative="two-sided").pvalue
+        )
+    p_values_bh = _bh_adjust(p_values)
+    half = n_iterations / 2.0
+
+    confirmed: list[str] = []
+    tentative: list[str] = []
+    rejected: list[str] = []
+    for i, knob in enumerate(knobs):
+        if p_values_bh[i] <= fdr_q:
+            if hit_counts[i] > half:
+                confirmed.append(knob)
+            else:
+                rejected.append(knob)
+        else:
+            tentative.append(knob)
+
+    return BorutaResult(
+        confirmed=confirmed,
+        tentative=tentative,
+        rejected=rejected,
+        hit_counts={k: int(hit_counts[i]) for i, k in enumerate(knobs)},
+        p_values={k: float(p_values[i]) for i, k in enumerate(knobs)},
+        p_values_bh={k: float(p_values_bh[i]) for i, k in enumerate(knobs)},
+        n_iterations=n_iterations,
+    )
+
+
 def boruta_with_group_perm(
     X: pd.DataFrame,
     y: pd.Series,
@@ -285,42 +341,17 @@ def boruta_with_group_perm(
 
         hit_counts += (real_imp > shadow_max).astype(np.int64)
 
-    # Two-sided binomial test per knob against p=0.5
-    p_values = np.empty(len(knobs))
-    for i, hits in enumerate(hit_counts):
-        p_values[i] = float(
-            stats.binomtest(int(hits), n=n_iterations, p=0.5, alternative="two-sided").pvalue
-        )
-    p_values_bh = _bh_adjust(p_values)
-    half = n_iterations / 2.0
-
-    confirmed: list[str] = []
-    tentative: list[str] = []
-    rejected: list[str] = []
-    for i, knob in enumerate(knobs):
-        if p_values_bh[i] <= fdr_q:
-            if hit_counts[i] > half:
-                confirmed.append(knob)
-            else:
-                rejected.append(knob)
-        else:
-            tentative.append(knob)
+    result = partition_boruta_hits(
+        hit_counts, knobs, n_iterations, fdr_q=fdr_q
+    )
 
     LOGGER.info(
         "BORUTA: confirmed=%d tentative=%d rejected=%d (iter=%d, fdr_q=%.2f)",
-        len(confirmed),
-        len(tentative),
-        len(rejected),
+        len(result.confirmed),
+        len(result.tentative),
+        len(result.rejected),
         n_iterations,
         fdr_q,
     )
 
-    return BorutaResult(
-        confirmed=confirmed,
-        tentative=tentative,
-        rejected=rejected,
-        hit_counts={k: int(hit_counts[i]) for i, k in enumerate(knobs)},
-        p_values={k: float(p_values[i]) for i, k in enumerate(knobs)},
-        p_values_bh={k: float(p_values_bh[i]) for i, k in enumerate(knobs)},
-        n_iterations=n_iterations,
-    )
+    return result

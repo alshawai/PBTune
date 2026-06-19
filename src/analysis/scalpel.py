@@ -35,6 +35,7 @@ from src.analysis.scalpel_significance import (
     BorutaResult,
     _fit_outer_rf,
     boruta_with_group_perm,
+    partition_boruta_hits,
 )
 from src.analysis.scalpel_stability import (
     LorenzTierResult,
@@ -59,6 +60,11 @@ SCALPEL_VERSION = "1.0"
 
 #: Lorenz cutoffs that satisfy the existing ``jenks_breaks`` schema slot.
 DEFAULT_LORENZ_BREAKPOINTS: list[float] = [0.50, 0.80]
+
+#: BH-FDR thresholds explored in the q-sensitivity sweep. Reviewers see how
+#: tier composition shifts as the FDR tolerance widens; hit counts are
+#: q-independent so the sweep is essentially free (Lorenz partitions only).
+Q_SWEEP: tuple[float, ...] = (0.05, 0.10, 0.20, 0.30)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +193,7 @@ class SCALPELResult:
     is_degenerate: bool = False
     preflight_reason: Optional[str] = None
     hyperparameters: dict[str, Any] = field(default_factory=dict)
+    q_sensitivity: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def is_successful(self) -> bool:
@@ -248,6 +255,10 @@ class SCALPELResult:
             "preflight_reason": self.preflight_reason,
             "is_degenerate": self.is_degenerate,
             "stable_knobs_semantics": "intersection_of_confirmed_sets",
+            "q_sensitivity_summary": {
+                q: int(payload.get("n_confirmed", 0))
+                for q, payload in self.q_sensitivity.items()
+            },
         }
 
     def diagnostics_full(self) -> dict[str, Any]:
@@ -278,6 +289,7 @@ class SCALPELResult:
             },
             "dba_prior_violations": list(self.dba_prior_violations),
             "diagnostics": dict(self.diagnostics),
+            "q_sensitivity": {q: dict(payload) for q, payload in self.q_sensitivity.items()},
         }
 
 
@@ -597,6 +609,38 @@ def scalpel_tier(
         coverage_core=hp.coverage_core,
     )
 
+    # Step 7b: q-sensitivity sweep — partition the same hit counts at
+    # alternative FDR targets and re-tier within each. Hit counts are
+    # q-independent so this adds only a handful of millisecond-scale
+    # Lorenz partitions; the sweep gives reviewers a tier-stability
+    # diagnostic ("how does the boundary move at q=0.05 vs q=0.30?").
+    knobs_in_X = list(X_clean.columns)
+    hit_counts_arr = np.array(
+        [boruta.hit_counts.get(k, 0) for k in knobs_in_X], dtype=np.int64
+    )
+    q_sensitivity: dict[str, dict[str, Any]] = {}
+    for q in Q_SWEEP:
+        q_result = partition_boruta_hits(
+            hit_counts_arr, knobs_in_X, hp.boruta_iter, fdr_q=q
+        )
+        if q_result.confirmed:
+            q_lorenz = assign_lorenz_tiers(
+                full_importances,
+                confirmed=q_result.confirmed,
+                coverage_minimal=hp.coverage_minimal,
+                coverage_core=hp.coverage_core,
+            )
+            q_assignments = dict(q_lorenz.tier_assignments)
+        else:
+            q_assignments = {}
+        q_sensitivity[f"{q:.2f}"] = {
+            "confirmed": list(q_result.confirmed),
+            "tentative": list(q_result.tentative),
+            "rejected": list(q_result.rejected),
+            "tier_assignments": q_assignments,
+            "n_confirmed": len(q_result.confirmed),
+        }
+
     # Step 8: stability — every subsample re-runs Layers 1+2 from scratch
     stability = group_clustered_stability(
         X_clean,
@@ -648,4 +692,5 @@ def scalpel_tier(
         is_degenerate=False,
         preflight_reason=None,
         hyperparameters=_hp_dict(hp),
+        q_sensitivity=q_sensitivity,
     )

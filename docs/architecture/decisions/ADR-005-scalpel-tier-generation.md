@@ -248,3 +248,33 @@ even with `stability_boruta_iter` matching the primary at 100.
 The pruned diagnostics block now also emits `stability_boruta_iter`
 (the resolved value, not the raw input) and `stability_jobs` so a
 downstream reviewer can confirm which budget actually ran.
+
+## Addendum (v1.1) — q-sensitivity sweep
+
+The primary BORUTA pass operates at a single FDR target
+(`fdr_q=0.10`). To let reviewers see how the tier boundary shifts as
+that threshold tightens or loosens, v1.1 reuses the per-knob hit
+counts (which are q-independent) and re-partitions them at
+`q ∈ {0.05, 0.10, 0.20, 0.30}`. The cost is four extra Lorenz
+partitions — milliseconds on top of the multi-minute primary pass.
+
+The implementation extracts a pure `partition_boruta_hits(hit_counts,
+knobs, n_iterations, *, fdr_q) → BorutaResult` from the original
+`boruta_with_group_perm` (which now calls it internally to produce its
+own verdict). The sweep iterates `Q_SWEEP = (0.05, 0.10, 0.20, 0.30)`
+and persists the result on `SCALPELResult.q_sensitivity`. By
+construction the confirmed sets are monotone-nested:
+`confirmed(0.05) ⊆ confirmed(0.10) ⊆ confirmed(0.20) ⊆ confirmed(0.30)`.
+
+Output:
+
+- `metadata.diagnostics.q_sensitivity_summary` (in
+  `data_driven_tiers.json`) carries `{q_str: n_confirmed}`.
+- `scalpel_diagnostics.json` `q_sensitivity[q_str]` carries the full
+  per-q partition with `tier_assignments` so a reviewer can see which
+  knobs the looser threshold would promote to `minimal`/`core`.
+
+There is no CLI flag — the sweep is mandatory, the cost is negligible,
+and the diagnostic is high-value. The degenerate path (no confirmed
+knobs at the primary `fdr_q`) skips the sweep and emits
+`q_sensitivity = {}`.
