@@ -288,6 +288,8 @@ n ≈ 2 000 / p ≈ 180:
 | `fdr_q` | 0.10 | Plan default; tightens the all-relevant set without collapsing it. |
 | `coverage_minimal` | 0.50 | Pareto / Juran "vital few" cut. |
 | `coverage_core` | 0.80 | 80/20 cut on the confirmed subset. |
+| `interaction_alpha` | 0.5 | Fused-signal weight: Lorenz input is `marginal + alpha * max_interaction`. |
+| `interaction_top_k` | 20 | Search frontier for pairwise interactions (caps cost at O(K * p)). |
 | `n_stability_subsamples` | 50 | Layer 3 budget (Meinshausen & Bühlmann 2010, lower end of B ∈ [50, 100]). |
 | `stability_subsample_frac` | 0.5 | Drop half the clusters per subsample. |
 | `stability_boruta_iter` | `None` → falls through to `boruta_iter` | BORUTA iter count *inside* each stability subsample. Match the primary or BH-FDR null is mis-calibrated. |
@@ -422,6 +424,48 @@ The sweep is operator-invisible: there is no CLI flag to disable it
 because the cost is negligible and the diagnostic is high-value. If
 the primary pass returns no confirmed knobs (the degenerate path), the
 sweep is skipped and `q_sensitivity` is empty.
+
+## v1.1 — pairwise-interaction fused signal
+
+fANOVA's `quantify_importance((i, j))` returns the interaction
+contribution above the two marginals. SCALPEL v1.0 used only the
+marginals to drive the Lorenz partition — a knob whose marginal mass
+was modest but whose strongest interaction lifted the response surface
+was demoted unfairly. v1.1 fuses the two:
+
+```text
+lorenz_input[k] = marginal[k] + alpha * max_interaction[k]
+max_interaction[k] = max_j fanova((k, j)).individual_importance
+```
+
+Only the top-K marginal knobs (K=20 default) get pairwise queries.
+The full O(p²) interaction matrix on ~180 knobs would dominate runtime,
+and in practice the fused signal only helps knobs whose marginal is
+already competitive — a knob with zero marginal and zero shadow mass
+is not going to be promoted by an interaction term alone.
+
+Hyperparameters: `interaction_alpha` (default 0.5) controls the mix.
+The default lets a unit-mass interaction matter only when the marginal
+is at least half its size. `--scalpel-interaction-alpha 0.0` recovers
+the pure marginal-only baseline; `--scalpel-interaction-top-k 0` skips
+interaction computation entirely.
+
+`SCALPELResult` persists three new fields:
+
+- `marginal_importances` — the unmixed fANOVA marginals (what v1.0
+  used as the Lorenz input).
+- `max_interactions` — per-knob max pairwise interaction (zero for
+  knobs outside the top-K).
+- `lorenz_input_importances` — the fused vector that actually drove
+  the Lorenz partition.
+- `top_k_marginals` — the search frontier (knobs whose pairwise
+  interactions were queried).
+
+`compute_fanova_marginals` is now a thin shim around the new
+`compute_fanova_importance` returning `FanovaImportance`. The shim
+preserves backward compatibility for the stability-layer closure and
+for `hardware_validator`'s cross-hardware export, neither of which
+benefit from the interaction signal.
 
 ## Cross-references
 

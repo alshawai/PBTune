@@ -194,6 +194,26 @@ def parse_args() -> argparse.Namespace:
         help="Cumulative-mass cut for the data-driven 'core' tier.",
     )
     parser.add_argument(
+        "--scalpel-interaction-alpha",
+        type=float,
+        default=0.5,
+        help=(
+            "Weight on the per-knob max pairwise interaction in the "
+            "fused Lorenz input (marginal + alpha * max_interaction). "
+            "Pass 0.0 to recover the marginal-only baseline."
+        ),
+    )
+    parser.add_argument(
+        "--scalpel-interaction-top-k",
+        type=int,
+        default=20,
+        help=(
+            "Search frontier for pairwise interactions: only the K knobs "
+            "with the largest marginals get queried, capping the cost at "
+            "O(K * p) instead of O(p^2). Pass 0 to skip interactions."
+        ),
+    )
+    parser.add_argument(
         "--scalpel-rf-trees",
         type=int,
         default=500,
