@@ -31,6 +31,7 @@ from src.tuners.lhs_design import LHSDesignTuner
 from src.tuners.utils.output_paths import resolve_tuner_output_root
 from src.tuners.utils.types import TunerLifecycleConfig, TuningStrategy
 from src.utils.logger import (
+    get_color_context,
     get_logger,
     print_startup_banner,
     set_colors_enabled,
@@ -40,6 +41,7 @@ from src.utils.session_clock import format_session_id
 from src.utils.types import STANDARD_BENCHMARK_CONFIG, clone_benchmark_config
 
 LOGGER = get_logger("LHSDesignCLI")
+COLORS = get_color_context()
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -248,16 +250,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
 
     set_colors_enabled(not args.no_color)
-    print_startup_banner()
+    print_startup_banner(TuningStrategy.LHS)
     setup_logging(verbosity=args.verbose, show_module=True)
 
     tuner = build_tuner(args)
     LOGGER.info(
-        "Starting LHS-design sweep: tier=%s, design_size=%d, workers=%d, output=%s",
+        "%sStarting LHS-design sweep%s: tier=%s%s%s, design_size=%s%d%s, "
+        "workers=%s%d%s, output=%s%s%s",
+        COLORS.bold,
+        COLORS.reset,
+        COLORS.cyan,
         args.tier,
+        COLORS.reset,
+        COLORS.cyan,
         args.design_size,
+        COLORS.reset,
+        COLORS.cyan,
         args.parallel_workers,
+        COLORS.reset,
+        COLORS.cyan,
         tuner.output_root,
+        COLORS.reset,
     )
     tuner.run()
     return 0

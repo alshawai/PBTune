@@ -122,7 +122,10 @@ class _FakeLHSTuner(LHSDesignTuner):
         self._instances = self.env.setup_instances(
             self.lifecycle.num_parallel_workers
         )
-        self.system_info = {"os": "test"}
+        # Empty dict mirrors BaseTuner's default; log_system_info() tolerates
+        # it via .get(..., {}) so the Commit C system-info block renders here
+        # without a real hardware probe.
+        self.system_info = {}
         self.session_environment = SimpleNamespace(to_dict=lambda: {"docker": False})
 
         # Build the design directly (skip real LHS sampling).
