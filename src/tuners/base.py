@@ -62,8 +62,13 @@ from src.tuners.utils.types import (
     TuningStrategy,
 )
 from src.utils.environments import EnvironmentFactory
-from src.utils.hardware_info import WorkerResources, get_system_info
-from src.utils.logger import get_logger
+from src.utils.hardware_info import WorkerResources, get_system_info, log_system_info
+from src.utils.logger import (
+    get_color_context,
+    get_logger,
+    log_section_header,
+    print_startup_banner,
+)
 from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
@@ -74,6 +79,7 @@ from src.utils.timing import TimingRecorder
 from src.utils.types import TuningMode, build_session_environment
 
 LOGGER = get_logger("BaseTuner")
+COLORS = get_color_context()
 
 
 class BaseTuner(ABC):
@@ -204,6 +210,17 @@ class BaseTuner(ABC):
         both are kept intentionally.
         """
         return self._benchmark_name
+
+    def config_summary_lines(self) -> List[Tuple[str, str]]:
+        """
+        Strategy-specific ``(label, value)`` rows for the startup summary.
+
+        Rendered in ``run()``'s initialization block (bold label, cyan value),
+        matching PBT's banner. The base returns the generic generation budget;
+        concrete tuners override to name their own budget line (PBT:
+        "Population Size", BO: "Iterations", LHS: "Design Size").
+        """
+        return [("Max Generations:", str(self.max_generations))]
 
     def session_filename(self) -> str:
         """Filename for the session JSON (``{strategy}_results_{ts}.json``)."""
@@ -408,34 +425,77 @@ class BaseTuner(ABC):
 
     def run(self) -> Dict[str, Any]:
         """Drive the full tuning lifecycle and return the session results."""
+        strategy_label = self.strategy.value.upper()
+        print_startup_banner(self.strategy)
+        log_section_header(
+            LOGGER,
+            "%sStarting %s Tuner initialization%s",
+            COLORS.bold,
+            strategy_label,
+            COLORS.reset,
+        )
         LOGGER.info(
-            "Starting %s tuner (tier=%s, source=%s, workers=%d)",
-            self.strategy.value.upper(),
+            "Knob Tier:       %s%s (%s source)%s",
+            COLORS.cyan,
             self.lifecycle.knob_tier,
             self.lifecycle.knob_source,
-            self.lifecycle.num_parallel_workers,
+            COLORS.reset,
         )
+        LOGGER.info(
+            "Parallel Workers:%s%d%s",
+            COLORS.cyan,
+            self.lifecycle.num_parallel_workers,
+            COLORS.reset,
+        )
+
         self.start_time = time.time()
         try:
+            log_section_header(
+                LOGGER,
+                "%sSetting up tuning environment%s",
+                COLORS.bold,
+                COLORS.reset,
+            )
             with self.bootstrap_timing.span("setup"):
                 self.setup()
 
+            self._log_optimization_header(strategy_label)
+
             self.tuning_start_time = time.time()
+            log_section_header(
+                LOGGER,
+                "%sStarting %s optimization loop%s",
+                COLORS.bold,
+                strategy_label,
+                COLORS.reset,
+            )
             for generation in range(self.max_generations):
                 outcome = self.step(generation)
 
                 if self.should_stop(outcome):
                     LOGGER.info(
-                        "Stopping criterion met after generation %d", generation
+                        "%sStopping criterion met after generation %d%s",
+                        COLORS.teal,
+                        generation,
+                        COLORS.reset,
                     )
                     break
         except KeyboardInterrupt:
-            LOGGER.warning("Interrupted by user; saving partial results...")
+            LOGGER.warning(
+                "%sInterrupted by user; saving partial results...%s",
+                COLORS.orange,
+                COLORS.reset,
+            )
         finally:
             try:
                 self.teardown()
             except (RuntimeError, ValueError, ConnectionError, OSError) as exc:
-                LOGGER.warning("Teardown encountered an error: %s", exc)
+                LOGGER.warning(
+                    "%sTeardown encountered an error: %s%s",
+                    COLORS.orange,
+                    exc,
+                    COLORS.reset,
+                )
 
         total_time = time.time() - self.start_time
         tuning_time = time.time() - (self.tuning_start_time or self.start_time)
@@ -452,13 +512,61 @@ class BaseTuner(ABC):
             output_dir=self.output_root,
             filename=self.session_filename(),
         )
-        best_config, _, _ = self.collect_best()
+        best_config, best_score, _ = self.collect_best()
         write_best_config_json(
             self.best_config_fractions(best_config or {}),
             output_dir=self.output_root,
             filename=self.best_config_filename(),
         )
+        log_section_header(
+            LOGGER,
+            "%s%s optimization complete%s",
+            COLORS.bold,
+            strategy_label,
+            COLORS.reset,
+        )
+        LOGGER.info(
+            "Best Score:      %s%.4f%s",
+            COLORS.green,
+            float(best_score) if best_score else 0.0,
+            COLORS.reset,
+        )
+        LOGGER.info(
+            "Total Time:      %s%.1fs%s", COLORS.cyan, total_time, COLORS.reset
+        )
+        LOGGER.info(
+            "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
+        )
         return results
+
+    def _log_optimization_header(self, strategy_label: str) -> None:
+        """Emit the PBT-grade system-info + configuration summary block."""
+        log_section_header(
+            LOGGER,
+            "%s%s PostgreSQL Tuner - Starting Optimization%s",
+            COLORS.bold,
+            strategy_label,
+            COLORS.reset,
+        )
+        log_system_info(LOGGER, self.system_info)
+        LOGGER.info(
+            "Knob Tier:       %s%s (%d knobs)%s",
+            COLORS.cyan,
+            self.lifecycle.knob_tier,
+            len(self.knob_space) if self.knob_space is not None else 0,
+            COLORS.reset,
+        )
+        for label, value in self.config_summary_lines():
+            LOGGER.info("%-16s %s%s%s", label, COLORS.cyan, value, COLORS.reset)
+        LOGGER.info(
+            "Workload Type:   %s%s%s",
+            COLORS.cyan,
+            self.workload_type_value,
+            COLORS.reset,
+        )
+        LOGGER.info(
+            "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
+        )
 
     def _assemble_results(
         self,

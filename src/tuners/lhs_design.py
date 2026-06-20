@@ -47,12 +47,13 @@ from src.tuners.utils.types import (
     TunerLifecycleConfig,
     TuningStrategy,
 )
-from src.utils.logger import get_logger
+from src.utils.logger import get_color_context, get_logger
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.types import BenchmarkConfig
 
 LOGGER = get_logger("LHSDesignTuner")
+COLORS = get_color_context()
 
 
 class LHSDesignTuner(BaseTuner):
@@ -130,6 +131,13 @@ class LHSDesignTuner(BaseTuner):
         """The design size is known up front, so seed it directly."""
         return self.design_size
 
+    def config_summary_lines(self) -> List[Tuple[str, str]]:
+        """Name the LHS budget line ("Design Size") in the startup summary."""
+        return [
+            ("Design Size:", str(self.design_size)),
+            ("Design Batches:", str(self.max_generations)),
+        ]
+
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
         if not best_config or self.full_knob_space is None:
             return {}
@@ -151,9 +159,13 @@ class LHSDesignTuner(BaseTuner):
         design = [default_config] + [c for c in lhs_configs if c != default_config]
         self.design = design[: self.design_size]
         LOGGER.info(
-            "Drew LHS design of %d configurations over %d knobs",
+            "Drew LHS design of %s%d%s configurations over %s%d%s knobs",
+            COLORS.cyan,
             len(self.design),
+            COLORS.reset,
+            COLORS.cyan,
             self.num_knobs,
+            COLORS.reset,
         )
         return list(self.design)
 
@@ -212,12 +224,17 @@ class LHSDesignTuner(BaseTuner):
         )
         self.generation_history.append(outcome.to_dict())
         LOGGER.info(
-            "Batch %d/%d complete: evaluated designs %d-%d, best-so-far=%.4f",
+            "%sBatch %d/%d complete%s: evaluated designs %d-%d, "
+            "best-so-far=%s%.4f%s",
+            COLORS.bold,
             generation + 1,
             self.max_generations,
+            COLORS.reset,
             start,
             end - 1,
+            COLORS.teal,
             self._best_score_so_far,
+            COLORS.reset,
         )
         return outcome
 
@@ -291,9 +308,11 @@ class LHSDesignTuner(BaseTuner):
                     metrics, score = future.result()
                 except GenerationEvaluationError as exc:  # noqa: BLE001 - record + continue
                     LOGGER.error(
-                        "Design config %d (worker %d) failed: %s",
+                        "%sDesign config %d (worker %d) failed%s: %s",
+                        COLORS.red,
                         generation * batch_size + local_id,
                         local_id,
+                        COLORS.reset,
                         exc,
                     )
                     barriers.abort()

@@ -162,3 +162,71 @@ class TestBaseTunerLifecycle:
     def test_cannot_instantiate_abstract_base(self, lifecycle, tmp_path):
         with pytest.raises(TypeError):
             BaseTuner(lifecycle, timestamp="t", output_root=tmp_path)
+
+
+class TestBaseTunerLogging:
+    """Smoke tests for the PBT-grade banner + lifecycle logging parity."""
+
+    def test_section_headers_and_system_info_fire(
+        self, lifecycle, tmp_path, caplog
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        with caplog.at_level("INFO"):
+            tuner.run()
+        messages = "\n".join(rec.getMessage() for rec in caplog.records)
+
+        # Lifecycle section headers (run + _log_optimization_header).
+        assert "Tuner initialization" in messages
+        assert "Setting up tuning environment" in messages
+        assert "Starting Optimization" in messages
+        assert "optimization loop" in messages
+        assert "optimization complete" in messages
+        # System-info block emitted by log_system_info().
+        assert "System Information:" in messages
+
+    def test_strategy_label_is_uppercased_in_headers(
+        self, lifecycle, tmp_path, caplog
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        with caplog.at_level("INFO"):
+            tuner.run()
+        messages = "\n".join(rec.getMessage() for rec in caplog.records)
+        # lifecycle.strategy is LHS -> headers carry the uppercased label.
+        assert "LHS Tuner initialization" in messages
+        assert "LHS optimization loop" in messages
+
+    def test_key_info_surfaces_carry_ansi_styling(
+        self, lifecycle, tmp_path, caplog
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        with caplog.at_level("INFO"):
+            tuner.run()
+        # The "Best Score" surface is rendered through the COLORS context.
+        best_score_recs = [
+            rec for rec in caplog.records if "Best Score" in rec.getMessage()
+        ]
+        assert best_score_recs, "expected a 'Best Score' summary line"
+        rendered = best_score_recs[0].getMessage()
+        assert "\x1b[" in rendered, "expected ANSI escape in the styled surface"
+
+    def test_banner_picks_subtitle_per_strategy(self, capsys):
+        from src.utils.logger.banners import print_startup_banner
+
+        print_startup_banner(TuningStrategy.LHS)
+        lhs_out = capsys.readouterr().out
+        assert "SCALPEL" in lhs_out  # LHS subtitle mentions SCALPEL
+
+        print_startup_banner(TuningStrategy.PBT)
+        pbt_out = capsys.readouterr().out
+        assert "Population-Based Training" in pbt_out
+
+        print_startup_banner(TuningStrategy.BO)
+        bo_out = capsys.readouterr().out
+        assert "Bayesian Optimization" in bo_out
+
+    def test_banner_defaults_to_pbt(self, capsys):
+        from src.utils.logger.banners import print_startup_banner
+
+        print_startup_banner()
+        out = capsys.readouterr().out
+        assert "Population-Based Training" in out
