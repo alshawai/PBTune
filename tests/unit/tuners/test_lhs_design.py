@@ -5,6 +5,7 @@ import math
 import pytest
 
 from src.tuners.lhs_design import LHSDesignTuner
+from src.tuners.utils.exceptions import TunerConfigError
 from src.tuners.utils.types import TunerLifecycleConfig, TuningStrategy
 from src.utils.types import STANDARD_BENCHMARK_CONFIG, clone_benchmark_config
 
@@ -40,7 +41,7 @@ class TestConstruction:
 
     def test_rejects_zero_design(self, tmp_path):
         lifecycle = TunerLifecycleConfig(strategy=TuningStrategy.LHS)
-        with pytest.raises(ValueError, match="design_size"):
+        with pytest.raises(TunerConfigError, match="design_size"):
             LHSDesignTuner(
                 lifecycle,
                 benchmark="tpch",
