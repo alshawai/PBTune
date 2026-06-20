@@ -27,6 +27,7 @@ class _FakeTuner(BaseTuner):
         self.stop_after = stop_after
         self.setup_called = False
         self.teardown_called = False
+        self.proposed = False
         self.steps_run = 0
 
     @property
@@ -46,23 +47,27 @@ class _FakeTuner(BaseTuner):
         return "sysbench"
 
     def setup(self) -> None:
+        # DB-free stand-in for the concrete BaseTuner.setup(): skip the real
+        # instance/orchestrator bring-up but honor the contract by seeding
+        # worker resources and drawing the initial design via the hook.
         self.setup_called = True
         self.worker_resources = WorkerResources(
             ram_bytes=2048, cpu_cores=2, disk_type="SSD"
         )
+        self.initial_configs = self.propose_initial_configs()
 
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
+        self.proposed = True
         return [{"work_mem": 0.1}]
 
     def step(self, generation: int) -> GenerationOutcome:
         self.steps_run += 1
         score = float(generation + 1)
+        self._best_score_so_far = max(self._best_score_so_far, score)
         self.generation_history.append({"generation": generation, "score": score})
         return GenerationOutcome(
             index=generation,
-            best_score_so_far=score,
             best_score_this_generation=score,
-            num_evaluations=1,
         )
 
     def should_stop(self, outcome: GenerationOutcome) -> bool:
@@ -103,6 +108,8 @@ class TestBaseTunerLifecycle:
         results = tuner.run()
 
         assert tuner.setup_called is True
+        assert tuner.proposed is True  # propose_initial_configs invoked by setup
+        assert tuner.initial_configs == [{"work_mem": 0.1}]
         assert tuner.teardown_called is True
         assert tuner.steps_run == 2  # stopped after 2 generations
 
