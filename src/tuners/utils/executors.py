@@ -1,4 +1,5 @@
-"""Workload-executor construction shared across tuning strategies.
+"""
+Workload-executor construction shared across tuning strategies.
 
 PBT's ``__init__`` contains a three-way branch (sysbench / tpch / custom) that
 constructs a workload executor, extracts workload features, and derives a
@@ -16,7 +17,9 @@ from typing import Any, Dict, Optional
 
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.tuner.benchmark.workload import WorkloadFileLoader
+from src.tuner.benchmark.workload import (
+    WorkloadFileLoader, extract_workload_template_metadata
+)
 from src.utils.metrics import WorkloadType
 from src.utils.scoring.workload_features import WorkloadFeatureExtractor
 from src.utils.types import BenchmarkConfig
@@ -24,7 +27,8 @@ from src.utils.types import BenchmarkConfig
 
 @dataclass
 class WorkloadBundle:
-    """Everything a tuner needs to drive a workload.
+    """
+    Everything a tuner needs to drive a workload.
 
     Attributes
     ----------
@@ -59,7 +63,8 @@ def build_workload_bundle(
     cpu_cores: int,
     workload_file: Optional[str] = None,
 ) -> WorkloadBundle:
-    """Construct the workload executor + features for a tuning run.
+    """
+    Construct the workload executor + features for a tuning run.
 
     Mirrors PBT's benchmark branch. ``benchmark`` selects the driver:
     'sysbench', 'tpch', or any other value / None for a custom template
@@ -116,7 +121,6 @@ def build_workload_bundle(
         )
     executor = WorkloadFileLoader.load_from_file(workload_file)
     benchmark_name = workload_type.value
-    from src.tuner.benchmark.workload import extract_workload_template_metadata
 
     template_metadata = extract_workload_template_metadata(executor)
     features = extractor.extract_template_features(metadata=template_metadata)

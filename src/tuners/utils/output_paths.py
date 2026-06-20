@@ -1,4 +1,5 @@
-"""Output-path resolution shared across tuning strategies.
+"""
+Output-path resolution shared across tuning strategies.
 
 Both PBT (``PBTTuner._build_output_dir``) and BO (``resolve_bo_output_root``)
 independently derive a results directory of the form::
@@ -19,7 +20,8 @@ from src.tuners.utils.types import TuningStrategy
 
 
 def _tier_slug(knob_tier: str, knob_source: str) -> str:
-    """Suffix data-driven tiers with ``@scalpel-v1``.
+    """
+    Suffix data-driven tiers with ``@scalpel-v1``.
 
     Mirrors the slugging in both incumbent writers: post-SCALPEL artifacts
     must not collide with pre-SCALPEL Jenks-era results that carried a
@@ -40,7 +42,8 @@ def resolve_tuner_output_root(
     knob_tier: str,
     knob_source: str = "expert",
 ) -> Path:
-    """Resolve the base output directory for a tuning run.
+    """
+    Resolve the base output directory for a tuning run.
 
     Parameters
     ----------

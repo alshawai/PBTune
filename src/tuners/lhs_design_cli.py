@@ -1,4 +1,5 @@
-"""CLI entry point for the LHS-design importance-sampling tuner.
+"""
+CLI entry point for the LHS-design importance-sampling tuner.
 
 Examples
 --------

@@ -1,4 +1,5 @@
-"""Package entry point for the unified tuners package.
+"""
+Package entry point for the unified tuners package.
 
 Currently dispatches to the LHS-design tuner CLI, so both of these work::
 

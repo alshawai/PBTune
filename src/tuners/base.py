@@ -1,4 +1,5 @@
-"""``BaseTuner`` — the shared lifecycle ABC for all tuning strategies.
+"""
+``BaseTuner`` — the shared lifecycle ABC for all tuning strategies.
 
 The three strategies (PBT, BO, LHS-design) differ only in *how they propose
 configurations* and *when they stop*. Everything around that — instance
@@ -46,7 +47,8 @@ LOGGER = get_logger("BaseTuner")
 
 
 class BaseTuner(ABC):
-    """Abstract base class encoding the shared tuner lifecycle.
+    """
+    Abstract base class encoding the shared tuner lifecycle.
 
     Subclasses provide strategy-specific behavior through the abstract hooks;
     the concrete ``run()`` method drives the invariant lifecycle and owns the
@@ -74,12 +76,10 @@ class BaseTuner(ABC):
 
         self._best_score_so_far: float = 0.0
 
-    # ------------------------------------------------------------------
-    # Abstract strategy hooks
-    # ------------------------------------------------------------------
     @abstractmethod
     def setup(self) -> None:
-        """Bring up instances, resolve resources, prune knobs, seed state.
+        """
+        Bring up instances, resolve resources, prune knobs, seed state.
 
         Implementations must populate ``self.worker_resources`` and ready
         whatever environment the generation loop needs. Called once at the
@@ -92,7 +92,8 @@ class BaseTuner(ABC):
 
     @abstractmethod
     def step(self, generation: int) -> GenerationOutcome:
-        """Run a single generation and return its outcome.
+        """
+        Run a single generation and return its outcome.
 
         Implementations evaluate configurations, update internal best-state,
         and append any strategy-specific record to ``generation_history``.
@@ -108,7 +109,8 @@ class BaseTuner(ABC):
 
     @abstractmethod
     def build_session_payload(self) -> Dict[str, Any]:
-        """Return strategy-specific sections to merge into the session JSON.
+        """
+        Return strategy-specific sections to merge into the session JSON.
 
         The base class supplies the shared header, ``best_configuration`` and
         ``worker_resources`` blocks; this hook contributes everything else
@@ -119,9 +121,6 @@ class BaseTuner(ABC):
     def teardown(self) -> None:
         """Stop instances and optionally clean up data. Always called."""
 
-    # ------------------------------------------------------------------
-    # Optional hooks (sensible defaults)
-    # ------------------------------------------------------------------
     @property
     def max_generations(self) -> int:
         """Upper bound on generations. Override for finite-budget strategies."""
@@ -151,16 +150,14 @@ class BaseTuner(ABC):
         return f"best_config_{self.timestamp}.json"
 
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert a best-config dict to hardware-relative fractions.
+        """
+        Convert a best-config dict to hardware-relative fractions.
 
         Default is identity; concrete tuners with a ``KnobSpace`` override
         this to serialize cross-host-portable fractions.
         """
         return best_config
 
-    # ------------------------------------------------------------------
-    # Concrete lifecycle driver (Template Method)
-    # ------------------------------------------------------------------
     def run(self) -> Dict[str, Any]:
         """Drive the full tuning lifecycle and return the session results."""
         LOGGER.info(
@@ -178,9 +175,7 @@ class BaseTuner(ABC):
             self.tuning_start_time = time.time()
             for generation in range(self.max_generations):
                 outcome = self.step(generation)
-                self._best_score_so_far = max(
-                    self._best_score_so_far, outcome.best_score_so_far
-                )
+
                 if self.should_stop(outcome):
                     LOGGER.info(
                         "Stopping criterion met after generation %d", generation
@@ -217,9 +212,6 @@ class BaseTuner(ABC):
         )
         return results
 
-    # ------------------------------------------------------------------
-    # Result assembly
-    # ------------------------------------------------------------------
     def _assemble_results(
         self,
         *,
