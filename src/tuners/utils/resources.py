@@ -1,4 +1,5 @@
-"""Worker-resource resolution shared across tuning strategies.
+"""
+Worker-resource resolution shared across tuning strategies.
 
 Both PBT and BO contain the same branch: if the caller supplied any manual
 resource override (RAM, CPUs, or a disk budget), route through

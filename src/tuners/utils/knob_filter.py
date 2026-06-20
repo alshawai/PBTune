@@ -1,4 +1,5 @@
-"""Runtime knob-compatibility pruning shared across tuning strategies.
+"""
+Runtime knob-compatibility pruning shared across tuning strategies.
 
 Both PBT and BO query a live instance's ``pg_settings`` to discover which
 configured knobs the running PostgreSQL build actually supports, then drop any
@@ -25,7 +26,8 @@ def query_runtime_supported_knobs(
     fallback_knobs: Iterable[str],
     connect_timeout: int = 5,
 ) -> Tuple[Set[str], str]:
-    """Return ``(supported_knob_names, server_version)`` from a live instance.
+    """
+    Return ``(supported_knob_names, server_version)`` from a live instance.
 
     On any connection/query failure this degrades gracefully to the supplied
     ``fallback_knobs`` and a ``"unknown"`` version, matching PBT's tolerant

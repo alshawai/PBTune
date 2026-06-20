@@ -1,4 +1,5 @@
-"""Shared utilities for the unified tuners package.
+"""
+Shared utilities for the unified tuners package.
 
 These helpers are extracted (by copy) from the PBT and BO tuners so that new
 strategies — starting with LHS-design sampling — can reuse the common
@@ -11,6 +12,13 @@ from src.tuners.utils.calibration import (
     MIN_OBSERVATIONS_FOR_RECALIBRATION,
     RecalibrationResult,
     maybe_recalibrate_scores,
+)
+from src.tuners.utils.exceptions import (
+    GenerationEvaluationError,
+    KnobSpaceEmptyError,
+    TunerConfigError,
+    TunerError,
+    TunerSetupError,
 )
 from src.tuners.utils.executors import WorkloadBundle, build_workload_bundle
 from src.tuners.utils.knob_filter import (
@@ -40,6 +48,11 @@ __all__ = [
     "maybe_recalibrate_scores",
     "WorkloadBundle",
     "build_workload_bundle",
+    "TunerError",
+    "TunerConfigError",
+    "TunerSetupError",
+    "KnobSpaceEmptyError",
+    "GenerationEvaluationError",
     "compute_unsupported_knobs",
     "log_pruning_summary",
     "query_runtime_supported_knobs",

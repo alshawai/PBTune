@@ -1,4 +1,5 @@
-"""LHS-design importance-sampling tuner.
+"""
+LHS-design importance-sampling tuner.
 
 ``LHSDesignTuner`` evaluates a *fixed* Latin Hypercube Sampling design over the
 knob space — there is no evolution, no exploit/explore, and no perturbation.
@@ -31,6 +32,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from src.config.data_root import resolve_data_root
 from src.config.database import get_db_config
 from src.tuner.benchmark.orchestrator import (
@@ -48,6 +51,11 @@ from src.tuners.utils.knob_filter import (
     query_runtime_supported_knobs,
 )
 from src.tuners.utils.resources import resolve_worker_resources
+from src.tuners.utils.exceptions import (
+    KnobSpaceEmptyError,
+    TunerConfigError,
+    GenerationEvaluationError,
+)
 from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
@@ -71,7 +79,8 @@ LOGGER = get_logger("LHSDesignTuner")
 
 
 class LHSDesignTuner(BaseTuner):
-    """Evaluate a fixed LHS design over the knob space in parallel batches.
+    """
+    Evaluate a fixed LHS design over the knob space in parallel batches.
 
     Parameters
     ----------
@@ -113,7 +122,7 @@ class LHSDesignTuner(BaseTuner):
         super().__init__(lifecycle, timestamp=timestamp, output_root=output_root)
 
         if design_size < 1:
-            raise ValueError("design_size must be at least 1")
+            raise TunerConfigError("design_size must be at least 1")
 
         self.benchmark = benchmark
         self.benchmark_config = benchmark_config
@@ -126,6 +135,7 @@ class LHSDesignTuner(BaseTuner):
         self.knob_space: Any = None
         self.full_knob_space: Any = None
         self.env: Any = None
+        self._instances: List[Any] = []
         self.orchestrator: Optional[WorkloadOrchestrator] = None
         self.metric_config: Any = None
         self.workload_features: Dict[str, float] = {}
@@ -135,6 +145,7 @@ class LHSDesignTuner(BaseTuner):
         self.enable_snapshots: bool = False
         self.system_info: Dict[str, Any] = {}
         self.session_environment: Any = None
+        self.design: List[Dict[str, Any]] = []
 
         # Result accumulation.
         self.design_records: List[Dict[str, Any]] = []
@@ -142,9 +153,6 @@ class LHSDesignTuner(BaseTuner):
         self._best_metrics: Optional[PerformanceMetrics] = None
         self._best_breakdown: Optional[ScoreBreakdown] = None
 
-    # ------------------------------------------------------------------
-    # Header property overrides
-    # ------------------------------------------------------------------
     @property
     def max_generations(self) -> int:
         """Number of parallel batches needed to cover the design."""
@@ -167,9 +175,6 @@ class LHSDesignTuner(BaseTuner):
             return {}
         return self.full_knob_space.config_to_fractions(best_config)
 
-    # ------------------------------------------------------------------
-    # Lifecycle hooks
-    # ------------------------------------------------------------------
     def setup(self) -> None:
         """Resolve resources, build workload + env, bring up instances, prune knobs."""
         # Resolve the granular workload type for the knob space (mirrors PBT).
@@ -321,7 +326,7 @@ class LHSDesignTuner(BaseTuner):
             unsupported, server_version, remaining=len(self.knob_space)
         )
         if len(self.knob_space) == 0:
-            raise RuntimeError(
+            raise KnobSpaceEmptyError(
                 "No runtime-compatible knobs remain after pg_settings pruning."
             )
 
@@ -338,7 +343,7 @@ class LHSDesignTuner(BaseTuner):
         if not batch_configs:
             return GenerationOutcome(index=generation, converged=True)
 
-        workers = self._build_batch_workers(batch_configs, start_index=start)
+        workers = self._build_batch_workers(batch_configs)
         barriers = GenerationBarrier(
             num_workers=len(workers),
             enabled=len(workers) > 1,
@@ -364,7 +369,7 @@ class LHSDesignTuner(BaseTuner):
 
             if score is not None and score > self._best_score_so_far:
                 self._best_score_so_far = float(score)
-                self._best_config = dict(worker.knob_config)
+                self._best_config = dict(worker.knob_config)  # type: ignore
                 self._best_metrics = metrics
                 self._best_breakdown = breakdown
             if score is not None:
@@ -372,9 +377,7 @@ class LHSDesignTuner(BaseTuner):
 
         outcome = GenerationOutcome(
             index=generation,
-            best_score_so_far=self._best_score_so_far,
             best_score_this_generation=best_this_batch,
-            num_evaluations=len(batch_configs),
             payload={
                 "evaluated": [r["design_index"] for r in self.design_records[-len(batch_configs):]],
                 "batch_elapsed_seconds": time.time() - gen_start,
@@ -391,9 +394,7 @@ class LHSDesignTuner(BaseTuner):
         )
         return outcome
 
-    def _build_batch_workers(
-        self, batch_configs: List[Dict[str, Any]], *, start_index: int
-    ) -> List[Worker]:
+    def _build_batch_workers(self, batch_configs: List[Dict[str, Any]]) -> List[Worker]:
         """Construct Workers bound to instances for one batch."""
         workers: List[Worker] = []
         for local_id, config in enumerate(batch_configs):
@@ -415,20 +416,19 @@ class LHSDesignTuner(BaseTuner):
         barriers: GenerationBarrier,
         generation: int,
     ) -> List[Tuple[int, Worker, Optional[PerformanceMetrics], Optional[float]]]:
-        """Run one batch concurrently, returning per-worker results.
+        """
+        Run one batch concurrently, returning per-worker results.
 
         Uses a thread pool sized to the batch so every config's measurement
         window overlaps under the shared barriers (identical contention).
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         batch_size = self.lifecycle.num_parallel_workers
         results: List[
             Tuple[int, Worker, Optional[PerformanceMetrics], Optional[float]]
         ] = []
 
         def _eval(worker: Worker):
-            metrics, score, _restart, _cfg, timing = self.orchestrator.evaluate_worker(
+            metrics, score, _restart, _cfg, timing = self.orchestrator.evaluate_worker(  # type: ignore
                 worker,
                 apply_config=True,
                 generation=generation,
@@ -441,7 +441,7 @@ class LHSDesignTuner(BaseTuner):
 
         if len(workers) == 1:
             single = GenerationBarrier(num_workers=1, enabled=False)
-            metrics, score, _r, _c, timing = self.orchestrator.evaluate_worker(
+            metrics, score, _r, _c, timing = self.orchestrator.evaluate_worker(  # type: ignore
                 workers[0],
                 apply_config=True,
                 generation=generation,
@@ -462,7 +462,7 @@ class LHSDesignTuner(BaseTuner):
                 worker = workers[local_id]
                 try:
                     metrics, score = future.result()
-                except Exception as exc:  # noqa: BLE001 - record + continue
+                except GenerationEvaluationError as exc:  # noqa: BLE001 - record + continue
                     LOGGER.error(
                         "Design config %d (worker %d) failed: %s",
                         generation * batch_size + local_id,

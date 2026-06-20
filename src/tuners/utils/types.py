@@ -1,4 +1,5 @@
-"""Shared types for the unified tuners package.
+"""
+Shared types for the unified tuners package.
 
 This module defines the small, dependency-light value types that the
 ``BaseTuner`` lifecycle and its concrete subclasses share. It is deliberately
@@ -17,6 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
+
+from src.tuners.utils.exceptions import TunerConfigError
+from src.utils.types import TuningMode
 
 
 class TuningStrategy(str, Enum):
@@ -60,6 +64,7 @@ class TuningStrategy(str, Enum):
         for member in cls:
             if member.value == normalized:
                 return member
+
         valid = ", ".join(m.value for m in cls)
         raise ValueError(
             f"Unknown tuning strategy {value!r}; expected one of: {valid}"
@@ -68,25 +73,21 @@ class TuningStrategy(str, Enum):
 
 @dataclass
 class GenerationOutcome:
-    """Result of a single tuner generation (a.k.a. round / batch).
+    """
+    Result of a single tuner generation (a.k.a. round / batch).
 
     Different strategies use different internal vocabulary — PBT calls these
     "generations", BO calls them "iterations", LHS calls them "design batches"
     — but they all share the same observable shape: an index, the best score
-    seen *so far*, the best score *this round*, and an optional per-strategy
-    payload for richer history.
+    seen *this round*, a converged flag, and an optional per-strategy payload
+    for richer history.
 
     Attributes
     ----------
     index
         Zero-based generation index.
-    best_score_so_far
-        Best composite score observed across all generations up to and
-        including this one.
     best_score_this_generation
         Best composite score observed *within* this generation.
-    num_evaluations
-        Number of configurations evaluated in this generation.
     converged
         Whether the strategy considers itself converged after this generation.
     payload
@@ -94,9 +95,7 @@ class GenerationOutcome:
     """
 
     index: int
-    best_score_so_far: float = 0.0
     best_score_this_generation: float = 0.0
-    num_evaluations: int = 0
     converged: bool = False
     payload: Dict[str, Any] = field(default_factory=dict)
 
@@ -104,9 +103,7 @@ class GenerationOutcome:
         """Serialize for inclusion in ``generation_history``."""
         record = {
             "generation": self.index,
-            "best_score_so_far": float(self.best_score_so_far),
             "best_score": float(self.best_score_this_generation),
-            "num_evaluations": int(self.num_evaluations),
             "converged": bool(self.converged),
         }
         record.update(self.payload)
@@ -138,6 +135,21 @@ class TunerLifecycleConfig:
         Whether to use the Docker environment backend.
     random_seed
         Seed for reproducible sampling.
+    tuning_mode
+        Restart policy mode (ONLINE / OFFLINE / ADAPTIVE). Threaded into the
+        orchestrator config so every strategy honors the same restart policy.
+    adaptive_restart_interval
+        Restart cadence (in generations) for ``TuningMode.ADAPTIVE``.
+    force_recreate_instances
+        Rebuild instance data from scratch instead of reusing a baseline.
+    worker_ram, worker_cpus, worker_disk_read_bps, worker_disk_write_bps,
+    worker_disk_read_iops, worker_disk_write_iops, probe_disk
+        Manual per-worker resource overrides. Any non-``None`` value routes
+        resolution through the manual resolver; otherwise resources are
+        auto-detected. Subsumes the former ad-hoc ``resource_overrides`` dict.
+    scoring_policy, scoring_policy_version, metric_reference_version
+        Scoring provenance overrides forwarded to global recalibration so the
+        serialized session records exactly which scoring contract produced it.
     """
 
     strategy: TuningStrategy
@@ -148,7 +160,30 @@ class TunerLifecycleConfig:
     use_docker: bool = True
     random_seed: Optional[int] = 42
 
+    # Restart policy.
+    tuning_mode: TuningMode = TuningMode.OFFLINE
+    adaptive_restart_interval: int = 10
+    force_recreate_instances: bool = False
+
+    # Per-worker resource overrides (None => auto-detect).
+    worker_ram: Optional[str] = None
+    worker_cpus: Optional[int] = None
+    worker_disk_read_bps: Optional[int] = None
+    worker_disk_write_bps: Optional[int] = None
+    worker_disk_read_iops: Optional[int] = None
+    worker_disk_write_iops: Optional[int] = None
+    probe_disk: bool = True
+
+    # Scoring provenance (None => engine defaults).
+    scoring_policy: Optional[str] = None
+    scoring_policy_version: Optional[str] = None
+    metric_reference_version: Optional[str] = None
+
     def __post_init__(self) -> None:
         self.strategy = TuningStrategy.from_value(self.strategy)
+        if isinstance(self.tuning_mode, str):
+            self.tuning_mode = TuningMode(self.tuning_mode)
         if self.num_parallel_workers < 1:
-            raise ValueError("num_parallel_workers must be at least 1")
+            raise TunerConfigError("num_parallel_workers must be at least 1")
+        if self.adaptive_restart_interval < 1:
+            raise TunerConfigError("adaptive_restart_interval must be at least 1")

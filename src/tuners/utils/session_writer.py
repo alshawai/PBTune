@@ -1,4 +1,5 @@
-"""Session-result serialization shared across tuning strategies.
+"""
+Session-result serialization shared across tuning strategies.
 
 PBT (``PBTTuner.save_final_results``) and BO (``write_bo_results``) each emit a
 ``tuning_session`` JSON envelope with a near-identical header block plus a
@@ -31,16 +32,17 @@ TIMING_SCHEMA_VERSION = "1.1"
 
 
 def convert_numpy_types(obj: Any) -> Any:
-    """Recursively convert numpy scalars/arrays to JSON-native Python types.
+    """
+    Recursively convert numpy scalars/arrays to JSON-native Python types.
 
     Identical in behavior to the helpers embedded in the PBT and BO writers;
     centralized here so all three share one implementation.
     """
     if isinstance(obj, np.bool_):
         return bool(obj)
-    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):  # type: ignore
         return int(obj)
-    if isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+    if isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):  # type: ignore
         return float(obj)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
@@ -79,7 +81,8 @@ def build_session_header(
     seed: Optional[int],
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build the shared ``tuning_session`` header block.
+    """
+    Build the shared ``tuning_session`` header block.
 
     The header carries the fields every loader expects regardless of
     strategy: schema version, the new ``tuning_strategy`` discriminator, the

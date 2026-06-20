@@ -1,4 +1,5 @@
-"""Post-hoc global score recalibration for tuning strategies.
+"""
+Post-hoc global score recalibration for tuning strategies.
 
 Strategies that evaluate many configurations under per-config (local)
 normalization benefit from a final pass that recomputes every score against a
@@ -23,7 +24,8 @@ MIN_OBSERVATIONS_FOR_RECALIBRATION = 3
 
 @dataclass
 class RecalibrationResult:
-    """Outcome of a global recalibration pass.
+    """
+    Outcome of a global recalibration pass.
 
     Attributes
     ----------
@@ -53,7 +55,8 @@ def maybe_recalibrate_scores(
     metric_reference_version: Optional[str] = None,
     workload_features: Optional[Dict[str, float]] = None,
 ) -> RecalibrationResult:
-    """Recalibrate scores globally if there are enough observations.
+    """
+    Recalibrate scores globally if there are enough observations.
 
     Returns an unapplied :class:`RecalibrationResult` (rather than raising)
     when fewer than :data:`MIN_OBSERVATIONS_FOR_RECALIBRATION` metrics are
