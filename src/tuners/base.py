@@ -307,7 +307,7 @@ class BaseTuner(ABC):
             db_config=db_config,
             worker_resources=self.worker_resources,
             run_id=self.snapshot_identifier,
-            force_recreate_baseline=self.lifecycle.force_recreate_instances,
+            force_recreate_baseline=self.lifecycle.force_recreate_baseline,
         )
 
         orchestrator_config = WorkloadOrchestratorConfig(

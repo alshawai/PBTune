@@ -142,6 +142,11 @@ class TunerLifecycleConfig:
         Restart cadence (in generations) for ``TuningMode.ADAPTIVE``.
     force_recreate_instances
         Rebuild instance data from scratch instead of reusing a baseline.
+    force_recreate_baseline
+        Rebuild the shared baseline snapshot from scratch instead of reusing a
+        cached one. Distinct from ``force_recreate_instances``: the baseline is
+        the pristine template every per-worker instance is cloned from, whereas
+        ``force_recreate_instances`` governs the per-worker instances themselves.
     worker_ram, worker_cpus, worker_disk_read_bps, worker_disk_write_bps,
     worker_disk_read_iops, worker_disk_write_iops, probe_disk
         Manual per-worker resource overrides. Any non-``None`` value routes
@@ -164,6 +169,7 @@ class TunerLifecycleConfig:
     tuning_mode: TuningMode = TuningMode.OFFLINE
     adaptive_restart_interval: int = 10
     force_recreate_instances: bool = False
+    force_recreate_baseline: bool = False
 
     # Per-worker resource overrides (None => auto-detect).
     worker_ram: Optional[str] = None
