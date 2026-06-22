@@ -1,6 +1,6 @@
 # SCALPEL Rollout Guide
 
-> Last reviewed: 2026-06-18 · See also:
+> Last reviewed: 2026-06-22 · See also:
 > [SCALPEL architecture](../architecture/scalpel.md),
 > [SCALPEL diagnostics reference](../reference/scalpel-diagnostics.md),
 > [ADR-005](../architecture/decisions/ADR-005-scalpel-tier-generation.md).
@@ -43,12 +43,18 @@ python -m src.tuners.lhs_design \
   --benchmark sysbench \
   --sysbench-workload oltp_read_write \
   --tier extensive \
+  --config thorough \
   --design-size 64 \
   --parallel-workers 4
 # → results/oltp/oltp_read_write/lhs_runs/extensive/tuning_sessions/lhs_results_*.json
+# → an lhs_design_<ts>.html log is written alongside it, matching PBT/BO.
 ```
 
-`python -m src.tuners` is an alias for the same CLI. The session JSON carries
+`python -m src.tuners` is an alias for the same CLI. The `--config` profile
+(`rapid` / `standard` / `thorough` / `research`) sets the defaults for design
+size, worker count, measurement/warmup durations, and the snapshot-restore
+cadence; each is overridable by its own flag (here `--design-size` and
+`--parallel-workers` override the `thorough` defaults). The session JSON carries
 `tuning_strategy: "lhs"` and a `design_records` array — one entry per design
 point with its config fractions, metrics, and score breakdown. Point SCALPEL
 at the `lhs_runs/.../tuning_sessions` directory exactly as you would a PBT
@@ -65,6 +71,15 @@ python -m src.scripts.analyze_knob_importance \
 Pick `--design-size` for the budget you have: larger designs give SCALPEL more
 rows to attribute over (tighter FDR control) at linear wall-clock cost. 64–128
 points is a reasonable starting range for the extensive tier.
+
+Two lifecycle details affect importance quality. First, each design batch is
+restored to the pristine baseline snapshot on the per-profile cadence
+(rapid=10 / standard=5 / thorough=1 / research=1 batches), so later batches do
+not attribute over DB state that drifted under earlier ones; use
+`--disable-snapshots` or tune `--snapshot-restore-interval N` to override.
+Second, `--probe-disk` (on by default) calibrates each worker's disk I/O budget
+with a short `fio` probe for realistic contention; if `fio` is not installed the
+probe is skipped with a WARNING and a heuristic budget is used instead.
 
 ## Single workload
 

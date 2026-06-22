@@ -248,7 +248,7 @@ class GenerationResult:
 
 ### Score finalisation
 
-`_finalize_scores()` runs once at session end and rescores every persisted `PerformanceMetrics` against the *final* normalisation anchors. This is what makes pre- and post-calibration generations comparable in the saved session JSON. The same rescoring helper is used by the post-hoc evaluation suite — see [src/utils/rescoring.py](../../src/utils/rescoring.py).
+`_finalize_scores()` runs once at session end and rescores every persisted `PerformanceMetrics` against the *final* normalisation anchors. This is what makes pre- and post-calibration generations comparable in the saved session JSON. The same rescoring helper is used by the post-hoc evaluation suite — see [src/tuners/utils/calibration.py](../../src/tuners/utils/calibration.py).
 
 ---
 

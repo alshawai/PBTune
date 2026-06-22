@@ -1,31 +1,33 @@
 # CLI Reference
 
-> Last reviewed: 2026-06-15
+> Last reviewed: 2026-06-22
 
-See also: [getting-started/quickstart](../getting-started/quickstart.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md), [guides/bo-baseline](../guides/bo-baseline.md), [guides/pbt-vs-bo-comparison](../guides/pbt-vs-bo-comparison.md)
+See also: [getting-started/quickstart](../getting-started/quickstart.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md), [guides/bo-baseline](../guides/bo-baseline.md), [guides/pbt-vs-bo-comparison](../guides/pbt-vs-bo-comparison.md), [guides/scalpel-rollout](../guides/scalpel-rollout.md)
 
-Consolidated reference for every command-line flag across all five user-facing entry points. Use the per-guide docs for narrative context — this page is for **lookup**.
+Consolidated reference for every command-line flag across all six user-facing entry points. Use the per-guide docs for narrative context — this page is for **lookup**.
 
 ```text
 python -m src.tuner.main                 # tuning sessions (PBT)
+python -m src.tuners                      # LHS-design importance-sampling tuner
 python -m src.evaluation                 # post-hoc default-vs-tuned comparison
 python -m src.scripts.bo_baseline        # SMAC3 Bayesian-Optimisation baseline
 python -m src.scripts.pbt_vs_bo_comarison  # cross-method comparison
 python -m src.visualization              # publication figure generation
 ```
 
-For the canonical authority on any flag's exact semantics, run the entry point with `--help`. This page reflects the flag set as of 2026-06-15.
+For the canonical authority on any flag's exact semantics, run the entry point with `--help`. This page reflects the flag set as of 2026-06-22.
 
 ---
 
 ## Table of contents
 
 1. [`src.tuner.main` — PBT tuning](#srctunermain--pbt-tuning)
-2. [`src.evaluation` — default-vs-tuned comparison](#srcevaluation--default-vs-tuned-comparison)
-3. [`src.scripts.bo_baseline` — Bayesian-Optimisation baseline](#srcscriptsbo_baseline--bayesian-optimisation-baseline)
-4. [`src.scripts.pbt_vs_bo_comarison` — cross-method comparison](#srcscriptspbt_vs_bo_comarison--cross-method-comparison)
-5. [`src.visualization` — publication figures](#srcvisualization--publication-figures)
-6. [Common cross-tool flags](#common-cross-tool-flags)
+2. [`src.tuners` — LHS-design tuning](#srctuners--lhs-design-tuning)
+3. [`src.evaluation` — default-vs-tuned comparison](#srcevaluation--default-vs-tuned-comparison)
+4. [`src.scripts.bo_baseline` — Bayesian-Optimisation baseline](#srcscriptsbo_baseline--bayesian-optimisation-baseline)
+5. [`src.scripts.pbt_vs_bo_comarison` — cross-method comparison](#srcscriptspbt_vs_bo_comarison--cross-method-comparison)
+6. [`src.visualization` — publication figures](#srcvisualization--publication-figures)
+7. [Common cross-tool flags](#common-cross-tool-flags)
 
 ---
 
@@ -112,6 +114,88 @@ The primary entry point. See [getting-started/quickstart](../getting-started/qui
 | `--ablation-value <str>` | none | The value of the ablation variable (recorded in JSON metadata). |
 | `--verbose {DEBUG\|INFO\|WARNING\|ERROR\|TRACE}` | `INFO` | Logging verbosity. |
 | `--no-color` | off | Disable ANSI colour in console output. |
+
+---
+
+## `src.tuners` — LHS-design tuning
+
+The strategy-unified tuner package. `python -m src.tuners` and `python -m src.tuners.lhs_design` are aliases for the same entry point: a fixed Latin Hypercube Sampling (LHS) *importance-design* sweep over the knob space, swept once with no evolution. The session JSON it writes (`tuning_strategy: "lhs"`, plus a `design_records` array) is the substrate the SCALPEL importance pipeline consumes. See [scalpel](../architecture/scalpel.md), [guides/scalpel-rollout](../guides/scalpel-rollout.md), and [ADR-006](../architecture/decisions/ADR-006-unified-tuners-package.md).
+
+Only `--design-size` is LHS-specific; every other group below is the shared strategy-agnostic surface (`src/tuners/cli.py`) that future strategies reuse.
+
+### Design configuration
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--design-size <int>` | profile-derived (`rapid`=8 / `standard`=32 / `thorough`=512 / `research`=1024) | Number of LHS design points to evaluate. Larger designs give SCALPEL more rows to attribute over at linear wall-clock cost. |
+
+### Tuning configuration
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--config {rapid\|standard\|thorough\|research}` | `standard` | Execution profile supplying default worker count, benchmark settings, design size, and snapshot cadence — each overridable by individual flags. Note: **no `extreme`** (that profile is PBT population-scale-specific). |
+| `--tier {minimal\|core\|standard\|extensive}` | `minimal` | Knob-space tier. SCALPEL designs are typically run on `extensive`. |
+| `--knob-source {expert\|data_driven}` | `expert` | `expert` reads `data/expert_defined_knobs/`; `data_driven` reads `data/data_driven_knobs/{workload}/`. |
+| `--parallel-workers <int>` | profile-derived (`rapid`=2 / `standard`=4 / `thorough`=8 / `research`=12) | Number of PostgreSQL instances evaluated concurrently. The design is swept in batches of this size. |
+| `--random-seed <int>` | `42` | Seed for reproducible LHS sampling. |
+
+### Workload settings
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--benchmark {sysbench\|tpch}` | `sysbench` | Benchmark driver. |
+| `--workload {oltp\|olap\|mixed}` | `oltp` | Workload type for custom workloads. |
+| `--workload-file <path>` | none | Custom workload file (non-sysbench/tpch only). |
+| `--duration <float>` | profile default | Measurement-window seconds. |
+| `--warmup <float>` | profile default | Warmup seconds before measurement. |
+| `--scale-factor <float>` | profile default | TPC-H / template scale factor. |
+| `--sysbench-tables <int>` | profile default | Number of sysbench tables. |
+| `--sysbench-table-size <int>` | profile default | Rows per sysbench table. |
+| `--sysbench-workload {oltp_read_only\|oltp_read_write\|oltp_write_only}` | `oltp_read_write` | Sysbench OLTP mode. |
+
+### Per-worker resources
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--worker-ram <str>` | auto | RAM per worker (e.g. `3G`, `512M`, `1073741824`). Total across workers must not exceed host RAM. |
+| `--worker-cpus <int>` | auto | CPU cores per worker. Total across workers must not exceed host cores. |
+| `--worker-disk-read-bps <int>` | auto | Per-worker disk read bandwidth (bytes/sec, cgroup blkio / io.max). |
+| `--worker-disk-write-bps <int>` | auto | Per-worker disk write bandwidth (bytes/sec). |
+| `--worker-disk-read-iops <int>` | auto | Per-worker disk read IOPS ceiling. |
+| `--worker-disk-write-iops <int>` | auto | Per-worker disk write IOPS ceiling. |
+| `--probe-disk` / `--no-probe-disk` | `--probe-disk` | Run a short fio probe at startup to calibrate per-worker disk I/O budget. **Requires `fio`**; when fio is absent the run logs a WARNING and falls back to the disk-class heuristic. |
+
+### Scoring & normalization
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--scoring-policy {fixed_v1\|feature_driven_v2}` | engine default | Performance-score aggregation policy. |
+| `--scoring-policy-version <str>` | from policy | Frozen policy version recorded in the session JSON. |
+| `--metric-reference-version <str>` | from policy | Frozen normalizer-metadata reference version. |
+
+### Instance management
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--tuning-mode {online\|offline\|adaptive}` | `offline` | Restart policy. `online` = runtime knobs only, no restarts; `offline` = all knobs, restart every generation; `adaptive` = all knobs, restart every N generations. |
+| `--no-docker` | off | Run on bare-metal PostgreSQL instead of Docker. |
+| `--force-recreate-instances` | off | Force recreation of worker instances before starting. |
+| `--force-recreate-baseline` | off | Force recreation of the shared baseline snapshot every per-worker instance is cloned from. |
+| `--enable-snapshots` / `--disable-snapshots` | enabled | Restore each worker to the pristine baseline snapshot on the per-profile cadence so every design batch starts from identical DB state (no drift carried between batches). |
+| `--snapshot-restore-interval N` | profile-derived (`rapid`=10 / `standard`=5 / `thorough`=1 / `research`=1) | Baseline-snapshot restore cadence in generations (one generation = one design batch). |
+| `--cleanup-instances` | off | Remove PostgreSQL instance data after completion. |
+| `--data-dir <path>` | `$PBT_DATA_ROOT` | Base directory for PostgreSQL instances (overrides `PBT_DATA_ROOT`). |
+
+### Output & logging
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--output-dir <path>` | `results` | Base results directory. Session JSON lands under `{output-dir}/{workload}/[{sysbench_workload}/]lhs_runs/{tier}/tuning_sessions/`. |
+| `--colocate-output` | off | Place results/logs under the data directory (`{data-root}/results`) instead of `./results/`. |
+| `--verbose {DEBUG\|INFO\|WARNING\|ERROR\|TRACE}` | `INFO` | Logging verbosity. |
+| `--no-color` | off | Disable ANSI colour in console output. |
+
+A timestamped `lhs_design_<ts>.html` log is written under the resolved output root, matching the HTML-log parity PBT and BO already provide.
 
 ---
 
@@ -239,11 +323,13 @@ Several flags appear in multiple entry points with identical semantics:
 
 | Flag | Where | Notes |
 | --- | --- | --- |
-| `--no-docker` | tuner, evaluation, bo | Reduced-isolation fallback. Tagged in output metadata. |
+| `--no-docker` | tuner, evaluation, bo, tuners | Reduced-isolation fallback. Tagged in output metadata. |
 | `--docker-image` | tuner, evaluation, bo | Override the auto-resolved image. |
-| `--data-dir` | tuner, evaluation, bo, viz | Worker data directory root. |
+| `--data-dir` | tuner, evaluation, bo, tuners, viz | Worker data directory root. |
 | `--output-dir` | every entry point | Result tree root. |
-| `--scoring-policy` | tuner, evaluation, bo | Same semantics; the value pinned in the output JSON. |
-| `--seed` (bo) / `--random-seed` (tuner) / `--seed` (evaluation) | various | Master deterministic seed. Names differ across CLIs for historical reasons; semantics are equivalent. |
-| `--colocate-output` | tuner, evaluation, bo | Co-locate HTML logs with JSON artefacts instead of using a separate `logs/` subdirectory. |
+| `--scoring-policy` | tuner, evaluation, bo, tuners | Same semantics; the value pinned in the output JSON. |
+| `--seed` (bo) / `--random-seed` (tuner, tuners) / `--seed` (evaluation) | various | Master deterministic seed. Names differ across CLIs for historical reasons; semantics are equivalent. |
+| `--colocate-output` | tuner, evaluation, bo, tuners | Co-locate HTML logs with JSON artefacts instead of using a separate `logs/` subdirectory. |
+| `--probe-disk` / `--no-probe-disk` | tuners | Calibrate per-worker disk I/O budget with a short `fio` probe (default on). When `fio` is absent the probe is skipped with a WARNING and the heuristic budget is used. |
+| `--enable-snapshots` / `--snapshot-restore-interval` | bo, tuners | Baseline-snapshot restoration cadence. Both default to enabled; the unset interval is profile-derived — bo and tuners share the rapid=10 / standard=5 / thorough=1 / research=1 schedule. |
 | `--verbose` | every entry point | Logging level. |

@@ -65,8 +65,9 @@ Introduce a new top-level package, [`src/tuners`](../../src/tuners), that holds:
   - `executors.py` — `build_workload_bundle`, the sysbench/tpch/custom branch.
   - `knob_filter.py` — runtime `pg_settings` knob pruning, as DB-free testable
     helpers.
-  - `calibration.py` — a tuner-facing adapter over the existing
-    [`src/utils/rescoring`](../../src/utils/rescoring.py) global recalibration.
+  - `calibration.py` — the global score-recalibration utilities (relocated
+    here from the now-deleted `src/utils/rescoring.py`; see the 2026-06-22
+    addendum). [`src/tuners/utils/calibration.py`](../../src/tuners/utils/calibration.py).
   - `session_writer.py` — `convert_numpy_types`, `build_session_header`, and
     the session/best-config write helpers.
 
@@ -173,3 +174,64 @@ Output lands at
 carrying `tuning_strategy: "lhs"` and a `design_records` array (one entry per
 design point with its config fractions, metrics, and score breakdown) that the
 SCALPEL pipeline consumes.
+
+## Addendum (2026-06-22): shared CLI, profiles, and PBT/BO parity
+
+After `LHSDesignTuner` proved the `BaseTuner` abstraction, the strategy grew the
+remaining surface needed to be a first-class peer of PBT/BO. None of it touched
+`src/tuner/` or `src/scripts/bo_baseline/`, so the copy-not-refactor invariant
+still holds.
+
+### Strategy-agnostic CLI + profile registry
+
+[`src/tuners/cli.py`](../../src/tuners/cli.py) now owns the full strategy-agnostic
+flag surface (Tuning Configuration, Workload Settings, Instance Management,
+Per-Worker Resources, Scoring & Normalization, Output & Logging). A new strategy
+entry point shrinks to *just* its own knobs (for LHS, only `--design-size`) plus a
+call to `add_common_groups`.
+
+The profile system mirrors PBT's two-layer model. `PROFILES` in
+[`src/tuners/utils/profiles.py`](../../src/tuners/utils/profiles.py) maps
+`--config` to a `TunerProfile` carrying the default worker count and a matched
+`BenchmarkConfig`; individual flags then override the profile under the
+"`None` means keep the profile default" convention. The profiles are
+`rapid` / `standard` / `thorough` / `research` (worker counts 2 / 4 / 8 / 12) —
+PBT's `extreme` is intentionally omitted, as it is population-scale specific and
+LHS is not a population method. Each strategy additionally owns a small
+`{profile: scalar}` map for the one hyperparameter it adds; LHS uses
+`LHS_DESIGN_SIZE_BY_PROFILE` (8 / 32 / 512 / 1024).
+
+### Per-batch baseline-snapshot restoration
+
+Each LHS design batch now restores the shared read-only baseline snapshot on the
+per-profile cadence (`snapshot_restore_interval`: rapid=10 / standard=5 /
+thorough=1 / research=1, numerically identical to PBT's restart cadence), so a
+fresh batch no longer inherits the drifted DB state left by the previous one. The
+CLI/profile choice is combined with the workload bundle's own decision via a
+logical AND in [`src/tuners/base.py`](../../src/tuners/base.py): a forced
+read-only / TPC-H auto-disable still wins, but otherwise the operator's
+`--enable-snapshots` / `--disable-snapshots` / `--snapshot-restore-interval`
+selection is honored.
+
+### HTML-log parity
+
+The CLI attaches `add_html_file_logging` and writes a timestamped
+`lhs_design_<ts>.html` under the resolved output root, matching the HTML logs
+PBT and BO already produce.
+
+### Probe-disk diagnostics
+
+`--probe-disk` (default on) calibrates the per-worker disk I/O budget with a short
+`fio` probe. [`src/utils/hardware_info.py`](../../src/utils/hardware_info.py) now
+emits a WARNING when probing was requested but `fio` is absent, instead of
+silently falling back to the heuristic budget. That file is shared with PBT/BO but
+sits *outside* the copy-not-refactor boundary (it is not under `src/tuner/` or
+`src/scripts/bo_baseline/`), so the additive diagnostic improves all three
+strategies.
+
+### Rescoring relocation
+
+The global score-recalibration utilities moved from the now-deleted
+`src/utils/rescoring.py` into
+[`src/tuners/utils/calibration.py`](../../src/tuners/utils/calibration.py), with
+all consumers repointed. PBT and BO remain unmodified.
