@@ -39,9 +39,9 @@ from src.tuners.cli import (
 from src.tuners.lhs_design import LHSDesignTuner
 from src.tuners.utils.types import TuningStrategy
 from src.utils.logger import (
+    add_html_file_logging,
     get_color_context,
     get_logger,
-    print_startup_banner,
     set_colors_enabled,
     setup_logging,
 )
@@ -126,10 +126,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
 
     set_colors_enabled(not args.no_color)
-    print_startup_banner(TuningStrategy.LHS)
     setup_logging(verbosity=args.verbose, show_module=True)
 
     tuner = build_tuner(args)
+
+    # HTML log parity with PBT/BO: attach a timestamped HTML file handler under
+    # the resolved output root. add_html_file_logging is additive to the console
+    # handler set up above and does not create parent dirs, so ensure the root
+    # exists first (cheap + idempotent). Placed before the startup banner so the
+    # banner is captured in the HTML file.
+    tuner.output_root.mkdir(parents=True, exist_ok=True)
+    log_path = tuner.output_root / f"lhs_design_{tuner.timestamp}.html"
+    add_html_file_logging(output_file=log_path, show_module=True)
+
     LOGGER.info(
         "%sStarting LHS-design sweep%s: tier=%s%s%s, design_size=%s%d%s, "
         "workers=%s%d%s, output=%s%s%s",

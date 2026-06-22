@@ -24,7 +24,7 @@ import seaborn as sns
 from scipy import stats
 
 from src.utils.metrics import PerformanceMetrics
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 
 # Configure academic plotting aesthetics
 sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)

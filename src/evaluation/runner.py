@@ -43,7 +43,7 @@ from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_l
 from src.utils.metrics import PerformanceMetrics, create_metric_config
 from src.utils.scoring import create_scoring_engine
 from src.config.data_root import resolve_data_root
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import (
     SysbenchExecutor,
     DEFAULT_SYSBENCH_WORKLOAD,

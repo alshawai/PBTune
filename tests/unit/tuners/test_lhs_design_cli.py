@@ -1,8 +1,14 @@
 """Tests for the LHS-design CLI argument parsing and tuner construction."""
 
+from unittest import mock
+
+import pytest
+
 from src.tuners.lhs_design import LHSDesignTuner
+from src.tuners import lhs_design_cli
 from src.tuners.lhs_design_cli import build_tuner, parse_args
-from src.tuners.utils.types import TuningStrategy
+from src.tuners.utils.exceptions import TunerConfigError
+from src.tuners.utils.types import TunerLifecycleConfig, TuningStrategy
 from src.utils.types import TuningMode
 
 
@@ -183,3 +189,63 @@ class TestSharedFlagsThreadIntoLifecycle:
         lc = build_tuner(args).lifecycle
         assert lc.force_recreate_instances is True
         assert lc.cleanup_instances is True
+
+    def test_force_recreate_baseline_threads_into_lifecycle(self):
+        args = parse_args(["--force-recreate-baseline"])
+        assert build_tuner(args).lifecycle.force_recreate_baseline is True
+
+
+class TestSnapshotFlags:
+    """--enable/--disable-snapshots and --snapshot-restore-interval surface."""
+
+    def test_snapshots_default_unset(self):
+        args = parse_args([])
+        assert args.enable_snapshots is None
+        assert args.snapshot_restore_interval is None
+
+    def test_enable_snapshots_parses_true(self):
+        assert parse_args(["--enable-snapshots"]).enable_snapshots is True
+
+    def test_disable_snapshots_parses_false(self):
+        assert parse_args(["--disable-snapshots"]).enable_snapshots is False
+
+    def test_default_enables_snapshots_on_lifecycle(self):
+        assert build_tuner(parse_args([])).lifecycle.enable_snapshots is True
+
+    def test_disable_snapshots_threads_onto_lifecycle(self):
+        lc = build_tuner(parse_args(["--disable-snapshots"])).lifecycle
+        assert lc.enable_snapshots is False
+
+    def test_interval_override_threads_onto_lifecycle(self):
+        lc = build_tuner(parse_args(["--snapshot-restore-interval", "3"])).lifecycle
+        assert lc.snapshot_restore_interval == 3
+
+    @pytest.mark.parametrize(
+        "profile,expected",
+        [("rapid", 10), ("standard", 5), ("thorough", 1), ("research", 1)],
+    )
+    def test_interval_default_resolves_via_profile(self, profile, expected):
+        lc = build_tuner(parse_args(["--config", profile])).lifecycle
+        assert lc.snapshot_restore_interval == expected
+
+    def test_interval_below_one_raises(self):
+        with pytest.raises(TunerConfigError):
+            TunerLifecycleConfig(
+                strategy=TuningStrategy.LHS, snapshot_restore_interval=0
+            )
+
+
+class TestHtmlLogParity:
+    """main() attaches an HTML file handler under the resolved output root."""
+
+    def test_main_attaches_html_handler(self):
+        with mock.patch.object(
+            lhs_design_cli, "add_html_file_logging"
+        ) as add_html, mock.patch.object(
+            LHSDesignTuner, "run", return_value=None
+        ):
+            lhs_design_cli.main(["--benchmark", "tpch", "--design-size", "4"])
+        add_html.assert_called_once()
+        log_path = add_html.call_args.kwargs["output_file"]
+        assert log_path.name.startswith("lhs_design_")
+        assert log_path.suffix == ".html"

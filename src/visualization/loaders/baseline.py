@@ -12,7 +12,7 @@ import numpy as np
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 
 LOGGER = get_logger("BaselineLoader")

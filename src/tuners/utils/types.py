@@ -147,6 +147,15 @@ class TunerLifecycleConfig:
         cached one. Distinct from ``force_recreate_instances``: the baseline is
         the pristine template every per-worker instance is cloned from, whereas
         ``force_recreate_instances`` governs the per-worker instances themselves.
+    enable_snapshots
+        Restore each worker's instance to the pristine baseline snapshot on a
+        per-profile cadence so every measurement window starts from identical
+        DB state. Read-only / TPC-H workloads force this off downstream (the
+        workload bundle's own ``enable_snapshots`` is AND'd in at setup).
+    snapshot_restore_interval
+        Baseline-restore cadence in generations (PBT/BO parity:
+        rapid=10, standard=5, thorough=1, research=1). A restore is due when
+        ``enable_snapshots and gen > 0 and gen % interval == 0``.
     worker_ram, worker_cpus, worker_disk_read_bps, worker_disk_write_bps,
     worker_disk_read_iops, worker_disk_write_iops, probe_disk
         Manual per-worker resource overrides. Any non-``None`` value routes
@@ -170,6 +179,8 @@ class TunerLifecycleConfig:
     adaptive_restart_interval: int = 10
     force_recreate_instances: bool = False
     force_recreate_baseline: bool = False
+    enable_snapshots: bool = True
+    snapshot_restore_interval: int = 5
 
     # Per-worker resource overrides (None => auto-detect).
     worker_ram: Optional[str] = None
@@ -193,3 +204,5 @@ class TunerLifecycleConfig:
             raise TunerConfigError("num_parallel_workers must be at least 1")
         if self.adaptive_restart_interval < 1:
             raise TunerConfigError("adaptive_restart_interval must be at least 1")
+        if self.snapshot_restore_interval < 1:
+            raise TunerConfigError("snapshot_restore_interval must be at least 1")

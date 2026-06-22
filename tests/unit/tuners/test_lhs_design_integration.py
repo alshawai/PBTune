@@ -90,6 +90,18 @@ class _FakeLHSTuner(LHSDesignTuner):
         super().__init__(*args, **kwargs)
         self._injected_design = design
 
+    def collect_metric_history(self):
+        """Opt out of the global post-hoc recalibration pass.
+
+        The fake orchestrator's score (== ``work_mem``) is a stub, not the
+        output of the real scoring engine, so feeding its metrics through the
+        real recalibration rubric would reorder the best against an unrelated
+        scale. These tests exercise the run()/step() driver + serialization;
+        the recalibration seam has dedicated coverage in
+        ``TestRecalibrationWiring`` (unit) and ``TestRecalibrationRun`` below.
+        """
+        return []
+
     def setup(self):
         space = _FakeKnobSpace(self._injected_design)
         self.knob_space = space
@@ -215,3 +227,94 @@ class TestLHSDesignRun:
         rec = tuner.design_records[0]
         assert "config" in rec and "work_mem" in rec["config"]
         assert "metrics" in rec and rec["metrics"]["throughput"] is not None
+
+
+class _RealMetricOrchestrator:
+    """Emits real PerformanceMetrics (valid latency + throughput) so the
+    global recalibration pass can rescore them through the real engine."""
+
+    def __init__(self):
+        self.scorer = _FakeScorer()
+
+    def evaluate_worker(self, worker, **_kwargs):
+        wm = float(worker.knob_config.get("work_mem", 0.0))
+        # Lower latency + higher throughput as work_mem rises.
+        metrics = PerformanceMetrics(
+            latency_p95=100.0 - wm * 50.0,
+            throughput=100.0 + wm * 100.0,
+        )
+        timing = SimpleNamespace(to_dict=lambda **kw: {"records": []})
+        return metrics, wm, False, {}, timing
+
+
+class _RecalLHSTuner(_FakeLHSTuner):
+    """Fake tuner that KEEPS the real recalibration pass enabled."""
+
+    def collect_metric_history(self):
+        # Re-enable the real history surface (parent fake disabled it).
+        return LHSDesignTuner.collect_metric_history(self)
+
+    def setup(self):
+        super().setup()
+        # Swap in a real MetricConfig + real-metric orchestrator so the
+        # post-hoc recalibration genuinely calibrates and rescores.
+        from src.utils.metrics import create_metric_config
+
+        self.metric_config = create_metric_config("olap")
+        self.orchestrator = _RealMetricOrchestrator()
+
+
+class TestRecalibrationRun:
+    """The run() lifecycle applies global post-hoc recalibration before
+    serialization, and the rescored values are internally consistent."""
+
+    def _make_recal(self, tmp_path, design, workers):
+        lifecycle = TunerLifecycleConfig(
+            strategy=TuningStrategy.LHS,
+            knob_tier="minimal",
+            num_parallel_workers=workers,
+        )
+        return _RecalLHSTuner(
+            lifecycle,
+            benchmark="tpch",
+            benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
+            design_size=len(design),
+            timestamp="20260619_1200",
+            output_root=tmp_path,
+            design=design,
+        )
+
+    def test_recalibration_applied_and_serialized(self, tmp_path):
+        tuner = self._make_recal(tmp_path, _DESIGN, workers=2)
+        results = tuner.run()
+
+        # The session records that recalibration ran.
+        assert results["recalibration"]["applied"] is True
+        assert "metadata" in results["recalibration"]
+        assert tuner.recalibration.applied is True
+        assert len(tuner.recalibration.breakdowns) == 5
+
+        # Every design record carries a rescored breakdown dict.
+        for rec in tuner.design_records:
+            assert isinstance(rec["score_breakdown"], dict)
+
+        # best_configuration is internally consistent with the rescored
+        # records: its score equals the max record score.
+        best_record_score = max(r["score"] for r in tuner.design_records)
+        assert results["best_configuration"]["score"] == pytest.approx(
+            best_record_score
+        )
+
+    def test_serialized_session_carries_rescored_scores(self, tmp_path):
+        tuner = self._make_recal(tmp_path, _DESIGN, workers=2)
+        tuner.run()
+        session_file = (
+            tmp_path / "tuning_sessions" / "lhs_results_20260619_1200.json"
+        )
+        loaded = json.loads(session_file.read_text())
+        assert loaded["recalibration"]["applied"] is True
+        # Each serialized design record has a non-null rescored breakdown.
+        assert all(
+            r["score_breakdown"] is not None for r in loaded["design_records"]
+        )
+

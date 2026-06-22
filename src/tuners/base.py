@@ -42,6 +42,10 @@ from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestratorConfig,
 )
 from src.tuner.config import get_knob_space
+from src.tuners.utils.calibration import (
+    RecalibrationResult,
+    maybe_recalibrate_scores,
+)
 from src.tuners.utils.executors import build_workload_bundle
 from src.tuners.utils.knob_filter import (
     compute_unsupported_knobs,
@@ -135,6 +139,10 @@ class BaseTuner(ABC):
 
         self._best_score_so_far: float = 0.0
 
+        # Populated by run() after the loop: the outcome of the optional
+        # global post-hoc recalibration pass (unapplied by default).
+        self.recalibration: RecalibrationResult = RecalibrationResult(applied=False)
+
     @abstractmethod
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
         """
@@ -172,6 +180,41 @@ class BaseTuner(ABC):
         ``worker_resources`` blocks; this hook contributes everything else
         (generation history, score breakdown, provenance, ...).
         """
+
+    def collect_metric_history(self) -> List[PerformanceMetrics]:
+        """
+        Return every measured :class:`PerformanceMetrics` across the run.
+
+        The shared ``run()`` feeds this flat history to the global post-hoc
+        recalibration pass (:func:`maybe_recalibrate_scores`) so the serialized
+        session can be rescored against one calibrated normalization range
+        before the per-config scores are frozen into the payload.
+
+        The base default returns an empty list, which makes recalibration a
+        no-op (below the observation floor) — a strategy that wants the
+        pre-rescored session overrides this to surface its observations. The
+        ordering of the returned list is the strategy's contract with its own
+        :meth:`apply_recalibration`: ``recalibration.scores[i]`` /
+        ``recalibration.breakdowns[i]`` correspond to ``history[i]``.
+        """
+        return []
+
+    def apply_recalibration(self, result: RecalibrationResult) -> None:
+        """
+        Fold a successful recalibration back into the strategy's state.
+
+        Called by ``run()`` after the loop when
+        :func:`maybe_recalibrate_scores` returns an applied result, *before*
+        results are assembled and serialized. The positional alignment between
+        ``result.scores`` / ``result.breakdowns`` and the list returned by
+        :meth:`collect_metric_history` is guaranteed by the shared pass, so an
+        override can rewrite per-config scores, ``best_configuration``, and
+        ``generation_history`` to reflect the globally calibrated rubric.
+
+        The base default is a no-op: strategies that do not surface a metric
+        history (or do not want pre-rescoring) inherit local scores unchanged.
+        """
+        return None
 
     @property
     def max_generations(self) -> int:
@@ -291,7 +334,7 @@ class BaseTuner(ABC):
         self._workload_type = bundle.workload_type
         self.workload_features = bundle.workload_features
         self.snapshot_identifier = bundle.snapshot_identifier
-        self.enable_snapshots = bundle.enable_snapshots
+        self.enable_snapshots = self.lifecycle.enable_snapshots and bundle.enable_snapshots
         workload_executor = bundle.executor
 
         self.metric_config = create_metric_config(
@@ -501,6 +544,8 @@ class BaseTuner(ABC):
         tuning_time = time.time() - (self.tuning_start_time or self.start_time)
         bootstrap_seconds = total_time - tuning_time
 
+        self._recalibrate_scores()
+
         results = self._assemble_results(
             total_time=total_time,
             tuning_time=tuning_time,
@@ -567,6 +612,62 @@ class BaseTuner(ABC):
         LOGGER.info(
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
         )
+
+    def _recalibrate_scores(self) -> None:
+        """
+        Run the optional global post-hoc recalibration pass after the loop.
+
+        Collects the strategy's flat metric history and, when there are enough
+        observations, recomputes every score against one globally calibrated
+        normalization range. A successful pass is stored on
+        ``self.recalibration`` and handed to :meth:`apply_recalibration` so the
+        strategy can fold the rescored values + breakdowns back into its state
+        *before* :meth:`_assemble_results` freezes the session payload.
+
+        Threads the live scoring provenance (policy, version, metric reference,
+        and the session's static workload-feature prior) through so the
+        rescored rubric matches the one the loop scored against. Below the
+        observation floor the result is unapplied and local scores stand.
+        """
+        history = self.collect_metric_history()
+        if not history:
+            return
+
+        metric_config = self.metric_config
+        result = maybe_recalibrate_scores(
+            history,
+            benchmark=self.benchmark,
+            workload=self._workload_type.value,
+            scoring_policy=getattr(metric_config, "scoring_policy", None),
+            scoring_policy_version=getattr(
+                metric_config, "scoring_policy_version", None
+            ),
+            metric_reference_version=getattr(
+                metric_config, "metric_reference_version", None
+            ),
+            workload_features=dict(self.workload_features) or None,
+        )
+        self.recalibration = result
+
+        if not result.applied:
+            LOGGER.info(
+                "%sGlobal recalibration skipped (%d observations < floor); "
+                "keeping local scores%s",
+                COLORS.orange,
+                len(history),
+                COLORS.reset,
+            )
+            return
+
+        LOGGER.info(
+            "%sGlobal recalibration applied across %d observations "
+            "(ranges_calibrated=%s)%s",
+            COLORS.teal,
+            len(history),
+            result.metadata.get("ranges_calibrated"),
+            COLORS.reset,
+        )
+        self.apply_recalibration(result)
 
     def _assemble_results(
         self,

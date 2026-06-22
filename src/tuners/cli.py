@@ -198,6 +198,36 @@ def _add_instance_group(parser: argparse.ArgumentParser) -> None:
             "instance is cloned from (default: reuse cached baseline)"
         ),
     )
+    snapshot_group = group.add_mutually_exclusive_group()
+    snapshot_group.add_argument(
+        "--enable-snapshots",
+        dest="enable_snapshots",
+        action="store_true",
+        default=None,
+        help=(
+            "Restore each worker to the pristine baseline snapshot on the "
+            "per-profile cadence so every measurement window starts from "
+            "identical DB state (default: enabled)."
+        ),
+    )
+    snapshot_group.add_argument(
+        "--disable-snapshots",
+        dest="enable_snapshots",
+        action="store_false",
+        default=None,
+        help="Never restore the baseline snapshot between generations.",
+    )
+    group.add_argument(
+        "--snapshot-restore-interval",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Baseline-snapshot restore cadence in generations. When unset, "
+            "defaults to the per-profile value selected by --config "
+            "(rapid=10, standard=5, thorough=1, research=1)."
+        ),
+    )
     group.add_argument(
         "--cleanup-instances",
         action="store_true",
@@ -400,6 +430,14 @@ def build_lifecycle_config(
         if args.parallel_workers is not None
         else PROFILES[args.config].num_parallel_workers
     )
+    enable_snapshots = (
+        args.enable_snapshots if args.enable_snapshots is not None else True
+    )
+    snapshot_restore_interval = (
+        args.snapshot_restore_interval
+        if args.snapshot_restore_interval is not None
+        else PROFILES[args.config].snapshot_restore_interval
+    )
     return TunerLifecycleConfig(
         strategy=strategy,
         knob_tier=args.tier,
@@ -411,6 +449,8 @@ def build_lifecycle_config(
         tuning_mode=tuning_mode,
         force_recreate_instances=args.force_recreate_instances,
         force_recreate_baseline=args.force_recreate_baseline,
+        enable_snapshots=enable_snapshots,
+        snapshot_restore_interval=snapshot_restore_interval,
         worker_ram=args.worker_ram,
         worker_cpus=args.worker_cpus,
         worker_disk_read_bps=args.worker_disk_read_bps,

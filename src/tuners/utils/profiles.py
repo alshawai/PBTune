@@ -55,19 +55,23 @@ class TunerProfile:
         The matched :class:`~src.utils.types.BenchmarkConfig` whose execution
         scalars (duration, warmup, scale factor, table sizing) seed the
         per-flag override layer in ``build_benchmark_config``.
+    snapshot_restore_interval
+        Baseline-snapshot restore cadence in generations (rapid=10, standard=5,
+        thorough=1, research=1). Overridden by ``--snapshot-restore-interval``.
     """
 
     name: str
     num_parallel_workers: int
     benchmark_config: BenchmarkConfig
+    snapshot_restore_interval: int
 
 
 # Worker counts mirror the matched PBT profiles in
 # ``src/tuner/config/tuner_config.py`` (RAPID=2, STANDARD=4, THOROUGH=8,
 # RESEARCH=12). The benchmark configs are reused verbatim from src/utils/types.
 PROFILES: dict[str, TunerProfile] = {
-    "rapid": TunerProfile("rapid", 2, RAPID_BENCHMARK_CONFIG),
-    "standard": TunerProfile("standard", 4, STANDARD_BENCHMARK_CONFIG),
-    "thorough": TunerProfile("thorough", 8, THOROUGH_BENCHMARK_CONFIG),
-    "research": TunerProfile("research", 12, RESEARCH_BENCHMARK_CONFIG),
+    "rapid": TunerProfile("rapid", 2, RAPID_BENCHMARK_CONFIG, 10),
+    "standard": TunerProfile("standard", 4, STANDARD_BENCHMARK_CONFIG, 5),
+    "thorough": TunerProfile("thorough", 8, THOROUGH_BENCHMARK_CONFIG, 1),
+    "research": TunerProfile("research", 12, RESEARCH_BENCHMARK_CONFIG, 1),
 }

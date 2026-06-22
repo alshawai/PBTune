@@ -450,6 +450,16 @@ def _resolve_host_disk_budget(
     disk_class = _detect_disk_class(device)
     heuristic = _heuristic_disk_budget(disk_class)
 
+    if probe_disk and shutil.which("fio") is None:
+        LOGGER.warning(
+            "  ➤ --probe-disk requested but the `fio` binary was not found on "
+            "PATH. Falling back to the %s-class heuristic for per-worker disk "
+            "budgeting instead of a measured probe. Install fio (e.g. "
+            "`apt install fio`, `dnf install fio`, `pacman -S fio`) and re-run "
+            "to enable the measured probe.",
+            disk_class,
+        )
+
     if probe_disk and data_path is not None:
         probed = _probe_disk_with_fio(data_path)
         if probed is not None:
