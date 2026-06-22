@@ -117,6 +117,12 @@ class LHSDesignTuner(BaseTuner):
 
         # Result accumulation.
         self.design_records: List[Dict[str, Any]] = []
+        # Parallel to ``design_records`` (same index): the live metric object
+        # and raw knob config behind each record, retained so the shared
+        # post-hoc recalibration pass can rescore every design point and fold
+        # globally calibrated scores back into the records + best-state.
+        self._eval_metrics: List[Optional[PerformanceMetrics]] = []
+        self._eval_configs: List[Optional[Dict[str, Any]]] = []
         self._best_config: Optional[Dict[str, Any]] = None
         self._best_metrics: Optional[PerformanceMetrics] = None
         self._best_breakdown: Optional[ScoreBreakdown] = None
@@ -190,7 +196,11 @@ class LHSDesignTuner(BaseTuner):
         results = self._evaluate_batch_parallel(workers, barriers, generation)
 
         for design_index, worker, metrics, score in results:
-            breakdown = self._safe_breakdown(metrics)
+            # The orchestrator already scored this worker during
+            # evaluate_worker and stashed the breakdown on the worker (the
+            # returned ``score`` IS ``worker.score_breakdown.final_score``).
+            # Reuse it instead of re-running the composite scorer.
+            breakdown = worker.score_breakdown if metrics is not None else None
             record = {
                 "design_index": design_index,
                 "batch": generation,
@@ -202,6 +212,10 @@ class LHSDesignTuner(BaseTuner):
                 ),
             }
             self.design_records.append(record)
+            self._eval_metrics.append(metrics)
+            self._eval_configs.append(
+                dict(worker.knob_config) if metrics is not None else None
+            )
 
             if score is not None and score > self._best_score_so_far:
                 self._best_score_so_far = float(score)
@@ -271,14 +285,28 @@ class LHSDesignTuner(BaseTuner):
             Tuple[int, Worker, Optional[PerformanceMetrics], Optional[float]]
         ] = []
 
+        # Baseline-snapshot restore cadence (PBT/BO parity). ``generation`` is
+        # the batch index; a restore is due at the start of a batch whose index
+        # is a positive multiple of the interval, and ``next_eval_will_restore``
+        # leads by one so the orchestrator can prep the next window.
+        interval = self.lifecycle.snapshot_restore_interval
+        restore_due = (
+            self.enable_snapshots and generation > 0 and generation % interval == 0
+        )
+        next_eval_will_restore = (
+            self.enable_snapshots
+            and (generation + 1) > 0
+            and (generation + 1) % interval == 0
+        )
+
         def _eval(worker: Worker):
             metrics, score, _restart, _cfg, timing = self.orchestrator.evaluate_worker(  # type: ignore
                 worker,
                 apply_config=True,
                 generation=generation,
                 barriers=barriers,
-                restore_due=False,
-                next_eval_will_restore=False,
+                restore_due=restore_due,
+                next_eval_will_restore=next_eval_will_restore,
             )
             worker.last_eval_timing = timing
             return metrics, score
@@ -290,8 +318,8 @@ class LHSDesignTuner(BaseTuner):
                 apply_config=True,
                 generation=generation,
                 barriers=single,
-                restore_due=False,
-                next_eval_will_restore=False,
+                restore_due=restore_due,
+                next_eval_will_restore=next_eval_will_restore,
             )
             workers[0].last_eval_timing = timing
             return [(generation * batch_size, workers[0], metrics, score)]
@@ -335,6 +363,71 @@ class LHSDesignTuner(BaseTuner):
             self._best_metrics,
         )
 
+    def collect_metric_history(self) -> List[PerformanceMetrics]:
+        """Every successfully measured design point, in design order.
+
+        Returns the live :class:`PerformanceMetrics` for records that produced
+        a measurement (failed/aborted configs contribute ``None`` and are
+        skipped). The shared :meth:`BaseTuner.run` feeds this to the global
+        post-hoc recalibration pass; positional alignment with
+        ``recalibration.scores`` / ``recalibration.breakdowns`` is preserved by
+        :meth:`apply_recalibration`, which walks the same valid positions.
+        """
+        return [m for m in self._eval_metrics if m is not None]
+
+    def apply_recalibration(self, result) -> None:
+        """Rewrite design records + best-state with globally rescored values.
+
+        ``result.scores[k]`` / ``result.breakdowns[k]`` correspond to the
+        ``k``-th non-``None`` entry of :attr:`_eval_metrics` — i.e. the same
+        order :meth:`collect_metric_history` produced. We map each back to its
+        originating record, overwrite ``score`` + ``score_breakdown``, then
+        recompute the best design point under the calibrated rubric so the
+        serialized ``best_configuration`` and ``score_breakdown`` block agree
+        with the rescored records.
+        """
+        valid_positions = [
+            i for i, m in enumerate(self._eval_metrics) if m is not None
+        ]
+        if not valid_positions or not result.scores:
+            return
+
+        best_score = float("-inf")
+        best_position: Optional[int] = None
+        for k, position in enumerate(valid_positions):
+            score = float(result.scores[k])
+            breakdown = result.breakdowns[k]
+            record = self.design_records[position]
+            record["score"] = score
+            record["score_breakdown"] = breakdown.to_dict()
+            if score > best_score:
+                best_score = score
+                best_position = position
+
+        if best_position is None:
+            return
+
+        best_k = valid_positions.index(best_position)
+        self._best_score_so_far = best_score
+        self._best_config = self._eval_configs[best_position]
+        self._best_metrics = self._eval_metrics[best_position]
+        self._best_breakdown = result.breakdowns[best_k]
+        # Surface the globally calibrated config so the serialized scoring +
+        # normalization metadata describe the rubric the records were rescored
+        # against, not the per-batch local ranges.
+        if result.metric_config is not None:
+            self.metric_config = result.metric_config
+        LOGGER.info(
+            "%sRescored best design point under global calibration%s: "
+            "score=%s%.4f%s (design_index=%s)",
+            COLORS.teal,
+            COLORS.reset,
+            COLORS.green,
+            best_score,
+            COLORS.reset,
+            self.design_records[best_position].get("design_index"),
+        )
+
     def build_session_payload(self) -> Dict[str, Any]:
         scoring_metadata = self.metric_config.get_scoring_metadata()
         payload: Dict[str, Any] = {
@@ -361,6 +454,14 @@ class LHSDesignTuner(BaseTuner):
                 if self._best_breakdown is not None
                 else {}
             ),
+            "recalibration": {
+                "applied": self.recalibration.applied,
+                **(
+                    {"metadata": self.recalibration.metadata}
+                    if self.recalibration.applied
+                    else {}
+                ),
+            },
             "system_info": self.system_info,
         }
         if self.session_environment is not None:

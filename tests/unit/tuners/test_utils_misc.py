@@ -1,24 +1,10 @@
-"""Tests for src.tuners.utils.calibration and knob_filter (DB-free paths)."""
+"""Tests for src.tuners.utils.knob_filter (DB-free paths).
 
-from src.tuners.utils.calibration import (
-    MIN_OBSERVATIONS_FOR_RECALIBRATION,
-    RecalibrationResult,
-    maybe_recalibrate_scores,
-)
+Calibration/rescoring coverage now lives in ``test_calibration.py`` (the
+canonical home for the relocated ``src/utils/rescoring.py`` module).
+"""
+
 from src.tuners.utils.knob_filter import compute_unsupported_knobs
-
-
-class TestMaybeRecalibrate:
-    def test_below_floor_skips(self):
-        # Fewer than the floor → unapplied, no exception, no DB/scoring needed.
-        result = maybe_recalibrate_scores([], benchmark="sysbench")
-        assert isinstance(result, RecalibrationResult)
-        assert result.applied is False
-        assert result.metric_config is None
-        assert result.rescored_values == []
-
-    def test_floor_constant(self):
-        assert MIN_OBSERVATIONS_FOR_RECALIBRATION == 3
 
 
 class TestComputeUnsupportedKnobs:
