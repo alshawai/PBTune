@@ -10,6 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # immutable and hashable.
 SEEDS_K5: tuple[int, ...] = (42, 123, 456, 789, 1024)
 SEEDS_K1: tuple[int, ...] = (42,)
+# Single seed for the pre-flight smoke suite — one seed is enough to exercise
+# the wiring; the smoke run is about catching pipeline bugs, not statistics.
+SEEDS_SMOKE: tuple[int, ...] = (42,)
 
 
 @dataclass(frozen=True)
@@ -242,7 +245,53 @@ def get_experiments_by_tier(tier: int) -> list[Experiment]:
     return [e for e in build_all_experiments() if e.tier == tier]
 
 def get_experiment_by_id(exp_id: str) -> Experiment | None:
-    for e in build_all_experiments():
+    for e in build_all_experiments() + build_smoke_experiments():
         if e.id == exp_id:
             return e
     return None
+
+
+def build_smoke_experiments() -> list[Experiment]:
+    """Minimal end-to-end smoke runs for the cloud experiment pipeline.
+
+    These exercise the full ``PBT → BO → EVAL`` path for both benchmark
+    families at the smallest legal budget, so a fresh VM's environment, CLI
+    wiring, and commit/push flow are validated in minutes rather than failing
+    midway through a multi-hour real experiment.
+
+    Budget rationale (the legal minimum):
+
+    - ``config_profile="rapid"`` + ``population=2`` + ``generations=1`` —
+      ``PBTConfig`` requires ``population_size >= 2`` and ``num_generations >= 1``.
+    - ``knob_tier="minimal"`` — fewest knobs, fastest apply/verify.
+    - ``eval_repetitions=2`` — ``src.evaluation`` requires ``--repetitions >= 2``
+      (needs paired observations for Wilcoxon); it warns about ``< 5``, which is
+      fine for a smoke.
+    - ``run_bo=True`` — BO budget derives from the PBT session
+      (``population * generations = 2``), so the BO phase stays tiny.
+
+    These are NOT part of :func:`build_all_experiments`, so they never appear
+    under ``--tier`` or the default run-everything path. ``tier=0`` marks them
+    as pre-flight checks. Reach them via ``--smoke`` or explicit id::
+
+        python -m scripts.experiments --smoke
+        python -m scripts.experiments --experiment smoke_sysbench_rw
+    """
+    return [
+        Experiment(
+            id="smoke_sysbench_rw", tier=0,
+            description="Smoke: Sysbench OLTP RW PBT→BO→EVAL (rapid/minimal, 1 gen)",
+            benchmark="sysbench", sysbench_workload="oltp_read_write", scale_factor=None,
+            config_profile="rapid", knob_tier="minimal", knob_source="expert",
+            tuning_mode="offline", seeds=SEEDS_SMOKE, eval_repetitions=2, run_bo=True,
+            population=2, generations=1, parallel_workers=2,
+        ),
+        Experiment(
+            id="smoke_tpch_sf01", tier=0,
+            description="Smoke: TPC-H SF0.1 PBT→BO→EVAL (rapid/minimal, 1 gen)",
+            benchmark="tpch", sysbench_workload=None, scale_factor=0.1,
+            config_profile="rapid", knob_tier="minimal", knob_source="expert",
+            tuning_mode="offline", seeds=SEEDS_SMOKE, eval_repetitions=2, run_bo=True,
+            population=2, generations=1, parallel_workers=2,
+        ),
+    ]
