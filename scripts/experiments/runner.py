@@ -235,7 +235,14 @@ class ExperimentRunner:
         # Refresh the cross-manifest index so the active experiment's
         # own writes don't shadow peer manifests pulled since startup.
         self._cross_manifest_index = self._build_cross_manifest_index()
-        
+
+        # LHS-design sweeps are a single-phase prep run (no BO/eval), but
+        # reuse the same manifest/resource/commit machinery as every other
+        # experiment.
+        if exp.strategy == "lhs":
+            self._run_lhs_experiment(exp, retry_failed)
+            return
+
         for seed in exp.seeds:
             LOGGER.info(f"=== {exp.id} | Seed {seed} ===")
             pbt_session_path = None
@@ -322,6 +329,38 @@ class ExperimentRunner:
             else:
                 LOGGER.info(f"Skipping EVAL (already done/failed)")
 
+    def _run_lhs_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
+        """Run an LHS-design importance sweep: a single phase, no BO/eval.
+
+        Mirrors the PBT phase's manifest tracking, resource handling, and
+        commit/push so an LHS run is resumable and recorded exactly like every
+        other experiment. The ``lhs_results_*.json`` it produces is the input
+        to the SCALPEL knob-importance pipeline
+        (``scripts/run_importance_fast.sh`` / ``run_importance_full.sh``).
+        """
+        for seed in exp.seeds:
+            LOGGER.info(f"=== {exp.id} | Seed {seed} (LHS) ===")
+            key = self._get_run_key(exp.id, seed, "lhs")
+            if self._is_done(key, retry_failed):
+                LOGGER.info("Skipping LHS (already done/failed)")
+                continue
+
+            LOGGER.info(f"Running LHS-design sweep for {exp.id} (seed {seed})")
+            cmd = self._build_lhs_cmd(exp, seed)
+            self._mark_status(key, "running", started_at=datetime.utcnow().isoformat() + "Z")
+
+            start_time = time.time()
+            success = self._run_command(cmd)
+            duration = time.time() - start_time
+
+            if success:
+                json_path = self._find_latest_session_json(RESULTS_DIR, "lhs_results_")
+                json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
+                self._mark_status(key, "done", duration_s=duration, session_json=json_str)
+                self._commit_and_push(exp, seed, "lhs")
+            else:
+                self._mark_status(key, "failed", duration_s=duration)
+
     def _resolve_warm_start_path(self, exp: Experiment) -> Path | None:
         """Resolve the best_config.json path for a warm-start experiment.
 
@@ -384,6 +423,37 @@ class ExperimentRunner:
             return None
 
         return best_config_path
+
+    def _build_lhs_cmd(self, exp: Experiment, seed: int) -> list[str]:
+        """Build the LHS-design importance-sweep command.
+
+        Threads the same resource flags (``--worker-ram``/``--worker-cpus``
+        from ``detect_worker_resources``) and instance/snapshot handling as
+        the PBT phase, so the sweep runs under identical resource limits.
+        ``--config thorough`` supplies the 512-point design size unless the
+        experiment pins ``design_size``.
+        """
+        cmd = [
+            "python", "-m", "src.tuners.lhs_design",
+            "--config", exp.config_profile,
+            "--tier", exp.knob_tier,
+            "--knob-source", exp.knob_source,
+            "--benchmark", exp.benchmark,
+            "--random-seed", str(seed),
+            "--tuning-mode", exp.tuning_mode,
+            "--snapshot-restore-interval", "1",
+            "--force-recreate-instances",
+            "--worker-ram", self.worker_ram,
+            "--worker-cpus", str(self.worker_cpus),
+            "--verbose", "DEBUG",
+        ]
+        if exp.sysbench_workload:
+            cmd.extend(["--sysbench-workload", exp.sysbench_workload])
+        if exp.scale_factor is not None:
+            cmd.extend(["--scale-factor", str(exp.scale_factor)])
+        if exp.design_size is not None:
+            cmd.extend(["--design-size", str(exp.design_size)])
+        return cmd
 
     def _build_pbt_cmd(self, exp: Experiment, seed: int) -> list[str]:
         cmd = [

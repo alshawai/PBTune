@@ -42,6 +42,14 @@ class Experiment:
     # runs.
     warm_start_source: str | None = None
     warm_start_source_seed: int | None = None
+    # Strategy selector. "pbt" (default) runs the three-phase PBT→BO→EVAL
+    # pipeline; "lhs" runs a single LHS-design importance sweep (no BO/eval),
+    # used to generate the session JSON the SCALPEL pipeline consumes. Kept a
+    # plain str so this lightweight matrix module need not import the tuners
+    # enum.
+    strategy: str = "pbt"
+    # LHS-only: design-size override. None → profile-derived (thorough=512).
+    design_size: int | None = None
 
 
 def get_data_driven_tier_experiments(workload_type: str = "oltp_read_write") -> list[Experiment]:
@@ -242,7 +250,35 @@ def get_experiments_by_tier(tier: int) -> list[Experiment]:
     return [e for e in build_all_experiments() if e.tier == tier]
 
 def get_experiment_by_id(exp_id: str) -> Experiment | None:
-    for e in build_all_experiments():
+    for e in build_all_experiments() + build_lhs_experiments():
         if e.id == exp_id:
             return e
     return None
+
+
+def build_lhs_experiments() -> list[Experiment]:
+    """Importance-design LHS sweeps — the SCALPEL inputs.
+
+    These are *preparation* runs, not part of the Tier 1/2/3 comparison
+    matrix, so they live outside :func:`build_all_experiments` and never
+    appear in ``--tier`` or the default "run everything" path. They are
+    reachable only by explicit id::
+
+        python -m scripts.experiments --experiment lhs_design
+
+    ``tier=0`` marks them as prep/analysis. The session JSON each produces
+    (``lhs_results_*.json``) feeds ``scripts/run_importance_fast.sh`` /
+    ``scripts/run_importance_full.sh``. ``knob_tier="extensive"`` samples the
+    broadest space so SCALPEL prunes from the full knob set; ``thorough``
+    supplies the 512-point design size (override via ``design_size``).
+    """
+    return [
+        Experiment(
+            id="lhs_design", tier=0,
+            description="Importance-design LHS sweep (SCALPEL input)",
+            benchmark="sysbench", sysbench_workload="oltp_read_write", scale_factor=None,
+            config_profile="thorough", knob_tier="extensive", knob_source="expert",
+            tuning_mode="offline", seeds=SEEDS_K1, eval_repetitions=0, run_bo=False,
+            strategy="lhs",
+        ),
+    ]
