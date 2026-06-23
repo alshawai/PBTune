@@ -214,7 +214,7 @@ class LHSDesignTuner(BaseTuner):
             self.design_records.append(record)
             self._eval_metrics.append(metrics)
             self._eval_configs.append(
-                dict(worker.knob_config) if metrics is not None else None
+                dict(worker.knob_config) if metrics is not None else None  # type: ignore
             )
 
             if score is not None and score > self._best_score_so_far:
@@ -428,6 +428,70 @@ class LHSDesignTuner(BaseTuner):
             self.design_records[best_position].get("design_index"),
         )
 
+    def _build_generation_history(self) -> List[Dict[str, Any]]:
+        """
+        Project the per-design records into a PBT-shaped ``generation_history``.
+
+        The shared analysis loader (:func:`src.analysis.data_loader.load_pbt_results`)
+        reads per-observation data exclusively from
+        ``generation_history[].worker_configs`` / ``worker_scores`` — it has no
+        ``design_records`` branch. To make an LHS trace natively loadable by the
+        SCALPEL pipeline (and honor the rollout guide's promise that an LHS dir
+        can be analyzed "exactly as you would a PBT trace"), we emit a second,
+        PBT-canonical *view* of the same observations here. ``design_records``
+        is left untouched as the LHS-native, fraction-encoded artifact.
+
+        Each LHS *batch* maps to one ``generation`` entry. Within a batch the
+        ``worker_id`` is the design's offset from the batch start
+        (``design_index - batch * num_parallel_workers``), so the loader's
+        join-by-``worker_id`` aligns configs with scores. Two deliberate
+        differences from ``design_records`` entries:
+
+        * **config** is sourced from :attr:`_eval_configs` (the raw decoded
+          ``knob_config``) rather than ``design_records[i]["config"]`` (knob
+          *fractions*), because the loader requires decoded knob→value maps —
+          ``config.keys()`` must match the PBT tunable-knob set.
+        * **score** / **metrics** are read from ``design_records`` so that any
+          recalibration already applied in place (``apply_recalibration``) is
+          reflected here.
+
+        Failed evaluations (``_eval_configs[i] is None``) are dropped — the
+        loader would skip them anyway (null score / ``failure_type``).
+        """
+        batch_size = self.lifecycle.num_parallel_workers
+        by_batch: Dict[int, Dict[str, List[Dict[str, Any]]]] = {}
+
+        for i, record in enumerate(self.design_records):
+            config = self._eval_configs[i] if i < len(self._eval_configs) else None
+            if config is None:
+                continue
+            batch = int(record.get("batch", 0))
+            design_index = int(record.get("design_index", i))
+            worker_id = design_index - batch * batch_size
+
+            bucket = by_batch.setdefault(
+                batch, {"worker_configs": [], "worker_scores": []}
+            )
+            bucket["worker_configs"].append(
+                {"worker_id": worker_id, "config": config}
+            )
+            bucket["worker_scores"].append(
+                {
+                    "worker_id": worker_id,
+                    "score": record.get("score"),
+                    "metrics": record.get("metrics") or {},
+                }
+            )
+
+        return [
+            {
+                "generation_index": batch,
+                "worker_configs": by_batch[batch]["worker_configs"],
+                "worker_scores": by_batch[batch]["worker_scores"],
+            }
+            for batch in sorted(by_batch)
+        ]
+
     def build_session_payload(self) -> Dict[str, Any]:
         scoring_metadata = self.metric_config.get_scoring_metadata()
         payload: Dict[str, Any] = {
@@ -445,6 +509,7 @@ class LHSDesignTuner(BaseTuner):
                 ),
             },
             "design_records": self.design_records,
+            "generation_history": self._build_generation_history(),
             "workload_features": scoring_metadata.get("workload_features", {}),
             "normalization_metadata": scoring_metadata.get(
                 "normalization_metadata", {}

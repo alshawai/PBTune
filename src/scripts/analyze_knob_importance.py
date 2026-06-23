@@ -18,7 +18,7 @@ from typing import Any, Iterable, Optional
 
 import pandas as pd
 
-from src.analysis.data_loader import load_pbt_results, LoadedData
+from src.analysis.data_loader import load_pbt_results, LoadedData, find_result_files
 from src.analysis.hardware_validator import (
     validate_hardware_importance,
     build_hardware_profile_key,
@@ -445,7 +445,7 @@ def _group_files_by_hardware(
 ) -> tuple[dict[str, tuple[list[Path], dict[str, Any]]], str]:
     """Group JSON result files by hardware profile key and extract workload."""
     groups: dict[str, tuple[list[Path], dict[str, Any]]] = {}
-    json_files = sorted(results_dir.glob("pbt_results_*.json"), key=lambda p: p.name)
+    json_files = find_result_files(results_dir)
 
     first_workload = "unknown"
 
@@ -782,9 +782,10 @@ def _discover_workloads(
             continue
         # Skip empty directories — refusing to overwrite a prior good
         # data_driven_tiers.json with empty SCALPEL output is by design.
-        if not any(path.glob("pbt_results_*.json")):
+        if not find_result_files(path):
             LOGGER.warning(
-                "Skipping %s: no pbt_results_*.json files found.", path
+                "Skipping %s: no pbt_results_*.json / lhs_results_*.json files found.",
+                path,
             )
             continue
         try:

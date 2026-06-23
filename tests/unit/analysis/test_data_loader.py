@@ -779,3 +779,74 @@ def test_sysbench_workload_no_promotion_for_non_sysbench():
 
     assert metadata["workload_type"] == "olap"
     assert metadata["benchmark_name"] == "tpch"
+
+
+def _lhs_shaped_session():
+    """A PBT-compatible session payload as projected by the LHS-design writer.
+
+    The LHS tuner keeps its native fraction-encoded ``design_records`` array but
+    also projects a ``generation_history`` so the shared loader can read it
+    without any LHS-specific branch.
+    """
+    return {
+        "tuning_session": {
+            "workload_type": "oltp",
+            "benchmark_name": "sysbench",
+            "sysbench_workload": "oltp_read_write",
+            "algorithm": "lhs-design",
+        },
+        "system_info": {"cpu": 4},
+        "design_records": [
+            {"design_index": 0, "batch": 0, "config": {"shared_buffers": 0.5}},
+            {"design_index": 1, "batch": 0, "config": {"shared_buffers": 0.9}},
+        ],
+        "generation_history": [
+            {
+                "generation_index": 0,
+                "worker_configs": [
+                    {"worker_id": 0, "config": {"shared_buffers": 1024}},
+                    {"worker_id": 1, "config": {"shared_buffers": 2048}},
+                ],
+                "worker_scores": [
+                    {
+                        "worker_id": 0,
+                        "score": 150.0,
+                        "metrics": {"throughput": 1000.0, "failure_type": None},
+                    },
+                    {
+                        "worker_id": 1,
+                        "score": 200.0,
+                        "metrics": {"throughput": 1500.0, "failure_type": None},
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_find_result_files_discovers_lhs_and_pbt(tmp_path):
+    """Discovery globs both pbt_results_*.json and lhs_results_*.json, name-sorted."""
+    from src.analysis.data_loader import find_result_files
+
+    (tmp_path / "pbt_results_a.json").write_text("{}")
+    (tmp_path / "lhs_results_b.json").write_text("{}")
+    (tmp_path / "unrelated.json").write_text("{}")
+
+    found = [p.name for p in find_result_files(tmp_path)]
+
+    assert found == ["lhs_results_b.json", "pbt_results_a.json"]
+
+
+def test_load_pbt_results_reads_lhs_results_file(tmp_path):
+    """An lhs_results_*.json session loads its projected observations."""
+    data_dir = tmp_path / "lhs_runs"
+    data_dir.mkdir()
+    (data_dir / "lhs_results_20260622_1407.json").write_text(
+        json.dumps(_lhs_shaped_session())
+    )
+
+    dataset = load_pbt_results(data_dir)
+
+    assert dataset.n_observations == 2
+    assert len(dataset.config_df) == 2
+    assert "shared_buffers" in dataset.knob_bounds

@@ -24,6 +24,26 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger("Loader")
 
+# Session-file discovery patterns. PBT writes ``pbt_results_*.json``; the
+# LHS-design tuner writes ``lhs_results_*.json`` with a PBT-shaped
+# ``generation_history`` (see ``LHSDesignTuner._build_generation_history``), so
+# both are natively loadable here. Any new strategy that emits a PBT-shaped
+# ``generation_history`` should add its prefix to this tuple.
+RESULT_FILE_GLOBS = ("pbt_results_*.json", "lhs_results_*.json")
+
+
+def find_result_files(directory):
+    """Return all known result-session files in ``directory``, name-sorted.
+
+    Globs every pattern in :data:`RESULT_FILE_GLOBS` so PBT and LHS traces are
+    discovered uniformly. The single source of truth for "what is a loadable
+    session file" -- used by the loader and the SCALPEL grouping/walk gates.
+    """
+    found = []
+    for pattern in RESULT_FILE_GLOBS:
+        found.extend(directory.glob(pattern))
+    return sorted(found, key=lambda p: p.name)
+
 
 @dataclass
 class LoadedData:
@@ -356,7 +376,7 @@ def load_pbt_results(
         if not json_files:
             raise FileNotFoundError("Provided file_paths list is empty")
     else:
-        json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
+        json_files = find_result_files(dir_path)
         if not json_files:
             raise FileNotFoundError(f"No PBT result files found in {directory_path}")
 

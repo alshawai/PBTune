@@ -173,6 +173,90 @@ class TestRecalibrationWiring:
         assert tuner._best_score_so_far == before
 
 
+class TestGenerationHistoryProjection:
+    """``_build_generation_history`` emits a PBT-canonical view of the design.
+
+    The shared analysis loader (``load_pbt_results``) reads observations only
+    from ``generation_history[].worker_configs``/``worker_scores``. This
+    projection makes an LHS trace natively loadable by that path without a
+    ``design_records`` branch in the loader.
+    """
+
+    def _seed(self, tuner, records, configs):
+        for rec, cfg in zip(records, configs):
+            tuner.design_records.append(rec)
+            tuner._eval_configs.append(cfg)
+
+    def test_groups_by_batch_with_local_worker_ids(self, tmp_path):
+        tuner = _make_tuner(design_size=8, workers=4, tmp_path=tmp_path)
+        # Two batches of 4; design_index is global, worker_id is the local offset.
+        records = [
+            {"design_index": i, "batch": i // 4, "score": float(i),
+             "metrics": {"throughput": 100.0 + i}}
+            for i in range(8)
+        ]
+        configs = [{"shared_buffers": 128 * (i + 1)} for i in range(8)]
+        self._seed(tuner, records, configs)
+
+        history = tuner._build_generation_history()
+        assert [g["generation_index"] for g in history] == [0, 1]
+        # worker_id resets to 0..3 within each batch.
+        assert [c["worker_id"] for c in history[0]["worker_configs"]] == [0, 1, 2, 3]
+        assert [c["worker_id"] for c in history[1]["worker_configs"]] == [0, 1, 2, 3]
+        # Config is the raw decoded knob map (from _eval_configs), not fractions.
+        assert history[1]["worker_configs"][0]["config"] == {"shared_buffers": 128 * 5}
+
+    def test_scores_paired_by_worker_id_with_metrics(self, tmp_path):
+        tuner = _make_tuner(design_size=4, workers=4, tmp_path=tmp_path)
+        records = [
+            {"design_index": i, "batch": 0, "score": float(i) + 0.5,
+             "metrics": {"throughput": 10.0 * i}}
+            for i in range(4)
+        ]
+        self._seed(tuner, records, [{"k": i} for i in range(4)])
+
+        history = tuner._build_generation_history()
+        scores = history[0]["worker_scores"]
+        assert {s["worker_id"] for s in scores} == {0, 1, 2, 3}
+        by_id = {s["worker_id"]: s for s in scores}
+        assert by_id[2]["score"] == 2.5
+        assert by_id[2]["metrics"] == {"throughput": 20.0}
+
+    def test_failed_designs_dropped(self, tmp_path):
+        tuner = _make_tuner(design_size=4, workers=4, tmp_path=tmp_path)
+        records = [
+            {"design_index": 0, "batch": 0, "score": 1.0, "metrics": {"x": 1}},
+            {"design_index": 1, "batch": 0, "score": None, "metrics": None},
+            {"design_index": 2, "batch": 0, "score": 2.0, "metrics": {"x": 2}},
+        ]
+        # The failed point has a None config (orchestrator failure path).
+        self._seed(tuner, records, [{"k": 0}, None, {"k": 2}])
+
+        history = tuner._build_generation_history()
+        ids = [c["worker_id"] for c in history[0]["worker_configs"]]
+        # worker_id 1 (the failed design) is absent; 0 and 2 survive.
+        assert ids == [0, 2]
+
+    def test_payload_includes_generation_history(self, tmp_path):
+        """build_session_payload exposes the projection as a top-level key."""
+        from src.utils.metrics import create_metric_config
+
+        tuner = _make_tuner(design_size=2, workers=2, tmp_path=tmp_path)
+        # build_session_payload reads scoring metadata off metric_config; in the
+        # DB-free path no setup() ran, so provide a minimal one.
+        tuner.metric_config = create_metric_config("oltp")
+        self._seed(
+            tuner,
+            [{"design_index": 0, "batch": 0, "score": 1.0, "metrics": {"x": 1}}],
+            [{"k": 0}],
+        )
+        payload = tuner.build_session_payload()
+        assert "generation_history" in payload
+        assert payload["generation_history"][0]["generation_index"] == 0
+        # design_records stays intact alongside the projection.
+        assert payload["design_records"] is tuner.design_records
+
+
 
 class TestSnapshotCadence:
     """``_evaluate_batch_parallel`` computes the per-batch restore predicate.
