@@ -27,6 +27,7 @@ import pytest
 
 from src.utils.hardware_info import (
     _DISK_CLASS_BUDGETS,
+    _DISK_PROBE_IOPS_SANITY_MIN,
     _DISK_PROBE_TRUST_FLOOR,
     _probe_passes_trust_floor,
     _resolve_host_disk_budget,
@@ -37,7 +38,8 @@ from src.utils.hardware_info import (
 
 
 def test_probe_passes_when_above_floor():
-    """Probe at 50% of heuristic on every field passes (floor is 25%)."""
+    """Probe at 50% of heuristic on every field passes (BPS floor is 25%,
+    and 50% of the heuristic IOPS clears the absolute sanity floor)."""
     heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
     probed = {k: int(v * 0.5) for k, v in heuristic.items()}
     passes, failed = _probe_passes_trust_floor(probed, heuristic)
@@ -46,7 +48,7 @@ def test_probe_passes_when_above_floor():
 
 
 def test_probe_passes_exactly_at_floor():
-    """At exactly the floor, we accept. The check is strict-less-than."""
+    """At exactly the BPS floor, we accept. The check is strict-less-than."""
     heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
     probed = {k: int(v * _DISK_PROBE_TRUST_FLOOR) for k, v in heuristic.items()}
     passes, failed = _probe_passes_trust_floor(probed, heuristic)
@@ -54,8 +56,8 @@ def test_probe_passes_exactly_at_floor():
 
 
 def test_probe_fails_below_floor_on_any_field():
-    """One field below floor rejects the whole probe — a 60× under-read
-    on read_bps is the GCP PD pathology this defends against."""
+    """One BPS field below the relative floor rejects the whole probe — a
+    60× under-read on read_bps is the GCP PD pathology this defends against."""
     heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
     probed = dict(heuristic)
     probed["read_bps"] = int(heuristic["read_bps"] * 0.10)  # 10% << 25%
@@ -66,16 +68,47 @@ def test_probe_fails_below_floor_on_any_field():
     assert "write_bps" not in failed
 
 
-def test_probe_fails_lists_all_bad_fields():
-    """The reject-reason log must enumerate every below-floor metric so
-    the operator can diagnose which axis the probe was wrong on."""
+def test_probe_iops_judged_absolutely_not_relatively():
+    """IOPS are NOT judged against the (unreachable high-QD) heuristic
+    ceilings. A read_iops at 10% of the 80k heuristic (8000 IOPS) is a
+    perfectly real SSD measurement and must pass — only the below-floor
+    BPS field should be listed."""
     heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
     probed = dict(heuristic)
-    probed["read_bps"] = int(heuristic["read_bps"] * 0.05)
-    probed["read_iops"] = int(heuristic["read_iops"] * 0.10)
+    probed["read_bps"] = int(heuristic["read_bps"] * 0.05)   # below BPS floor
+    probed["read_iops"] = int(heuristic["read_iops"] * 0.10)  # 8000 IOPS — fine
     passes, failed = _probe_passes_trust_floor(probed, heuristic)
     assert passes is False
-    assert set(failed) == {"read_bps", "read_iops"}
+    assert set(failed) == {"read_bps"}
+
+
+def test_probe_rejects_iops_below_absolute_floor():
+    """An IOPS reading below the absolute sanity floor (broken probe /
+    O_DIRECT rejected) is rejected even when bandwidth looks healthy."""
+    heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
+    probed = dict(heuristic)
+    probed["read_iops"] = _DISK_PROBE_IOPS_SANITY_MIN - 1
+    probed["write_iops"] = _DISK_PROBE_IOPS_SANITY_MIN - 1
+    passes, failed = _probe_passes_trust_floor(probed, heuristic)
+    assert passes is False
+    assert set(failed) == {"read_iops", "write_iops"}
+
+
+def test_probe_accepts_real_ssd_profile():
+    """The bug report profile: a real SATA SSD delivering healthy
+    sequential bandwidth and tens-of-thousands of IOPS (well below the
+    80k/60k heuristic ceilings) must be ACCEPTED, where the old
+    relative-IOPS floor rejected every such probe."""
+    heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
+    probed = {
+        "read_bps": int(450 * 1024 * 1024),
+        "write_bps": int(300 * 1024 * 1024),
+        "read_iops": 40_000,
+        "write_iops": 20_000,
+    }
+    passes, failed = _probe_passes_trust_floor(probed, heuristic)
+    assert passes is True
+    assert failed == []
 
 
 # ── _resolve_host_disk_budget end-to-end behavior ──────────────────
@@ -95,6 +128,22 @@ def test_resolve_keeps_plausible_probe(mock_probe, _mock_dev, _mock_class, tmp_p
     assert disk_class == "sata_ssd"
     assert budget["read_bps"] == plausible["read_bps"]
     assert budget != heuristic
+
+
+@patch("src.utils.hardware_info._detect_disk_class", return_value="sata_ssd")
+@patch("src.utils.hardware_info._resolve_block_device_node", return_value="/dev/sda")
+@patch("src.utils.hardware_info._probe_disk_with_fio")
+def test_resolve_clamps_probe_above_ceiling(mock_probe, _mock_dev, _mock_class, tmp_path):
+    """A probe that reports MORE than the class heuristic (warmed-up
+    volume, brief burst) must be clamped down to the ceiling so a
+    per-worker budget can never exceed sustained class capacity."""
+    heuristic = _DISK_CLASS_BUDGETS["sata_ssd"]
+    mock_probe.return_value = {k: v * 3 for k, v in heuristic.items()}
+
+    budget, disk_class = _resolve_host_disk_budget(tmp_path, probe_disk=True)
+    assert disk_class == "sata_ssd"
+    # Every field is capped at the heuristic ceiling.
+    assert budget == dict(heuristic)
 
 
 @patch("src.utils.hardware_info._detect_disk_class", return_value="sata_ssd")
