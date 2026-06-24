@@ -81,7 +81,7 @@ The runner solves this with a **Pilot + Freeze** strategy:
 The frozen anchors are not optimal — they were calibrated from only the pilot observations and will look conservative compared to anchors a long PBT run could produce. Two safeguards address this:
 
 - The pilot uses Sobol coverage, not random, so the anchors capture more of the space than a similarly-sized random sample would.
-- Post-hoc cross-method comparison via [`rescore_metrics_globally()`](../../src/utils/rescoring.py) pools raw metrics from both PBT and BO runs and rescales using globally-calibrated anchors, so the frozen in-run BO scores are not what the comparison is judged against. See [pbt-vs-bo-comparison guide](../guides/pbt-vs-bo-comparison.md).
+- Post-hoc cross-method comparison via [`rescore_metrics_globally()`](../../src/tuners/utils/calibration.py) pools raw metrics from both PBT and BO runs and rescales using globally-calibrated anchors, so the frozen in-run BO scores are not what the comparison is judged against. See [pbt-vs-bo-comparison guide](../guides/pbt-vs-bo-comparison.md).
 
 ---
 

@@ -9,20 +9,40 @@ data for downstream Machine Learning models and visualization.
 
 from __future__ import annotations
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
 
 from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.tuner.config.knob_loader import get_knob_space
 from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
 from src.utils.hardware_info import WorkerResources
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("Loader")
+
+# Session-file discovery patterns. PBT writes ``pbt_results_*.json``; the
+# LHS-design tuner writes ``lhs_results_*.json`` with a PBT-shaped
+# ``generation_history`` (see ``LHSDesignTuner._build_generation_history``), so
+# both are natively loadable here. Any new strategy that emits a PBT-shaped
+# ``generation_history`` should add its prefix to this tuple.
+RESULT_FILE_GLOBS = ("pbt_results_*.json", "lhs_results_*.json")
+
+
+def find_result_files(directory):
+    """Return all known result-session files in ``directory``, name-sorted.
+
+    Globs every pattern in :data:`RESULT_FILE_GLOBS` so PBT and LHS traces are
+    discovered uniformly. The single source of truth for "what is a loadable
+    session file" -- used by the loader and the SCALPEL grouping/walk gates.
+    """
+    found = []
+    for pattern in RESULT_FILE_GLOBS:
+        found.extend(directory.glob(pattern))
+    return sorted(found, key=lambda p: p.name)
 
 
 @dataclass
@@ -44,6 +64,15 @@ class LoadedData:
         Domain bounds for each variable used by fANOVA or HyperOpt algorithms.
     n_observations : int
         Total number of valid evaluations extracted.
+    session_index : pd.Series
+        Per-row integer code indicating which input session JSON the row
+        came from (index into ``metadata``). Aligned 1:1 with ``config_df``
+        rows on the same ``RangeIndex(0, n_observations)``. Used by SCALPEL
+        to build cluster ids for group-permutation BORUTA / stability so
+        the null respects PBT's non-i.i.d. structure.
+    generation_index : pd.Series
+        Per-row PBT generation index. Aligned 1:1 with ``config_df``.
+        Combined with ``session_index`` to form ``sample_groups``.
     """
 
     config_df: pd.DataFrame
@@ -52,6 +81,12 @@ class LoadedData:
     metric_config: MetricConfig
     knob_bounds: dict[str, tuple[float, float]]
     n_observations: int
+    session_index: pd.Series = field(
+        default_factory=lambda: pd.Series(dtype="int64", name="session_index")
+    )
+    generation_index: pd.Series = field(
+        default_factory=lambda: pd.Series(dtype="int64", name="generation_index")
+    )
 
 
 def _encode_dataframe_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -208,9 +243,44 @@ def _extract_knob_bounds(
                 b_min = float(df[col].min()) if not df.empty else 0.0
                 b_max = float(df[col].max()) if not df.empty else 1.0
 
-        bounds[col] = (max(b_min, 0.0), b_max)
+        # Bounds must enclose every observed value or fANOVA's ConfigSpace check
+        # rejects the sample. Widen with observed extrema to cover:
+        #   - sessions whose hardware-relative resolution differed from the
+        #     first session's `worker_resources`
+        #   - PostgreSQL sentinel values (e.g. -1 = "inherit") on int/real knobs
+        #   - enum codes mapped to -1 by `_encode_dataframe_features` when the
+        #     value is missing from the column's unique set
+        if not df.empty:
+            b_min = min(b_min, float(df[col].min()))
+            b_max = max(b_max, float(df[col].max()))
+
+        bounds[col] = (b_min, b_max)
 
     return bounds
+
+
+def _infer_tuning_strategy(
+    session_meta: dict[str, Any],
+    file_path: Path,
+) -> str:
+    """Resolve the tuning_strategy label for a session file.
+
+    Prefers the explicit ``tuning_session.tuning_strategy`` field. Falls back
+    to a path heuristic for legacy sessions written before the field existed:
+    ``/pbt_runs/`` -> ``"pbt"``, ``/bo_runs/`` -> ``"bo"``, ``/lhs_runs/`` ->
+    ``"lhs"``. Returns ``"unknown"`` when neither path nor field resolves.
+    """
+    explicit = session_meta.get("tuning_strategy")
+    if explicit:
+        return str(explicit)
+    path_str = str(file_path)
+    if "/pbt_runs/" in path_str:
+        return "pbt"
+    if "/bo_runs/" in path_str:
+        return "bo"
+    if "/lhs_runs/" in path_str:
+        return "lhs"
+    return "unknown"
 
 
 def _build_session_metadata(
@@ -224,6 +294,7 @@ def _build_session_metadata(
         "file_name": file_path.name,
         "workload_type": session_meta.get("workload_type", default_workload_type),
         "benchmark_name": session_meta.get("benchmark_name", "unknown"),
+        "tuning_strategy": _infer_tuning_strategy(session_meta, file_path),
         "system_info": data.get("system_info", {}),
         "worker_resources": data.get("worker_resources", {}),
     }
@@ -238,7 +309,7 @@ def _build_session_metadata(
 
     # Preserve all additional session_meta fields (e.g., sysbench_workload, scale_factor)
     for key, value in session_meta.items():
-        if key not in {"workload_type", "benchmark_name"}:
+        if key not in {"workload_type", "benchmark_name", "tuning_strategy"}:
             metadata[key] = value
 
     # Also grab scoring overrides from the root data object if present
@@ -305,7 +376,7 @@ def load_pbt_results(
         if not json_files:
             raise FileNotFoundError("Provided file_paths list is empty")
     else:
-        json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
+        json_files = find_result_files(dir_path)
         if not json_files:
             raise FileNotFoundError(f"No PBT result files found in {directory_path}")
 
@@ -314,6 +385,8 @@ def load_pbt_results(
     raw_configs: list[dict[str, Any]] = []
     valid_metrics: list[PerformanceMetrics] = []
     metadata_list: list[dict[str, Any]] = []
+    session_indices: list[int] = []
+    generation_indices: list[int] = []
     target_knob_set = None
 
     # 1. Parsing and Extraction
@@ -334,10 +407,12 @@ def load_pbt_results(
                 default_workload_type=default_workload_type,
             )
         )
+        session_id_int = len(metadata_list) - 1
 
-        for gen in data.get("generation_history", []):
+        for gen_position, gen in enumerate(data.get("generation_history", [])):
             worker_configs = gen.get("worker_configs", [])
             worker_scores = gen.get("worker_scores", [])
+            generation_id = int(gen.get("generation_index", gen_position))
 
             # Actual JSON format (written by main.py):
             #   worker_configs: [{worker_id, config}]
@@ -382,6 +457,8 @@ def load_pbt_results(
 
                 raw_configs.append(config)
                 valid_metrics.append(pm)
+                session_indices.append(session_id_int)
+                generation_indices.append(generation_id)
 
     n_valid = len(raw_configs)
     if n_valid == 0:
@@ -397,6 +474,8 @@ def load_pbt_results(
             ),
             knob_bounds={},
             n_observations=0,
+            session_index=pd.Series(dtype="int64", name="session_index"),
+            generation_index=pd.Series(dtype="int64", name="generation_index"),
         )
 
     # 2. Global Rescoring
@@ -433,8 +512,14 @@ def load_pbt_results(
 
     # 3. DataFrame Post-Processing
     df = pd.DataFrame(raw_configs)
-    df_encoded = _encode_dataframe_features(df)
-    scores_series = pd.Series(global_scores, name="score")
+    df_encoded = _encode_dataframe_features(df).reset_index(drop=True)
+    scores_series = pd.Series(global_scores, name="score").reset_index(drop=True)
+    session_index_series = pd.Series(
+        session_indices, name="session_index", dtype="int64"
+    ).reset_index(drop=True)
+    generation_index_series = pd.Series(
+        generation_indices, name="generation_index", dtype="int64"
+    ).reset_index(drop=True)
 
     worker_resources = (
         metadata_list[0].get("worker_resources", {}) if metadata_list else {}
@@ -456,4 +541,6 @@ def load_pbt_results(
         metric_config=global_metric_config,
         knob_bounds=knob_bounds,
         n_observations=n_valid,
+        session_index=session_index_series,
+        generation_index=generation_index_series,
     )

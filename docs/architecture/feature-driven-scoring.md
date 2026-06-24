@@ -181,7 +181,7 @@ Calibrating the normalizer's quantile anchors against raw observations is sensit
 
 The filter returns a `(filtered_array, metadata_dict)` pair where the metadata records `n_removed`, `original_size`, the bounds used, and a `fallback_used` flag. When the input has fewer than 4 observations or `IQR == 0`, the filter falls back to the unfiltered values rather than producing degenerate bounds; both cases are surfaced in the metadata so post-hoc analysis can audit when calibration was unfiltered.
 
-The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/utils/rescoring.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
+The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/tuners/utils/calibration.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
 
 ## Source References
 

@@ -1,6 +1,6 @@
 # Documentation
 
-> Last reviewed: 2026-06-07
+> Last reviewed: 2026-06-18
 
 This documentation is organised by **reader intent** using the [Diátaxis framework](https://diataxis.fr/). Pick the entry point that matches what you need to do right now:
 
@@ -31,6 +31,7 @@ Task-oriented. Assumes you know what you're trying to do.
 - [visualization](guides/visualization.md) — generate publication figures from result trees
 - [adding-knobs](guides/adding-knobs.md) — add a new tunable PostgreSQL knob to the search space
 - [adding-workloads](guides/adding-workloads.md) — author and use a custom JSON/YAML workload template
+- [scalpel-rollout](guides/scalpel-rollout.md) — run SCALPEL on a single workload, fan it out via `--all-workloads`, and debug degenerate results
 
 ## reference/ — Reference
 
@@ -41,6 +42,7 @@ Information-oriented. For looking things up, not for reading top-to-bottom.
 - [benchmarking](reference/benchmarking.md) — dual-evaluation strategy and `SchemaProvider` protocol
 - [autotuning-knob-policy](reference/autotuning-knob-policy.md) — per-knob tuning rationale and safety classification
 - [metrics-validation](reference/metrics-validation.md) — academic validation of the multi-objective scoring formulation
+- [scalpel-diagnostics](reference/scalpel-diagnostics.md) — every field SCALPEL writes to `data_driven_tiers.json` and the `scalpel_diagnostics.json` sibling
 
 ## architecture/ — Explanation
 
@@ -57,7 +59,8 @@ Understanding-oriented. The "how it works and why" set. Read in the listed order
 - [hardware-aware-normalization](architecture/hardware-aware-normalization.md) — fractional encoding, per-worker resource slicing
 - [postgresql-connection-and-knobs](architecture/postgresql-connection-and-knobs.md) — connection layer, knob retrieval, tuning metadata, policy filter
 - [evaluation-suite](architecture/evaluation-suite.md) — `ComparisonRunner`, paired statistical methodology, multi-arm comparisons
-- [knob-importance-analysis](architecture/knob-importance-analysis.md) — fANOVA + TreeSHAP + Jenks tier generation
+- [knob-importance-analysis](architecture/knob-importance-analysis.md) — fANOVA + TreeSHAP + SCALPEL tier generation
+- [scalpel](architecture/scalpel.md) — SCALPEL pipeline (significance gate, Lorenz coverage, group-clustered stability, DBA-prior audit)
 - [bo-baseline](architecture/bo-baseline.md) — SMAC3 surrogate selection, Pilot+Freeze normalisation, read-back parity, parallel ask-tell
 - [visualization](architecture/visualization.md) — figure-framework design rationale (auto-discovery, loader/renderer split, theme ownership)
 
@@ -69,6 +72,7 @@ Design decisions with context, alternatives, and consequences.
 - [ADR-002 — Feature-driven scoring v2](architecture/decisions/ADR-002-feature-driven-scoring-v2.md)
 - [ADR-003 — Lockstep generation barriers](architecture/decisions/ADR-003-lockstep-generation-barriers.md)
 - [ADR-004 — Docker CPU subset isolation](architecture/decisions/ADR-004-docker-cpu-subset-isolation.md)
+- [ADR-005 — SCALPEL tier generation](architecture/decisions/ADR-005-scalpel-tier-generation.md)
 
 ## research/ — Research positioning
 

@@ -8,7 +8,7 @@ from typing import Any
 
 from src.utils.logger import get_logger
 from src.utils.metrics import MetricConfig, PerformanceMetrics
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError
 from src.visualization.loaders.session import SessionTrace, load_sessions
 

@@ -18,6 +18,10 @@ from src.visualization.loaders.importance import (
     load_importance_from_dir,
     ImportanceData,
 )
+from src.visualization.loaders.tier_diagnostics import (
+    load_tier_diagnostics,
+    TierDiagnostics,
+)
 from src.visualization.loaders.baseline import load_bo_trace, BOTrace
 
 __all__ = [
@@ -33,6 +37,8 @@ __all__ = [
     "load_importance",
     "load_importance_from_dir",
     "ImportanceData",
+    "load_tier_diagnostics",
+    "TierDiagnostics",
     "load_bo_trace",
     "BOTrace",
 ]

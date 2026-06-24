@@ -579,7 +579,13 @@ class PBTTuner:
         return normalized or "default"
 
     def _build_output_dir(self, base_output_dir: Path) -> Path:
-        """Build structured output directory, canonically separating ablation runs if specified."""
+        """Build structured output directory, canonically separating ablation runs if specified.
+
+        When ``knob_source == "data_driven"``, the tier slug is suffixed
+        with ``@scalpel-v1`` so post-SCALPEL artifacts cannot collide
+        with pre-SCALPEL Jenks-era results that contained a different
+        knob set under the same canonical tier name.
+        """
         ablation_subpath = Path("")
         if (
             getattr(self, "ablation_variable", None)
@@ -591,20 +597,24 @@ class PBTTuner:
                 / str(self.ablation_value)
             )
 
+        tier_slug = self.knob_tier
+        if str(getattr(self, "knob_source", "")) == "data_driven":
+            tier_slug = f"{self.knob_tier}@scalpel-v1"
+
         if self.benchmark_name == "sysbench":
             return (
                 base_output_dir
                 / self.workload_type.value
                 / self.pbt_config.benchmark_config.sysbench_workload
                 / "pbt_runs"
-                / self.knob_tier
+                / tier_slug
                 / ablation_subpath
             )
         return (
             base_output_dir
             / self.workload_type.value
             / "pbt_runs"
-            / self.knob_tier
+            / tier_slug
             / ablation_subpath
         )
 
@@ -1335,6 +1345,7 @@ class PBTTuner:
         results = {
             "tuning_session": {
                 "timing_schema_version": "1.1",
+                "tuning_strategy": "pbt",
                 "knob_tier": self.knob_tier,
                 "knob_source": self.knob_source,
                 "num_knobs": len(self.full_knob_space),
