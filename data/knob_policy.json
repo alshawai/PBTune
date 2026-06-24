@@ -300,5 +300,85 @@
       "stability",
       "OS I/O subsystem selector (io_uring/posix/worker); infrastructure knob, not performance tuning. io_uring can exhaust kernel memory under multi-instance load."
     ]
+  },
+  "IMPORTANCE_NUISANCE_EXCLUSIONS": {
+    "array_nulls": [
+      "catalog_compat",
+      "Compatibility flag; not a performance knob."
+    ],
+    "IntervalStyle": [
+      "display_format",
+      "Output formatting; no performance effect."
+    ],
+    "bytea_output": [
+      "display_format",
+      "Wire format for bytea; no performance effect."
+    ],
+    "syslog_facility": [
+      "logging_routing",
+      "Logging routing target; not a performance knob."
+    ],
+    "syslog_sequence_numbers": [
+      "logging_routing",
+      "Logging routing toggle; not a performance knob."
+    ],
+    "syslog_split_messages": [
+      "logging_routing",
+      "Logging routing toggle; not a performance knob."
+    ],
+    "lo_compat_privileges": [
+      "catalog_compat",
+      "Large-object compatibility flag; no perf effect."
+    ],
+    "quote_all_identifiers": [
+      "display_format",
+      "SQL emission style; not a performance knob."
+    ],
+    "escape_string_warning": [
+      "display_format",
+      "Warning toggle; not a performance knob."
+    ],
+    "transform_null_equals": [
+      "catalog_compat",
+      "Legacy compatibility flag; not a performance knob."
+    ],
+    "standard_conforming_strings": [
+      "catalog_compat",
+      "Wire/parsing compatibility flag; not a perf knob."
+    ],
+    "backslash_quote": [
+      "catalog_compat",
+      "Legacy escape behavior; not a performance knob."
+    ],
+    "default_toast_compression": [
+      "debatable_perf",
+      "Conservatively excluded for SCALPEL; operator can override via overrides set."
+    ],
+    "krb_caseins_users": [
+      "security_auth",
+      "Authentication policy; not a performance knob."
+    ],
+    "password_encryption": [
+      "security_auth",
+      "Authentication hash algorithm; not a performance knob."
+    ],
+    "gss_accept_delegation": [
+      "security_auth",
+      "GSS auth policy; not a performance knob."
+    ],
+    "stats_fetch_consistency": [
+      "observability",
+      "Stats subsystem behavior; not a workload performance knob."
+    ]
+  },
+  "IMPORTANCE_NUISANCE_PREFIXES": {
+    "track_": [
+      "observability",
+      "Stats tracking toggles; not workload performance knobs."
+    ],
+    "log_": [
+      "observability",
+      "Log emission toggles; operator may opt back in selectively via overrides set."
+    ]
   }
 }

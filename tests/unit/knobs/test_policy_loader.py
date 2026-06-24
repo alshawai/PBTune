@@ -98,3 +98,33 @@ def test_policy_loader_missing_file_raises_filenotfounderror(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         module._load_policy(str(missing_path))
+
+
+def test_importance_nuisance_exclusions_loaded():
+    """SCALPEL's nuisance filter must be populated from knob_policy.json."""
+    module = _load_policy_module()
+    policy_json = json.loads(POLICY_JSON_PATH.read_text(encoding="utf-8"))
+    expected = policy_json["IMPORTANCE_NUISANCE_EXCLUSIONS"]
+
+    assert len(module.IMPORTANCE_NUISANCE_EXCLUSIONS) == len(expected)
+    assert "array_nulls" in module.IMPORTANCE_NUISANCE_EXCLUSIONS
+    assert "IntervalStyle" in module.IMPORTANCE_NUISANCE_EXCLUSIONS
+    assert all(
+        isinstance(value, tuple) and len(value) == 2
+        for value in module.IMPORTANCE_NUISANCE_EXCLUSIONS.values()
+    )
+
+
+def test_importance_nuisance_prefixes_loaded():
+    """SCALPEL's nuisance prefix list must be populated from knob_policy.json."""
+    module = _load_policy_module()
+    policy_json = json.loads(POLICY_JSON_PATH.read_text(encoding="utf-8"))
+    expected = policy_json["IMPORTANCE_NUISANCE_PREFIXES"]
+
+    assert len(module.IMPORTANCE_NUISANCE_PREFIXES) == len(expected)
+    assert "track_" in module.IMPORTANCE_NUISANCE_PREFIXES
+    assert "log_" in module.IMPORTANCE_NUISANCE_PREFIXES
+    assert all(
+        isinstance(value, tuple) and len(value) == 2
+        for value in module.IMPORTANCE_NUISANCE_PREFIXES.values()
+    )

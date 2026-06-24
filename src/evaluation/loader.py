@@ -190,6 +190,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
 
     score_breakdown = score_breakdown_from_dict(scoring_metadata["score_breakdown"])
     knob_source = str(ts_meta.get("knob_source", "expert"))
+    tuning_strategy = _infer_tuning_strategy(ts_meta, path)
 
     return TuningSessionData(
         best_knobs=best_knobs,
@@ -201,6 +202,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         workload_type=workload_type,
         sysbench_workload=sysbench_workload,
         knob_source=knob_source,
+        tuning_strategy=tuning_strategy,
         session_id=session_id,
         scoring_policy=scoring_metadata["scoring_policy"],
         scoring_policy_version=scoring_metadata["scoring_policy_version"],
@@ -269,6 +271,26 @@ def _infer_benchmark_and_workload(
     return benchmark, workload_type
 
 
+def _infer_tuning_strategy(ts_meta: dict[str, Any], path: Path) -> str:
+    """Resolve tuning_strategy from explicit field or path-based fallback.
+
+    Mirrors ``src/analysis/data_loader.py::_infer_tuning_strategy`` so the two
+    loader paths agree on the canonical label set: ``"pbt" | "bo" | "lhs" |
+    "unknown"``.
+    """
+    explicit = ts_meta.get("tuning_strategy")
+    if explicit:
+        return str(explicit)
+    path_str = str(path)
+    if "/pbt_runs/" in path_str:
+        return "pbt"
+    if "/bo_runs/" in path_str:
+        return "bo"
+    if "/lhs_runs/" in path_str:
+        return "lhs"
+    return "unknown"
+
+
 def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize runtime tuning metadata into canonical evaluation keys.
@@ -280,7 +302,7 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
     config: dict[str, Any] = {
         k: v
         for k, v in ts_meta.items()
-        if k not in {"benchmark_name", "workload_type", "timestamp"}
+        if k not in {"benchmark_name", "workload_type", "timestamp", "tuning_strategy"}
     }
 
     def _as_int(value: Any) -> Optional[int]:

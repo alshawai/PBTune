@@ -214,7 +214,7 @@ Older sessions may have an empty `workload_features: {}` — the loader falls ba
 
 ### `normalization_metadata`
 
-Snapshot of the `QuantileUtilityNormalizer` state at the end of the session, used by the post-hoc rescoring helper in [`src/utils/rescoring.py`](../../src/utils/rescoring.py).
+Snapshot of the `QuantileUtilityNormalizer` state at the end of the session, used by the post-hoc rescoring helper in [`src/tuners/utils/calibration.py`](../../src/tuners/utils/calibration.py).
 
 | Field | Type | Notes |
 | --- | --- | --- |
