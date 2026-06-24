@@ -127,6 +127,8 @@ results/**/multi_arm_comparison_*
 results/oltp/comparisons/
 results/**/fanova_importance.json
 results/**/bo_runs/**/smac_output/
+PBTune-experiments/
+figures/
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
