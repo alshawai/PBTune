@@ -129,6 +129,7 @@ results/**/fanova_importance.json
 results/**/bo_runs/**/smac_output/
 PBTune-experiments/
 figures/
+karim/
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*
