@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scripts.experiments.experiment_matrix import (
     build_all_experiments,
+    build_smoke_experiments,
     get_experiment_by_id,
     get_experiments_by_tier,
 )
@@ -58,6 +59,15 @@ def main():
     parser = argparse.ArgumentParser(description="Cloud Experiment Suite Runner")
     parser.add_argument("--tier", type=int, nargs="+", choices=[1, 2, 3], help="Run specific tiers")
     parser.add_argument("--experiment", type=str, help="Run a specific experiment by ID")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Run the minimal end-to-end smoke suite (rapid PBT+BO at 1 "
+            "generation + eval) for both benchmark families, committing/"
+            "pushing like any other run. Use before a real cloud campaign."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     parser.add_argument("--no-push", action="store_true", help="Skip git commit/push to results repo")
     parser.add_argument("--resume", action="store_true", help="Resume from manifest (default behavior, skips done)")
@@ -92,7 +102,9 @@ def main():
 
     experiments_to_run = []
 
-    if args.experiment:
+    if args.smoke:
+        experiments_to_run = build_smoke_experiments()
+    elif args.experiment:
         exp = get_experiment_by_id(args.experiment)
         if not exp:
             print(f"Experiment {args.experiment} not found.")
