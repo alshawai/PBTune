@@ -281,10 +281,10 @@ def build_lhs_experiments() -> list[Experiment]:
             description="Importance-design LHS sweep (SCALPEL input)",
             benchmark="sysbench", sysbench_workload="oltp_read_write", scale_factor=None,
             config_profile="thorough", knob_tier="extensive", knob_source="expert",
-            tuning_mode="offline", seeds=SEEDS_K1, eval_repetitions=0, run_bo=False,
+            tuning_mode="offline", seeds=SEEDS_K5, eval_repetitions=0, run_bo=False,
             strategy="lhs",
         )
-      
+    ]
 
 def build_smoke_experiments() -> list[Experiment]:
     """Minimal end-to-end smoke runs for the cloud experiment pipeline.

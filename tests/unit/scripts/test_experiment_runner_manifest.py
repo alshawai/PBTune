@@ -442,3 +442,56 @@ def test_push_falls_back_to_origin_without_upstream(pushing_runner_factory, monk
 
     assert fake.push_remotes == ["origin"]
     assert fake.pull_remotes == ["origin"]
+
+
+# ── _preflight_disk_isolation: fail-fast Disk-IO parity guard ────────
+
+
+def _build_runner(monkeypatch, *, dry_run: bool):
+    """ExperimentRunner with the hardware probe stubbed, for guard tests."""
+    with patch("scripts.experiments.runner.detect_worker_resources") as md:
+        md.return_value = type(
+            "WR", (), {"ram_bytes": 1024 * 1024 * 1024, "cpu_cores": 2}
+        )()
+        return ExperimentRunner(dry_run=dry_run, no_push=True)
+
+
+def test_preflight_raises_when_block_device_unresolved(monkeypatch):
+    """Non-dry run + unresolvable block device → hard stop, so a
+    multi-hour run never proceeds without enforceable Disk-IO limits."""
+    runner = _build_runner(monkeypatch, dry_run=False)
+    monkeypatch.setattr(
+        "scripts.experiments.runner.resolve_data_root", lambda *a, **k: Path("/tmp/x")
+    )
+    monkeypatch.setattr(
+        "scripts.experiments.runner._resolve_block_device_node", lambda *a, **k: None
+    )
+    with pytest.raises(RuntimeError, match="Disk-IO isolation preflight FAILED"):
+        runner._preflight_disk_isolation()
+
+
+def test_preflight_passes_when_block_device_resolves(monkeypatch):
+    """A resolvable block device → no raise (limits will be enforced)."""
+    runner = _build_runner(monkeypatch, dry_run=False)
+    monkeypatch.setattr(
+        "scripts.experiments.runner.resolve_data_root", lambda *a, **k: Path("/tmp/x")
+    )
+    monkeypatch.setattr(
+        "scripts.experiments.runner._resolve_block_device_node",
+        lambda *a, **k: "/dev/sda",
+    )
+    runner._preflight_disk_isolation()  # must not raise
+
+
+def test_preflight_skipped_in_dry_run(monkeypatch):
+    """dry_run never launches real workers, so the guard is a no-op even
+    when the device cannot be resolved (and must not call the resolver)."""
+    runner = _build_runner(monkeypatch, dry_run=True)
+
+    def _boom(*a, **k):  # pragma: no cover - must never be called
+        raise AssertionError("resolver must not run under dry_run")
+
+    monkeypatch.setattr(
+        "scripts.experiments.runner._resolve_block_device_node", _boom
+    )
+    runner._preflight_disk_isolation()  # must not raise or call resolver

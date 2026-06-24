@@ -6,7 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 from scripts.experiments.experiment_matrix import Experiment
-from src.utils.hardware_info import detect_worker_resources
+from src.config.data_root import resolve_data_root
+from src.utils.hardware_info import detect_worker_resources, _resolve_block_device_node
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RESULTS_DIR = PROJECT_ROOT / "results"
@@ -339,8 +340,48 @@ class ExperimentRunner:
         self._active_manifest["runs"][key].update(kwargs)
         self._save_manifest()
 
+    def _preflight_disk_isolation(self) -> None:
+        """Fail fast if per-worker Disk-IO limits cannot be enforced.
+
+        PBT, BO, and EVAL must run every worker inside the *same*
+        hardware envelope for the comparison to be fair. Disk-IO parity
+        is enforced via Docker cgroup ``io.max``/blkio, which requires
+        resolving the host block device backing the workers' data root.
+        When that device can't be resolved (non-Linux host, tmpfs/overlay
+        data dir, bind-mounted path), ``EnvironmentFactory`` silently
+        drops the disk limits and only logs a warning — a multi-hour run
+        can then finish with broken Disk-IO parity and no hard failure.
+
+        This converts that buried warning into a hard stop at the
+        orchestration layer, where a whole experiment (and hours of
+        compute) is at stake. Skipped under ``dry_run`` (no real runs).
+        """
+        if self.dry_run:
+            return
+        data_root = resolve_data_root()
+        device = _resolve_block_device_node(data_root)
+        if device is None:
+            raise RuntimeError(
+                "Disk-IO isolation preflight FAILED: could not resolve a host "
+                f"block device for the workers' data root ({data_root}). "
+                "Per-worker disk limits would NOT be enforced, so PBT, BO, and "
+                "EVAL would not share the same hardware envelope — invalidating "
+                "the comparison. Run on a Linux host whose data root lives on a "
+                "real block device (not tmpfs/overlay/bind-mount), or set the "
+                "data root via PBT_DATA_ROOT. Aborting before launching the run."
+            )
+        LOGGER.info(
+            "Disk-IO isolation preflight OK: workers' data root %s → block "
+            "device %s (per-worker cgroup limits will be enforced).",
+            data_root,
+            device,
+        )
+
     def run_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
         LOGGER.info(f"Starting experiment {exp.id} (Tier {exp.tier})")
+
+        # Guarantee Disk-IO parity is enforceable before burning compute.
+        self._preflight_disk_isolation()
 
         # Activate this experiment's own manifest. All writes during
         # this call go to a single file owned by this experiment, so

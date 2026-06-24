@@ -65,15 +65,28 @@ class WorkerResources:
 _DISK_MIN_BPS_PER_WORKER = 1 * 1024 * 1024
 _DISK_MIN_IOPS_PER_WORKER = 100
 
-# Trust threshold for the fio probe. When the probed sustained throughput
-# falls below this fraction of the disk-class heuristic, we treat the
-# probe as unreliable (cold cache, burst-credit starvation on cloud PDs,
-# concurrent I/O during startup) and fall back to the heuristic instead.
-# 0.25 = "if the probe says you're getting <25% of what your disk class
-# is normally capable of, the probe is the suspect, not the disk." Tuned
-# against GCP pd-ssd noise where the first 5-10s of probing can return
-# <5% of true sustained capacity on a freshly attached volume.
+# Trust threshold for the fio probe's **bandwidth** metrics. When probed
+# sustained throughput falls below this fraction of the disk-class
+# heuristic, the probe is treated as unreliable (cold cache,
+# burst-credit starvation on cloud PDs, concurrent I/O during startup)
+# and we fall back to the heuristic instead. 0.25 = "if the probe says
+# you're getting <25% of what your disk class is normally capable of,
+# the probe is the suspect, not the disk." Tuned against GCP pd-ssd
+# noise where the first 5-10s of probing can return <5% of true
+# sustained capacity on a freshly attached volume.
+#
+# NOTE: this relative floor is applied to BANDWIDTH only. The class
+# heuristic IOPS values are high-queue-depth *ceilings* that a single
+# probe cannot reach, so judging measured IOPS against 25% of them
+# rejected every legitimate SSD probe. IOPS are validated against an
+# absolute sanity floor instead (``_DISK_PROBE_IOPS_SANITY_MIN``).
 _DISK_PROBE_TRUST_FLOOR = 0.25
+
+# Absolute sanity floor for probed IOPS. Below this a probe is almost
+# certainly broken (fio misconfiguration, O_DIRECT rejected, a
+# credit-starved cloud volume mid-attach) rather than a real ceiling.
+# Any modern disk clears 100 IOPS comfortably.
+_DISK_PROBE_IOPS_SANITY_MIN = 100
 
 # Heuristic sustained-throughput ceilings per disk class.
 # Values reflect realistic sustained (not peak-burst) numbers for the
@@ -302,19 +315,39 @@ def _probe_disk_with_fio(
 ) -> Optional[Dict[str, int]]:
     """Measure host disk bandwidth and IOPS with an ``fio`` probe.
 
-    Runs a sequential write at 1 MiB blocks for sustained-bps and a
-    4k random read for IOPS. The probe file is created under
-    ``data_path`` so the measurement reflects the filesystem the
-    workers actually write to. Returns ``None`` when fio is missing or
-    any probe fails — callers fall back to the heuristic.
+    Four direction-correct jobs, all using **O_DIRECT** (``--direct=1``)
+    so the measurement reflects the *device*, not the page cache:
 
-    Probe runtimes (8s write, 5s read) are tuned to outlast the
+    - ``write_bps``  — 1 MiB sequential write   (``--rw=write``)
+    - ``read_bps``   — 1 MiB sequential read    (``--rw=read``)
+    - ``write_iops`` — 4k random write at depth (``--rw=randwrite``)
+    - ``read_iops``  — 4k random read at depth  (``--rw=randread``)
+
+    Bandwidth comes from the sequential jobs; IOPS come from the 4k
+    random jobs. Earlier revisions measured both from the *same* two
+    jobs, which conflated metrics (``read_bps`` from a 4k random read,
+    ``write_iops`` from a 1 MiB sequential write ≈ bps/1 MiB) and, with
+    buffered I/O (``--direct=0``), reported page-cache throughput
+    (e.g. an impossible 1375 MB/s write on a SATA SSD).
+
+    IOPS jobs prefer the asynchronous ``libaio`` engine at queue depth
+    64 so they reflect device capability rather than the syscall rate of
+    a QD1 ``psync`` loop; they fall back to ``psync`` (depth 1) when
+    ``libaio`` is unavailable. O_DIRECT also requires a backing
+    filesystem that supports it — on tmpfs/overlay the job fails and the
+    whole probe returns ``None`` (heuristic fallback), which is correct
+    because such a directory is not the real data disk.
+
+    The probe file is created under ``data_path`` so the measurement
+    reflects the filesystem the workers actually write to. Returns
+    ``None`` when fio is missing or any job fails — callers fall back to
+    the heuristic.
+
+    Sequential runtimes (8s write, 5s read) are tuned to outlast the
     burst-credit + cold-cache window on cloud-attached block storage
-    (GCP Persistent Disk, AWS EBS gp3). Shorter runs can land entirely
-    inside a credit-starved moment and report a small fraction of true
-    sustained capacity. The host_budget validator in
-    ``_resolve_host_disk_budget`` provides a second layer of defence
-    against pathological probe results.
+    (GCP Persistent Disk, AWS EBS gp3); the IOPS jobs reuse the same
+    8s/5s budgets. The validator in ``_resolve_host_disk_budget``
+    provides a second layer of defence against pathological results.
     """
     fio_bin = shutil.which("fio")
     if not fio_bin:
@@ -337,6 +370,7 @@ def _probe_disk_with_fio(
         "--time_based",
         "--output-format=json",
         "--group_reporting",
+        "--direct=1",
     ]
 
     def _run(args: list[str]) -> Optional[Dict[str, Any]]:
@@ -354,48 +388,73 @@ def _probe_disk_with_fio(
         except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
             return None
 
+    def _job(payload: Optional[Dict[str, Any]], direction: str) -> Optional[Dict[str, Any]]:
+        if not payload:
+            return None
+        try:
+            return payload["jobs"][0][direction]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+    def _bw_job(name: str, rw: str, runtime_flag: str, direction: str,
+                extra: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+        args = common_args + [
+            f"--name={name}",
+            f"--rw={rw}",
+            "--bs=1M",
+            runtime_flag,
+            "--ioengine=psync",
+        ] + (extra or [])
+        return _job(_run(args), direction)
+
+    def _iops_job(name: str, rw: str, runtime_flag: str, direction: str) -> Optional[Dict[str, Any]]:
+        # Prefer async libaio at depth for realistic device IOPS; fall
+        # back to a synchronous QD1 psync loop when libaio is absent.
+        async_args = common_args + [
+            f"--name={name}",
+            f"--rw={rw}",
+            "--bs=4k",
+            runtime_flag,
+            "--ioengine=libaio",
+            "--iodepth=64",
+        ]
+        job = _job(_run(async_args), direction)
+        if job is not None:
+            return job
+        sync_args = common_args + [
+            f"--name={name}_sync",
+            f"--rw={rw}",
+            "--bs=4k",
+            runtime_flag,
+            "--ioengine=psync",
+            "--iodepth=1",
+        ]
+        return _job(_run(sync_args), direction)
+
     try:
-        write_payload = _run(
-            common_args
-            + [
-                "--name=write_probe",
-                "--rw=write",
-                "--bs=1M",
-                "--runtime=8",
-                "--ioengine=psync",
-                "--direct=0",
-                "--fsync_on_close=1",
-            ]
-        )
-        read_payload = _run(
-            common_args
-            + [
-                "--name=read_probe",
-                "--rw=randread",
-                "--bs=4k",
-                "--runtime=5",
-                "--ioengine=psync",
-                "--direct=0",
-            ]
-        )
+        # Runtime flags are written as literals (--runtime=8 / --runtime=5)
+        # so the burst-credit window stays covered; an AST guard in the
+        # test-suite pins these values.
+        write_bw = _bw_job("write_bps", "write", "--runtime=8", "write", extra=["--fsync_on_close=1"])
+        read_bw = _bw_job("read_bps", "read", "--runtime=5", "read")
+        write_io = _iops_job("write_iops", "randwrite", "--runtime=8", "write")
+        read_io = _iops_job("read_iops", "randread", "--runtime=5", "read")
     finally:
         try:
             probe_file.unlink()
         except OSError:
             pass
 
-    if not write_payload or not read_payload:
+    if not all((write_bw, read_bw, write_io, read_io)):
         return None
 
     try:
-        write_job = write_payload["jobs"][0]["write"]
-        read_job = read_payload["jobs"][0]["read"]
         # fio reports bandwidth in KiB/s (`bw`) and IOPS as a float.
         return {
-            "read_bps": int(read_job.get("bw", 0)) * 1024,
-            "write_bps": int(write_job.get("bw", 0)) * 1024,
-            "read_iops": int(read_job.get("iops", 0)),
-            "write_iops": int(write_job.get("iops", 0)),
+            "read_bps": int(read_bw.get("bw", 0)) * 1024,
+            "write_bps": int(write_bw.get("bw", 0)) * 1024,
+            "read_iops": int(read_io.get("iops", 0)),
+            "write_iops": int(write_io.get("iops", 0)),
         }
     except (KeyError, IndexError, TypeError, ValueError):
         return None
@@ -406,28 +465,55 @@ def _probe_passes_trust_floor(
     heuristic: Dict[str, int],
     *,
     floor: float = _DISK_PROBE_TRUST_FLOOR,
+    iops_floor: int = _DISK_PROBE_IOPS_SANITY_MIN,
 ) -> tuple[bool, list[str]]:
-    """Decide whether an fio probe is plausible relative to the class
-    heuristic.
+    """Decide whether an fio probe is plausible.
 
-    Cloud-attached block storage (GCP PD, AWS EBS) can return wildly
-    pessimistic short-burst readings during the first few seconds after
-    attach — credit-starvation, cold cache, concurrent container I/O.
-    A probe that says "your SATA-SSD-class disk delivers 2 MB/s" is far
-    more likely to be a broken measurement than a real ceiling.
+    The check is split by metric type:
+
+    - **Bandwidth** (``read_bps``, ``write_bps``) is judged *relative*
+      to the class heuristic: below ``floor`` (25%) of the heuristic the
+      probe is rejected. This is the defence against cloud-attached
+      block storage (GCP PD, AWS EBS) returning wildly pessimistic
+      short-burst readings during the first seconds after attach — a
+      probe claiming "your SATA-SSD-class disk delivers 2 MB/s" is far
+      more likely to be a broken measurement than a real ceiling. The
+      BPS heuristics are realistic sequential ceilings, so this
+      comparison is meaningful.
+    - **IOPS** (``read_iops``, ``write_iops``) is judged against an
+      *absolute* sanity floor (``iops_floor``). The class heuristic IOPS
+      are high-queue-depth ceilings a single probe cannot reach, so
+      comparing measured IOPS to 25% of them rejected every legitimate
+      SSD probe. Only an absurdly low reading (broken probe) is rejected.
 
     Returns (passes, reasons). When ``passes`` is False, ``reasons`` is
-    the list of fields that fell below the trust floor — fed to the
-    caller's log message so the operator can diagnose why their probe
-    was rejected.
+    the list of fields that failed — fed to the caller's log message so
+    the operator can diagnose why their probe was rejected.
     """
-    fields = ("read_bps", "write_bps", "read_iops", "write_iops")
     failed: list[str] = []
-    for key in fields:
-        threshold = heuristic[key] * floor
-        if probed[key] < threshold:
+    for key in ("read_bps", "write_bps"):
+        if probed[key] < heuristic[key] * floor:
+            failed.append(key)
+    for key in ("read_iops", "write_iops"):
+        if probed[key] < iops_floor:
             failed.append(key)
     return (not failed), failed
+
+
+def _clamp_probe_to_heuristic(
+    probed: Dict[str, int], heuristic: Dict[str, int]
+) -> Dict[str, int]:
+    """Cap each probed metric at the class heuristic ceiling.
+
+    A hot/bursty probe (or one run on a warmed-up volume that briefly
+    exceeds sustained capacity) must never set a per-worker budget above
+    what the disk class can sustain, so we take ``min(probed, heuristic)``
+    on every field.
+    """
+    return {
+        key: min(probed[key], heuristic[key])
+        for key in ("read_bps", "write_bps", "read_iops", "write_iops")
+    }
 
 
 def _resolve_host_disk_budget(
@@ -437,12 +523,13 @@ def _resolve_host_disk_budget(
 ) -> tuple[Dict[str, int], str]:
     """Resolve host-level disk budget plus the disk class label used.
 
-    Probe results that fall below ``_DISK_PROBE_TRUST_FLOOR`` of the
-    class heuristic on any metric are rejected and the heuristic is
-    used instead — fio's 5-10s window can hit a credit-starved or
-    cold-cache moment on a cloud PD and return a tiny fraction of
-    sustained capacity, which would then bottleneck every worker for
-    the rest of the session.
+    A probe is accepted only when it passes ``_probe_passes_trust_floor``
+    (relative bandwidth floor + absolute IOPS floor); accepted probes are
+    then clamped to the class heuristic ceiling. Rejected probes fall
+    back to the heuristic — fio's 5-10s window can hit a credit-starved
+    or cold-cache moment on a cloud PD and return a tiny fraction of
+    sustained capacity, which would then bottleneck every worker for the
+    rest of the session.
     """
     device = None
     if data_path is not None:
@@ -465,18 +552,21 @@ def _resolve_host_disk_budget(
         if probed is not None:
             passes, failed_fields = _probe_passes_trust_floor(probed, heuristic)
             if passes:
+                accepted = _clamp_probe_to_heuristic(probed, heuristic)
                 LOGGER.debug(
-                    "  ➤ Disk probe via fio: read=%.1f MB/s, write=%.1f MB/s, "
-                    "read_iops=%d, write_iops=%d",
-                    probed["read_bps"] / (1024 * 1024),
-                    probed["write_bps"] / (1024 * 1024),
-                    probed["read_iops"],
-                    probed["write_iops"],
+                    "  ➤ Disk probe via fio (clamped to %s ceiling): "
+                    "read=%.1f MB/s, write=%.1f MB/s, read_iops=%d, write_iops=%d",
+                    disk_class,
+                    accepted["read_bps"] / (1024 * 1024),
+                    accepted["write_bps"] / (1024 * 1024),
+                    accepted["read_iops"],
+                    accepted["write_iops"],
                 )
-                return probed, disk_class
+                return accepted, disk_class
             LOGGER.warning(
-                "  ➤ Disk probe via fio returned implausibly low values "
-                "(below %d%% of %s-class heuristic on %s): "
+                "  ➤ Disk probe via fio returned implausible values "
+                "(bandwidth below %d%% of %s-class heuristic, or IOPS below "
+                "the %d-IOPS sanity floor, on %s): "
                 "read=%.1f MB/s, write=%.1f MB/s, read_iops=%d, write_iops=%d. "
                 "Falling back to heuristic. Cloud-attached PDs (GCP, AWS) "
                 "can return short-burst credit-starved readings during the "
@@ -485,6 +575,7 @@ def _resolve_host_disk_budget(
                 "this disk.",
                 int(_DISK_PROBE_TRUST_FLOOR * 100),
                 disk_class,
+                _DISK_PROBE_IOPS_SANITY_MIN,
                 ", ".join(failed_fields),
                 probed["read_bps"] / (1024 * 1024),
                 probed["write_bps"] / (1024 * 1024),
