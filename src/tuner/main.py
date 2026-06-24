@@ -926,7 +926,7 @@ class PBTTuner:
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_dir, COLORS.reset
         )
 
-        self.start_time = time.time()
+        bootstrap_start = time.time()
         try:
             log_section_header(
                 LOGGER,
@@ -1013,6 +1013,16 @@ class PBTTuner:
                 COLORS.reset,
             )
 
+            # Reset wall-clock origin to exclude bootstrap (instance creation,
+            # snapshot setup).  Bootstrap is a one-time amortized cost that the
+            # notes prescribe excluding from the convergence-plot time axis.
+            self.start_time = time.time()
+            bootstrap_seconds = self.start_time - bootstrap_start
+            LOGGER.info(
+                "Bootstrap completed in %.1fs (excluded from tuning wall-clock)",
+                bootstrap_seconds,
+            )
+
             try:
                 for generation in range(self.pbt_config.num_generations):
                     self.run_generation(generation)
@@ -1065,7 +1075,7 @@ class PBTTuner:
                         e,
                     )
 
-        total_time = time.time() - self.start_time
+        total_time = time.time() - bootstrap_start  # includes bootstrap for summary
 
         LOGGER.info("Saving final results to output directory...")
         results = self.save_final_results(total_time)
@@ -1173,6 +1183,8 @@ class PBTTuner:
                 "seed": self.random_seed,
                 "total_generations": self.population.current_generation,
                 "total_time_seconds": total_time,
+                "tuning_time_seconds": time.time() - self.start_time,
+                "bootstrap_time_seconds": total_time - (time.time() - self.start_time),
                 "timestamp": self.timestamp,
                 "tuning_mode": self.pbt_config.benchmark_config.tuning_mode.value,
                 "adaptive_restart_interval": self.pbt_config.benchmark_config.adaptive_restart_interval,

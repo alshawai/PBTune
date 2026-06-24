@@ -12,6 +12,7 @@ from src.visualization.theme import PBTuneTheme
 from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
+from src.visualization.exceptions import DataLoadError
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
     load_sessions, load_session, load_bo_trace, aggregate_seeds, SessionTrace, BOTrace, MultiSeedAggregate, load_comparison, ComparisonData, RAW_METRIC_KEYS
@@ -268,6 +269,83 @@ def _add_divergence_annotation(ax, x_div, y_pbt, y_bo):
     )
 
 
+def _find_baseline_crossing(
+    x: np.ndarray,
+    y: np.ndarray,
+    baseline: float,
+    higher_is_better: bool = True,
+) -> tuple[float, float] | None:
+    """Find the first x-value where y exceeds (or drops below) a baseline.
+
+    Returns (x_cross, y_cross) or None if no crossing is found.
+    Follows the LlamaTune Fig 9 convention of marking time-to-baseline-optimal.
+    """
+    for i in range(len(y)):
+        exceeded = y[i] > baseline if higher_is_better else y[i] < baseline
+        if exceeded:
+            return float(x[i]), float(y[i])
+    return None
+
+
+def _add_baseline_crossing_marker(ax, x_cross, y_cross, label="Exceeds default"):
+    """Add a red diamond marker at the baseline-crossing point (LlamaTune style)."""
+    ax.plot(
+        x_cross, y_cross,
+        marker="D", markersize=8, color="#DC2626",
+        markeredgecolor="white", markeredgewidth=1.2,
+        zorder=10, label=label,
+    )
+
+
+def _compute_parallel_efficiency(
+    sessions: list,
+    n_workers: int,
+) -> float | None:
+    """Compute empirical parallel efficiency η from recorded generation timings.
+
+    η = (mean_gen_elapsed) / (n_workers × mean_gen_elapsed)
+      ≈ (P × G × T_iter_solo) / T_session_wall_clock   (when P=1 data unavailable)
+
+    Without a P=1 control run we approximate T_iter_solo as
+    mean(generation_elapsed_seconds) / n_workers, which gives a *lower bound*
+    on true efficiency because lockstep overhead is baked into generation_elapsed.
+
+    Returns η in [0, 1] or None if data is insufficient.
+    """
+    if not sessions or n_workers <= 1:
+        return None
+
+    all_gen_elapsed = []
+    all_wall_clock = []
+    for s in sessions:
+        gen_elapsed = s.generation_elapsed_seconds
+        wall_clock = s.wall_clock_seconds
+        if len(gen_elapsed) > 0 and np.any(gen_elapsed > 0):
+            all_gen_elapsed.append(gen_elapsed)
+            all_wall_clock.append(wall_clock)
+
+    if not all_gen_elapsed:
+        return None
+
+    # Average across seeds
+    min_len = min(len(g) for g in all_gen_elapsed)
+    gen_elapsed_mean = np.mean(
+        np.vstack([g[:min_len] for g in all_gen_elapsed]), axis=0
+    )
+    wall_total = np.mean([w[min_len - 1] for w in all_wall_clock])
+
+    if wall_total <= 0:
+        return None
+
+    # Ideal sequential time: each generation would run P iterations sequentially
+    ideal_sequential_time = np.sum(gen_elapsed_mean) * n_workers
+    # Actual wall-clock is wall_total
+    # Speedup = ideal_sequential / actual, Efficiency = Speedup / P
+    eta = ideal_sequential_time / (n_workers * wall_total)
+
+    return float(np.clip(eta, 0.0, 1.0))
+
+
 def generate(
     pbt_paths: list[str],
     bo_paths: list[str],
@@ -327,7 +405,12 @@ def generate(
                 bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config, metric_key=metric_key))
         else:
             bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))
-        
+
+    # Filter out empty traces (e.g. failed/aborted runs with 0 evaluations)
+    bo_traces = [t for t in bo_traces if len(t.best_scores) > 0]
+    if not bo_traces:
+        raise DataLoadError("No non-empty BO baseline traces found")
+
     is_bo_multi_seed = len(bo_traces) > 1
     min_bo_len = min(len(t.best_scores) for t in bo_traces)
     bo_best_scores_stack = np.vstack([t.best_scores[:min_bo_len] for t in bo_traces])
@@ -414,7 +497,8 @@ def generate(
         auto_grid(ax_left)
         
         if is_multi_seed:
-            pbt_wall = np.mean(np.vstack([s.wall_clock_seconds for s in sessions]), axis=0)
+            min_gens = len(pbt_agg.generations)
+            pbt_wall = np.mean(np.vstack([s.wall_clock_seconds[:min_gens] for s in sessions]), axis=0)
         else:
             pbt_wall = np.array(sessions[0].wall_clock_seconds)
             
@@ -444,12 +528,65 @@ def generate(
             if div_res is not None:
                 x_div, y_pbt, y_bo = div_res
                 _add_divergence_annotation(ax_right, x_div, y_pbt, y_bo)
-                
+
+        # ── LlamaTune-style baseline-crossing marker ────────────────────
+        if default_score is not None and annotation:
+            # Determine direction: for latency metrics, lower is better
+            higher_is_better = not (metric_key and metric_key.startswith("latency"))
+
+            # Mark on evaluations axis (left panel)
+            cross_evals = _find_baseline_crossing(
+                pbt_evals, pbt_agg.mean_best, default_score,
+                higher_is_better=higher_is_better,
+            )
+            if cross_evals is not None:
+                _add_baseline_crossing_marker(
+                    ax_left, cross_evals[0], cross_evals[1],
+                    label=f"Exceeds default (eval {int(cross_evals[0])})",
+                )
+                logger.info(
+                    "PBTune exceeds default at evaluation %d", int(cross_evals[0])
+                )
+
+            # Mark on wall-clock axis (right panel)
+            cross_wall = _find_baseline_crossing(
+                pbt_wall, pbt_agg.mean_best, default_score,
+                higher_is_better=higher_is_better,
+            )
+            if cross_wall is not None:
+                _add_baseline_crossing_marker(
+                    ax_right, cross_wall[0], cross_wall[1],
+                    label=f"Exceeds default ({cross_wall[0]:.0f}s)",
+                )
+                logger.info(
+                    "PBTune exceeds default at %.0fs wall-clock", cross_wall[0]
+                )
+
+        # ── Parallelism factor η ────────────────────────────────────────
+        eta = _compute_parallel_efficiency(sessions, n_workers)
+        caption_parts = []
+        if eta is not None:
+            overhead_pct = (1.0 - eta) * 100
+            caption_parts.append(
+                f"Empirical parallel efficiency \u03b7 = {eta:.2f} "
+                f"(~{overhead_pct:.0f}% overhead vs. ideal linear scaling, "
+                f"P = {n_workers} workers)"
+            )
+            logger.info("Parallel efficiency η = %.3f (P=%d)", eta, n_workers)
+
         auto_grid(ax_right)
         
         add_panel_labels([ax_left, ax_right])
         ax_right.legend(loc="lower right")
-        fig.tight_layout()
+
+        if caption_parts:
+            fig.text(
+                0.5, -0.02, "; ".join(caption_parts),
+                ha="center", va="top", fontsize=7, style="italic",
+                color="#4B5563",
+            )
+
+        fig.tight_layout(rect=[0, 0.03, 1, 1] if caption_parts else None)
         
         fmt_list = [ExportFormat(f) for f in (formats or ["pdf", "png"])]
         export_figure(fig, output_dir, FIG_ID, formats=fmt_list)
