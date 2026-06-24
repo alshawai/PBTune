@@ -16,6 +16,19 @@ LEGACY_MANIFEST_PATH = RESULTS_DIR / "experiment_manifest.json"
 # MANIFEST_PATH directly. The runner no longer writes here by default.
 MANIFEST_PATH = LEGACY_MANIFEST_PATH
 
+# Results repo (a separate git repo at RESULTS_DIR) version-control settings.
+RESULTS_BRANCH = "main"
+# Remote to push results to when the branch has no configured upstream. The
+# actual remote is resolved per-run from the branch's upstream (``@{u}``), so
+# machines whose results remote is named something other than "origin" (e.g.
+# "main") still push correctly; this is only the last-resort fallback.
+DEFAULT_RESULTS_REMOTE = "origin"
+# Bounded retry for the multi-VM push race: when a peer commit lands between
+# our pull and our push, the push is rejected (non-fast-forward); we re-pull
+# with rebase and try again up to this many times.
+PUSH_RETRIES = 3
+STASH_MSG = "pbtune-autostash"
+
 LOGGER = logging.getLogger("ExperimentRunner")
 
 
@@ -178,24 +191,126 @@ class ExperimentRunner:
             LOGGER.error(f"Command failed with exit code {e.returncode}: {' '.join(cmd)}")
             return False
 
+    def _git(
+        self, *args: str, check: bool = True, capture: bool = False
+    ) -> subprocess.CompletedProcess:
+        """Run a git command in the results repo (``RESULTS_DIR``)."""
+        return subprocess.run(
+            ["git", *args],
+            cwd=RESULTS_DIR,
+            check=check,
+            text=True,
+            capture_output=capture,
+        )
+
+    def _resolve_remote(self) -> str:
+        """Resolve the results repo's push remote.
+
+        Prefers the remote configured as ``RESULTS_BRANCH``'s upstream
+        (``git rev-parse --abbrev-ref <branch>@{u}`` → ``<remote>/<branch>``),
+        so machines whose results remote is named something other than
+        ``origin`` (a real case: this repo's clone names it ``main``) still
+        push correctly. Falls back to :data:`DEFAULT_RESULTS_REMOTE` when the
+        branch has no upstream. Cached after the first resolution.
+        """
+        if getattr(self, "_results_remote", None) is not None:
+            return self._results_remote
+
+        remote = DEFAULT_RESULTS_REMOTE
+        upstream = self._git(
+            "rev-parse", "--abbrev-ref", f"{RESULTS_BRANCH}@{{u}}",
+            check=False, capture=True,
+        )
+        if upstream.returncode == 0 and "/" in (upstream.stdout or ""):
+            # "<remote>/<branch>" → take the remote half.
+            remote = upstream.stdout.strip().rsplit("/", 1)[0]
+        self._results_remote: str = remote
+        return remote
+
+    def _sync_results_repo(self) -> None:
+        """Integrate peer commits before staging ours: stash → pull → stash pop.
+
+        Several VMs push to the shared results repo concurrently. Pulling on a
+        dirty tree would abort the rebase, so we stash first (including
+        untracked files — new result JSONs are untracked and a plain stash
+        would miss them), rebase onto the remote, then restore our artifacts.
+        Failures here are logged, never fatal: a phase's progress is already
+        persisted in the manifest before this runs.
+        """
+        stash = self._git(
+            "stash", "push", "--include-untracked", "-m", STASH_MSG,
+            check=False, capture=True,
+        )
+        did_stash = (
+            stash.returncode == 0
+            and "No local changes to save" not in (stash.stdout or "")
+        )
+        try:
+            pull = self._git(
+                "pull", "--rebase", self._resolve_remote(), RESULTS_BRANCH,
+                check=False, capture=True,
+            )
+            if pull.returncode != 0:
+                LOGGER.warning(
+                    "git pull --rebase failed: %s. Aborting any partial rebase.",
+                    (pull.stderr or pull.stdout or "").strip(),
+                )
+                # Never leave the repo mid-rebase for the next phase.
+                self._git("rebase", "--abort", check=False, capture=True)
+        finally:
+            if did_stash:
+                pop = self._git("stash", "pop", check=False, capture=True)
+                if pop.returncode != 0:
+                    LOGGER.error(
+                        "git stash pop hit a conflict integrating peer changes: "
+                        "%s\nLocal artifacts are preserved in the stash "
+                        "(`git stash list`); resolve manually.",
+                        (pop.stderr or pop.stdout or "").strip(),
+                    )
+
     def _commit_and_push(self, exp: Experiment, seed: int, phase: str) -> None:
         if self.dry_run or self.no_push:
             return
 
         try:
-            subprocess.run(["git", "add", "--", *self._paths_to_stage(exp)], cwd=RESULTS_DIR, check=True)
-            status = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=RESULTS_DIR
-            )
-            if status.returncode == 0:
+            # 1. Integrate peer commits first (stash → pull --rebase → pop) so
+            #    our push is a fast-forward in the common case.
+            self._sync_results_repo()
+
+            # 2. Stage only this experiment's artifacts (path scoping avoids
+            #    picking up an in-flight peer write).
+            self._git("add", "--", *self._paths_to_stage(exp))
+            if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
                 LOGGER.info("No changes to commit in results repo.")
                 return
 
+            # 3. Commit locally.
             msg = f"results({exp.id}): {phase} seed={seed}"
-            subprocess.run(["git", "commit", "-m", msg], cwd=RESULTS_DIR, check=True)
-            subprocess.run(["git", "push", "origin", "main"], cwd=RESULTS_DIR, check=True)
-            LOGGER.info(f"Successfully pushed {msg} to PBTune-experiments")
+            self._git("commit", "-m", msg)
+
+            # 4. Push with bounded retry: a peer may land a commit between our
+            #    pull and push, rejecting it. Re-integrate and retry.
+            remote = self._resolve_remote()
+            for attempt in range(1, PUSH_RETRIES + 1):
+                push = self._git(
+                    "push", remote, RESULTS_BRANCH, check=False, capture=True
+                )
+                if push.returncode == 0:
+                    LOGGER.info("Successfully pushed %s", msg)
+                    return
+                LOGGER.warning(
+                    "Push rejected (attempt %d/%d): %s. Re-pulling with rebase.",
+                    attempt, PUSH_RETRIES, (push.stderr or "").strip(),
+                )
+                self._git(
+                    "pull", "--rebase", remote, RESULTS_BRANCH,
+                    check=False, capture=True,
+                )
+            LOGGER.error(
+                "Push still failing after %d attempts; commit %r is preserved "
+                "locally and will be reconciled on the next phase's sync.",
+                PUSH_RETRIES, msg,
+            )
         except subprocess.CalledProcessError as e:
             LOGGER.error(f"Failed to commit/push results: {e}")
 
