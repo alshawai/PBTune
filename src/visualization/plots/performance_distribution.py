@@ -15,7 +15,7 @@ from src.visualization.registry import register_figure
 from src.visualization.loaders import (
     load_sessions, load_session, load_bo_trace, load_comparison, SessionTrace, BOTrace, ComparisonData
 )
-from src.visualization.utils import despine, auto_grid
+from src.visualization.utils import auto_grid
 from src.visualization.plots.convergence_curve import (
     _build_shared_metric_config,
     _rescore_comparison_arm,
@@ -52,8 +52,10 @@ def _collect_final_scores(
     comparison_data,
     comparison_path: str | None = None,
     metric_config=None,
+    metric_key: str | None = None,
 ) -> dict[str, np.ndarray]:
     res = {}
+    target_metric = metric_key or "score"
     if comparison_path is not None and metric_config is not None:
         for arm_name, method_name in (
             ("default", "Default"),
@@ -72,47 +74,76 @@ def _collect_final_scores(
         # Load Default
         if "Default" in res:
             pass
-        elif is_multi and "default" in comparison_data.summaries_by_arm and "score" in comparison_data.summaries_by_arm["default"]:
-            stat_summary = comparison_data.summaries_by_arm["default"]["score"]
+        elif is_multi and "default" in comparison_data.summaries_by_arm and target_metric in comparison_data.summaries_by_arm["default"]:
+            stat_summary = comparison_data.summaries_by_arm["default"][target_metric]
             res["Default"] = np.array(stat_summary.values) if stat_summary.values and len(stat_summary.values) > 1 else np.array([stat_summary.mean])
-        elif not is_multi and "score" in comparison_data.default_summaries:
-            stat_summary = comparison_data.default_summaries["score"]
+        elif not is_multi and target_metric in comparison_data.default_summaries:
+            stat_summary = comparison_data.default_summaries[target_metric]
             res["Default"] = np.array(stat_summary.values) if stat_summary.values and len(stat_summary.values) > 1 else np.array([stat_summary.mean])
             
         # Try to load BO from comparison
         if "BO-SMAC" in res:
             pass
-        elif is_multi and "bo" in comparison_data.summaries_by_arm and "score" in comparison_data.summaries_by_arm["bo"]:
-            stat_summary = comparison_data.summaries_by_arm["bo"]["score"]
+        elif is_multi and "bo" in comparison_data.summaries_by_arm and target_metric in comparison_data.summaries_by_arm["bo"]:
+            stat_summary = comparison_data.summaries_by_arm["bo"][target_metric]
             res["BO-SMAC"] = np.array(stat_summary.values) if stat_summary.values and len(stat_summary.values) > 1 else np.array([stat_summary.mean])
         else:
-            res["BO-SMAC"] = np.array([t.best_scores[-1] for t in bo_traces])
+            if target_metric == "score":
+                res["BO-SMAC"] = np.array([t.best_scores[-1] for t in bo_traces])
+            else:
+                from src.visualization.loaders.session import _extract_raw_value
+                res["BO-SMAC"] = np.array([_extract_raw_value(t.best_metrics[-1], target_metric) for t in bo_traces])
             
         # Try to load PBT from comparison
         if "PBTune" in res:
             pass
-        elif is_multi and "pbt" in comparison_data.summaries_by_arm and "score" in comparison_data.summaries_by_arm["pbt"]:
-            stat_summary = comparison_data.summaries_by_arm["pbt"]["score"]
+        elif is_multi and "pbt" in comparison_data.summaries_by_arm and target_metric in comparison_data.summaries_by_arm["pbt"]:
+            stat_summary = comparison_data.summaries_by_arm["pbt"][target_metric]
             res["PBTune"] = np.array(stat_summary.values) if stat_summary.values and len(stat_summary.values) > 1 else np.array([stat_summary.mean])
         else:
-            res["PBTune"] = np.array([s.best_scores[-1] for s in pbt_sessions])
+            if target_metric == "score":
+                res["PBTune"] = np.array([s.best_scores[-1] for s in pbt_sessions])
+            else:
+                from src.visualization.loaders.session import _extract_raw_value
+                res["PBTune"] = np.array([_extract_raw_value(s.best_metrics[-1], target_metric) for s in pbt_sessions])
             
     else:
-        res["BO-SMAC"] = np.array([t.best_scores[-1] for t in bo_traces])
-        res["PBTune"] = np.array([s.best_scores[-1] for s in pbt_sessions])
+        if target_metric == "score":
+            res["BO-SMAC"] = np.array([t.best_scores[-1] for t in bo_traces])
+            res["PBTune"] = np.array([s.best_scores[-1] for s in pbt_sessions])
+        else:
+            from src.visualization.loaders.session import _extract_raw_value
+            res["BO-SMAC"] = np.array([_extract_raw_value(t.best_metrics[-1], target_metric) for t in bo_traces])
+            res["PBTune"] = np.array([_extract_raw_value(s.best_metrics[-1], target_metric) for s in pbt_sessions])
     
     return res
 
 def generate(
-    pbt_paths: list[str],
-    bo_paths: list[str],
+    pbt_paths: list[str] | None = None,
+    bo_paths: list[str] | None = None,
     comparison_path: str | None = None,
     output_dir: str = "figures/",
     venue: str = "pvldb",
     formats: list[str] | None = None,
-    show_significance: bool = True,
+    show_significance: bool = False,
+    data_dir: Path | str | None = None,
+    theme: PBTuneTheme | None = None,
+    metric_key: str | None = None,
+    **kwargs,
 ) -> Figure:
     logger.info("Generating %s figure", FIG_ID)
+
+    if not pbt_paths and data_dir:
+        d = Path(data_dir) / "oltp" / "oltp_read_write"
+        if d.exists():
+            pbt_paths = [str(d / "pbt_runs" / "extensive" / "tuning_sessions")]
+            bo_paths = [str(d / "bo_runs" / "extensive" / "baseline_sessions")]
+            comps = sorted((d / "comparisons" / "extensive").glob("multi_arm_comparison_*.json"))
+            if comps and not comparison_path:
+                comparison_path = str(comps[-1])
+
+    pbt_paths = pbt_paths or []
+    bo_paths = bo_paths or []
 
     shared_metric_config = _build_shared_metric_config(
         pbt_paths, bo_paths, comparison_path
@@ -126,21 +157,21 @@ def generate(
                 path_obj.glob("pbt_results_*.json"), key=lambda p: p.name
             ):
                 sessions.append(
-                    load_session(session_path, metric_config=shared_metric_config)
+                    load_session(session_path, metric_config=shared_metric_config, metric_key=metric_key)
                 )
         elif path_obj.is_dir():
-            sessions.extend(load_sessions(path))
+            sessions.extend(load_sessions(path, metric_key=metric_key))
         else:
-            sessions.append(load_session(path, metric_config=shared_metric_config))
+            sessions.append(load_session(path, metric_config=shared_metric_config, metric_key=metric_key))
             
     bo_traces = []
     for path in bo_paths:
         path_obj = Path(path)
         if path_obj.is_dir():
             for trace_path in sorted(path_obj.glob("bo_results_*.json"), key=lambda p: p.name):
-                bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config))
+                bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config, metric_key=metric_key))
         else:
-            bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config))
+            bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))
         
     comp_data = None
     if comparison_path is not None:
@@ -156,6 +187,7 @@ def generate(
         comp_data,
         comparison_path=comparison_path,
         metric_config=shared_metric_config,
+        metric_key=metric_key,
     )
     
     # Log sample sizes
@@ -164,9 +196,9 @@ def generate(
     n_def = len(scores_dict.get("Default", []))
     logger.info("Data loaded: PBT n=%d, BO n=%d, Default n=%d", n_pbt, n_bo, n_def)
     
-    theme = PBTuneTheme(venue=venue)
-    with theme.apply():
-        fig, ax = theme.figure(size_hint="single", aspect=0.85)
+    _theme = theme or PBTuneTheme(venue=venue)
+    with _theme.apply():
+        fig, ax = _theme.figure(size_hint="single", aspect=0.85)
         
         pt = _try_import_raincloud()
         
@@ -245,10 +277,14 @@ def generate(
                 ax.set_ylim(top=heights[h_idx-1] + (y_max * 0.1))
                 
         ax.set_xlabel("Method")
-        ax.set_ylabel("Final Best Composite Score")
         
-        despine(ax)
-        auto_grid(ax, axis="y")
+        y_label = "Final Best Composite Score"
+        if metric_key == "throughput": y_label = "Throughput (txn/sec)"
+        elif metric_key == "latency_p99": y_label = "99th %-tile Latency (ms)"
+        elif metric_key == "latency_p95": y_label = "95th %-tile Latency (ms)"
+        ax.set_ylabel(y_label)
+        
+
         fig.tight_layout()
         
         fmt_list = [ExportFormat(f) for f in (formats or ["pdf", "png"])]

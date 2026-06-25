@@ -6,7 +6,15 @@ enforcing consistent styling, proper PVLDB sizing, and semantic color choices.
 """
 
 from src.visualization.theme import PBTuneTheme
-from src.visualization.colors import METHOD_COLORS, METRIC_COLORS, get_method_style
+from src.visualization.colors import (
+    METHOD_COLORS,
+    METRIC_COLORS,
+    METHOD_MARKERS,
+    METHOD_LINESTYLES,
+    METHOD_HATCHES,
+    LINE_PLOT_COLORS,
+    get_method_style,
+)
 from src.visualization.registry import REGISTRY, register_figure
 from src.visualization.types import FigureSpec, FigureSize, ExportFormat, VenuePreset
 from src.visualization.export import export_figure
@@ -21,6 +29,10 @@ __all__ = [
     "PBTuneTheme",
     "METHOD_COLORS",
     "METRIC_COLORS",
+    "METHOD_MARKERS",
+    "METHOD_LINESTYLES",
+    "METHOD_HATCHES",
+    "LINE_PLOT_COLORS",
     "get_method_style",
     "REGISTRY",
     "register_figure",
