@@ -262,3 +262,75 @@ def test_train_combined_importance_includes_hardware_features(monkeypatch):
 
     assert {"ram_bytes", "cpu_cores", "disk_type"} <= set(captured_columns)
     assert isinstance(result, ImportanceResult)
+
+
+# ── build_combined_loaded_data: knob_bounds merging ──────────────────
+
+
+def test_combined_bounds_merge_widest_profile_bounds():
+    """Combined knob_bounds must take the widest envelope from per-profile
+    bounds, not just the tight empirical min/max of the concatenated data."""
+    df_a = pd.DataFrame({"knob_a": [0.3, 0.4]})
+    df_b = pd.DataFrame({"knob_a": [0.5, 0.6]})
+
+    # Profile A has wide domain-spec bounds, profile B has narrow ones.
+    data_a = _make_loaded_data(df_a, [1.0, 2.0])
+    data_a.knob_bounds["knob_a"] = (0.0, 100.0)  # wide domain spec
+
+    data_b = _make_loaded_data(df_b, [1.5, 2.5])
+    data_b.knob_bounds["knob_a"] = (0.0, 50.0)
+
+    resources_a = {"ram_bytes": 8 * 1024**3, "cpu_cores": 4, "disk_type": "SSD"}
+    resources_b = {"ram_bytes": 16 * 1024**3, "cpu_cores": 8, "disk_type": "SSD"}
+
+    combined = build_combined_loaded_data([(data_a, resources_a), (data_b, resources_b)])
+
+    b_min, b_max = combined.knob_bounds["knob_a"]
+    # Must preserve the widest profile bound (100.0), not just data max (0.6).
+    assert b_max >= 100.0, f"expected max >= 100.0, got {b_max}"
+    assert b_min <= 0.0, f"expected min <= 0.0, got {b_min}"
+
+
+def test_combined_bounds_hardware_descriptors_from_data():
+    """Hardware descriptor columns (ram_bytes, cpu_cores, disk_type) are
+    not in per-profile knob_bounds, so they must get data-derived bounds."""
+    df_a = pd.DataFrame({"knob_a": [0.1, 0.2]})
+    df_b = pd.DataFrame({"knob_a": [0.3, 0.4]})
+
+    data_a = _make_loaded_data(df_a, [1.0, 2.0])
+    data_b = _make_loaded_data(df_b, [1.5, 2.5])
+
+    resources_a = {"ram_bytes": 8 * 1024**3, "cpu_cores": 4, "disk_type": "SSD"}
+    resources_b = {"ram_bytes": 16 * 1024**3, "cpu_cores": 8, "disk_type": "HDD"}
+
+    combined = build_combined_loaded_data([(data_a, resources_a), (data_b, resources_b)])
+
+    # ram_bytes and cpu_cores are hardware-only columns.
+    ram_min, ram_max = combined.knob_bounds["ram_bytes"]
+    assert ram_min <= 8 * 1024**3
+    assert ram_max >= 16 * 1024**3
+
+    cpu_min, cpu_max = combined.knob_bounds["cpu_cores"]
+    assert cpu_min <= 4
+    assert cpu_max >= 8
+
+
+def test_combined_bounds_enclose_observed_outside_profile_bounds():
+    """If a profile's observed data exceeds its own knob_bounds (sentinel
+    values, rounding), the combined bounds must still enclose it."""
+    df_a = pd.DataFrame({"knob_a": [-1.0, 0.5]})  # -1 is a sentinel
+    df_b = pd.DataFrame({"knob_a": [0.3, 0.4]})
+
+    data_a = _make_loaded_data(df_a, [1.0, 2.0])
+    data_a.knob_bounds["knob_a"] = (0.0, 1.0)  # doesn't cover -1
+
+    data_b = _make_loaded_data(df_b, [1.5, 2.5])
+    data_b.knob_bounds["knob_a"] = (0.0, 1.0)
+
+    resources_a = {"ram_bytes": 8 * 1024**3, "cpu_cores": 4, "disk_type": "SSD"}
+    resources_b = {"ram_bytes": 8 * 1024**3, "cpu_cores": 4, "disk_type": "SSD"}
+
+    combined = build_combined_loaded_data([(data_a, resources_a), (data_b, resources_b)])
+
+    b_min, _ = combined.knob_bounds["knob_a"]
+    assert b_min <= -1.0, f"expected min <= -1.0, got {b_min}"

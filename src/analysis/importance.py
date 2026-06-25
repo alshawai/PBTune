@@ -7,6 +7,7 @@ Computes marginal and pairwise importance of database knobs using fANOVA varianc
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 from dataclasses import dataclass
 
@@ -132,14 +133,31 @@ def _build_config_space(
     df: pd.DataFrame,
     knob_bounds: dict[str, tuple[float, float]],
 ) -> ConfigurationSpace:
-    """Create ConfigSpace definitions matching encoded dataframe columns."""
+    """Create ConfigSpace definitions matching encoded dataframe columns.
+
+    fANOVA enforces ``X[i, c] in [lower, upper]`` strictly, including
+    the column-max equality.  We widen by a small epsilon on both sides
+    so samples that sit exactly on the observed min/max do not trip
+    fANOVA's bound check after its internal float rounding.  This
+    mirrors the pattern in ``scalpel_stability._build_fanova_config_space``.
+    """
+    epsilon = 1e-9
     config_space = ConfigurationSpace()
 
     for col in df.columns:
         b_min, b_max = knob_bounds[col]
+        if not df.empty:
+            # Ensure observed samples are strictly inside the configured
+            # range even when knob_bounds were computed elsewhere.
+            b_min = min(b_min, float(df[col].min())) - epsilon
+            b_max = max(b_max, float(df[col].max())) + epsilon
+        if b_min >= b_max:
+            b_max = b_min + 1.0
         if df[col].dtype.kind in "biu" or pd.api.types.is_integer_dtype(df[col]):
+            # Use floor/ceil instead of int() truncation so the
+            # interval always widens, never narrows.
             config_space.add_hyperparameter(
-                UniformIntegerHyperparameter(col, int(b_min), int(b_max))
+                UniformIntegerHyperparameter(col, math.floor(b_min), math.ceil(b_max))
             )
         else:
             config_space.add_hyperparameter(
