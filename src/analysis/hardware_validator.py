@@ -379,13 +379,32 @@ def build_combined_loaded_data(
         else pd.Series(dtype="int64", name="generation_index")
     )
 
+    # Merge per-profile knob_bounds (union of widest bounds) so the
+    # domain-spec-aware bounds established by _extract_knob_bounds()
+    # survive into the combined model.  For columns not present in
+    # any profile (hardware descriptors like ram_bytes, cpu_cores,
+    # disk_type) fall back to observed min/max.
     knob_bounds: dict[str, tuple[float, float]] = {}
     for column in combined_df.columns:
         series = combined_df[column]
         if series.empty:
             knob_bounds[column] = (0.0, 1.0)
             continue
-        knob_bounds[column] = (float(series.min()), float(series.max()))
+        profile_bounds = [
+            ld.knob_bounds[column]
+            for ld, _ in normalized_profiles
+            if column in ld.knob_bounds
+        ]
+        if profile_bounds:
+            b_min = min(b[0] for b in profile_bounds)
+            b_max = max(b[1] for b in profile_bounds)
+        else:
+            b_min = float(series.min())
+            b_max = float(series.max())
+        # Also ensure every observed value in the combined set fits.
+        b_min = min(b_min, float(series.min()))
+        b_max = max(b_max, float(series.max()))
+        knob_bounds[column] = (b_min, b_max)
 
     base_metric_config = normalized_profiles[0][0].metric_config
 
