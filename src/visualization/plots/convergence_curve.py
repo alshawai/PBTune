@@ -19,7 +19,7 @@ from src.visualization.loaders import (
 )
 from src.visualization.loaders.session import _extract_raw_value
 from src.visualization.utils import (
-    despine, add_panel_labels, add_baseline_line, auto_grid, set_integer_ticks
+    add_panel_labels, add_baseline_line, auto_grid, set_integer_ticks
 )
 
 logger = logging.getLogger(__name__)
@@ -250,8 +250,18 @@ def _find_divergence_point(
 
 def _plot_method_curve(ax, x, y, std, method_key, label, shade_band):
     style = get_method_style(method_key)
-    style_subset = {"color": style["color"], "linestyle": style.get("linestyle", "-")}
-    ax.plot(x, y, label=label, **style_subset)
+    n_markers = min(20, len(x))
+    markevery = max(1, len(x) // n_markers)
+    ax.plot(
+        x, y, label=label,
+        color=style["color"],
+        linestyle=style.get("linestyle", "-"),
+        marker=style.get("marker", "o"),
+        markevery=markevery,
+        markersize=7,
+        markeredgecolor="white",
+        markeredgewidth=0.8,
+    )
     if shade_band and std is not None and not np.all(std == 0):
         ax.fill_between(x, y - std, y + std, alpha=0.15, color=style["color"])
 
@@ -347,14 +357,17 @@ def _compute_parallel_efficiency(
 
 
 def generate(
-    pbt_paths: list[str],
-    bo_paths: list[str],
+    pbt_paths: list[str] | None = None,
+    bo_paths: list[str] | None = None,
     comparison_path: str | None = None,
     output_dir: str = "figures/",
     venue: str = "pvldb",
     formats: list[str] | None = None,
     annotation: bool = True,
     metric_key: str | None = None,
+    data_dir: Path | str | None = None,
+    theme: PBTuneTheme | None = None,
+    **kwargs,
 ) -> Figure:
     """Generate convergence curve figure.
 
@@ -372,6 +385,18 @@ def generate(
         metric_key = None
 
     logger.info("Generating %s figure (metric_key=%s)", FIG_ID, metric_key or "score")
+
+    if not pbt_paths and data_dir:
+        d = Path(data_dir) / "oltp" / "oltp_read_write"
+        if d.exists():
+            pbt_paths = [str(d / "pbt_runs" / "extensive" / "tuning_sessions")]
+            bo_paths = [str(d / "bo_runs" / "extensive" / "baseline_sessions")]
+            comps = sorted((d / "comparisons" / "extensive").glob("multi_arm_comparison_*.json"))
+            if comps and not comparison_path:
+                comparison_path = str(comps[-1])
+
+    pbt_paths = pbt_paths or []
+    bo_paths = bo_paths or []
 
     shared_metric_config = _build_shared_metric_config(
         pbt_paths, bo_paths, comparison_path
@@ -461,9 +486,9 @@ def generate(
         
     logger.info("Data loaded: %d PBT seeds, %d BO seeds", pbt_agg.n_seeds, len(bo_traces))
     
-    theme = PBTuneTheme(venue=venue)
-    with theme.apply():
-        fig, (ax_left, ax_right) = theme.subplots(1, 2, size_hint="double", sharey=True)
+    _theme = theme or PBTuneTheme(venue=venue)
+    with _theme.apply():
+        fig, (ax_left, ax_right) = _theme.subplots(1, 2, size_hint="double", sharey=True)
         
         n_workers = sessions[0].metadata["n_workers"]
         pbt_evals = np.array(pbt_agg.generations) * n_workers
@@ -582,7 +607,7 @@ def generate(
         if caption_parts:
             fig.text(
                 0.5, -0.02, "; ".join(caption_parts),
-                ha="center", va="top", fontsize=7, style="italic",
+                ha="center", va="top", fontsize=11, style="italic",
                 color="#4B5563",
             )
 

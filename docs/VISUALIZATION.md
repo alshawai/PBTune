@@ -7,6 +7,7 @@ the performance, convergence, efficiency, and tradeoffs of different database tu
 
 All outputs are styled via `PBTuneTheme` for specific publication venues (`pvldb`, `springer`,
 `preview`) to ensure consistent fonts, colorblind-friendly palettes, and correct column dimensions.
+The framework defaults to a **Boxed Academic Style** (all spines visible, top/right legends, hatched bars) matching CDBTune+ and other top-tier systems papers.
 
 ---
 
@@ -29,6 +30,14 @@ python -m src.scripts.generate_final_visuals \
 ```
 
 ### Global CLI Arguments
+
+To generate all plots across a variety of metrics easily, we provide a standalone script:
+```bash
+python generate_all_metrics.py
+```
+This automatically loops through `score`, `throughput`, `latency_p99`, and `latency_p95` and exports suffixed variations.
+
+If you are generating plots individually using the `__main__` entrypoint:
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
@@ -225,7 +234,36 @@ fig = generate(
 
 ---
 
-## 4. Performance Distribution (`performance_distribution.py`)
+## 4. Comparison Bar Chart (`comparison_bar.py`)
+
+### Purpose
+
+A grouped bar chart specifically comparing multiple methods across multiple metrics (e.g., Throughput and Latency) simultaneously. This replaces multi-panel scatter plots when strict quantitative comparisons are required.
+
+### What it plots
+
+A multi-panel figure where each panel corresponds to a metric:
+- X-axis: Different database workloads (e.g., Read-Only, Read-Write, Write-Only)
+- Y-axis: The metric value (e.g., Throughput or Latency)
+- Bars: Grouped by method, stylized with explicit hatches and bordered legends spanning the top of the figure.
+
+### Data sources
+
+| Source | What it reads |
+|---|---|
+| `extensive/comparisons/` | `multi_arm_comparison_*.json` files for workload summaries |
+
+### Examples
+
+```bash
+python -m src.scripts.generate_final_visuals \
+    --figure comparison_bar \
+    --data-dir results/oltp
+```
+
+---
+
+## 5. Performance Distribution (`performance_distribution.py`)
 
 ### Purpose
 
@@ -273,6 +311,8 @@ fig = generate(
     pbt_paths=["results/sysbench/pbt"],
     bo_paths=["results/sysbench/bo"],
     comparison_path="report.json",  # optional, adds Default arm
+    metric_key="throughput",        # dynamically changes the plotted metric
+    show_significance=False,        # disabled by default for cleaner plots
     venue="preview",
 )
 ```
@@ -286,7 +326,8 @@ fig = generate(
 Convergence Curve       FULL hist    FULL hist    optional (Default)       ✅ yes
 Pareto Frontier         BEST cfg     BEST cfg     optional (all arms)      ❌ no
 Resource Efficiency     BEST cfg     BEST cfg     ❌ ignored               ❌ no
-Perf Distribution       FINAL best   FINAL best   optional (all arms)      ❌ no
+Perf Distribution       FINAL best   FINAL best   optional (all arms)      ✅ yes
+Comparison Bar          ❌ ignored   ❌ ignored   REQUIRED                 ❌ no
 ```
 
 - **FULL hist** = reads entire `generation_history` / `evaluation_history`
@@ -301,9 +342,11 @@ Perf Distribution       FINAL best   FINAL best   optional (all arms)      ❌ n
 
 | Venue | Font | Width | LaTeX | Use case |
 |---|---|---|---|---|
-| `preview` | Sans-serif 11pt | 10" double | No | Quick local preview |
+| `preview` | Sans-serif 11pt | 10" double | No | Quick local preview / fallback if LaTeX fails |
 | `pvldb` | Serif 9pt | 7" double | Yes | VLDB submission |
 | `springer` | Serif 10pt | 6.85" double | Yes | Springer/LNCS submission |
+
+> **LaTeX Note**: `pvldb` and `springer` venues require a working LaTeX installation (specifically `type1cm.sty` and `texlive-fonts-extra`). If Matplotlib fails with a `RuntimeError: latex was not able to process`, fallback to `--venue preview` or install the missing TeX packages.
 
 ### Output Formats
 
@@ -312,6 +355,6 @@ Override with the `formats` parameter in the programmatic API.
 
 ### Theme and Colors
 
-- Consistent method colors across all plots via `src.visualization.colors`
-- Colorblind-friendly palette
+- Consistent method colors and explicit hatching (`METHOD_HATCHES`) via `src.visualization.colors`
+- Dense, fully-boxed academic styling (no despining) matching reference literature
 - Grid, spine, and typography settings via `PBTuneTheme`
