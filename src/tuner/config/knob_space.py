@@ -691,6 +691,8 @@ class KnobSpace:
         scale = budget_bytes / total  # < 1.0
 
         # Scale all memory allocations uniformly (preserves ratios)
+        # We do NOT scale max_connections, as it is an architectural limit
+        # and shrinking it would exponentially squash the overall memory footprint.
         if "shared_buffers" in config and "shared_buffers" in self.knobs:
             config["shared_buffers"] = self.knobs["shared_buffers"].normalize_value(
                 config["shared_buffers"] * scale
@@ -703,10 +705,6 @@ class KnobSpace:
             config["maintenance_work_mem"] = self.knobs[
                 "maintenance_work_mem"
             ].normalize_value(config["maintenance_work_mem"] * scale)
-        if "max_connections" in config and "max_connections" in self.knobs:
-            config["max_connections"] = self.knobs["max_connections"].normalize_value(
-                config["max_connections"] * scale
-            )
 
         return config
 
