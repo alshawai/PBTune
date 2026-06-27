@@ -299,9 +299,17 @@
     "io_method": [
       "stability",
       "OS I/O subsystem selector (io_uring/posix/worker); infrastructure knob, not performance tuning. io_uring can exhaust kernel memory under multi-instance load."
+    ],
+    "default_transaction_isolation": [
+      "semantic_behavior",
+      "Transaction isolation level; dictated by application requirements, not a tunable performance dial."
     ]
   },
   "IMPORTANCE_NUISANCE_EXCLUSIONS": {
+    "default_transaction_isolation": [
+      "semantic_behavior",
+      "Transaction isolation level; dictated by application requirements, not a tunable performance dial."
+    ],
     "array_nulls": [
       "catalog_compat",
       "Compatibility flag; not a performance knob."
