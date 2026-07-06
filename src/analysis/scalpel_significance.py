@@ -19,8 +19,7 @@ SCALPEL design (see docs/architecture or /home/eima40x4c/.claude/plans/distribut
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd

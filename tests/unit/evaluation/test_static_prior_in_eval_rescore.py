@@ -19,7 +19,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUNNER_PATH = PROJECT_ROOT / "src" / "evaluation" / "runner.py"
