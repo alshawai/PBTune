@@ -217,6 +217,80 @@ def test_resolve_manual_worker_resources_valid(
 @patch("src.utils.hardware_info.psutil.virtual_memory")
 @patch("src.utils.hardware_info.psutil.cpu_count")
 @patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_threshold_threads_to_auto_fallback(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    """The ``threshold`` arg must drive the CPU/RAM auto-fallback budget.
+
+    Regression for Bug 4: ``resolve_manual_worker_resources`` previously
+    hardcoded 0.8 for the auto-detect fallback (and for disk), ignoring the
+    caller's intended fraction. With no manual RAM/CPU supplied, the function
+    takes the auto path, so a higher threshold must yield a larger per-worker
+    budget.
+    """
+
+    class MockMem:
+        total = 16 * 1024**3
+
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    # No manual ram/cpus -> auto fallback. 8 cores, 4 workers.
+    # threshold=0.8 -> floor(8*0.8/4) = floor(1.6) = 1 core
+    wr_080 = resolve_manual_worker_resources(num_workers=4, threshold=0.8)
+    # threshold=0.95 -> floor(8*0.95/4) = floor(1.9) = 1 core (cpu unchanged here),
+    # but RAM scales: int(16G*0.95/4) > int(16G*0.8/4)
+    wr_095 = resolve_manual_worker_resources(num_workers=4, threshold=0.95)
+
+    assert wr_095.ram_bytes > wr_080.ram_bytes
+    # RAM fallback must equal threshold * total / num_workers exactly.
+    assert wr_080.ram_bytes == int(16 * 1024**3 * 0.8) // 4
+    assert wr_095.ram_bytes == int(16 * 1024**3 * 0.95) // 4
+
+
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
+def test_resolve_manual_worker_resources_threshold_defaults_to_080(
+    mock_process,
+    mock_cpu_count,
+    mock_virtual_memory,
+    _mock_disk_type,
+):
+    """Omitting ``threshold`` preserves the historical 0.8 behaviour."""
+
+    class MockMem:
+        total = 16 * 1024**3
+
+    mock_virtual_memory.return_value = MockMem()
+
+    class MockProcess:
+        def cpu_affinity(self):
+            return list(range(8))
+
+    mock_process.return_value = MockProcess()
+    mock_cpu_count.return_value = 8
+
+    wr_default = resolve_manual_worker_resources(num_workers=4)
+    wr_080 = resolve_manual_worker_resources(num_workers=4, threshold=0.8)
+    assert wr_default.ram_bytes == wr_080.ram_bytes
+    assert wr_default.cpu_cores == wr_080.cpu_cores
+
+
+@patch("src.utils.hardware_info.detect_disk_type", return_value="SSD")
+@patch("src.utils.hardware_info.psutil.virtual_memory")
+@patch("src.utils.hardware_info.psutil.cpu_count")
+@patch("src.utils.hardware_info.psutil.Process")
 def test_resolve_manual_worker_resources_exceeds_ram(
     mock_process,
     mock_cpu_count,

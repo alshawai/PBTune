@@ -445,7 +445,12 @@ def _probe_disk_with_fio(
         except OSError:
             pass
 
-    if not all((write_bw, read_bw, write_io, read_io)):
+    if (
+        write_bw is None
+        or read_bw is None
+        or write_io is None
+        or read_io is None
+    ):
         return None
 
     try:
@@ -918,6 +923,7 @@ def resolve_manual_worker_resources(
     worker_disk_read_iops: Optional[int] = None,
     worker_disk_write_iops: Optional[int] = None,
     probe_disk: bool = True,
+    threshold: float = 0.8,
 ) -> WorkerResources:
     """
     Resolve manual worker resources and validate against host limits.
@@ -930,6 +936,13 @@ def resolve_manual_worker_resources(
     Manual values that would push the total beyond 95% of the detected
     host ceiling are dropped in favour of auto-detected values, mirroring
     the RAM/CPU overflow behaviour.
+
+    ``threshold`` is the fraction of host capacity the auto-detection
+    *fallback* divides across workers (CPU, RAM, and disk alike). It mirrors
+    :func:`detect_worker_resources` so a caller asking for, e.g., 0.95 gets a
+    consistent fallback across all three dimensions instead of a disk budget
+    silently locked to 0.8. The 95% hard cap and 80% warning below are
+    separate guardrails on the *manual* request and are intentionally fixed.
     """
     if data_path is not None:
         disk_type = detect_disk_type_for_path(data_path)
@@ -945,8 +958,8 @@ def resolve_manual_worker_resources(
         total_cpus = psutil.cpu_count(logical=True) or 1
 
     # Fallback auto-detection values
-    usable_ram = int(total_ram * 0.8)
-    usable_cpu = total_cpus * 0.8
+    usable_ram = int(total_ram * threshold)
+    usable_cpu = total_cpus * threshold
     auto_ram = max(100 * 1024 * 1024, int(usable_ram / num_workers))
     auto_cpu = max(1, math.floor(usable_cpu / num_workers))
 
@@ -957,7 +970,7 @@ def resolve_manual_worker_resources(
     auto_disk = _partition_disk_budget(
         host_disk_budget,
         num_workers=num_workers,
-        threshold=0.8,
+        threshold=threshold,
     )
 
     resolved_ram = auto_ram
@@ -1290,6 +1303,18 @@ def get_system_info(data_path: Optional[Path] = None) -> Dict[str, Any]:
             "version": "",
             "machine": "",
         }
+
+    try:
+        # Record CPU governor / turbo / current-frequency span so a session's
+        # per-core throughput context is reproducible and auditable. Import
+        # locally to avoid a module-level cycle (cpu_perf imports the logger,
+        # which is fine, but keep hardware_info's import surface minimal).
+        from src.utils.cpu_perf import read_cpu_perf_state
+
+        info["cpu_perf"] = read_cpu_perf_state().to_metadata()
+    except (OSError, ValueError, TypeError, ImportError) as e:
+        LOGGER.warning("Failed to detect CPU performance state: %s", e)
+        info["cpu_perf"] = {"supported": False}
 
     return info
 

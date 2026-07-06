@@ -6,6 +6,7 @@ from ConfigSpace import Configuration
 
 from src.tuner.config.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
+from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
@@ -29,6 +30,7 @@ def evaluate_config(
     seed: Optional[int] = None,
     restore_due: bool = False,
     next_eval_will_restore: bool = False,
+    barriers: Optional[GenerationBarrier] = None,
 ) -> Tuple[
     Optional[float],
     Dict,
@@ -79,6 +81,12 @@ def evaluate_config(
         skip the post-workload VACUUM ANALYZE, since the restore will
         wipe its on-disk effects (and it cannot influence the metrics
         we just collected).
+    barriers : Optional[GenerationBarrier]
+        Lockstep barrier shared with co-tenant background load workers. When
+        provided, the foreground trial waits at each B1–B17 point so its
+        warmup+measurement window (B8–B9) overlaps the background load exactly,
+        reproducing PBT's single-host contention. ``None`` (the default) runs
+        with no synchronization / no background load.
 
     Returns
     -------
@@ -139,6 +147,7 @@ def evaluate_config(
         random_seed=seed,
         restore_due=restore_due,
         next_eval_will_restore=next_eval_will_restore,
+        barriers=barriers,
     )
 
     # The orchestrator already verified the config and read back the true
