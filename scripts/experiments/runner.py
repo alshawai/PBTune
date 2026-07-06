@@ -1,13 +1,39 @@
+import atexit
 import json
 import logging
+import signal
 import subprocess
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
 from scripts.experiments.experiment_matrix import Experiment
 from src.config.data_root import resolve_data_root
 from src.utils.hardware_info import detect_worker_resources, _resolve_block_device_node
+from src.tuner.config.tuner_config import (
+    RAPID_CONFIG,
+    STANDARD_CONFIG,
+    THOROUGH_CONFIG,
+    RESEARCH_CONFIG,
+)
+
+# Per-experiment parallel-worker resolution must mirror what the PBT CLI
+# (``src.tuner.main``) will actually use as ``num_parallel_workers`` -- that is
+# the denominator ``detect_worker_resources`` divides host capacity by. The CLI
+# uses ``--parallel-workers`` when supplied, else the selected config profile's
+# default. We reproduce that mapping here from the canonical profile configs so
+# resource budgets cannot drift from the real run (the previous code hardcoded
+# 8, which silently mis-sized any experiment whose effective width was not 8).
+_PROFILE_PARALLEL_WORKERS = {
+    "rapid": RAPID_CONFIG.num_parallel_workers,
+    "standard": STANDARD_CONFIG.num_parallel_workers,
+    "thorough": THOROUGH_CONFIG.num_parallel_workers,
+    "research": RESEARCH_CONFIG.num_parallel_workers,
+}
+# Fallback when a profile name is unknown (defensive; the matrix only uses
+# "thorough" and "rapid" today).
+_DEFAULT_PARALLEL_WORKERS = THOROUGH_CONFIG.num_parallel_workers
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RESULTS_DIR = PROJECT_ROOT / "results"
@@ -74,11 +100,10 @@ class ExperimentRunner:
         # written by a peer machine and pulled via git).
         self._cross_manifest_index = self._build_cross_manifest_index()
         
-        # Calculate resources once
-        resources = detect_worker_resources(max_parallel_workers=8, threshold=0.95)
-        worker_ram_mb = resources.ram_bytes // (1024 * 1024)
-        self.worker_ram = f"{worker_ram_mb}M"
-        self.worker_cpus = max(1, resources.cpu_cores)
+        # Per-experiment worker-resource flags are computed lazily in
+        # ``_worker_resource_flags(exp)`` (the parallel-worker denominator
+        # depends on the experiment), and memoised here keyed by that count.
+        self._worker_flag_cache: dict[int, tuple[str, int]] = {}
         
         # Set up logging
         if not LOGGER.handlers:
@@ -86,6 +111,45 @@ class ExperimentRunner:
                 level=logging.INFO,
                 format="%(asctime)s [%(levelname)s] %(message)s"
             )
+
+    def _effective_parallel_workers(self, exp: Experiment) -> int:
+        """Resolve the parallel-worker count the PBT run will actually use.
+
+        Mirrors ``src.tuner.main``: an explicit ``parallel_workers`` on the
+        experiment wins; otherwise the config profile's default applies. This
+        is the denominator host capacity is divided by, so it must match the
+        real run or per-worker budgets are wrong.
+        """
+        if exp.parallel_workers is not None:
+            return max(1, int(exp.parallel_workers))
+        return _PROFILE_PARALLEL_WORKERS.get(
+            exp.config_profile, _DEFAULT_PARALLEL_WORKERS
+        )
+
+    def _worker_resource_flags(self, exp: Experiment) -> tuple[str, int]:
+        """Return ``(worker_ram, worker_cpus)`` CLI flag values for ``exp``.
+
+        Per-worker budgets are host capacity (at 95%) divided by the
+        experiment's effective parallel-worker count. Memoised by that count so
+        repeated experiments of the same width don't re-probe the host.
+        """
+        n = self._effective_parallel_workers(exp)
+        cached = self._worker_flag_cache.get(n)
+        if cached is not None:
+            return cached
+        resources = detect_worker_resources(max_parallel_workers=n, threshold=0.95)
+        worker_ram_mb = resources.ram_bytes // (1024 * 1024)
+        flags = (f"{worker_ram_mb}M", max(1, resources.cpu_cores))
+        self._worker_flag_cache[n] = flags
+        LOGGER.info(
+            "Experiment %s: per-worker resources for %d parallel workers -> "
+            "%s RAM, %d CPUs",
+            exp.id,
+            n,
+            flags[0],
+            flags[1],
+        )
+        return flags
 
     def _resolve_manifest_path(self, exp_id: str) -> Path:
         """Resolve the manifest path for ``exp_id``.
@@ -377,6 +441,75 @@ class ExperimentRunner:
             device,
         )
 
+    @contextmanager
+    def cpu_performance_session(self):
+        """Pin CPU governor=performance + disable turbo for the batch, then revert.
+
+        Removes per-core throughput variance with active-core count (frequency
+        scaling + turbo) so PBT (N parallel workers) and the co-tenant-loaded BO
+        baseline see identical per-core clocks. The host's original governor/turbo
+        is snapshotted on entry and **always restored on exit** — normal return,
+        exception, or SIGINT/SIGTERM — so the machine is never left mutated.
+
+        Skipped under ``dry_run``. Best-effort: if the host lacks the sysfs
+        interface or we lack root, it logs a warning and proceeds unpinned rather
+        than aborting (the disk-isolation preflight is the hard gate; clock
+        pinning is a quality-of-measurement improvement, not a correctness
+        invariant).
+        """
+        if self.dry_run:
+            yield
+            return
+
+        from src.utils.cpu_perf import (
+            read_cpu_perf_state,
+            set_performance_mode,
+            restore_cpu_perf_state,
+        )
+
+        saved = read_cpu_perf_state()
+        restored = {"done": False}
+
+        def _restore_once(*_args) -> None:
+            if restored["done"]:
+                return
+            restored["done"] = True
+            restore_cpu_perf_state(saved)
+
+        # Belt-and-suspenders: also restore on hard signals and at interpreter
+        # exit, in case the surrounding loop is killed outside the finally.
+        prev_handlers: dict[int, object] = {}
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                prev_handlers[sig] = signal.getsignal(sig)
+
+                def _handler(signum, frame, _sig=sig):
+                    _restore_once()
+                    prev = prev_handlers.get(_sig)
+                    if callable(prev):
+                        prev(signum, frame)
+                    else:
+                        # Default behaviour: re-raise as the process terminating.
+                        raise KeyboardInterrupt()
+
+                signal.signal(sig, _handler)
+            except (ValueError, OSError):
+                # Not in main thread or unsupported — skip signal hook.
+                pass
+        atexit.register(_restore_once)
+
+        if saved.supported:
+            set_performance_mode(saved)
+        try:
+            yield
+        finally:
+            _restore_once()
+            for sig, prev in prev_handlers.items():
+                try:
+                    signal.signal(sig, prev)  # type: ignore[arg-type]
+                except (ValueError, OSError, TypeError):
+                    pass
+
     def run_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
         LOGGER.info(f"Starting experiment {exp.id} (Tier {exp.tier})")
 
@@ -589,6 +722,7 @@ class ExperimentRunner:
         ``--config thorough`` supplies the 512-point design size unless the
         experiment pins ``design_size``.
         """
+        worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
             "python", "-m", "src.tuners.lhs_design",
             "--config", exp.config_profile,
@@ -599,8 +733,8 @@ class ExperimentRunner:
             "--tuning-mode", exp.tuning_mode,
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--worker-ram", self.worker_ram,
-            "--worker-cpus", str(self.worker_cpus),
+            "--worker-ram", worker_ram,
+            "--worker-cpus", str(worker_cpus),
             "--verbose", "DEBUG",
         ]
         if exp.sysbench_workload:
@@ -612,6 +746,7 @@ class ExperimentRunner:
         return cmd
 
     def _build_pbt_cmd(self, exp: Experiment, seed: int) -> list[str]:
+        worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
             "python", "-m", "src.tuner.main",
             "--config", exp.config_profile,
@@ -626,8 +761,8 @@ class ExperimentRunner:
             # flag makes that contract part of the experiment record.
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--worker-ram", self.worker_ram,
-            "--worker-cpus", str(self.worker_cpus),
+            "--worker-ram", worker_ram,
+            "--worker-cpus", str(worker_cpus),
             "--verbose", "DEBUG"
         ]
 
@@ -673,6 +808,13 @@ class ExperimentRunner:
         # explicitly so a stale or partial session JSON cannot silently
         # change the workload shape. Anything that would mismatch the
         # PBT run breaks the fair-comparison invariant the paper rests on.
+        #
+        # NOTE: when --pbt-session is present (the normal matrix path) the BO
+        # runner inherits per-worker resources AND the co-tenancy degree from
+        # the session JSON, so these --worker-ram/--worker-cpus flags are
+        # intentionally redundant (logged as ignored by the BO runner). They
+        # are kept for the standalone-BO path where no session is supplied.
+        worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
             "python", "-m", "src.scripts.bo_baseline",
             "--config", exp.config_profile,
@@ -684,8 +826,8 @@ class ExperimentRunner:
             "--enable-snapshots",
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--worker-ram", self.worker_ram,
-            "--worker-cpus", str(self.worker_cpus),
+            "--worker-ram", worker_ram,
+            "--worker-cpus", str(worker_cpus),
             "--verbose", "INFO"
         ]
         if exp.sysbench_workload:
