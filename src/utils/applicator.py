@@ -390,7 +390,12 @@ class KnobApplicator:
             return False, f"{name} requires restart (postmaster context)"
 
         if param_info.vartype == "bool":
-            if not isinstance(value, (bool, int, str)):
+            try:
+                import numpy as np
+                _bool_types = (bool, int, str, np.bool_)
+            except (ImportError, AttributeError):
+                _bool_types = (bool, int, str)
+            if not isinstance(value, _bool_types):
                 return False, f"{name} must be boolean"
             if isinstance(value, str):
                 value_str = value.lower()
