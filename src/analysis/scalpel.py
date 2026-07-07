@@ -26,20 +26,17 @@ from __future__ import annotations
 import argparse
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd
 
 from src.analysis.scalpel_significance import (
-    BorutaResult,
     _fit_outer_rf,
     boruta_with_group_perm,
     partition_boruta_hits,
 )
 from src.analysis.scalpel_stability import (
-    LorenzTierResult,
-    StabilityResult,
     apply_nuisance_filter,
     assign_lorenz_tiers,
     audit_dba_prior,
@@ -342,7 +339,6 @@ def lorenz_tier_from_importances(
     ``minimal`` / ``core`` / ``standard`` purely by Lorenz cumulative mass.
     """
     from src.analysis.tier_generator import (  # local import to break cycle
-        AgreementReport,
         EXPERT_TIER_ORDER,
         TierResult,
         compare_to_expert,

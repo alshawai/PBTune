@@ -9,7 +9,6 @@ the tuner at LHS-sample time.
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import pandas as pd

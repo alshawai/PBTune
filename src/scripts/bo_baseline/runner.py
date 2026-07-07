@@ -51,6 +51,7 @@ from src.scripts.bo_baseline.search_space import (
     knobs_to_configspace,
 )
 from src.scripts.bo_baseline.objective import evaluate_config
+from src.scripts.bo_baseline.cotenant import CoTenantLoadController
 from src.scripts.bo_baseline.result_writer import (
     write_bo_results,
     resolve_bo_output_root,
@@ -107,6 +108,29 @@ class BOBaselineRunner:
 
         # Resource equalization: PBT-derived > manual CLI override > auto detection
         if config.pbt_worker_resources:
+            # PBT inheritance wins for fairness, but make the precedence
+            # explicit: if manual --worker-ram/--worker-cpus/--worker-disk-*
+            # flags were ALSO supplied they are intentionally ignored here.
+            # Surfacing this avoids the silent-override footgun where a caller
+            # believes their flags took effect.
+            manual_flags_present = config.worker_ram is not None or (
+                config.worker_cpus is not None
+            ) or any(
+                v is not None
+                for v in (
+                    config.worker_disk_read_bps,
+                    config.worker_disk_write_bps,
+                    config.worker_disk_read_iops,
+                    config.worker_disk_write_iops,
+                )
+            )
+            if manual_flags_present:
+                self.logger.warning(
+                    "Manual --worker-ram/--worker-cpus/--worker-disk-* flags are "
+                    "IGNORED because a PBT session was supplied; per-worker "
+                    "resources are inherited from the PBT session to preserve the "
+                    "fair-comparison invariant."
+                )
             self.worker_resources = WorkerResources(
                 ram_bytes=int(config.pbt_worker_resources.get("ram_bytes", 0)),
                 cpu_cores=int(config.pbt_worker_resources.get("cpu_cores", 1)),
@@ -222,6 +246,10 @@ class BOBaselineRunner:
         # Captured at the start of optimize() (after bootstrap). Used to
         # report a leak-free ``tuning_time_seconds`` excluding bootstrap.
         self.tuning_start_time: Optional[float] = None
+        # Co-tenant load controller; replaced with a real one in run() once the
+        # environment/orchestrator exist. Defaults to a disabled no-op so any
+        # early cleanup path is safe.
+        self.cotenant: Optional[CoTenantLoadController] = None
 
     def _create_workload_executor(self):
         """Create appropriate workload executor based on benchmark type."""
@@ -315,6 +343,43 @@ class BOBaselineRunner:
             skipped,
         )
         return relabeled
+
+    def _evaluate_with_cotenancy(
+        self,
+        config,
+        worker: Worker,
+        orchestrator: WorkloadOrchestrator,
+        previous_engine_config,
+        seed=None,
+        restore_due: bool = False,
+        next_eval_will_restore: bool = False,
+    ):
+        """Evaluate one foreground BO trial under matched co-tenant load.
+
+        Creates a fresh per-trial barrier shared by the foreground worker and
+        the ``degree - 1`` background loaders, launches the loaders, runs the
+        foreground evaluation in lockstep (its workload contends with the
+        background load during B8–B9), then joins the loaders. When co-tenancy
+        is disabled the barrier is ``None`` and this reduces to a plain
+        ``evaluate_config`` call (zero overhead).
+        """
+        barriers = self.cotenant.make_barrier() if self.cotenant else None
+        futures = self.cotenant.start_round(barriers) if self.cotenant else []
+        try:
+            return evaluate_config(
+                config,
+                worker,
+                orchestrator,
+                self.knob_space,
+                previous_engine_config,
+                seed=seed,
+                restore_due=restore_due,
+                next_eval_will_restore=next_eval_will_restore,
+                barriers=barriers,
+            )
+        finally:
+            if self.cotenant:
+                self.cotenant.finish_round(futures)
 
     def _run_sequential_optimization(
         self,
@@ -415,14 +480,14 @@ class BOBaselineRunner:
                     restarted,
                     wall_time,
                     eval_timing,
-                ) = evaluate_config(
+                ) = self._evaluate_with_cotenancy(
                     sobol_config,
                     worker,
                     orchestrator,
-                    self.knob_space,
                     previous_engine_config,
                     restore_due=restore_due,
                     next_eval_will_restore=next_eval_will_restore,
+                    seed=None,
                 )
                 previous_engine_config = dict(
                     configspace_to_knobs(sobol_config, self.knob_space)
@@ -685,11 +750,10 @@ class BOBaselineRunner:
                     restarted,
                     wall_time,
                     eval_timing,
-                ) = evaluate_config(
+                ) = self._evaluate_with_cotenancy(
                     trial_info.config,
                     worker,
                     orchestrator,
-                    self.knob_space,
                     previous_engine_config,
                     seed=trial_info.seed,
                     restore_due=restore_due,
@@ -1199,9 +1263,25 @@ class BOBaselineRunner:
                 "Database environment created: %s", type(self.env).__name__
             )
 
-            # Single worker bound to the single PostgreSQL instance
-            num_instances = 1
-            self.logger.info("Setting up 1 PostgreSQL instance...")
+            # Foreground BO trial always runs on worker 0. When co-tenancy is
+            # enabled (degree > 1, matched to the PBT session's parallel-worker
+            # count) we additionally bring up ``degree - 1`` background load
+            # instances (worker ids 1..degree-1) on their own disjoint cpusets,
+            # so each BO measurement window experiences the same single-host
+            # contention a PBT generation does. Worker 0 keeps its full
+            # per-worker slice either way (not devalued).
+            degree = max(1, int(getattr(self.config, "cotenancy_degree", 1)))
+            num_instances = degree
+            if degree > 1:
+                self.logger.info(
+                    "Setting up %d PostgreSQL instances (1 foreground BO + %d "
+                    "co-tenant load) under matched co-tenancy degree %d...",
+                    num_instances,
+                    degree - 1,
+                    degree,
+                )
+            else:
+                self.logger.info("Setting up 1 PostgreSQL instance...")
             with self.bootstrap_timing.span("setup_instances", num_workers=num_instances):
                 self.env.setup_instances(
                     num_workers=num_instances, num_parallel_workers=num_instances
@@ -1228,9 +1308,22 @@ class BOBaselineRunner:
             )
             self.logger.debug("Orchestrator configuration: %s", orchestrator_config)
 
-            # Single worker
+            # Single (foreground) worker
             worker = Worker(worker_id=0, knob_space=self.knob_space)
             worker.db_config = self.env.get_db_config(0)
+
+            # Co-tenant load controller: drives the background load instances
+            # in lockstep with worker 0's measurement window. A no-op when
+            # degree <= 1. Stored on self so the sequential-optimization loop
+            # and the finally-cleanup can reach it.
+            self.cotenant = CoTenantLoadController(
+                degree=degree,
+                env=self.env,
+                orchestrator=orchestrator,
+                knob_space=self.knob_space,
+                base_db_config=self.db_config,
+                seed=self.config.random_seed,
+            )
 
             # Build ConfigSpace
             self.logger.info("Building ConfigSpace...")
@@ -1500,6 +1593,9 @@ class BOBaselineRunner:
                 requested_iterations=self.config.n_iterations,
                 requested_pilot_size=requested_pilot_size,
                 actual_pilot_size=actual_pilot_size,
+                cotenancy=(
+                    self.cotenant.to_metadata() if self.cotenant is not None else None
+                ),
             )
 
             self.logger.info("BO tuning completed in %.2f seconds", total_time)
@@ -1509,6 +1605,12 @@ class BOBaselineRunner:
 
         finally:
             # Cleanup
+            _cotenant = getattr(self, "cotenant", None)
+            if _cotenant is not None:
+                try:
+                    _cotenant.shutdown()
+                except Exception as e:  # noqa: BLE001
+                    self.logger.warning("Error shutting down co-tenant pool: %s", e)
             if hasattr(self, "env"):
                 self.logger.info("Cleaning up environment...")
                 try:
@@ -1791,6 +1893,29 @@ def main():
         default=None,
         choices=["fixed_v1", "feature_driven_v2"],
         help="Scoring policy to use (default: feature_driven_v2 via per-workload config)",
+    )
+    parser.add_argument(
+        "--cotenancy-degree",
+        type=int,
+        default=None,
+        help=(
+            "Total concurrent instances (foreground BO trial + background load) "
+            "during each measurement window, so BO sees the same single-host "
+            "contention a PBT generation does. 1 disables background load. When "
+            "--pbt-session is given this is FORCED to that session's "
+            "num_parallel_workers (matched, mandatory) unless --no-cotenant is "
+            "set; this flag only applies for standalone BO runs without a session."
+        ),
+    )
+    parser.add_argument(
+        "--no-cotenant",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable co-tenancy background load entirely, even when --pbt-session "
+            "is given. BO runs solo on the host (degree=1). Useful for ablation "
+            "studies or debugging."
+        ),
     )
     parser.add_argument(
         "--enable-snapshots",

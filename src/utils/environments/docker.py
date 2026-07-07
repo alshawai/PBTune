@@ -209,7 +209,17 @@ class DockerEnvironment(DatabaseEnvironment):
             },
             "ports": {"5432/tcp": self._worker_port(worker_id)},
             "mem_limit": self.ram_bytes if self.ram_bytes > 0 else None,
-            "nano_cpus": int(self.cpu_cores * 1e9) if self.cpu_cores > 0 else None,
+            # CPU quota and cpuset must agree on the per-worker budget. Both
+            # read ``_worker_cpu_budget()`` (which prefers the canonical
+            # ``worker_resources.cpu_cores`` and falls back to the legacy
+            # ``cpu_cores`` scalar) so a direct constructor call that leaves
+            # ``cpu_cores`` at its 0.0 default cannot silently drop the CPU
+            # quota while cpuset still pins cores.
+            "nano_cpus": (
+                int(self._worker_cpu_budget() * 1e9)
+                if self._worker_cpu_budget() > 0
+                else None
+            ),
             "cpuset_cpus": self._worker_cpuset_cpus(worker_id, num_workers),
             "network": self.network_name,
             "detach": True,
