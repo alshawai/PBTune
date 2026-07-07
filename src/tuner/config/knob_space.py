@@ -1014,7 +1014,7 @@ class KnobSpace:
                 # Alternate True/False, then shuffle
                 samples = [True, False] * (num_samples // 2)
                 if num_samples % 2 == 1:
-                    samples.append(rng.choice([True, False]))
+                    samples.append(bool(rng.choice([True, False])))
                 rng.shuffle(samples)
             else:
                 # For ENUM: stratified sampling if enough values, else random
