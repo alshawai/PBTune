@@ -78,6 +78,17 @@ class BOConfig:
     worker_disk_write_iops: Optional[int] = None
     probe_disk: bool = True
 
+    # Co-tenancy load: number of *total* concurrent instances (foreground BO
+    # trial + background load) to run during each measurement window so the BO
+    # baseline experiences the same single-host contention a PBT generation
+    # does. ``1`` disables background load. When a PBT session is supplied this
+    # is forced to the session's ``num_parallel_workers`` (the matched,
+    # mandatory degree) unless ``no_cotenant`` is set. An explicit
+    # ``--cotenancy-degree`` only applies when no session pins it.
+    # See src/scripts/bo_baseline/cotenant.py.
+    cotenancy_degree: int = 1
+    no_cotenant: bool = False
+
     # Scoring policy
     # Available options:
     # - "fixed_v1": Legacy static weights based on workload type (OLTP/OLAP/MIXED)
@@ -241,16 +252,41 @@ class BOConfig:
         if isinstance(worker_resources, dict):
             self.pbt_worker_resources = worker_resources
 
-        # Extract num_parallel_workers for parallel BO (only if set_max_workers=True)
-        if set_max_workers:
-            num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
-            if num_parallel_workers > 0:
+        # Extract num_parallel_workers from the session. It drives two things:
+        #   (1) resource_division for the legacy parallel-BO path (only when
+        #       set_max_workers lets the session override the CLI), and
+        #   (2) cotenancy_degree — the MANDATORY, matched co-tenancy load level
+        #       so each BO measurement window experiences the same single-host
+        #       contention a PBT generation generated. This is enforced
+        #       unconditionally whenever the session reports a positive count.
+        num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
+        if self.no_cotenant:
+            self.cotenancy_degree = 1
+            LOGGER.info(
+                "Co-tenancy explicitly disabled (--no-cotenant); BO will run "
+                "WITHOUT background load despite PBT session having "
+                "num_parallel_workers=%d.",
+                num_parallel_workers,
+            )
+            if set_max_workers and num_parallel_workers > 0:
                 self.resource_division = num_parallel_workers
-            else:
-                LOGGER.warning(
-                    "PBT session is missing positive num_parallel_workers; "
-                    "keeping configured BO resource division"
-                )
+        elif num_parallel_workers > 0:
+            self.cotenancy_degree = num_parallel_workers
+            LOGGER.info(
+                "Co-tenancy degree set to %d from matched PBT session "
+                "(num_parallel_workers); BO trials will run with %d background "
+                "load instance(s).",
+                num_parallel_workers,
+                num_parallel_workers - 1,
+            )
+            if set_max_workers:
+                self.resource_division = num_parallel_workers
+        else:
+            LOGGER.warning(
+                "PBT session is missing positive num_parallel_workers; cannot "
+                "enforce matched co-tenancy — BO will run WITHOUT background "
+                "load (this breaks the fair-comparison invariant)."
+            )
 
         # Extract snapshot settings
         if "enable_snapshots" in session:
@@ -419,6 +455,13 @@ class BOConfig:
                 else None
             ),
             probe_disk=args.probe_disk if hasattr(args, "probe_disk") else True,
+            cotenancy_degree=(
+                args.cotenancy_degree
+                if hasattr(args, "cotenancy_degree")
+                and args.cotenancy_degree is not None
+                else base_config.cotenancy_degree
+            ),
+            no_cotenant=getattr(args, "no_cotenant", False),
         )
 
         if args.pbt_session:

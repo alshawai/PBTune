@@ -1,6 +1,5 @@
 """Tests for the BaseTuner lifecycle ABC using a fake in-memory strategy."""
 
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest

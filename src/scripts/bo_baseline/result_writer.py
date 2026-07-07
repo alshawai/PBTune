@@ -90,6 +90,7 @@ def write_bo_results(
     requested_iterations: Optional[int] = None,
     requested_pilot_size: Optional[int] = None,
     actual_pilot_size: Optional[int] = None,
+    cotenancy: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Serialize Bayesian Optimization results in PBT-compatible JSON format.
@@ -380,6 +381,14 @@ def write_bo_results(
 
     if session_environment is not None:
         result["session_environment"] = session_environment.to_dict()
+
+    if cotenancy is not None:
+        # Honest record of the co-tenant load applied during each measurement
+        # window so the BO session documents the contention it ran under
+        # (degree, background worker ids, load-config seed). The foreground BO
+        # trial is always worker 0; ids in ``background_worker_ids`` are pure
+        # load and were not measured.
+        result["cotenancy"] = convert_numpy_types(cotenancy)
 
     # Create output directory structure
     bo_root = resolve_bo_output_root(

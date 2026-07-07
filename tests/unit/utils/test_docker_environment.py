@@ -85,6 +85,41 @@ def test_worker_cpu_budget_prefers_worker_resources() -> None:
     assert env._worker_cpu_budget() == 2
 
 
+def test_nano_cpus_follows_worker_budget_not_legacy_scalar() -> None:
+    """nano_cpus (CPU quota) must agree with the cpuset budget.
+
+    Regression: nano_cpus previously read the legacy ``cpu_cores`` scalar
+    while cpuset read ``worker_resources.cpu_cores``. When a caller leaves
+    ``cpu_cores`` at its 0.0 default but supplies ``worker_resources``, the
+    quota would silently drop to None while cpuset still pinned cores. Both
+    must now derive from ``_worker_cpu_budget()``.
+    """
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=4,
+        disk_type="SSD",
+    )
+    env.cpu_cores = 0.0  # legacy scalar left unset
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert kwargs["nano_cpus"] == 4 * 1_000_000_000
+    # cpuset and quota agree on the same 4-core budget.
+    assert kwargs["cpuset_cpus"] is not None
+
+
+def test_nano_cpus_none_when_no_budget_available() -> None:
+    """No CPU budget (no worker_resources, zero legacy scalar) → unlimited."""
+    env = _make_environment()
+    env.worker_resources = None
+    env.cpu_cores = 0.0
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert kwargs["nano_cpus"] is None
+
+
 from unittest.mock import MagicMock, patch
 
 

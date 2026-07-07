@@ -123,8 +123,9 @@ def main():
         manifest_path=args.manifest,
     )
 
-    for exp in experiments_to_run:
-        runner.run_experiment(exp, retry_failed=args.retry_failed)
+    with runner.cpu_performance_session():
+        for exp in experiments_to_run:
+            runner.run_experiment(exp, retry_failed=args.retry_failed)
 
 
 if __name__ == "__main__":
