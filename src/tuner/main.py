@@ -1372,6 +1372,8 @@ class PBTTuner:
                 "timestamp": self.timestamp,
                 "tuning_mode": self.pbt_config.benchmark_config.tuning_mode.value,
                 "adaptive_restart_interval": self.pbt_config.benchmark_config.adaptive_restart_interval,
+                "enable_snapshots": self.pbt_config.enable_snapshots,
+                "snapshot_restore_interval": self.pbt_config.snapshot_restore_interval,
                 "scoring_policy": scoring_payload["scoring_policy"],
                 "scoring_policy_version": scoring_payload["scoring_policy_version"],
                 "metric_reference_version": scoring_payload["metric_reference_version"],

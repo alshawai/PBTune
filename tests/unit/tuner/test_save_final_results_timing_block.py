@@ -181,6 +181,8 @@ def fake_tuner(tmp_path):
         perturbation_factors=(0.8, 1.2),
         ready_interval=1,
         dead_config_threshold=3,
+        enable_snapshots=False,
+        snapshot_restore_interval=1,
     )
 
     full_knob_space = _FakeKnobSpace()
