@@ -13,8 +13,9 @@ import signal
 import time
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional, TYPE_CHECKING
 import psycopg2
 import psutil
 
@@ -23,6 +24,9 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.utils.hardware_info import WorkerResources
 
 logger = get_logger("BareMetalEnvironment")
 
@@ -43,6 +47,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
         base_port: int = 5440,
         base_dir: Path = Path("./.instances"),
         ram_bytes: int = 0,
+        worker_resources: Optional["WorkerResources"] = None,
         force_recreate_baseline: bool = False,
     ):
         """Initialize bare metal environment with configuration."""
@@ -60,7 +65,15 @@ class BareMetalEnvironment(DatabaseEnvironment):
         self.base_port = base_port
         self.base_dir = base_dir
         self.ram_bytes = ram_bytes
+        self.worker_resources = worker_resources
         self.instances: Dict[int, InstanceConfig] = {}
+        # Bare-metal does not use Docker; declared explicitly for symmetry
+        # with ``DockerEnvironment`` so SessionEnvironment can serialize
+        # both backends through the same code path.
+        self.docker_version = None
+        # Number of parallel workers, populated in ``setup_instances``.
+        # Default of 1 keeps resource queries safe before setup runs.
+        self._num_parallel_workers = 1
 
         logger.debug(
             "➤ Initialized BareMetalEnvironment with base_port=%d, base_dir=%s",
@@ -68,12 +81,70 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self.base_dir,
         )
 
+    def _worker_root_dir(self, worker_id: int) -> Path:
+        """Return the root directory that groups all files for a worker."""
+        return self.base_dir / self._get_instance_subpath() / f"worker_{worker_id}"
+
+    def _resolve_worker_data_dir(self, worker_id: int, force_recreate: bool) -> Path:
+        """Choose the PGDATA directory for a worker.
+
+        Bare-metal historically stored clusters directly under the worker root.
+        New runs prefer a dedicated ``pgdata`` subdirectory so the layout matches
+        the Docker backend and stale root-level files do not block initialization.
+        """
+        worker_root = self._worker_root_dir(worker_id)
+        nested_pgdata = worker_root / "pgdata"
+
+        if not force_recreate:
+            if (nested_pgdata / "PG_VERSION").exists():
+                return nested_pgdata
+            if (worker_root / "PG_VERSION").exists():
+                return worker_root
+
+        return nested_pgdata
+
+    def _prepare_worker_data_dir(self, worker_id: int, force_recreate: bool) -> Path:
+        """Ensure the worker PGDATA directory exists and is writable."""
+        worker_root = self._worker_root_dir(worker_id)
+        data_dir = self._resolve_worker_data_dir(worker_id, force_recreate)
+        worker_root.mkdir(parents=True, exist_ok=True)
+
+        if force_recreate and data_dir.exists():
+            try:
+                shutil.rmtree(data_dir)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to remove existing PGDATA directory for worker %d at %s: %s. "
+                    "Using a fresh directory instead.",
+                    worker_id,
+                    data_dir,
+                    exc,
+                )
+                data_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f"worker_{worker_id}_pgdata_", dir=str(worker_root)
+                    )
+                )
+            else:
+                data_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            data_dir.mkdir(parents=True, exist_ok=True)
+
+        return data_dir
+
     def setup_instances(
-        self, num_workers: int, force_recreate: bool = False
+        self,
+        num_workers: int,
+        force_recreate: bool = False,
+        num_parallel_workers: int = 1,
     ) -> List[InstanceConfig]:
         """Set up N database instances on the bare metal host."""
         if num_workers <= 0:
             raise ValueError("Must specify at least 1 worker")
+
+        # Track parallelism on the instance so SessionEnvironment / resource
+        # allocation queries can read it back later.
+        self._num_parallel_workers = num_parallel_workers
 
         logger.info(
             "Setting up %d BareMetal PostgreSQL instances (force_recreate=%s)",
@@ -86,9 +157,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
 
         for worker_id in range(num_workers):
             port = self.base_port + worker_id
-            data_dir = (
-                self.base_dir / self._get_instance_subpath() / f"worker_{worker_id}"
-            )
+            data_dir = self._prepare_worker_data_dir(worker_id, force_recreate)
 
             # --- Phase 1: Clean up any pre-existing state ---
             # Do NOT use `pg_ctl stop -w` here — it blocks indefinitely if the
@@ -128,11 +197,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self._kill_stale_port_holder(port)
 
             # --- Phase 2: Ensure data directory is ready ---
-            if force_recreate and data_dir.exists():
-                shutil.rmtree(data_dir, ignore_errors=True)
-
             if not (data_dir / "PG_VERSION").exists():
-                data_dir.parent.mkdir(parents=True, exist_ok=True)
                 logger.info(
                     "Initializing new database cluster for worker %d at %s...",
                     worker_id,
@@ -151,6 +216,7 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     ],
                     check=True,
                     capture_output=True,
+                    text=True,
                 )
 
                 # Overwrite postgresql.conf to ensure the correct port is bound natively
@@ -321,6 +387,8 @@ class BareMetalEnvironment(DatabaseEnvironment):
                 "postgresql.conf",
                 "--exclude",
                 "postmaster.pid",
+                "--exclude",
+                "postgresql.auto.conf",
                 str(self.instances[worker_id].data_dir) + "/",
                 str(baseline_path) + "/",
             ],
@@ -350,6 +418,8 @@ class BareMetalEnvironment(DatabaseEnvironment):
                     "--delete",
                     "--exclude",
                     "postgresql.conf",
+                    "--exclude",
+                    "postgresql.auto.conf",
                     str(snapshot_path) + "/",
                     str(data_dir) + "/",
                 ],
@@ -361,14 +431,71 @@ class BareMetalEnvironment(DatabaseEnvironment):
             self._wait_for_ready(worker_id)
             return False
 
-        # Make sure persist configuration logic stays clean! (removes any postgresql.auto.conf)
-        auto_conf = data_dir / "postgresql.auto.conf"
-        if auto_conf.exists():
-            auto_conf.unlink()
-
         self.start_instance(worker_id)
         self._wait_for_ready(worker_id)
         return True
+
+    def clone_instances(
+        self, source_worker_id: int, target_worker_ids: List[int]
+    ) -> bool:
+        """Clone the physical database state from a source worker to multiple target workers using Rsync."""
+        if not target_worker_ids:
+            return True
+
+        source_data_dir = self.instances[source_worker_id].data_dir
+
+        # Stop source to ensure consistency
+        self.stop_instance(source_worker_id, mode="immediate")
+
+        # Stop all targets
+        for target_id in target_worker_ids:
+            self.stop_instance(target_id, mode="immediate")
+
+        success = True
+        try:
+            for target_id in target_worker_ids:
+                target_data_dir = self.instances[target_id].data_dir
+                try:
+                    subprocess.run(
+                        [
+                            "rsync",
+                            "-a",
+                            "--delete",
+                            "--exclude",
+                            "postgresql.conf",
+                            "--exclude",
+                            "postgresql.auto.conf",
+                            str(source_data_dir) + "/",
+                            str(target_data_dir) + "/",
+                        ],
+                        check=True,
+                    )
+
+                except subprocess.CalledProcessError as e:
+                    logger.error(
+                        "Failed to clone instance %d to %d: %s",
+                        source_worker_id,
+                        target_id,
+                        e,
+                    )
+                    success = False
+        finally:
+            # Always restart source
+            self.start_instance(source_worker_id)
+            self._wait_for_ready(source_worker_id)
+
+            # Restart all targets
+            for target_id in target_worker_ids:
+                self.start_instance(target_id)
+                try:
+                    self._wait_for_ready(target_id)
+                except RuntimeError as e:
+                    logger.error(
+                        "Target %d failed to restart after clone: %s", target_id, e
+                    )
+                    success = False
+
+        return success
 
     def rebuild_worker_instance(self, worker_id: int) -> bool:
         """Rebuild a worker instance from scratch."""
@@ -385,6 +512,39 @@ class BareMetalEnvironment(DatabaseEnvironment):
             user=self.base_config.user,
             password=self.base_config.password,
         )
+
+    def get_resource_allocations(self):
+        """Return per-worker resource allocations.
+
+        Bare-metal does not enforce cgroup-style isolation, so ``cpuset_cpus``
+        and ``docker_memory_limit_bytes`` are always ``None``. CPU/RAM
+        figures come from the ``worker_resources`` passed at construction
+        when available; otherwise reasonable host-derived fallbacks are
+        used so the JSON record is still populated.
+        """
+        from src.utils.types import WorkerResourceAllocation
+
+        worker_ids = sorted(self.instances.keys()) or [0]
+        if self.worker_resources is not None:
+            per_worker_ram = int(self.worker_resources.ram_bytes)
+            per_worker_cpu = int(self.worker_resources.cpu_cores)
+        else:
+            num_workers = max(1, len(worker_ids))
+            per_worker_ram = (
+                int(self.ram_bytes) if self.ram_bytes > 0
+                else int(psutil.virtual_memory().total / num_workers)
+            )
+            per_worker_cpu = max(1, (psutil.cpu_count(logical=True) or 1) // num_workers)
+        return [
+            WorkerResourceAllocation(
+                worker_id=worker_id,
+                cpu_cores=per_worker_cpu,
+                cpuset_cpus=None,
+                ram_bytes=per_worker_ram,
+                docker_memory_limit_bytes=None,
+            )
+            for worker_id in worker_ids
+        ]
 
     def collect_memory_utilization(self, worker_id: int) -> float:
         """Collect PostgreSQL RSS utilization ratio against worker memory budget."""

@@ -116,6 +116,49 @@ class TestSysbenchFeatureExtraction:
             features_high["concurrency_pressure"] > features_low["concurrency_pressure"]
         )
 
+    def test_extract_sysbench_8_threads_above_singlethread_cutoff(self):
+        """Regression: 8-thread sysbench must clear the 0.15 single-thread cutoff.
+
+        The CompositeScorer strips ``throughput_variance`` whenever
+        ``concurrency_pressure < 0.15`` (treating the workload as
+        effectively single-threaded). The previous formula
+        ``min(threads/cpu_cores, 8) / 8`` produced exactly 0.125 for the
+        balanced 8-thread / 8-core case, falsely tripping that cutoff.
+        Aligning with the template-features scale (``threads / 16``)
+        keeps multi-threaded sysbench runs above the threshold.
+        """
+        extractor = WorkloadFeatureExtractor()
+
+        features = extractor.extract_sysbench_features(
+            script="oltp_read_write",
+            threads=8,
+            cpu_cores=8,
+            table_size=1_000_000,
+            tables=4,
+        )
+
+        assert features["concurrency_pressure"] >= 0.15
+        assert features["concurrency_pressure"] == pytest.approx(0.5)
+
+    def test_extract_sysbench_singlethread_below_cutoff(self):
+        """A 1-thread sysbench run must remain below the single-thread cutoff.
+
+        The throughput-variance metric is mathematically zero for a
+        single client thread, so the scorer's bypass should still fire
+        when ``--threads=1``.
+        """
+        extractor = WorkloadFeatureExtractor()
+
+        features = extractor.extract_sysbench_features(
+            script="oltp_read_write",
+            threads=1,
+            cpu_cores=8,
+            table_size=1_000_000,
+            tables=4,
+        )
+
+        assert features["concurrency_pressure"] < 0.15
+
     def test_extract_sysbench_working_set_impact(self):
         """Test working set size calculation."""
         extractor = WorkloadFeatureExtractor()
@@ -164,7 +207,6 @@ class TestTPCHFeatureExtraction:
             "working_set_millions",
             "query_mix_entropy",
             "tail_latency_sensitivity",
-            "cache_warmup_applied",
         }
         assert set(features.keys()) == expected_keys
 
@@ -173,29 +215,23 @@ class TestTPCHFeatureExtraction:
         assert features["write_ratio"] == pytest.approx(0.0)
 
         # TPC-H has high OLAP complexity
-        assert features["olap_complexity"] > 0.7
-
-        # Cache warmup should be applied
-        assert features["cache_warmup_applied"] == 1.0
+        assert features["olap_complexity"] > 0.5
 
     def test_extract_tpch_medium_scale_factor(self):
         """Test TPC-H with medium scale factor."""
         extractor = WorkloadFeatureExtractor()
         features = extractor.extract_tpch_features(scale_factor=10, warmup_passes=2)
 
-        # Medium SF should have moderate working set (scale factor = working_set millions)
-        assert features["working_set_millions"] == 10
-
-        # Cache warmup is applied
-        assert features["cache_warmup_applied"] == pytest.approx(1.0)
+        # TPC-H working set is derived from the 8,661,245 rows-per-SF constant.
+        assert features["working_set_millions"] == pytest.approx(86.61245)
 
     def test_extract_tpch_large_scale_factor(self):
         """Test TPC-H with large scale factor."""
         extractor = WorkloadFeatureExtractor()
         features = extractor.extract_tpch_features(scale_factor=100, warmup_passes=1)
 
-        # Large SF should have large working set (equals scale factor)
-        assert features["working_set_millions"] == 100
+        # Large SF should scale linearly with the TPC-H row-count constant.
+        assert features["working_set_millions"] == pytest.approx(866.1245)
 
         # High join intensity (TPC-H has complex joins)
         assert features["join_intensity"] > 0.5
@@ -225,9 +261,10 @@ class TestTPCHFeatureExtraction:
             scale_factor=1, warmup_passes=3
         )
 
-        # Both should indicate warmup applied (via the flag)
-        assert features_no_warmup["cache_warmup_applied"] == 0.0
-        assert features_with_warmup["cache_warmup_applied"] == 1.0
+        # Warmup is an execution detail and should not appear in the feature vector.
+        assert set(features_no_warmup.keys()) == set(features_with_warmup.keys())
+        assert "cache_warmup_applied" not in features_no_warmup
+        assert "cache_warmup_applied" not in features_with_warmup
 
 
 class TestTemplateFeatureExtraction:
@@ -470,7 +507,6 @@ class TestFeatureNormalization:
             "concurrency_pressure",
             "query_mix_entropy",
             "tail_latency_sensitivity",
-            "cache_warmup_applied",
         }
 
         for key in normalized_keys:

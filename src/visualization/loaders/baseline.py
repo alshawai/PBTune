@@ -12,7 +12,8 @@ from dateutil import parser as dateutil_parser
 
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
-from src.utils.rescoring import rescore_metrics_globally
+from src.utils.scoring import create_scoring_engine
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 from src.visualization.loaders.session import RAW_METRIC_KEYS, _extract_raw_value
 
@@ -173,8 +174,11 @@ def load_bo_trace(
         use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
         if use_raw:
             new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
-        else:
+        elif hasattr(metric_config, "compute_score_value"):
             new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
+        else:
+            engine = create_scoring_engine(metric_config)
+            new_scores = [engine.compute_breakdown(m).final_score for m in all_metrics]
     else:
         new_scores = None
 

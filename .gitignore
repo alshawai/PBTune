@@ -100,9 +100,11 @@ data/raw/
 data/processed/
 *.csv
 *.parquet
-!data/tuner_knobs/
-!data/tuner_knobs/*.csv
+!data/expert_defined_knobs/
+!data/expert_defined_knobs/*.csv
 
+# Ignore data-driven generated knobs but we will force-push a sample
+data/data_driven_knobs/
 # IDE and editor files
 *.swp
 *.swo
@@ -114,19 +116,12 @@ secrets.json
 .codebrush.json
 .env.local
 
-# Optimization results (ignore bulky timestamped traces and HTML logs)
-results/**/comparisons
-results/**/pbt_results_*.json
-results/**/bo_results_*.json
-results/**/best_config*.json
-results/**/bo_best_config*.json
-results/**/comparison_*.json
-results/**/intermediate_*.json
-results/**/*.html
-results/**/multi_arm_comparison_*
-results/oltp/comparisons/
-results/**/fanova_importance.json
-results/**/bo_runs/**/smac_output/
+# Optimization results (ignore all results by default)
+results/*
+
+# But keep the specific files we want to track
+!results/.gitignore
+!results/README.md
 PBTune-experiments/
 figures/
 karim/

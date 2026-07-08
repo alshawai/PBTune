@@ -2,13 +2,14 @@
 Startup and Status Banners
 ===========================
 
-Provides ASCII-art banners and formatted status messages for both the
-PBT tuning pipeline and the evaluation comparison pipeline.
+Provides ASCII-art banners and formatted status messages for the tuning
+pipelines (PBT, LHS-design, BO) and the evaluation comparison pipeline.
 
 Functions:
 
-    print_startup_banner()
-        PBT ASCII art banner for the tuner entry point.
+    print_startup_banner(strategy=TuningStrategy.PBT)
+        Per-strategy ASCII art banner for a tuner entry point. The zero-arg
+        call preserves the original PBT banner verbatim.
 
     get_evaluation_banner(session_name, benchmark, reps, env_type)
         Professional box-drawing banner for evaluation runs.
@@ -18,30 +19,86 @@ Functions:
 """
 
 import shutil
+from typing import TYPE_CHECKING, Dict, Tuple, Union
 
 from src.utils.logger.context import get_color_context
 
+if TYPE_CHECKING:  # avoid a runtime import cycle (types -> logger -> types)
+    from src.tuners.utils.types import TuningStrategy
+
 COLORS = get_color_context()
 
-
-def print_startup_banner() -> None:
-    """
-    Print a colorful ASCII art banner directly to stdout.
-    Bypasses the logging module to avoid adding timestamps and log levels.
-    """
-    banner = r"""
-    ____  ____  ______   ____             __  ______           _____ ____    __     ______                     
+# Per-strategy startup art + subtitle. Keyed by the TuningStrategy *value*
+# ("pbt"/"lhs"/"bo") so the banner module never imports the tuners package at
+# runtime. The PBT entry is the original art, preserved verbatim.
+_PBT_ART = r"""
+    ____  ____  ______   ____             __  ______           _____ ____    __     ______
    / __ \/ __ )/_  __/  / __ \____  _____/ /_/ ____/________  / ___// __ \  / /    /_  __/_  ______  ___  _____
   / /_/ / __  | / /    / /_/ / __ \/ ___/ __/ / __/ ___/ _ \  \__ \/ / / / / /      / / / / / / __ \/ _ \/ ___/
- / ____/ /_/ / / /    / ____/ /_/ (__  ) /_/ /_/ / /  /  __/ ___/ / /_/ / / /___   / / / /_/ / / / /  __/ /    
-/_/   /_____/ /_/    /_/    \____/____/\__/\____/_/   \___/ /____/\___\_\/_____/  /_/  \__,_/_/ /_/\___/_/     
+ / ____/ /_/ / / /    / ____/ /_/ (__  ) /_/ /_/ / /  /  __/ ___/ / /_/ / / /___   / / / /_/ / / / /  __/ /
+/_/   /_____/ /_/    /_/    \____/____/\__/\____/_/   \___/ /____/\___\_\/_____/  /_/  \__,_/_/ /_/\___/_/
 """
+
+_LHS_ART = r"""
+    __    __  _____     ____            _                ______
+   / /   / / / / __/   / __ \___  _____(_)___ _____     /_  __/_ ______  ___  _____
+  / /   / /_/ /\ \    / / / / _ \/ ___/ / __ `/ __ \     / / / / / / __ \/ _ \/ ___/
+ / /___/ __  /___/ / / /_/ /  __(__  ) / /_/ / / / /    / / / /_/ / / / /  __/ /
+/_____/_/ /_//____/ /_____/\___/____/_/\__, /_/ /_/    /_/  \__,_/_/ /_/\___/_/
+                                      /____/
+"""
+
+_BO_ART = r"""
+    ____  ____     ____             __                 _____ ____    __       ______                     
+   / __ )/ __ \   / __ \____  _____/ /_____ _________ / ___// __ \  / /      /_  __/_  ______  ___  _____
+  / __  / / / /  / /_/ / __ \/ ___/ __/ __ `/ ___/ _ \\__ \/ / / / / /        / / / / / / __ \/ _ \/ ___/
+ / /_/ / /_/ /  / ____/ /_/ (__  ) /_/ /_/ / /  /  __/__/ / /_/ / / /___     / / / /_/ / / / /  __/ /    
+/_____/\____/  /_/    \____/____/\__/\__, /_/   \___/____/\___\_\/_____/    /_/  \__,_/_/ /_/\___/_/     
+                                    /____/                                                               
+"""
+
+# value -> (art, subtitle)
+_STRATEGY_BANNERS: Dict[str, Tuple[str, str]] = {
+    "pbt": (
+        _PBT_ART,
+        "Population-Based Training for Automatic Database Parameter Tuning",
+    ),
+    "lhs": (
+        _LHS_ART,
+        "Latin-Hypercube Importance-Design Sweep for SCALPEL Knob Analysis",
+    ),
+    "bo": (
+        _BO_ART,
+        "BO PostgreSQL Tuner — Bayesian Optimization Baseline",
+    ),
+}
+
+
+def print_startup_banner(
+    strategy: Union["TuningStrategy", str] = "pbt",
+) -> None:
+    """
+    Print a colorful per-strategy ASCII art banner directly to stdout.
+
+    Bypasses the logging module to avoid adding timestamps and log levels.
+
+    Parameters
+    ----------
+    strategy : TuningStrategy | str, optional
+        Which strategy banner to render. Accepts a ``TuningStrategy`` enum
+        member or its string value ("pbt", "lhs", "bo"). Defaults to the PBT
+        banner so the original zero-arg call site is unchanged.
+    """
+    key = getattr(strategy, "value", strategy)
+    if not isinstance(key, str):
+        key = str(key)
+    art, subtitle = _STRATEGY_BANNERS.get(key.lower(), _STRATEGY_BANNERS["pbt"])
 
     term_width = shutil.get_terminal_size().columns
     term_width = max(term_width, 100)
 
     # Calculate banner width based on the longest line
-    banner_lines = banner.strip("\n").split("\n")
+    banner_lines = art.strip("\n").split("\n")
     banner_width = max(len(line) for line in banner_lines) if banner_lines else 105
 
     # Print the banner (already aligned relative to itself, we can print it directly)
@@ -50,7 +107,6 @@ def print_startup_banner() -> None:
     for line in banner_lines:
         print(f"{padding}{COLORS.sky_blue}{COLORS.bold}{line}{COLORS.reset}")
 
-    subtitle = "Population-Based Training for Automatic Database Parameter Tuning"
     # Center the subtitle text relative to the terminal
     print(
         f"\n{COLORS.bold}{COLORS.italic}{COLORS.sky_blue}{subtitle.center(term_width)}{COLORS.reset}"

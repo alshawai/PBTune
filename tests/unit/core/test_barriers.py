@@ -24,7 +24,7 @@ class TestGenerationBarrierBasic:
     def test_all_workers_pass_all_barriers(self):
         """All N threads pass through all 17 barriers without deadlock."""
         num_workers = 3
-        barriers = GenerationBarrier(num_workers=num_workers, timeout=5.0)
+        barriers = GenerationBarrier(num_workers=num_workers)
 
         # Track order: each thread records its passage timestamps
         arrival_times: dict = {name: [] for name in BARRIER_NAMES}
@@ -54,7 +54,7 @@ class TestGenerationBarrierBasic:
     def test_barriers_enforce_ordering(self):
         """Workers at barrier N+1 cannot proceed until all pass barrier N."""
         num_workers = 4
-        barriers = GenerationBarrier(num_workers=num_workers, timeout=5.0)
+        barriers = GenerationBarrier(num_workers=num_workers)
 
         # Worker 0 will be delayed at B1 (connected) while others arrive quickly
         passed_barrier_1: List[int] = []
@@ -95,7 +95,7 @@ class TestGenerationBarrierDisabled:
 
     def test_disabled_barriers_dont_block(self):
         """When enabled=False, wait() returns immediately even with 1 thread."""
-        barriers = GenerationBarrier(num_workers=4, timeout=5.0, enabled=False)
+        barriers = GenerationBarrier(num_workers=4, enabled=False)
 
         # Should not block — only one thread, but barriers are disabled
         for name in BARRIER_NAMES:
@@ -105,7 +105,7 @@ class TestGenerationBarrierDisabled:
 
     def test_disabled_drain_remaining_noop(self):
         """drain_remaining is a no-op when disabled."""
-        barriers = GenerationBarrier(num_workers=4, timeout=5.0, enabled=False)
+        barriers = GenerationBarrier(num_workers=4, enabled=False)
         # Should not raise
         barriers.drain_remaining("connected", worker_id=0)
 
@@ -113,22 +113,29 @@ class TestGenerationBarrierDisabled:
 class TestGenerationBarrierBrokenRecovery:
     """Test graceful degradation when a barrier breaks."""
 
-    def test_timeout_sets_broken_flag(self):
-        """When a barrier times out, all subsequent waits are no-ops."""
-        # 2 workers, but only 1 will arrive → timeout
-        barriers = GenerationBarrier(num_workers=2, timeout=0.5)
+    def test_abort_sets_broken_flag(self):
+        """When abort() is called, all subsequent waits are no-ops."""
+        # 2 workers, but only 1 will arrive — abort unblocks it.
+        barriers = GenerationBarrier(num_workers=2)
 
-        results = {"timed_out": False, "subsequent_noop": False}
+        results = {"subsequent_noop": False}
 
         def lone_worker():
             barriers.wait("connected", worker_id=0)
-            # After timeout/broken, next barrier should be a no-op
+            # After abort/broken, next barrier should be a no-op
             barriers.wait("config_applied", worker_id=0)
             results["subsequent_noop"] = True
 
+        def aborter():
+            time.sleep(0.1)
+            barriers.abort()
+
         t = threading.Thread(target=lone_worker)
+        t_abort = threading.Thread(target=aborter)
         t.start()
-        t.join(timeout=3.0)
+        t_abort.start()
+        t.join(timeout=5.0)
+        t_abort.join(timeout=5.0)
 
         assert barriers.broken
         assert results["subsequent_noop"]
@@ -136,19 +143,23 @@ class TestGenerationBarrierBrokenRecovery:
     def test_drain_remaining_unblocks_peers(self):
         """When one worker drains, other workers waiting are unblocked."""
         num_workers = 2
-        barriers = GenerationBarrier(num_workers=num_workers, timeout=2.0)
+        barriers = GenerationBarrier(num_workers=num_workers)
 
         worker_0_passed = threading.Event()
         worker_1_passed = threading.Event()
 
         def worker_0():
-            """Normal worker that waits at 'connected'."""
-            barriers.wait("connected", worker_id=0)
+            """Normal worker that passes through ALL barriers."""
+            for name in BARRIER_NAMES:
+                barriers.wait(name, worker_id=0)
             worker_0_passed.set()
 
         def worker_1():
-            """Crashed worker: drains all barriers starting from 'connected'."""
-            # Simulate crash: drain instead of waiting
+            """Crashed worker: drains all barriers starting from 'connected'.
+
+            This simulates a worker that failed before reaching any barrier
+            and needs to release all of them so worker_0 can proceed.
+            """
             barriers.drain_remaining("connected", worker_id=1)
             worker_1_passed.set()
 
@@ -157,8 +168,8 @@ class TestGenerationBarrierBrokenRecovery:
         t0.start()
         t1.start()
 
-        t0.join(timeout=5.0)
-        t1.join(timeout=5.0)
+        t0.join(timeout=10.0)
+        t1.join(timeout=10.0)
 
         # Both workers should have passed (worker_1 via drain)
         assert worker_0_passed.is_set()
@@ -171,7 +182,7 @@ class TestGenerationBarrierReset:
     def test_reset_allows_reuse(self):
         """After reset, barriers can be used again for a new generation."""
         num_workers = 2
-        barriers = GenerationBarrier(num_workers=num_workers, timeout=2.0)
+        barriers = GenerationBarrier(num_workers=num_workers)
 
         def run_one_barrier():
             """Have all workers pass through the first barrier."""
@@ -209,28 +220,28 @@ class TestGenerationBarrierEdgeCases:
 
     def test_invalid_barrier_name_raises(self):
         """Passing an unknown barrier name raises ValueError."""
-        barriers = GenerationBarrier(num_workers=1, timeout=1.0)
+        barriers = GenerationBarrier(num_workers=1)
         with pytest.raises(ValueError, match="Unknown barrier name"):
             barriers.wait("nonexistent_barrier", worker_id=0)
 
     def test_next_barrier_name(self):
         """next_barrier_name returns correct successor."""
-        barriers = GenerationBarrier(num_workers=1, timeout=1.0, enabled=False)
+        barriers = GenerationBarrier(num_workers=1, enabled=False)
         assert barriers.next_barrier_name("connected") == "config_applied"
         assert barriers.next_barrier_name("disconnected") is None
         assert barriers.next_barrier_name("unknown") is None
 
     def test_repr(self):
         """repr shows meaningful status."""
-        b1 = GenerationBarrier(num_workers=3, timeout=60.0, enabled=True)
+        b1 = GenerationBarrier(num_workers=3, enabled=True)
         assert "enabled" in repr(b1)
 
-        b2 = GenerationBarrier(num_workers=3, timeout=60.0, enabled=False)
+        b2 = GenerationBarrier(num_workers=3, enabled=False)
         assert "disabled" in repr(b2)
 
     def test_single_worker_passes_instantly(self):
         """With num_workers=1, barriers pass immediately (no waiting)."""
-        barriers = GenerationBarrier(num_workers=1, timeout=1.0)
+        barriers = GenerationBarrier(num_workers=1)
 
         start = time.monotonic()
         for name in BARRIER_NAMES:
@@ -243,7 +254,7 @@ class TestGenerationBarrierEdgeCases:
     def test_abort_unblocks_waiting_threads(self):
         """abort() instantly breaks all barriers, unblocking waiters."""
         num_workers = 3
-        barriers = GenerationBarrier(num_workers=num_workers, timeout=30.0)
+        barriers = GenerationBarrier(num_workers=num_workers)
 
         unblocked = threading.Event()
 
@@ -271,7 +282,7 @@ class TestGenerationBarrierEdgeCases:
 
     def test_abort_on_already_broken_is_noop(self):
         """Calling abort() on a broken barrier set is harmless."""
-        barriers = GenerationBarrier(num_workers=2, timeout=1.0)
+        barriers = GenerationBarrier(num_workers=2)
         barriers.abort()
         assert barriers.broken
         barriers.abort()  # Should not raise
@@ -279,7 +290,7 @@ class TestGenerationBarrierEdgeCases:
 
     def test_abort_on_disabled_is_noop(self):
         """Calling abort() on a disabled barrier set is harmless."""
-        barriers = GenerationBarrier(num_workers=2, timeout=1.0, enabled=False)
+        barriers = GenerationBarrier(num_workers=2, enabled=False)
         barriers.abort()
         assert not barriers.broken  # Stays not-broken since disabled
 
@@ -295,7 +306,7 @@ class TestHybridModeBatching:
     def test_batch_sized_barrier_does_not_deadlock(self):
         """A barrier sized to batch_size (< population) completes without deadlock."""
         batch_size = 2
-        barriers = GenerationBarrier(num_workers=batch_size, timeout=3.0)
+        barriers = GenerationBarrier(num_workers=batch_size)
 
         results = []
         lock = threading.Lock()
@@ -330,7 +341,7 @@ class TestHybridModeBatching:
         ]
 
         for batch in batches:
-            batch_barriers = GenerationBarrier(num_workers=len(batch), timeout=3.0)
+            batch_barriers = GenerationBarrier(num_workers=len(batch))
 
             def worker_fn(wid: int, barriers=batch_barriers):
                 for name in BARRIER_NAMES:
@@ -349,7 +360,7 @@ class TestHybridModeBatching:
     def test_dead_worker_does_not_deadlock_batch(self):
         """One worker dies mid-batch; drain_remaining unblocks the other."""
         batch_size = 2
-        barriers = GenerationBarrier(num_workers=batch_size, timeout=3.0)
+        barriers = GenerationBarrier(num_workers=batch_size)
 
         results = []
         lock = threading.Lock()

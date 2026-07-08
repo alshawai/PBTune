@@ -1,0 +1,20 @@
+# PBTune-experiments repository
+#
+# This directory is tracked by a SEPARATE git repository
+# (PBTune-experiments) and is gitignored by the parent PBTune repo.
+#
+# Workflow:
+#   After experiments, commit and push from results/.
+#   On local machine, clone PBTune-experiments into PBTune/results/.
+
+# Ignore intermediate generation snapshots (bulky, reconstructable)
+**/intermediate_generations/
+
+# Ignore SMAC internal output (BO surrogate state)
+**/smac_output/
+
+# Ignore OS / editor junk
+.DS_Store
+Thumbs.db
+*~
+*.swp

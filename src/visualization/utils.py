@@ -2,7 +2,7 @@
 Reusable plot utilities for formatting, labeling, and annotations.
 """
 
-from typing import Sequence
+from typing import Literal, Sequence
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -203,7 +203,11 @@ def truncate_legend(ax: Axes, max_items: int = 5) -> None:
     ax.legend(keep_handles, keep_labels)
 
 
-def auto_grid(ax: Axes, axis: str = "both", which: str = "major") -> None:
+def auto_grid(
+    ax: Axes,
+    axis: Literal["both", "x", "y"] = "both",
+    which: Literal["major", "minor", "both"] = "major",
+) -> None:
     """
     Enable standard light grid.
     """

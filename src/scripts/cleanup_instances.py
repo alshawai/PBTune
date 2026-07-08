@@ -48,8 +48,9 @@ def _docker_force_remove(path: Path) -> None:
     """Uses a root Docker container to bypass permission boundaries and rm -rf a path."""
     if not path.exists():
         return
-    parent = str(path.parent)
-    child = path.name
+    abs_path = path.resolve()
+    parent = str(abs_path.parent)
+    child = abs_path.name
     try:
         import docker
 
@@ -58,12 +59,24 @@ def _docker_force_remove(path: Path) -> None:
             "alpine",
             entrypoint=["rm", "-rf", f"/host/{child}"],
             volumes={parent: {"bind": "/host", "mode": "rw"}},
+            network_mode="none",
             remove=True,
         )
     except Exception as e:
-        logging.warning("Failed to force-remove %s via Docker: %s", path, e)
-        # Fallback to standard shutil
-        shutil.rmtree(path, ignore_errors=True)
+        logging.warning("Failed to force-remove %s via Docker: %s", abs_path, e)
+        # Fallback: try sudo rm -rf (common on Linux dev machines)
+        import subprocess
+
+        try:
+            subprocess.run(
+                ["sudo", "rm", "-rf", str(abs_path)],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        except Exception:
+            # Final fallback to standard shutil (best-effort)
+            shutil.rmtree(abs_path, ignore_errors=True)
 
 
 def _docker_cleanup_trash(base_dir: Path | None = None) -> None:
@@ -101,6 +114,7 @@ def _docker_cleanup_trash(base_dir: Path | None = None) -> None:
                     entrypoint=["sh", "-c"],
                     command=["rm -rf /host/.instances*"],
                     volumes={str(trash_dir): {"bind": "/host", "mode": "rw"}},
+                    network_mode="none",
                     remove=True,
                 )
             except Exception as e:

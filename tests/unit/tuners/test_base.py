@@ -1,0 +1,231 @@
+"""Tests for the BaseTuner lifecycle ABC using a fake in-memory strategy."""
+
+from typing import Any, Dict, List, Optional, Tuple
+
+import pytest
+
+from src.tuners.base import BaseTuner
+from src.tuners.utils.types import (
+    GenerationOutcome,
+    TunerLifecycleConfig,
+    TuningStrategy,
+)
+from src.utils.hardware_info import WorkerResources
+
+
+class _FakeMetrics:
+    def to_dict(self) -> Dict[str, Any]:
+        return {"throughput": 100.0}
+
+
+class _FakeTuner(BaseTuner):
+    """Minimal concrete tuner that runs entirely in memory (no DB/instances)."""
+
+    def __init__(self, lifecycle, *, timestamp, output_root, stop_after=2):
+        super().__init__(lifecycle, timestamp=timestamp, output_root=output_root)
+        self.stop_after = stop_after
+        self.setup_called = False
+        self.teardown_called = False
+        self.proposed = False
+        self.steps_run = 0
+
+    @property
+    def max_generations(self) -> int:
+        return 10
+
+    @property
+    def num_knobs(self) -> int:
+        return 5
+
+    @property
+    def workload_type_value(self) -> str:
+        return "oltp"
+
+    @property
+    def benchmark_name(self) -> str:
+        return "sysbench"
+
+    def setup(self) -> None:
+        # DB-free stand-in for the concrete BaseTuner.setup(): skip the real
+        # instance/orchestrator bring-up but honor the contract by seeding
+        # worker resources and drawing the initial design via the hook.
+        self.setup_called = True
+        self.worker_resources = WorkerResources(
+            ram_bytes=2048, cpu_cores=2, disk_type="SSD"
+        )
+        self.initial_configs = self.propose_initial_configs()
+
+    def propose_initial_configs(self) -> List[Dict[str, Any]]:
+        self.proposed = True
+        return [{"work_mem": 0.1}]
+
+    def step(self, generation: int) -> GenerationOutcome:
+        self.steps_run += 1
+        score = float(generation + 1)
+        self._best_score_so_far = max(self._best_score_so_far, score)
+        self.generation_history.append({"generation": generation, "score": score})
+        return GenerationOutcome(
+            index=generation,
+            best_score_this_generation=score,
+        )
+
+    def should_stop(self, outcome: GenerationOutcome) -> bool:
+        return outcome.index + 1 >= self.stop_after
+
+    def collect_best(self) -> Tuple[Dict[str, Any], float, Optional[Any]]:
+        return {"work_mem": 0.25}, float(self.steps_run), _FakeMetrics()
+
+    def build_session_payload(self) -> Dict[str, Any]:
+        return {
+            "convergence": {"converged": True},
+            "tuning_session": {"design_size": 8},
+        }
+
+    def teardown(self) -> None:
+        self.teardown_called = True
+
+    def best_config_fractions(self, best_config):
+        return best_config
+
+
+@pytest.fixture
+def lifecycle():
+    return TunerLifecycleConfig(
+        strategy=TuningStrategy.LHS,
+        knob_tier="core",
+        knob_source="expert",
+        num_parallel_workers=2,
+        random_seed=7,
+    )
+
+
+class TestBaseTunerLifecycle:
+    def test_run_drives_full_lifecycle(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(
+            lifecycle, timestamp="20260619_1200", output_root=tmp_path, stop_after=2
+        )
+        results = tuner.run()
+
+        assert tuner.setup_called is True
+        assert tuner.proposed is True  # propose_initial_configs invoked by setup
+        assert tuner.initial_configs == [{"work_mem": 0.1}]
+        assert tuner.teardown_called is True
+        assert tuner.steps_run == 2  # stopped after 2 generations
+
+        session = results["tuning_session"]
+        assert session["tuning_strategy"] == "lhs"
+        assert session["knob_tier"] == "core"
+        assert session["num_knobs"] == 5
+        assert session["seed"] == 7
+        assert session["num_parallel_workers"] == 2
+        assert session["design_size"] == 8  # merged from payload's tuning_session
+        assert "total_time_seconds" in session
+
+    def test_run_writes_session_and_best_config(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(
+            lifecycle, timestamp="20260619_1200", output_root=tmp_path
+        )
+        tuner.run()
+
+        session_file = (
+            tmp_path / "tuning_sessions" / "lhs_results_20260619_1200.json"
+        )
+        best_file = tmp_path / "best_configs" / "best_config_20260619_1200.json"
+        assert session_file.exists()
+        assert best_file.exists()
+
+    def test_best_configuration_block(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        results = tuner.run()
+        best = results["best_configuration"]
+        assert best["knobs"] == {"work_mem": 0.25}
+        assert best["metrics"] == {"throughput": 100.0}
+        assert best["score"] == 2.0
+
+    def test_worker_resources_serialized(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        results = tuner.run()
+        assert results["worker_resources"]["ram_bytes"] == 2048
+        assert results["worker_resources"]["cpu_cores"] == 2
+
+    def test_teardown_runs_even_if_step_raises(self, lifecycle, tmp_path):
+        class _Boom(_FakeTuner):
+            def step(self, generation):
+                raise RuntimeError("boom")
+
+        tuner = _Boom(lifecycle, timestamp="t", output_root=tmp_path)
+        with pytest.raises(RuntimeError, match="boom"):
+            tuner.run()
+        assert tuner.teardown_called is True
+
+    def test_cannot_instantiate_abstract_base(self, lifecycle, tmp_path):
+        with pytest.raises(TypeError):
+            BaseTuner(lifecycle, timestamp="t", output_root=tmp_path)
+
+
+class TestBaseTunerLogging:
+    """Smoke tests for the PBT-grade banner + lifecycle logging parity."""
+
+    def test_section_headers_and_system_info_fire(
+        self, lifecycle, tmp_path, caplog
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        with caplog.at_level("INFO"):
+            tuner.run()
+        messages = "\n".join(rec.getMessage() for rec in caplog.records)
+
+        # Lifecycle section headers (run + _log_optimization_header).
+        assert "Tuner initialization" in messages
+        assert "Setting up tuning environment" in messages
+        assert "Starting Optimization" in messages
+        assert "optimization loop" in messages
+        assert "optimization complete" in messages
+        # System-info block emitted by log_system_info().
+        assert "System Information:" in messages
+
+    def test_strategy_label_is_uppercased_in_headers(
+        self, lifecycle, tmp_path, caplog
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        with caplog.at_level("INFO"):
+            tuner.run()
+        messages = "\n".join(rec.getMessage() for rec in caplog.records)
+        # lifecycle.strategy is LHS -> headers carry the uppercased label.
+        assert "LHS Tuner initialization" in messages
+        assert "LHS optimization loop" in messages
+
+    def test_key_info_surfaces_carry_ansi_styling(
+        self, lifecycle, tmp_path, caplog
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        with caplog.at_level("INFO"):
+            tuner.run()
+        # The "Best Score" surface is rendered through the COLORS context.
+        best_score_recs = [
+            rec for rec in caplog.records if "Best Score" in rec.getMessage()
+        ]
+        assert best_score_recs, "expected a 'Best Score' summary line"
+        rendered = best_score_recs[0].getMessage()
+        assert "\x1b[" in rendered, "expected ANSI escape in the styled surface"
+
+    def test_banner_picks_subtitle_per_strategy(self, capsys):
+        from src.utils.logger.banners import print_startup_banner
+
+        print_startup_banner(TuningStrategy.LHS)
+        lhs_out = capsys.readouterr().out
+        assert "SCALPEL" in lhs_out  # LHS subtitle mentions SCALPEL
+
+        print_startup_banner(TuningStrategy.PBT)
+        pbt_out = capsys.readouterr().out
+        assert "Population-Based Training" in pbt_out
+
+        print_startup_banner(TuningStrategy.BO)
+        bo_out = capsys.readouterr().out
+        assert "Bayesian Optimization" in bo_out
+
+    def test_banner_defaults_to_pbt(self, capsys):
+        from src.utils.logger.banners import print_startup_banner
+
+        print_startup_banner()
+        out = capsys.readouterr().out
+        assert "Population-Based Training" in out

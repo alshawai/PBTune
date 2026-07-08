@@ -154,7 +154,7 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
     Example
     -------
     >>> from src.tuner.config.knob_loader import load_knob_space_from_csv
-    >>> knob_space = load_knob_space_from_csv("data/tuner_knobs/minimal_knobs.csv")
+    >>> knob_space = load_knob_space_from_csv("data/expert_defined_knobs/minimal_knobs.csv")
     >>> print(f"Loaded {len(knob_space)} knobs")
     """
     df = pd.read_csv(csv_path)
@@ -215,61 +215,136 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
     return KnobSpace(knob_definitions)
 
 
+EXPERT_KNOBS_DIR = "data/expert_defined_knobs"
+DATA_DRIVEN_KNOBS_DIR = "data/data_driven_knobs"
+CANONICAL_TIER_ORDER: list[str] = ["minimal", "core", "standard", "extensive"]
+
+
+def _resolve_tier_csv_path(
+    tier: str,
+    knob_source: str,
+    workload_type: Optional[str],
+) -> Path:
+    """Resolve the on-disk CSV path for a tier without checking existence."""
+    tier_lower = tier.lower()
+    if knob_source == "expert":
+        data_dir = Path(EXPERT_KNOBS_DIR)
+    elif knob_source == "data_driven":
+        if not workload_type:
+            raise ValueError(
+                "workload_type must be specified when knob_source is 'data_driven'"
+            )
+        data_dir = Path(DATA_DRIVEN_KNOBS_DIR) / workload_type
+    else:
+        raise ValueError(
+            f"Unknown knob_source: {knob_source}. Must be 'expert' or 'data_driven'"
+        )
+    return data_dir / f"{tier_lower}_knobs.csv"
+
+
 def load_knob_space_for_tier(
-    tier: str, data_dir: str = "data/tuner_knobs"
+    tier: str,
+    knob_source: str = "expert",
+    workload_type: Optional[str] = None,
 ) -> KnobSpace:
     """
-    Load KnobSpace for a specific tier.
+    Load KnobSpace for a specific tier and knob source.
 
     Parameters
     ----------
     tier : str
         Tier name: 'minimal', 'core', 'standard', or 'extensive'
-    data_dir : str
-        Directory containing preprocessed CSVs
+    knob_source : str
+        Knob source: 'expert' or 'data_driven'
+    workload_type : str, optional
+        Workload type (required if knob_source is 'data_driven')
 
     Returns
     -------
     KnobSpace
-        Knob space for the tier
+        Knob space for the tier and source.
 
-    Example
-    -------
-    >>> from src.tuner.config.knob_loader import load_knob_space_for_tier
-    >>> minimal_space = load_knob_space_for_tier('minimal')
-    >>> print(f"Minimal space has {len(minimal_space)} knobs")
+    Notes
+    -----
+    Under SCALPEL, ``data_driven`` runs can produce empty ``core`` or
+    ``standard`` tiers when the importance distribution is sharply
+    concentrated; :func:`src.knobs.preprocess_knobs.preprocess_and_save_knobs`
+    deliberately skips writing CSV files for empty tiers. When the
+    requested tier file is missing or loads zero knobs, this function
+    walks DOWN ``CANONICAL_TIER_ORDER`` to the next broader tier that
+    exists and logs a warning. ``extensive`` is always written, so the
+    fallback chain always terminates.
     """
     tier_lower = tier.lower()
-    valid_tiers = ["minimal", "core", "standard", "extensive"]
-
-    if tier_lower not in valid_tiers:
-        raise ValueError(f"Unknown tier: {tier}. Must be one of {valid_tiers}")
-
-    csv_path = Path(data_dir) / f"{tier_lower}_knobs.csv"
-
-    if not csv_path.exists():
-        raise FileNotFoundError(
-            f"Preprocessed knobs not found: {csv_path}\n"
-            f"Run preprocessing first:\n"
-            f"  python -m src.knobs (includes preprocessing)\n"
-            f"Current working directory: {Path.cwd()}"
+    if tier_lower not in CANONICAL_TIER_ORDER:
+        raise ValueError(
+            f"Unknown tier: {tier}. Must be one of {CANONICAL_TIER_ORDER}"
         )
 
-    return load_knob_space_from_csv(str(csv_path))
+    start_idx = CANONICAL_TIER_ORDER.index(tier_lower)
+    last_exc: Exception | None = None
+    for current_idx in range(start_idx, len(CANONICAL_TIER_ORDER)):
+        current_tier = CANONICAL_TIER_ORDER[current_idx]
+        csv_path = _resolve_tier_csv_path(current_tier, knob_source, workload_type)
+        if not csv_path.exists():
+            last_exc = FileNotFoundError(
+                f"Preprocessed knobs not found: {csv_path}"
+            )
+            if current_tier != tier_lower:
+                LOGGER.warning(
+                    "Tier '%s' CSV missing; trying broader tier '%s'",
+                    tier_lower,
+                    CANONICAL_TIER_ORDER[current_idx + 1]
+                    if current_idx + 1 < len(CANONICAL_TIER_ORDER)
+                    else current_tier,
+                )
+            continue
+        knob_space = load_knob_space_from_csv(str(csv_path))
+        if len(knob_space) == 0:
+            LOGGER.warning(
+                "Tier '%s' CSV at %s loaded zero knobs; walking down to next broader tier",
+                current_tier,
+                csv_path,
+            )
+            continue
+        if current_tier != tier_lower:
+            LOGGER.warning(
+                "Requested tier '%s' unavailable; falling back to '%s' (%d knobs)",
+                tier_lower,
+                current_tier,
+                len(knob_space),
+            )
+        return knob_space
+
+    raise FileNotFoundError(
+        f"No usable knob CSV found for tier '{tier_lower}' "
+        f"(walked through {CANONICAL_TIER_ORDER[start_idx:]}). "
+        f"Run preprocessing first:\n"
+        f"  python -m src.knobs.preprocess_knobs"
+    ) from last_exc
 
 
-# Lazy-loaded knob spaces
-_KNOB_SPACES: Dict[str, KnobSpace] = {}
+# Lazy-loaded knob spaces indexed by (tier, knob_source, workload_type)
+_KNOB_SPACES: Dict[tuple[str, str, Optional[str]], KnobSpace] = {}
 
 
-def get_knob_space(tier: str = "minimal", force_reload: bool = False) -> KnobSpace:
+def get_knob_space(
+    tier: str = "minimal",
+    knob_source: str = "expert",
+    workload_type: Optional[str] = None,
+    force_reload: bool = False,
+) -> KnobSpace:
     """
-    Get or load KnobSpace for a tier (cached).
+    Get or load KnobSpace for a tier, knob source, and workload type (cached).
 
     Parameters
     ----------
     tier : str
         Tier name
+    knob_source : str
+        Knob source: 'expert' or 'data_driven'
+    workload_type : str, optional
+        Workload type (required if knob_source is 'data_driven')
     force_reload : bool
         Force reloading from CSV even if cached
 
@@ -278,8 +353,15 @@ def get_knob_space(tier: str = "minimal", force_reload: bool = False) -> KnobSpa
     KnobSpace
         Cached or freshly loaded knob space
     """
-    if force_reload or tier not in _KNOB_SPACES:
-        _KNOB_SPACES[tier] = load_knob_space_for_tier(tier)
+    cache_key = (
+        tier.lower(),
+        knob_source.lower(),
+        workload_type.lower() if workload_type else None,
+    )
+    if force_reload or cache_key not in _KNOB_SPACES:
+        _KNOB_SPACES[cache_key] = load_knob_space_for_tier(
+            tier=tier, knob_source=knob_source, workload_type=workload_type
+        )
 
-    LOGGER.debug("➤ Loaded %d knobs", len(_KNOB_SPACES[tier]))
-    return _KNOB_SPACES[tier]
+    LOGGER.debug("➤ Loaded %d knobs", len(_KNOB_SPACES[cache_key]))
+    return _KNOB_SPACES[cache_key]

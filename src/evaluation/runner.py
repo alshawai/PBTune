@@ -41,8 +41,9 @@ from src.utils.environments import EnvironmentFactory, DatabaseEnvironment
 from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
 from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
 from src.utils.metrics import PerformanceMetrics, create_metric_config
+from src.utils.scoring import create_scoring_engine
 from src.config.data_root import resolve_data_root
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import (
     SysbenchExecutor,
     DEFAULT_SYSBENCH_WORKLOAD,
@@ -176,6 +177,11 @@ class ComparisonRunner:
 
         tuned_knobs = self._resolve_tuned_knobs(session)
 
+        LOGGER.info("\n── Tuned Configuration Applied ──")
+        for _k, _v in sorted(tuned_knobs.items()):
+            LOGGER.info("  %-40s = %s", _k, _v)
+        LOGGER.info("── (%d knobs total) ──", len(tuned_knobs))
+
         executor = self._create_executor()
 
         eval_policy = self.config.scoring_policy or session.scoring_policy
@@ -221,6 +227,12 @@ class ComparisonRunner:
                 eval_ref_version,
             )
 
+        # Score both arms (default vs tuned) under the STATIC workload-feature
+        # prior, not the PBT session's drifted vector. PBT refines features
+        # via EMA every generation; using its drifted vector to grade the
+        # head-to-head bakes whatever direction PBT happened to drift into
+        # the rubric, which is asymmetric since the default arm never had a
+        # chance to influence those features.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -228,7 +240,7 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
-            workload_features=session.workload_features,
+            workload_features=None,
         )
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
@@ -327,10 +339,19 @@ class ComparisonRunner:
         arms: dict[str, dict[str, Any]] = {"default": {}, "pbt": pbt_knobs}
         knobs_by_arm: dict[str, dict[str, Any]] = {"default": {}, "pbt": pbt_knobs}
 
+        LOGGER.info("\n── Tuned Configuration Applied (PBT) ──")
+        for _k, _v in sorted(pbt_knobs.items()):
+            LOGGER.info("  %-40s = %s", _k, _v)
+        LOGGER.info("── (%d knobs total) ──", len(pbt_knobs))
+
         if bo_session:
             bo_knobs = self._resolve_tuned_knobs(bo_session)
             arms["bo"] = bo_knobs
             knobs_by_arm["bo"] = bo_knobs
+            LOGGER.info("\n── Tuned Configuration Applied (BO) ──")
+            for _k, _v in sorted(bo_knobs.items()):
+                LOGGER.info("  %-40s = %s", _k, _v)
+            LOGGER.info("── (%d knobs total) ──", len(bo_knobs))
 
         executor = self._create_executor()
 
@@ -339,8 +360,7 @@ class ComparisonRunner:
             self.config.scoring_policy_version or pbt_session.scoring_policy_version
         )
         eval_ref_version = (
-            self.config.metric_reference_version
-            or pbt_session.metric_reference_version
+            self.config.metric_reference_version or pbt_session.metric_reference_version
         )
 
         LOGGER.info(
@@ -361,6 +381,13 @@ class ComparisonRunner:
             [r for arm_runs in runs_by_arm.values() for r in arm_runs],
             key=lambda r: (r.run_number, r.order_in_pair, r.config_type),
         )
+        # Multi-arm head-to-head: score every arm under the SAME static
+        # workload-feature prior. Using the PBT session's drifted vector
+        # (refined via EMA every generation during PBT training) would
+        # give PBT a co-adapted rubric while BO is graded on a vector it
+        # never trained against. workload_features=None falls back to the
+        # workload-type-conditioned base prior in create_metric_config,
+        # which is symmetric across arms.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -368,15 +395,13 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
-            workload_features=pbt_session.workload_features,
+            workload_features=None,
         )
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
 
         LOGGER.info("\n── Pairwise statistical analysis ──")
-        pairwise_results = compute_pairwise_statistics(
-            runs_by_arm, benchmark=benchmark
-        )
+        pairwise_results = compute_pairwise_statistics(runs_by_arm, benchmark=benchmark)
 
         result = MultiArmComparisonResult(
             runs_by_arm=runs_by_arm,
@@ -664,6 +689,7 @@ class ComparisonRunner:
             run_id=f"eval_{self.timestamp}",
             container_prefix="eval-worker",
             image_name=self.config.docker_image,
+            force_recreate_baseline=self.config.force_recreate_baseline,
         )
 
     def _resolve_tuned_knobs(self, session: TuningSessionData) -> dict[str, Any]:
@@ -686,8 +712,19 @@ class ComparisonRunner:
             )
             return dict(session.best_knobs)
 
+        if session.benchmark == "sysbench":
+            resolved_workload_type = session.sysbench_workload or "oltp_read_write"
+        elif session.benchmark == "tpch":
+            resolved_workload_type = "olap"
+        else:
+            resolved_workload_type = session.workload_type
+
         try:
-            knob_space = get_knob_space(tier)
+            knob_space = get_knob_space(
+                tier,
+                knob_source=session.knob_source,
+                workload_type=resolved_workload_type,
+            )
         except Exception as exc:
             LOGGER.warning(
                 "Failed to load knob space for tier '%s': %s. Applying stored knob values as-is.",
@@ -700,6 +737,11 @@ class ComparisonRunner:
             ram_bytes=session.worker_resources.ram_bytes,
             cpu_cores=session.worker_resources.cpu_cores,
             disk_type=session.worker_resources.disk_type,
+            disk_read_bps=session.worker_resources.disk_read_bps,
+            disk_write_bps=session.worker_resources.disk_write_bps,
+            disk_read_iops=session.worker_resources.disk_read_iops,
+            disk_write_iops=session.worker_resources.disk_write_iops,
+            disk_class=session.worker_resources.disk_class,
         )
         knob_space.resolve_hardware_ranges(runtime_resources)
         resolved = knob_space.fractions_to_config(session.best_knobs)
@@ -775,18 +817,22 @@ class ComparisonRunner:
             default_runs.append(default_run)
             tuned_runs.append(tuned_run)
 
+            _d, _t = default_run, tuned_run
             LOGGER.info(
-                "➤ Pair %d complete: default(score=%.2f,p95=%.1f,tps=%.1f,mem=%.1f%%) | "
-                "tuned(score=%.2f,p95=%.1f,tps=%.1f,mem=%.1f%%)",
+                "➤ Pair %d complete  [%.1fs | %.1fs]:\n"
+                "     default : score=%8.3f  p95=%9.2f ms  tps=%9.1f  mem=%6.1f%%\n"
+                "     tuned   : score=%8.3f  p95=%9.2f ms  tps=%9.1f  mem=%6.1f%%",
                 run_number,
-                default_run.score,
-                default_run.metrics.latency_p95,
-                default_run.metrics.throughput,
-                default_run.metrics.memory_utilization * 100.0,
-                tuned_run.score,
-                tuned_run.metrics.latency_p95,
-                tuned_run.metrics.throughput,
-                tuned_run.metrics.memory_utilization * 100.0,
+                _d.duration_seconds,
+                _t.duration_seconds,
+                _d.score,
+                _d.metrics.latency_p95,
+                _d.metrics.throughput,
+                _d.metrics.memory_utilization * 100.0,
+                _t.score,
+                _t.metrics.latency_p95,
+                _t.metrics.throughput,
+                _t.metrics.memory_utilization * 100.0,
             )
 
         if not default_runs or not tuned_runs:
@@ -802,6 +848,31 @@ class ComparisonRunner:
             self.config.repetitions,
         )
         return default_runs, tuned_runs
+
+    def _fetch_boot_values(
+        self, env: DatabaseEnvironment, param_names: list[str]
+    ) -> dict[str, str]:
+        """Fetch the PostgreSQL default boot values for the specified parameters."""
+        if not param_names:
+            return {}
+        try:
+            active_config = env.get_db_config(worker_id=0)
+            from src.database.connection import get_connection
+
+            conn = get_connection(config=active_config)
+            cursor = conn.cursor()
+            placeholders = ",".join(["%s"] * len(param_names))
+            cursor.execute(
+                f"SELECT name, boot_val FROM pg_settings WHERE name IN ({placeholders})",
+                param_names,
+            )
+            results = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.close()
+            conn.close()
+            return results
+        except Exception as e:
+            LOGGER.debug("Failed to fetch boot_values: %s", e)
+            return {}
 
     def _run_multi_arm_repetitions(
         self,
@@ -865,9 +936,15 @@ class ComparisonRunner:
             for arm_name in arm_order:
                 r = rep_runs[arm_name]
                 summary_parts.append(
-                    f"{arm_name}(score={r.score:.2f},tps={r.metrics.throughput:.1f})"
+                    f"{arm_name}(score={r.score:8.3f}, "
+                    f"p95={r.metrics.latency_p95:9.2f}ms, "
+                    f"tps={r.metrics.throughput:9.1f}, "
+                    f"mem={r.metrics.memory_utilization * 100.0:6.1f}%, "
+                    f"dur={r.duration_seconds:6.1f}s)"
                 )
-            LOGGER.info("➤ Rep %d complete: %s", run_number, " | ".join(summary_parts))
+            LOGGER.info(
+                "➤ Rep %d complete:\n     %s", run_number, "\n     ".join(summary_parts)
+            )
 
         total_successful = min(len(v) for v in runs_by_arm.values())
         if total_successful == 0:
@@ -914,10 +991,20 @@ class ComparisonRunner:
         """
         benchmark_name = self.config.benchmark or session.benchmark
         run_started = time.monotonic()
+        LOGGER.info(
+            "  Starting single run: %s (Rep %d, order %d) in container %s",
+            config_type,
+            run_number,
+            order_in_pair,
+            f"eval_{self.timestamp}",
+        )
         env = self._build_environment(executor, session.worker_resources)
 
         try:
-            env.setup_instances(num_workers=1, force_recreate=True)
+            setup_started = time.monotonic()
+            env.setup_instances(
+                num_workers=1, force_recreate=True, num_parallel_workers=1
+            )
             active_config = env.get_db_config(worker_id=0)
 
             if knobs:
@@ -927,11 +1014,22 @@ class ComparisonRunner:
                     config=applicator_config,
                     worker_id=0,
                 )
+
+                boot_values = self._fetch_boot_values(env, list(knobs.keys()))
+
                 apply_result = knob_applicator.apply(knobs)
 
+                for k, v in knobs.items():
+                    boot_val = boot_values.get(k)
+                    if boot_val is not None and str(v) != boot_val:
+                        LOGGER.debug(
+                            "  Knob '%s': boot_val=%s, applied_val=%s", k, boot_val, v
+                        )
+
                 if apply_result.restart_required:
+                    restart_started = time.monotonic()
                     LOGGER.info(
-                        "Restart-required knobs applied (%s); restarting instance",
+                        "  Restart-required knobs applied (%s); restarting instance...",
                         list(apply_result.restart_required),
                     )
                     if not env.restart_instance(worker_id=0):
@@ -939,6 +1037,10 @@ class ComparisonRunner:
                             "Failed to restart instance after applying "
                             f"restart-required knobs: {list(apply_result.restart_required)}"
                         )
+                    LOGGER.info(
+                        "  Instance restarted in %.1fs",
+                        time.monotonic() - restart_started,
+                    )
 
                     # Refresh config after restart and rebind applicator.
                     active_config = env.get_db_config(worker_id=0)
@@ -956,6 +1058,10 @@ class ComparisonRunner:
                         verification.failed_params,
                     )
 
+            setup_elapsed = time.monotonic() - setup_started
+            LOGGER.debug("  Environment setup completed in %.1fs", setup_elapsed)
+
+            bench_started = time.monotonic()
             if benchmark_name == "tpch":
                 metrics = executor.execute(
                     db_config=active_config,
@@ -968,6 +1074,12 @@ class ComparisonRunner:
                     warmup=int(self.config.sysbench_warmup_seconds or 30),
                     random_seed=pair_seed,
                 )
+            bench_elapsed = time.monotonic() - bench_started
+            LOGGER.debug(
+                "  Benchmark execution completed in %.1fs (setup=%.1fs)",
+                bench_elapsed,
+                setup_elapsed,
+            )
 
             metrics.memory_utilization = env.collect_memory_utilization(worker_id=0)
 
@@ -1127,30 +1239,30 @@ class ComparisonRunner:
             )
         print("═" * 68)
 
-        # Per-metric table
+        # Per-metric table  (Median ± SD columns)
         header = (
-            f"  {'Metric':<18} {'Default':>10} {'Tuned':>10} {'Δ%':>9} "
-            f"{'p (adj)':>9} {'Cohen d':>8} {'Sig':>4}"
+            f"  {'Metric':<18} {'Default Med ± SD':>18} {'Tuned Med ± SD':>18} "
+            f"{'Δ%':>9} {'p (adj)':>9} {'Cohen d':>8} {'Sig':>4}"
         )
         print(header)
-        print("  " + "─" * 66)
+        print("  " + "─" * 90)
 
         for mc in stats.metrics:
-            d_val = mc.default.median
-            t_val = mc.tuned.median
+            d_str = f"{mc.default.median:.3f} ± {mc.default.std:.3f}"
+            t_str = f"{mc.tuned.median:.3f} ± {mc.tuned.std:.3f}"
             imp = mc.improvement_pct
             star = "✓" if mc.significant else " "
             print(
                 f"  {mc.metric_name:<18} "
-                f"{d_val:>10.3f} "
-                f"{t_val:>10.3f} "
+                f"{d_str:>18} "
+                f"{t_str:>18} "
                 f"{imp:>+9.1f}% "
                 f"{mc.p_value_corrected:>9.4f} "
                 f"{mc.cohens_d:>8.2f} "
                 f"{star:>4}"
             )
 
-        print("  " + "─" * 66)
+        print("  " + "─" * 90)
         print(f"\n  Overall improvement : {stats.overall_improvement_pct:+.1f}%")
         ci_lo, ci_hi = stats.overall_improvement_ci
         print(f"  Bootstrap 95% CI   : [{ci_lo:+.1f}%, {ci_hi:+.1f}%]")
@@ -1202,33 +1314,32 @@ class ComparisonRunner:
         arm_names = sorted(result.runs_by_arm.keys())
         n_reps = len(next(iter(result.runs_by_arm.values())))
 
-        print("\n" + "═" * 78)
+        print("\n" + "═" * 90)
         print("  MULTI-ARM EVALUATION SUMMARY")
         print(f"  Arms      : {', '.join(arm_names)}")
         print(f"  Benchmark : {benchmark_name.upper()}")
         print(f"  Reps      : {n_reps}")
-        print(
-            f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}"
-        )
-        print("═" * 78)
+        print(f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}")
+        print("═" * 90)
 
         import numpy as _np
 
-        header = f"  {'Arm':<12} {'Score':>10} {'Throughput':>12} {'Latency p95':>12}"
+        header = (
+            f"  {'Arm':<12} {'Score Med ± SD':>18} "
+            f"{'Throughput Med ± SD':>22} {'Latency p95 Med ± SD':>24}"
+        )
         print(header)
-        print("  " + "─" * 48)
+        print("  " + "─" * 78)
         for arm_name in arm_names:
             runs = result.runs_by_arm[arm_name]
             scores = [r.score for r in runs]
             tps = [r.metrics.throughput for r in runs]
             lat = [r.metrics.latency_p95 for r in runs]
-            print(
-                f"  {arm_name:<12} "
-                f"{float(_np.median(scores)):>10.2f} "
-                f"{float(_np.median(tps)):>12.1f} "
-                f"{float(_np.median(lat)):>12.2f}"
-            )
-        print("  " + "─" * 48)
+            sc_str = f"{float(_np.median(scores)):.2f} ± {float(_np.std(scores, ddof=1) if len(scores) > 1 else 0.0):.2f}"
+            tp_str = f"{float(_np.median(tps)):.1f} ± {float(_np.std(tps, ddof=1) if len(tps) > 1 else 0.0):.1f}"
+            lt_str = f"{float(_np.median(lat)):.2f} ± {float(_np.std(lat, ddof=1) if len(lat) > 1 else 0.0):.2f}"
+            print(f"  {arm_name:<12} {sc_str:>18} {tp_str:>22} {lt_str:>24}")
+        print("  " + "─" * 78)
 
         print("\n  PAIRWISE COMPARISONS (score)")
         print("  " + "─" * 74)
@@ -1241,9 +1352,7 @@ class ComparisonRunner:
 
         for pw in result.pairwise_statistics:
             score_mc = next(
-                mc
-                for mc in pw.statistics.metrics
-                if mc.metric_name == "score"
+                mc for mc in pw.statistics.metrics if mc.metric_name == "score"
             )
             label = f"{pw.arm_a} vs {pw.arm_b}"
             ci_lo, ci_hi = score_mc.improvement_ci
@@ -1265,7 +1374,7 @@ class ComparisonRunner:
             print(f"\n  Results written to : {result.output_path}")
         if result.log_path:
             print(f"  Session log written: {result.log_path}")
-        print("═" * 78 + "\n")
+        print("═" * 90 + "\n")
 
 
 def _metrics_to_score(
@@ -1301,7 +1410,7 @@ def _metrics_to_score(
         workload_features=workload_features,
     )
 
-    return metric_config.compute_score_value(metrics)
+    return create_scoring_engine(metric_config).compute_breakdown(metrics).final_score
 
 
 def _extract_pg_major(pg_version_str: str) -> str:
@@ -1571,7 +1680,9 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
             "mode": "multi_arm",
             "arms": arm_names,
             "tuning_session_path": str(cfg.tuning_session_path),
-            "bo_session_path": str(cfg.bo_session_path) if cfg.bo_session_path else None,
+            "bo_session_path": str(cfg.bo_session_path)
+            if cfg.bo_session_path
+            else None,
             "evaluation_log_path": str(result.log_path) if result.log_path else None,
             "benchmark": benchmark_name,
             "repetitions": cfg.repetitions,
@@ -1607,8 +1718,7 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
         },
         "knobs_by_arm": result.knobs_by_arm,
         "runs_by_arm": {
-            arm: [_run(r) for r in runs]
-            for arm, runs in result.runs_by_arm.items()
+            arm: [_run(r) for r in runs] for arm, runs in result.runs_by_arm.items()
         },
         "pairwise_statistics": pairwise_dict,
         "scoring_metadata": result.scoring_metadata,

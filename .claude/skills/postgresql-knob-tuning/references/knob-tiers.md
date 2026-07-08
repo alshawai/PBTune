@@ -9,10 +9,10 @@ Fewer knobs = faster convergence but potentially suboptimal.
 
 | Tier | Count | Purpose | CSV Source |
 |------|-------|---------|------------|
-| `minimal` | 5 | Quick testing, debugging, CI | `data/tuner_knobs/minimal_knobs.csv` |
-| `core` | 10 | Standard experiments | `data/tuner_knobs/core_knobs.csv` |
-| `standard` | 20 | Comprehensive analysis | `data/tuner_knobs/standard_knobs.csv` |
-| `extensive` | 40+ | Research-grade full sweep | `data/tuner_knobs/extensive_knobs.csv` |
+| `minimal` | 5 | Quick testing, debugging, CI | `data/expert_defined_knobs/minimal_knobs.csv` |
+| `core` | 10 | Standard experiments | `data/expert_defined_knobs/core_knobs.csv` |
+| `standard` | 20 | Comprehensive analysis | `data/expert_defined_knobs/standard_knobs.csv` |
+| `extensive` | 40+ | Research-grade full sweep | `data/expert_defined_knobs/extensive_knobs.csv` |
 
 ### Expert-Defined Tier Membership (Current)
 
@@ -27,10 +27,9 @@ Fewer knobs = faster convergence but potentially suboptimal.
 ### Data-Driven Tiers (Future — via knob-importance-analysis)
 
 Once sufficient experiment data exists (1000+ config-score pairs):
-1. Run fANOVA importance analysis
-2. Apply Jenks Natural Breaks clustering on importance scores
-3. Use silhouette score to find optimal number of tiers (k=2..6)
-4. Generate new tier CSVs with data-driven membership
+1. Run fANOVA importance analysis using `src/scripts/analyze_knob_importance.py`
+2. Specify `--export-tiers` on the analysis script to write the data-driven tiers to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json` (forces k=4 clusters projected onto `minimal`, `core`, `standard`, `extensive`)
+3. Preprocess raw database knobs with `--source data_driven` to generate workload-specific tier CSVs under `data/data_driven_knobs/{workload_type}/` (the script automatically resolves the tiers JSON if you provide `--tiers-json` with the workload path)
 
 ## CSV Format
 

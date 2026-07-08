@@ -21,7 +21,7 @@ from src.utils.environments.docker import DockerEnvironment
 from src.utils.environments.bare_metal import BareMetalEnvironment
 from src.benchmarks.executor import BenchmarkExecutor
 from src.config.database import DatabaseConfig
-from src.utils.hardware_info import detect_pg_version
+from src.utils.hardware_info import detect_pg_version, _resolve_block_device_node
 
 LOGGER = get_logger("EnvironmentFactory")
 COLORS = get_color_context()
@@ -96,17 +96,36 @@ class EnvironmentFactory:
                 resolved_image_name = EnvironmentFactory._resolve_docker_image(
                     image_name
                 )
+                # Resolve the host block-device node backing base_dir so the
+                # container's blkio limits target the right device. Falls
+                # back to None when the path can't be mapped (non-Linux,
+                # tmpfs, overlay) -- DockerEnvironment skips blkio kwargs
+                # in that case.
+                data_device_node = _resolve_block_device_node(base_dir)
+                if data_device_node is None:
+                    LOGGER.warning(
+                        "Could not resolve a host block device for '%s'; "
+                        "per-worker disk I/O limits will not be enforced.",
+                        base_dir,
+                    )
+                else:
+                    LOGGER.info(
+                        "Resolved host block device for blkio limits: %s",
+                        data_device_node,
+                    )
                 return DockerEnvironment(
                     run_id=run_id,
                     db_config=db_config,
                     schema_provider=schema_provider,
                     cpu_cores=cpu_cores,
                     ram_bytes=ram_bytes,
+                    worker_resources=worker_resources,
                     image_name=resolved_image_name,
                     base_port=base_port,
                     base_dir=base_dir,
                     container_prefix=container_prefix,
                     force_recreate_baseline=force_recreate_baseline,
+                    data_device_node=data_device_node,
                 )
             except (
                 ImportError,

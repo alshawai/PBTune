@@ -7,6 +7,7 @@ Computes marginal and pairwise importance of database knobs using fANOVA varianc
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 from dataclasses import dataclass
 
@@ -114,6 +115,7 @@ class _ImportancePassResult:
     model_r2: float
     fanova_model: Any
     column_names: list[str]
+    cs_param_names: list[str]  # ConfigSpace's alphabetical hyperparameter order
 
 
 def _drop_zero_variance_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -132,14 +134,31 @@ def _build_config_space(
     df: pd.DataFrame,
     knob_bounds: dict[str, tuple[float, float]],
 ) -> ConfigurationSpace:
-    """Create ConfigSpace definitions matching encoded dataframe columns."""
+    """Create ConfigSpace definitions matching encoded dataframe columns.
+
+    fANOVA enforces ``X[i, c] in [lower, upper]`` strictly, including
+    the column-max equality.  We widen by a small epsilon on both sides
+    so samples that sit exactly on the observed min/max do not trip
+    fANOVA's bound check after its internal float rounding.  This
+    mirrors the pattern in ``scalpel_stability._build_fanova_config_space``.
+    """
+    epsilon = 1e-9
     config_space = ConfigurationSpace()
 
     for col in df.columns:
         b_min, b_max = knob_bounds[col]
+        if not df.empty:
+            # Ensure observed samples are strictly inside the configured
+            # range even when knob_bounds were computed elsewhere.
+            b_min = min(b_min, float(df[col].min())) - epsilon
+            b_max = max(b_max, float(df[col].max())) + epsilon
+        if b_min >= b_max:
+            b_max = b_min + 1.0
         if df[col].dtype.kind in "biu" or pd.api.types.is_integer_dtype(df[col]):
+            # Use floor/ceil instead of int() truncation so the
+            # interval always widens, never narrows.
             config_space.add_hyperparameter(
-                UniformIntegerHyperparameter(col, int(b_min), int(b_max))
+                UniformIntegerHyperparameter(col, math.floor(b_min), math.ceil(b_max))
             )
         else:
             config_space.add_hyperparameter(
@@ -186,6 +205,7 @@ def _run_importance_pass(
     bootstrap: bool,
     max_samples: Optional[int | float],
     skip_shap: bool = False,
+    X_df: Optional[pd.DataFrame] = None,
 ) -> _ImportancePassResult:
     """Run one full SHAP + fANOVA decomposition pass."""
     rf = RandomForestRegressor(
@@ -202,7 +222,7 @@ def _run_importance_pass(
     pass_r2 = float(rf.score(X, y))
 
     shap_importances = {}
-    shap_values = []
+    shap_values: np.ndarray = np.empty(0)
     if not skip_shap:
         explainer = shap.TreeExplainer(rf)
         shap_values = explainer.shap_values(X)
@@ -232,8 +252,12 @@ def _run_importance_pass(
     elif max_features == "log2":
         fanova_max_features = max(1, int(np.log2(X.shape[1])))
 
+    # Pass the DataFrame to fANOVA so it can auto-reorder columns to
+    # match ConfigSpace's alphabetical hyperparameter ordering.  When
+    # X_df is unavailable (legacy callers) fall back to the numpy array.
+    fanova_X = X_df if X_df is not None else X
     fanova_model = fANOVA(
-        X=X,
+        X=fanova_X,
         Y=y,
         config_space=config_space,
         n_trees=n_estimators,
@@ -245,8 +269,12 @@ def _run_importance_pass(
         bootstrapping=bootstrap,
     )
 
+    # fANOVA indexes features by ConfigSpace's get_hyperparameters()
+    # order (alphabetical), not by the DataFrame column order.  Use
+    # ConfigSpace's ordering for correct marginal importance extraction.
+    cs_param_names = [hp.name for hp in config_space.get_hyperparameters()]
     marginal_importances: dict[str, float] = {}
-    for i, col in enumerate(col_names):
+    for i, col in enumerate(cs_param_names):
         res = fanova_model.quantify_importance((i,))
         marginal_importances[col] = float(res[(i,)]["individual importance"])
 
@@ -269,6 +297,7 @@ def _run_importance_pass(
         model_r2=pass_r2,
         fanova_model=fanova_model,
         column_names=col_names,
+        cs_param_names=cs_param_names,
     )
 
 
@@ -340,6 +369,7 @@ def analyze_knob_importance(
     X = df.to_numpy()
     y = scores.to_numpy()
     col_names = df.columns.tolist()
+    X_df = df  # preserve DataFrame for fANOVA column reordering
 
     result_pass = _run_importance_pass(
         X=X,
@@ -355,6 +385,7 @@ def analyze_knob_importance(
         bootstrap=bootstrap,
         max_samples=max_samples,
         skip_shap=skip_shap,
+        X_df=X_df,
     )
 
     if result_pass.model_r2 < 0.5:
@@ -377,8 +408,10 @@ def analyze_knob_importance(
 
     if interaction_order >= 2:
         top_k_features = list(result_pass.marginal_importances.keys())[:top_k]
+        # Use ConfigSpace's alphabetical ordering for fANOVA indices,
+        # not the DataFrame column order.
         top_k_indices = [
-            result_pass.column_names.index(feat) for feat in top_k_features
+            result_pass.cs_param_names.index(feat) for feat in top_k_features
         ]
 
         for i in range(len(top_k_indices)):
@@ -389,8 +422,8 @@ def analyze_knob_importance(
                 res = result_pass.fanova_model.quantify_importance((idx1, idx2))
                 val = res[(idx1, idx2)]["individual importance"]
 
-                feat1 = result_pass.column_names[idx1]
-                feat2 = result_pass.column_names[idx2]
+                feat1 = result_pass.cs_param_names[idx1]
+                feat2 = result_pass.cs_param_names[idx2]
                 pairwise_interactions[(feat1, feat2)] = float(val)
 
         pairwise_interactions = dict(

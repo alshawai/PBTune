@@ -233,6 +233,13 @@ def validate_hardware_importance(
     conservative_tiers: dict[str, str] = {}
 
     if profile_keys:
+        # Under SCALPEL, ``tier_assignments`` only contains BORUTA-confirmed
+        # knobs (non-confirmed are absent), so this intersection becomes the
+        # set of knobs confirmed across every hardware profile rather than
+        # the set of all labelled knobs. The result is exposed downstream
+        # via ``hardware_validation.stable_knobs_semantics`` so reviewers
+        # can interpret the value correctly. Under the legacy Lorenz
+        # fallback every knob is present, preserving original semantics.
         common_knobs = set(tier_assignments[profile_keys[0]].keys())
         for key in profile_keys[1:]:
             common_knobs &= set(tier_assignments[key].keys())
@@ -322,6 +329,9 @@ def build_combined_loaded_data(
     combined_frames: list[pd.DataFrame] = []
     combined_scores: list[pd.Series] = []
     combined_metadata: list[dict[str, Any]] = []
+    combined_session_indices: list[pd.Series] = []
+    combined_generation_indices: list[pd.Series] = []
+    session_offset = 0
 
     for loaded_data, resources in normalized_profiles:
         profile_key = build_hardware_profile_key(resources)
@@ -333,6 +343,24 @@ def build_combined_loaded_data(
         combined_frames.append(df)
         combined_scores.append(loaded_data.scores.reset_index(drop=True))
 
+        # Session indices need a per-profile offset so cluster ids stay
+        # unique across the combined dataset. Generation indices do not
+        # need offsetting because SCALPEL builds clusters from the
+        # composite ``session_index:generation_index`` tuple downstream.
+        if not loaded_data.session_index.empty:
+            shifted = loaded_data.session_index.reset_index(drop=True) + session_offset
+            combined_session_indices.append(shifted)
+            session_offset += int(loaded_data.session_index.max() or 0) + 1
+        else:
+            combined_session_indices.append(
+                pd.Series(dtype="int64", name="session_index")
+            )
+        combined_generation_indices.append(
+            loaded_data.generation_index.reset_index(drop=True)
+            if not loaded_data.generation_index.empty
+            else pd.Series(dtype="int64", name="generation_index")
+        )
+
         for entry in loaded_data.metadata:
             entry_copy = dict(entry)
             entry_copy["hardware_profile"] = profile_key
@@ -340,14 +368,43 @@ def build_combined_loaded_data(
 
     combined_df = pd.concat(combined_frames, ignore_index=True)
     combined_score_series = pd.concat(combined_scores, ignore_index=True)
+    combined_session_series = (
+        pd.concat(combined_session_indices, ignore_index=True)
+        if any(not s.empty for s in combined_session_indices)
+        else pd.Series(dtype="int64", name="session_index")
+    )
+    combined_generation_series = (
+        pd.concat(combined_generation_indices, ignore_index=True)
+        if any(not s.empty for s in combined_generation_indices)
+        else pd.Series(dtype="int64", name="generation_index")
+    )
 
+    # Merge per-profile knob_bounds (union of widest bounds) so the
+    # domain-spec-aware bounds established by _extract_knob_bounds()
+    # survive into the combined model.  For columns not present in
+    # any profile (hardware descriptors like ram_bytes, cpu_cores,
+    # disk_type) fall back to observed min/max.
     knob_bounds: dict[str, tuple[float, float]] = {}
     for column in combined_df.columns:
         series = combined_df[column]
         if series.empty:
             knob_bounds[column] = (0.0, 1.0)
             continue
-        knob_bounds[column] = (float(series.min()), float(series.max()))
+        profile_bounds = [
+            ld.knob_bounds[column]
+            for ld, _ in normalized_profiles
+            if column in ld.knob_bounds
+        ]
+        if profile_bounds:
+            b_min = min(b[0] for b in profile_bounds)
+            b_max = max(b[1] for b in profile_bounds)
+        else:
+            b_min = float(series.min())
+            b_max = float(series.max())
+        # Also ensure every observed value in the combined set fits.
+        b_min = min(b_min, float(series.min()))
+        b_max = max(b_max, float(series.max()))
+        knob_bounds[column] = (b_min, b_max)
 
     base_metric_config = normalized_profiles[0][0].metric_config
 
@@ -358,6 +415,8 @@ def build_combined_loaded_data(
         metric_config=base_metric_config,
         knob_bounds=knob_bounds,
         n_observations=len(combined_df),
+        session_index=combined_session_series,
+        generation_index=combined_generation_series,
     )
 
 

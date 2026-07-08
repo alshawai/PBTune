@@ -285,8 +285,9 @@ def create_tier_dataframes(
 
 def preprocess_and_save_knobs(
     raw_csv_path: Optional[str] = None,
-    output_dir: str = "data/tuner_knobs",
+    output_dir: Optional[str] = None,
     tier_source: str = "expert",
+    tiers_json: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Complete preprocessing pipeline.
@@ -300,20 +301,55 @@ def preprocess_and_save_knobs(
     ----------
     raw_csv_path : Optional[str]
         Path to raw knobs CSV. If None, retrieves from database.
-    output_dir : str
-        Directory to save preprocessed CSVs
+    output_dir : Optional[str]
+        Directory to save preprocessed CSVs. If None, resolved based on tier_source.
     tier_source : str
         Source of tiers ('expert' or 'data_driven')
+    tiers_json : Optional[str]
+        Path to data-driven tiers JSON file.  When ``None`` (default) and
+        ``tier_source`` is ``'data_driven'``, the path is resolved to
+        ``data/data_driven_knobs/{workload_type}/data_driven_tiers.json``
+        where ``workload_type`` must be provided via a CLI argument or the
+        caller must pass an explicit path.
 
     Returns
     -------
     Dict[str, str]
         Dictionary mapping tier name to saved CSV path
     """
+    import json
+
+    if tier_source == "data_driven":
+        if tiers_json is None:
+            raise ValueError(
+                "tiers_json must be specified when tier_source is 'data_driven'. "
+                "Use the path: data/data_driven_knobs/{workload_type}/data_driven_tiers.json\n"
+                "Generate it first with:\n"
+                "  python -m src.scripts.analyze_knob_importance "
+                "--results-dir <dir> --export-tiers"
+            )
+        from src.knobs.knob_metadata import load_data_driven_tiers
+
+        load_data_driven_tiers(tiers_json)
+
+    if output_dir is None:
+        if tier_source == "expert":
+            output_dir = "data/expert_defined_knobs"
+        elif tier_source == "data_driven":
+            with open(tiers_json, "r") as f:  # type: ignore[arg-type]
+                metadata = json.load(f).get("metadata", {})
+            workload_type = metadata.get("workload_type")
+            if not workload_type:
+                raise ValueError(f"workload_type not found in {tiers_json}")
+            output_dir = f"data/data_driven_knobs/{workload_type}"
+        else:
+            raise ValueError(f"Unknown tier_source: {tier_source}")
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     print("PostgreSQL Knob Preprocessing for PBT Tuner")
+    print(f"Tier Source: {tier_source}")
     print("=" * 43)
 
     print("\n[1/4] Loading raw knobs...")
@@ -342,6 +378,22 @@ def preprocess_and_save_knobs(
         tier_df = tier_df.sort_values(["tuning_priority", "name"])
 
         csv_path = output_path / f"{tier_name}_knobs.csv"
+        if tier_name != "extensive" and tier_df.empty:
+            # SCALPEL produces empty 'core' or 'standard' lists when the
+            # importance distribution is sharply concentrated. Writing a
+            # header-only CSV would crash the tuner at LHS sample time, so
+            # we skip the file and let `load_knob_space_for_tier` walk
+            # down to the next-broader non-empty tier with a warning.
+            if csv_path.exists():
+                try:
+                    csv_path.unlink()
+                except OSError:
+                    pass
+            print(
+                f"  ⚠ {tier_name.upper()}: SCALPEL produced 0 knobs — skipping CSV"
+            )
+            continue
+
         tier_df.to_csv(csv_path, index=False)
         saved_paths[tier_name] = str(csv_path)
 
@@ -357,7 +409,12 @@ def preprocess_and_save_knobs(
     return saved_paths
 
 
-def load_knobs_for_tier(tier: str, data_dir: str = "data/tuner_knobs") -> pd.DataFrame:
+def load_knobs_for_tier(
+    tier: str,
+    knob_source: str = "expert",
+    workload_type: Optional[str] = None,
+    data_dir: Optional[str] = None,
+) -> pd.DataFrame:
     """
     Load preprocessed knobs for a specific tier.
 
@@ -365,8 +422,12 @@ def load_knobs_for_tier(tier: str, data_dir: str = "data/tuner_knobs") -> pd.Dat
     ----------
     tier : str
         Tier name: 'minimal', 'core', 'standard', or 'extensive'
-    data_dir : str
-        Directory containing preprocessed knob CSVs
+    knob_source : str
+        Knob source: 'expert' or 'data_driven'
+    workload_type : str, optional
+        Workload type (required if knob_source is 'data_driven')
+    data_dir : str, optional
+        Override directory containing preprocessed CSVs
 
     Returns
     -------
@@ -386,23 +447,88 @@ def load_knobs_for_tier(tier: str, data_dir: str = "data/tuner_knobs") -> pd.Dat
     if tier_lower not in valid_tiers:
         raise ValueError(f"Unknown tier: {tier}. Must be one of {valid_tiers}")
 
-    csv_path = Path(data_dir) / f"{tier_lower}_knobs.csv"
+    if data_dir is not None:
+        csv_path = Path(data_dir) / f"{tier_lower}_knobs.csv"
+    else:
+        if knob_source == "expert":
+            csv_path = Path("data/expert_defined_knobs") / f"{tier_lower}_knobs.csv"
+        elif knob_source == "data_driven":
+            if not workload_type:
+                raise ValueError(
+                    "workload_type must be specified when knob_source is 'data_driven'"
+                )
+            csv_path = (
+                Path("data/data_driven_knobs")
+                / workload_type
+                / f"{tier_lower}_knobs.csv"
+            )
+        else:
+            raise ValueError(f"Unknown knob_source: {knob_source}")
 
     if not csv_path.exists():
         raise FileNotFoundError(
             f"Preprocessed knobs not found: {csv_path}\n"
             f"Run preprocessing first:\n"
-            f"  python -m src.tuner.config.preprocess_knobs"
+            f"  python -m src.knobs.preprocess_knobs"
         )
 
     return pd.read_csv(csv_path)
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    raw_csv: Optional[str] = None
-    if len(sys.argv) > 1:
-        raw_csv = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Preprocess PostgreSQL knobs")
+    parser.add_argument(
+        "--raw-csv",
+        type=str,
+        default=None,
+        help="Path to raw CSV (pg_settings export)",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        choices=["expert", "data_driven", "both"],
+        default="expert",
+        help="Knob tier source to generate ('expert', 'data_driven', or 'both')",
+    )
+    parser.add_argument(
+        "--tiers-json",
+        type=str,
+        default=None,
+        help=(
+            "Path to data-driven tiers JSON file. "
+            "Expected format: data/data_driven_knobs/{workload_type}/data_driven_tiers.json. "
+            "Required when --source is 'data_driven' or 'both'."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Override output directory",
+    )
 
-    preprocess_and_save_knobs(raw_csv_path=raw_csv)
+    args = parser.parse_args()
+
+    if args.source == "both":
+        print("Preprocessing expert-defined knobs...")
+        preprocess_and_save_knobs(
+            raw_csv_path=args.raw_csv,
+            output_dir=args.output_dir,
+            tier_source="expert",
+        )
+        print("\nPreprocessing data-driven knobs...")
+        preprocess_and_save_knobs(
+            raw_csv_path=args.raw_csv,
+            output_dir=args.output_dir,
+            tier_source="data_driven",
+            tiers_json=args.tiers_json,
+        )
+    else:
+        preprocess_and_save_knobs(
+            raw_csv_path=args.raw_csv,
+            output_dir=args.output_dir,
+            tier_source=args.source,
+            tiers_json=args.tiers_json,
+        )

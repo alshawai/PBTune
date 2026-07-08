@@ -19,7 +19,8 @@ def _make_tuner(env: MagicMock, cleanup_instances: bool = False) -> PBTTuner:
     tuner.LOGGER = MagicMock()
     tuner.system_info = {}
     tuner.knob_tier = "minimal"
-    tuner.knob_space = {}
+    tuner.knob_space = MagicMock()
+    tuner.full_knob_space = MagicMock()
     tuner.workload_type = SimpleNamespace(value="oltp")
     tuner.output_dir = Path("results")
 
@@ -27,6 +28,7 @@ def _make_tuner(env: MagicMock, cleanup_instances: bool = False) -> PBTTuner:
         population_size=1,
         num_generations=0,
         enable_snapshots=False,
+        num_parallel_workers=1,
     )
     tuner.force_recreate_instances = False
     tuner.cleanup_instances = cleanup_instances
@@ -117,14 +119,17 @@ def test_evaluate_worker_handles_recovery_exception_after_connection_failure() -
     """Recovery failures after connection errors should not escape evaluate_worker."""
     tuner = PBTTuner.__new__(PBTTuner)
     tuner.current_generation = 0
-    tuner._restarted_this_gen = False
+    tuner._restarted_this_generation = False
     tuner.restart_count = 0
+    tuner.population = MagicMock()
     from src.utils.scoring.contracts import ScoreBreakdown
 
     # metric_config now exposes compute_score() which returns a ScoreBreakdown
     tuner.metric_config = SimpleNamespace(
         latency_metric="p95",
-        compute_score=lambda metrics, worker_logger=None: ScoreBreakdown(final_score=0.0),
+        compute_score=lambda metrics, worker_logger=None: ScoreBreakdown(
+            final_score=0.0
+        ),
     )
     tuner.pbt_config = SimpleNamespace(dead_config_score=0.0, crash_score=0.0)
 

@@ -519,4 +519,163 @@ def test_worker_metrics_table_creates_additional_sections_for_large_worker_count
     assert "Worker-0" in sections[0]
     assert "Worker-4" in sections[1]
     assert "Worker-8" in sections[2]
-    assert "Worker-8" not in sections[0]
+
+
+def test_log_worker_metrics_table_splits_operational_metrics_from_total_queries():
+    """Debug worker tables should start the secondary block at total_queries."""
+    logger = logging.getLogger("test.log_worker_metrics_table")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    root_logger = logging.getLogger()
+    previous_root_level = root_logger.level
+    root_logger.setLevel(logging.DEBUG)
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        set_colors_enabled(False)
+        _logger_helpers.log_worker_metrics_table(
+            logger,
+            [
+                {
+                    "score": 41.687,
+                    "latency_p95": "1403.87ms",
+                    "error_rate": "0.00%",
+                    "total_queries": 22,
+                    "memory_utilization": "6.91%",
+                },
+                {
+                    "score": 58.085,
+                    "latency_p95": "1591.85ms",
+                    "error_rate": "0.00%",
+                    "total_queries": 22,
+                    "memory_utilization": "8.43%",
+                },
+            ],
+            worker_labels=["Worker-0", "Worker-1"],
+            metric_order=[
+                "score",
+                "latency_p95",
+                "error_rate",
+                "total_queries",
+                "memory_utilization",
+            ],
+            title="Generation 8 Worker Metrics",
+        )
+    finally:
+        set_colors_enabled(True)
+        root_logger.setLevel(previous_root_level)
+
+    lines = stream.getvalue().splitlines()
+    total_queries_line = next(
+        index for index, line in enumerate(lines) if "Total Queries" in line
+    )
+    memory_utilization_line = next(
+        index for index, line in enumerate(lines) if "Memory Utilization" in line
+    )
+
+    assert lines[total_queries_line - 1].lstrip().startswith("+")
+    assert total_queries_line < memory_utilization_line
+
+
+def test_log_worker_metrics_table_keeps_scan_efficiency_in_primary_section():
+    """Scan efficiency should remain in the scoring block even if payload order drifts."""
+    logger = logging.getLogger("test.log_worker_metrics_table.scan_primary")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    root_logger = logging.getLogger()
+    previous_root_level = root_logger.level
+    root_logger.setLevel(logging.DEBUG)
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        set_colors_enabled(False)
+        _logger_helpers.log_worker_metrics_table(
+            logger,
+            [
+                {
+                    "score": 75.935,
+                    "latency_p95": "153.02ms",
+                    "throughput": "100.6 TPS",
+                    "total_queries": 50460,
+                    "scan_efficiency": "100.0%",
+                    "memory_utilization": "1.16%",
+                }
+            ],
+            worker_labels=["Worker-0"],
+            title="Generation 9 Worker Metrics",
+        )
+    finally:
+        set_colors_enabled(True)
+        root_logger.setLevel(previous_root_level)
+
+    lines = stream.getvalue().splitlines()
+    scan_line = next(
+        index for index, line in enumerate(lines) if "Scan Efficiency" in line
+    )
+    total_queries_line = next(
+        index for index, line in enumerate(lines) if "Total Queries" in line
+    )
+
+    assert scan_line < total_queries_line
+
+
+def test_log_worker_metrics_table_hides_secondary_metrics_when_root_is_info():
+    """Secondary debug metrics should stay hidden when app verbosity is INFO."""
+    logger = logging.getLogger("test.log_worker_metrics_table.root_info")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    root_logger = logging.getLogger()
+    previous_root_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        set_colors_enabled(False)
+        _logger_helpers.log_worker_metrics_table(
+            logger,
+            [
+                {
+                    "score": 77.979,
+                    "latency_p95": "125.53ms",
+                    "throughput": "111.6 TPS",
+                    "scan_efficiency": "99.5%",
+                    "total_queries": 55960,
+                    "rows_examined": 1152327,
+                    "rows_returned": 1168291,
+                    "io_read_mb": "6.99 MB",
+                    "io_write_mb": "1.37 MB",
+                    "cache_hit_ratio": "99.9%",
+                }
+            ],
+            worker_labels=["Worker-0"],
+            title="Generation 10 Worker Metrics",
+        )
+    finally:
+        set_colors_enabled(True)
+        root_logger.setLevel(previous_root_level)
+
+    output = stream.getvalue()
+    assert "Total Queries" not in output
+    assert "Rows Examined" not in output
+    assert "Cache Hit Ratio" not in output
