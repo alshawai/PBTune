@@ -719,23 +719,46 @@ class WorkloadOrchestrator:
         db_config: DatabaseConfig,
         worker_logger: Optional[logging.Logger] = None,
     ) -> None:
-        """Validate benchmark state before execution and repair it if needed."""
+        """Validate benchmark state before execution and repair it if needed.
+
+        Retries validation up to 3 times with a short delay before falling
+        back to ``prepare()``, which recreates the full benchmark schema
+        (~4.5 GB for large sysbench configs) and generates significant WAL.
+        Transient connection errors under co-tenant load would otherwise
+        trigger needless ``prepare()`` calls on every iteration.
+        """
         if not isinstance(self.workload_executor, BenchmarkExecutor):
             return
 
         worker_logger = worker_logger or LOGGER
 
-        try:
-            if self.workload_executor.validate(db_config):
-                worker_logger.debug(
-                    " ➤ Benchmark validation successful, ready to execute"
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                if self.workload_executor.validate(db_config):
+                    worker_logger.debug(
+                        " ➤ Benchmark validation successful, ready to execute"
+                    )
+                    return
+            except Exception as e:
+                worker_logger.warning(
+                    "Benchmark validation attempt %d/%d raised %s",
+                    attempt,
+                    max_retries,
+                    e,
                 )
-                return
-        except Exception as e:
-            worker_logger.warning(
-                "Benchmark validation raised %s; attempting prepare()", e
-            )
+            if attempt < max_retries:
+                worker_logger.debug(
+                    " ➤ Validation failed (attempt %d/%d); retrying in 2s...",
+                    attempt,
+                    max_retries,
+                )
+                time.sleep(2)
 
+        worker_logger.warning(
+            "Benchmark validation failed after %d attempts; running prepare()",
+            max_retries,
+        )
         self.workload_executor.prepare(db_config)
 
         if not self.workload_executor.validate(db_config):

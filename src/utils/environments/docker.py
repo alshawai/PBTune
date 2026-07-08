@@ -266,7 +266,7 @@ class DockerEnvironment(DatabaseEnvironment):
         try:
             with self._with_timeout(timeout):
                 old_container = self.client.containers.get(container_name)
-                old_container.remove(force=True)
+                old_container.remove(force=True, v=True)
         except docker_errors.NotFound:
             return True
         except docker_errors.DockerException as exc:
@@ -330,7 +330,7 @@ class DockerEnvironment(DatabaseEnvironment):
                     f"rm -rf failed with exit code {result.get('StatusCode')}: "
                     f"{container.logs().decode('utf-8', errors='replace')}"
                 )
-            container.remove(force=True)
+            container.remove(force=True, v=True)
         except docker_errors.DockerException as exc:
             if not quiet:
                 LOGGER.debug(
@@ -526,7 +526,7 @@ class DockerEnvironment(DatabaseEnvironment):
                         f"Copy failed with exit code {result.get('StatusCode')}: "
                         f"{container.logs().decode('utf-8', errors='replace')}"
                     )
-                container.remove(force=True)
+                container.remove(force=True, v=True)
 
             return pgdata_dir
         except docker_errors.DockerException as exc:
@@ -728,7 +728,7 @@ class DockerEnvironment(DatabaseEnvironment):
                     LOGGER.debug(
                         "  Recreating existing worker-0 container because baseline snapshot is missing"
                     )
-                    container.remove(force=True)
+                    container.remove(force=True, v=True)
                     raise docker_errors.NotFound("recreate worker-0 for baseline")
 
                 if container.status != "running":
@@ -1040,7 +1040,7 @@ class DockerEnvironment(DatabaseEnvironment):
             container_name = self._container_name(worker_id)
             try:
                 container = self.client.containers.get(container_name)
-                container.remove(force=True)
+                container.remove(force=True, v=True)
             except docker_errors.NotFound:
                 pass
             except (
@@ -1327,7 +1327,7 @@ class DockerEnvironment(DatabaseEnvironment):
                         f"Copy failed with exit code {result.get('StatusCode')}: "
                         f"{copy_container.logs().decode('utf-8', errors='replace')}"
                     )
-                copy_container.remove(force=True)
+                copy_container.remove(force=True, v=True)
 
             # Restart the worker
             container.start()
@@ -1518,7 +1518,7 @@ class DockerEnvironment(DatabaseEnvironment):
                         f"Clone copy failed with exit code {result.get('StatusCode')}: "
                         f"{copy_container.logs().decode('utf-8', errors='replace')}"
                     )
-                copy_container.remove(force=True)
+                copy_container.remove(force=True, v=True)
 
             # 5. Start source container back up
             source_container.start()

@@ -2,6 +2,7 @@
 
 from src.utils.metrics import PerformanceMetrics
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -344,6 +345,41 @@ class BOBaselineRunner:
         )
         return relabeled
 
+    def _log_disk_usage(self, label: str) -> None:
+        """Log disk usage of PGDATA directories and filesystem for diagnostics."""
+        try:
+            total, used, free = shutil.disk_usage("/")
+            pct = used / total * 100
+            self.logger.info(
+                "[disk] %s — filesystem: %.1f%% used (%.1f GB free)",
+                label,
+                pct,
+                free / (1024**3),
+            )
+            if not hasattr(self, "env") or self.env is None:
+                return
+            base = getattr(self.env, "base_dir", None)
+            if base is None:
+                return
+            base = Path(base)
+            for child in sorted(base.rglob("pgdata")):
+                if child.is_dir():
+                    try:
+                        size = sum(
+                            f.stat().st_blocks * 512
+                            for f in child.rglob("*")
+                            if f.is_file()
+                        )
+                        self.logger.info(
+                            "[disk]   %s: %.1f MB",
+                            child.relative_to(base),
+                            size / (1024**2),
+                        )
+                    except OSError:
+                        pass
+        except Exception as exc:
+            self.logger.debug("[disk] usage probe failed: %s", exc)
+
     def _evaluate_with_cotenancy(
         self,
         config,
@@ -446,6 +482,7 @@ class BOBaselineRunner:
         self.logger.info(
             "=== Phase 1: Bootstrap (%d iterations, fallback anchors) ===", pilot_size
         )
+        self._log_disk_usage("bootstrap start")
 
         for pilot_idx, sobol_config in enumerate(sobol_configs):
             restore_due = (
@@ -691,6 +728,9 @@ class BOBaselineRunner:
 
         for bo_idx in range(remaining):
             iteration_count = pilot_size + bo_idx
+
+            if iteration_count % 5 == 0:
+                self._log_disk_usage(f"iter {iteration_count}")
 
             restore_due = (
                 self.config.enable_snapshots
