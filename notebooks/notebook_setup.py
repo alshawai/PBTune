@@ -21,7 +21,7 @@ This will:
 Why change working directory?
 ------------------------------
 By changing to the project root, all relative paths in the codebase
-work correctly (e.g., "data/tuner_knobs/minimal_knobs.csv") without
+work correctly (e.g., "data/expert_defined_knobs/minimal_knobs.csv") without
 needing to modify core modules to use absolute paths.
 """
 

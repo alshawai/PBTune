@@ -17,7 +17,9 @@ from src.utils.types import (
     clone_benchmark_config,
 )
 from src.utils.logger import get_logger
+
 LOGGER = get_logger("Config")
+
 
 @dataclass
 class BOConfig:
@@ -29,6 +31,7 @@ class BOConfig:
 
     # Knob Space
     knob_tier: str = "core"  # minimal, core, standard, extensive
+    knob_source: str = "expert"  # expert, data_driven
 
     # Benchmark/workload configuration
     benchmark_config: BenchmarkConfig = field(
@@ -47,7 +50,9 @@ class BOConfig:
     colocate_output: bool = False
     verbose: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
-    # Pilot+Freeze: number of initial design iterations before freezing ranges
+    # Bootstrap size: number of initial Sobol iterations evaluated before the
+    # normalizer is first calibrated and SMAC history is relabeled.
+    # After calibration the normalizer continues to expand dynamically.
     range_update_interval: int = 10
 
     # SMAC surrogate model
@@ -58,20 +63,46 @@ class BOConfig:
     pbt_knob_names: Optional[tuple[str, ...]] = None
 
     # Snapshot configuration
-    enable_snapshots: bool = False
+    enable_snapshots: bool = True
     snapshot_restore_interval: int = 1
 
-    # Parallel BO configuration
+    # Worker configuration (strictly sequential — single worker)
     max_workers: int = 1
-    batched_bo: bool = False
     pbt_worker_resources: Optional[Dict[str, Any]] = None
     resource_division: int = 1
+    worker_ram: Optional[str] = None
+    worker_cpus: Optional[int] = None
+    worker_disk_read_bps: Optional[int] = None
+    worker_disk_write_bps: Optional[int] = None
+    worker_disk_read_iops: Optional[int] = None
+    worker_disk_write_iops: Optional[int] = None
+    probe_disk: bool = True
+
+    # Co-tenancy load: number of *total* concurrent instances (foreground BO
+    # trial + background load) to run during each measurement window so the BO
+    # baseline experiences the same single-host contention a PBT generation
+    # does. ``1`` disables background load. When a PBT session is supplied this
+    # is forced to the session's ``num_parallel_workers`` (the matched,
+    # mandatory degree) unless ``no_cotenant`` is set. An explicit
+    # ``--cotenancy-degree`` only applies when no session pins it.
+    # See src/scripts/bo_baseline/cotenant.py.
+    cotenancy_degree: int = 1
+    no_cotenant: bool = False
 
     # Scoring policy
     # Available options:
     # - "fixed_v1": Legacy static weights based on workload type (OLTP/OLAP/MIXED)
     # - "feature_driven_v2": Dynamic weights based on workload features evaluating variance, tail amplification, and DB stats
-    scoring_policy: str = "default"
+    # When ``None``, the per-workload base config picks the canonical default
+    # (``DEFAULT_SCORING_POLICY`` = ``feature_driven_v2``), matching PBT.
+    scoring_policy: Optional[str] = None
+
+    # Early stopping — stop the BO loop if the incumbent does not improve for
+    # `early_stopping_patience` consecutive iterations. When applied via
+    # ``apply_pbt_session(set_iteration_budget=True)``, patience is set to a
+    # flat cap (50) rather than scaled to the budget; see that method.
+    early_stopping_enabled: bool = True
+    early_stopping_patience: int = 20  # default overridden by presets
 
     @staticmethod
     def _load_pbt_session(path: Path) -> Dict[str, Any]:
@@ -108,6 +139,7 @@ class BOConfig:
 
         self.pbt_session_path = path
         self.knob_tier = str(session.get("knob_tier", self.knob_tier))
+        self.knob_source = str(session.get("knob_source", self.knob_source))
         benchmark = str(session.get("benchmark_name", self.benchmark_config.benchmark))
         workload_type = str(
             session.get("workload_type", self.benchmark_config.workload_type)
@@ -167,13 +199,46 @@ class BOConfig:
         )
         if set_iteration_budget:
             population_size = int(session.get("population_size", 0) or 0)
-            total_generations = int(session.get("total_generations", 0) or 0)
-            if population_size > 0 and total_generations > 0:
-                self.n_iterations = population_size * total_generations
+
+            generation_history = payload.get("generation_history")
+            if isinstance(generation_history, list) and generation_history:
+                actual_generations = len(generation_history)
+            else:
+                # Legacy session without generation_history; fall back to the
+                # configured target. Will overshoot when PBT early-stopped,
+                # but that is preferable to silently swapping in the preset.
+                actual_generations = int(session.get("total_generations", 0) or 0)
+
+            if population_size > 0 and actual_generations > 0:
+                preset_iterations = self.n_iterations
+                self.n_iterations = population_size * actual_generations
+                LOGGER.info(
+                    "PBT session: pop_size=%d × actual_generations=%d → "
+                    "n_iterations=%d (replaces preset=%d for equal-evaluation budget)",
+                    population_size,
+                    actual_generations,
+                    self.n_iterations,
+                    preset_iterations,
+                )
             else:
                 LOGGER.warning(
-                    "PBT session is missing positive population_size or "
-                    "total_generations; keeping configured BO iteration budget"
+                    "PBT session is missing population_size or generation_history; "
+                    "keeping preset BO iteration budget (pop=%d, gens=%d)",
+                    population_size,
+                    actual_generations,
+                )
+
+            # Flat patience cap: BO's GP overhead grows with iteration count,
+            # so scaling patience with the budget pours cycles into a
+            # saturated GP. 50 iterations is enough to detect a true
+            # convergence plateau without burning compute on a saturated
+            # surrogate.
+            if self.early_stopping_enabled:
+                self.early_stopping_patience = min(50, self.n_iterations)
+                LOGGER.info(
+                    "Set early_stopping_patience=%d (flat cap, budget=%d iterations)",
+                    self.early_stopping_patience,
+                    self.n_iterations,
                 )
 
         best_configuration = payload.get("best_configuration", {})
@@ -187,35 +252,83 @@ class BOConfig:
         if isinstance(worker_resources, dict):
             self.pbt_worker_resources = worker_resources
 
-        # Extract num_parallel_workers for parallel BO (only if set_max_workers=True)
-        if set_max_workers:
-            num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
-            if num_parallel_workers > 0:
+        # Extract num_parallel_workers from the session. It drives two things:
+        #   (1) resource_division for the legacy parallel-BO path (only when
+        #       set_max_workers lets the session override the CLI), and
+        #   (2) cotenancy_degree — the MANDATORY, matched co-tenancy load level
+        #       so each BO measurement window experiences the same single-host
+        #       contention a PBT generation generated. This is enforced
+        #       unconditionally whenever the session reports a positive count.
+        num_parallel_workers = int(session.get("num_parallel_workers", 0) or 0)
+        if self.no_cotenant:
+            self.cotenancy_degree = 1
+            LOGGER.info(
+                "Co-tenancy explicitly disabled (--no-cotenant); BO will run "
+                "WITHOUT background load despite PBT session having "
+                "num_parallel_workers=%d.",
+                num_parallel_workers,
+            )
+            if set_max_workers and num_parallel_workers > 0:
                 self.resource_division = num_parallel_workers
-            else:
-                LOGGER.warning(
-                    "PBT session is missing positive num_parallel_workers; "
-                    "keeping configured BO resource division"
-                )
+        elif num_parallel_workers > 0:
+            self.cotenancy_degree = num_parallel_workers
+            LOGGER.info(
+                "Co-tenancy degree set to %d from matched PBT session "
+                "(num_parallel_workers); BO trials will run with %d background "
+                "load instance(s).",
+                num_parallel_workers,
+                num_parallel_workers - 1,
+            )
+            if set_max_workers:
+                self.resource_division = num_parallel_workers
+        else:
+            LOGGER.warning(
+                "PBT session is missing positive num_parallel_workers; cannot "
+                "enforce matched co-tenancy — BO will run WITHOUT background "
+                "load (this breaks the fair-comparison invariant)."
+            )
 
         # Extract snapshot settings
         if "enable_snapshots" in session:
             self.enable_snapshots = bool(session["enable_snapshots"])
-        
+
         if self.enable_snapshots and "snapshot_restore_interval" in session:
-            # PBT restores every N generations. 
-            # Translate to BO iterations by multiplying by population_size.
+            # PBT restores every N generations.
+            # BO now operates per-generation as well, so no pop_size multiplier.
             pbt_interval = int(session["snapshot_restore_interval"])
-            pop_size = int(session.get("population_size", 1))
-            self.snapshot_restore_interval = pbt_interval * pop_size
+            self.snapshot_restore_interval = pbt_interval
             LOGGER.info(
-                f"Extracted PBT snapshot interval ({pbt_interval} gens * {pop_size} pop) "
+                f"Extracted PBT snapshot interval ({pbt_interval} gens) "
                 f"-> BO interval: {self.snapshot_restore_interval} iterations"
             )
 
         # Extract scoring policy from PBT session if present
         if "scoring_policy" in session:
             self.scoring_policy = str(session["scoring_policy"])
+
+        # ── Consolidated summary of everything copied from the PBT session ──
+        LOGGER.info(
+            "Applied PBT session '%s':\n"
+            "  tier=%s, knob_source=%s, benchmark=%s/%s\n"
+            "  tuning_mode=%s, eval=%.0fs, warmup=%.0fs\n"
+            "  n_iterations=%d, knob_filter=%d knob(s), resource_division=%d\n"
+            "  snapshots=%s (interval=%d), scoring_policy=%s",
+            path.name,
+            self.knob_tier,
+            self.knob_source,
+            self.benchmark_config.benchmark,
+            self.benchmark_config.sysbench_workload
+            or self.benchmark_config.workload_type,
+            self.benchmark_config.tuning_mode,
+            self.benchmark_config.evaluation_duration,
+            self.benchmark_config.warmup_duration,
+            self.n_iterations,
+            len(self.pbt_knob_names) if self.pbt_knob_names else 0,
+            self.resource_division,
+            self.enable_snapshots,
+            self.snapshot_restore_interval,
+            self.scoring_policy,
+        )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "BOConfig":
@@ -265,13 +378,26 @@ class BOConfig:
             else benchmark_preset.warmup_passes,
         )
 
+        # Resolve early stopping settings
+        early_stopping_enabled = base_config.early_stopping_enabled
+        if hasattr(args, "disable_early_stopping") and args.disable_early_stopping:
+            early_stopping_enabled = False
+
+        early_stopping_patience = (
+            args.early_stopping_patience
+            if hasattr(args, "early_stopping_patience")
+            and args.early_stopping_patience is not None
+            else base_config.early_stopping_patience
+        )
+
         config = replace(
             base_config,
             n_iterations=args.iterations
             if args.iterations is not None
             else base_config.n_iterations,
             random_seed=args.seed if args.seed is not None else base_config.random_seed,
-            knob_tier=args.tier or base_config.knob_tier,
+            knob_tier=getattr(args, "tier", None) or base_config.knob_tier,
+            knob_source=getattr(args, "knob_source", None) or base_config.knob_source,
             benchmark_config=benchmark_config,
             use_docker=not args.no_docker,
             docker_image=args.docker_image,
@@ -291,9 +417,6 @@ class BOConfig:
             bo_surrogate=args.bo_surrogate
             if args.bo_surrogate is not None
             else base_config.bo_surrogate,
-            batched_bo=args.batched_bo
-            if hasattr(args, "batched_bo") and args.batched_bo is not None
-            else base_config.batched_bo,
             resource_division=args.resource_division
             if hasattr(args, "resource_division") and args.resource_division is not None
             else base_config.resource_division,
@@ -304,8 +427,41 @@ class BOConfig:
             if hasattr(args, "enable_snapshots") and args.enable_snapshots is not None
             else base_config.enable_snapshots,
             snapshot_restore_interval=args.snapshot_restore_interval
-            if hasattr(args, "snapshot_restore_interval") and args.snapshot_restore_interval is not None
+            if hasattr(args, "snapshot_restore_interval")
+            and args.snapshot_restore_interval is not None
             else base_config.snapshot_restore_interval,
+            early_stopping_enabled=early_stopping_enabled,
+            early_stopping_patience=early_stopping_patience,
+            worker_ram=args.worker_ram if hasattr(args, "worker_ram") else None,
+            worker_cpus=args.worker_cpus if hasattr(args, "worker_cpus") else None,
+            worker_disk_read_bps=(
+                args.worker_disk_read_bps
+                if hasattr(args, "worker_disk_read_bps")
+                else None
+            ),
+            worker_disk_write_bps=(
+                args.worker_disk_write_bps
+                if hasattr(args, "worker_disk_write_bps")
+                else None
+            ),
+            worker_disk_read_iops=(
+                args.worker_disk_read_iops
+                if hasattr(args, "worker_disk_read_iops")
+                else None
+            ),
+            worker_disk_write_iops=(
+                args.worker_disk_write_iops
+                if hasattr(args, "worker_disk_write_iops")
+                else None
+            ),
+            probe_disk=args.probe_disk if hasattr(args, "probe_disk") else True,
+            cotenancy_degree=(
+                args.cotenancy_degree
+                if hasattr(args, "cotenancy_degree")
+                and args.cotenancy_degree is not None
+                else base_config.cotenancy_degree
+            ),
+            no_cotenant=getattr(args, "no_cotenant", False),
         )
 
         if args.pbt_session:
@@ -313,7 +469,8 @@ class BOConfig:
                 config.apply_pbt_session(
                     Path(args.pbt_session),
                     set_iteration_budget=args.iterations is None,
-                    set_max_workers=not hasattr(args, "resource_division") or args.resource_division is None,
+                    set_max_workers=not hasattr(args, "resource_division")
+                    or args.resource_division is None,
                 )
             except Exception as e:
                 LOGGER.warning(
@@ -321,33 +478,43 @@ class BOConfig:
                     f"Falling back to default or CLI-provided settings."
                 )
 
-        config.max_workers = config.resource_division if config.batched_bo else 1
+        config.max_workers = 1  # Always sequential
+
+        # Explicit CLI overrides session / defaults
+        if getattr(args, "knob_source", None) is not None:
+            config.knob_source = args.knob_source
 
         return config
+
 
 RAPID_BO_CONFIG = BOConfig(
     n_iterations=40,
     range_update_interval=10,
+    early_stopping_patience=20,
     benchmark_config=clone_benchmark_config(RAPID_BENCHMARK_CONFIG),
 )
 STANDARD_BO_CONFIG = BOConfig(
-    n_iterations=120,
+    n_iterations=80,
     range_update_interval=10,
+    early_stopping_patience=50,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
 )
 THOROUGH_BO_CONFIG = BOConfig(
     n_iterations=400,
     range_update_interval=15,
+    early_stopping_patience=200,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
 )
 RESEARCH_BO_CONFIG = BOConfig(
     n_iterations=1600,
     range_update_interval=20,
+    early_stopping_patience=800,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
 )
 EXTREME_BO_CONFIG = BOConfig(
     n_iterations=3200,
     range_update_interval=25,
+    early_stopping_patience=1600,
     benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
 )
 

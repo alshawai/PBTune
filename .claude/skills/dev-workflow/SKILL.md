@@ -39,15 +39,18 @@ Type checking covers: `src/evaluation`, `src/utils`, `src/scripts`
 
 ```
 tests/unit/
-├── analysis/     # data_loader, importance
-├── benchmarks/   # sysbench, tpch executor tests
-├── config/       # hardware normalization
-├── core/         # population, evaluator, CLI, warm start, saturation
-├── evaluation/   # comparative evaluation, public API
-├── knobs/        # metadata loader, policy loader
-├── scoring/      # normalizer, weight model, workload features
-├── scripts/      # cleanup instances
-└── utils/        # environments, hardware info, instrumentation
+├── analysis/      # data_loader, importance, timing_breakdown
+├── api/           # public API surface
+├── benchmarks/    # sysbench, tpch executor tests
+├── config/        # hardware normalization
+├── core/          # barriers, orchestrator fault injection, CLI, warm start, saturation
+├── evaluation/    # comparative evaluation, public API
+├── knobs/         # metadata loader, policy loader
+├── scoring/       # normalizer, weight model, workload features
+├── scripts/       # cleanup instances, BO baseline
+├── tuner/         # session save/finalization, timing block
+├── utils/         # environments, hardware info, instrumentation, timing
+└── visualization/ # plot rendering
 ```
 
 All tests use `pytest`. Common fixtures are in `tests/conftest.py` and
@@ -69,6 +72,7 @@ All tests use `pytest`. Common fixtures are in `tests/conftest.py` and
 
 ## Dependencies
 
-- Runtime: `requirements.txt` (psycopg2, numpy, pandas, scipy, docker, fanova, shap)
+- Runtime: `requirements.txt` (psycopg2-binary, SQLAlchemy, numpy, pandas, scipy, scikit-learn, psutil, PyYAML, fanova, shap)
+- Optional: smac3, ConfigSpace (BO baseline)
 - Dev: `requirements-dev.txt` (pytest, ruff, mypy)
-- Install: `pip install -r requirements.txt -r requirements-dev.txt`
+- Install: `pip install -r requirements.txt -r requirements-dev.txt` (or `make install-dev`)

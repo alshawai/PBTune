@@ -10,10 +10,7 @@ import sys
 import importlib
 from unittest.mock import MagicMock
 
-# Mock ConfigSpace and fanova
-mock_cs = MagicMock()
-sys.modules["ConfigSpace"] = mock_cs
-sys.modules["ConfigSpace.hyperparameters"] = MagicMock()
+# Mock fanova and shap
 
 
 class MockFANOVA:
@@ -225,3 +222,105 @@ def test_correlation_warning(caplog):
         mock_shap.TreeExplainer.shap_values = original_shap_values
 
     assert "Low correlation between fANOVA and SHAP importance rankings" in caplog.text
+
+
+# ── _build_config_space hardening ────────────────────────────────────
+
+from src.analysis.importance import _build_config_space
+
+
+def test_config_space_widens_with_epsilon():
+    """Bounds set to exact min/max must be widened so fANOVA's strict
+    ``X[i] > upper`` check doesn't reject boundary samples."""
+    df = pd.DataFrame({"f": [0.0, 1.0]})
+    bounds = {"f": (0.0, 1.0)}
+    cs = _build_config_space(df, bounds)
+    hp = cs.get_hyperparameter("f")
+    assert hp.lower < 0.0, "lower bound must be widened below data min"
+    assert hp.upper > 1.0, "upper bound must be widened above data max"
+
+
+def test_config_space_encloses_observed_outside_bounds():
+    """If data contains values outside the provided knob_bounds, the
+    config space must still enclose them (union of bounds ∪ data)."""
+    df = pd.DataFrame({"f": [-5.0, 10.0]})
+    bounds = {"f": (0.0, 1.0)}
+    cs = _build_config_space(df, bounds)
+    hp = cs.get_hyperparameter("f")
+    assert hp.lower < -5.0
+    assert hp.upper > 10.0
+
+
+def test_config_space_integer_uses_floor_ceil():
+    """Integer bounds must use floor/ceil, not int() truncation, so the
+    interval always widens rather than narrowing."""
+    df = pd.DataFrame({"i": pd.array([5, 10], dtype="int64")})
+    bounds = {"i": (5.0, 10.0)}
+    cs = _build_config_space(df, bounds)
+    hp = cs.get_hyperparameter("i")
+    # After epsilon subtraction from 5.0 and addition to 10.0,
+    # floor(4.999...) = 4, ceil(10.000...) = 11
+    assert hp.lower <= 4, f"expected lower ≤ 4, got {hp.lower}"
+    assert hp.upper >= 11, f"expected upper ≥ 11, got {hp.upper}"
+
+
+def test_config_space_degenerate_interval():
+    """When all values are identical (min == max), the config space must
+    still produce a valid (non-zero-width) interval."""
+    df = pd.DataFrame({"f": [42.0, 42.0, 42.0]})
+    bounds = {"f": (42.0, 42.0)}
+    cs = _build_config_space(df, bounds)
+    hp = cs.get_hyperparameter("f")
+    assert hp.lower < hp.upper
+
+
+def test_config_space_large_integer_no_crash():
+    """Large integer values (like ram_bytes) at exact boundaries must not
+    crash fANOVA due to float-precision issues."""
+    ram_vals = pd.array([8589934592, 17179869184], dtype="int64")
+    df = pd.DataFrame({"ram_bytes": ram_vals})
+    bounds = {"ram_bytes": (float(ram_vals[0]), float(ram_vals[1]))}
+    cs = _build_config_space(df, bounds)
+    hp = cs.get_hyperparameter("ram_bytes")
+    assert hp.lower <= 8589934592
+    assert hp.upper >= 17179869184
+
+
+def test_fanova_survives_non_alphabetical_columns():
+    """Regression: ConfigSpace alphabetically sorts hyperparameters, so
+    columns named z_*, a_*, m_* get reordered.  Passing the DataFrame
+    (not numpy) to fANOVA lets it auto-reorder; this test verifies the
+    full pipeline doesn't crash when columns are non-alphabetical.
+
+    The bug was: _run_importance_pass converted df.to_numpy() *before*
+    passing to fANOVA, so column i in X mapped to the wrong
+    hyperparameter i in ConfigSpace's sorted order."""
+    from fanova import fANOVA as _fANOVA  # noqa: N813
+
+    # Non-alphabetical column order: z, a, m.
+    # ConfigSpace will reorder to: a, m, z.
+    rng = np.random.RandomState(42)
+    n = 50
+    df = pd.DataFrame({
+        "z_knob": rng.uniform(0.0, 100.0, n),
+        "a_knob": rng.uniform(0.0, 10.0, n),
+        "m_knob": rng.uniform(0.0, 50.0, n),
+    })
+    bounds = {
+        "z_knob": (0.0, 100.0),
+        "a_knob": (0.0, 10.0),
+        "m_knob": (0.0, 50.0),
+    }
+    scores = pd.Series(rng.uniform(0.0, 100.0, n))
+
+    cs = _build_config_space(df, bounds)
+
+    # This would crash with RuntimeError if X is numpy and column order
+    # doesn't match ConfigSpace's alphabetical order.
+    _fANOVA(
+        X=df,  # DataFrame → fANOVA auto-reorders
+        Y=scores.to_numpy(),
+        config_space=cs,
+        n_trees=4,
+        seed=42,
+    )

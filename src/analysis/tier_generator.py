@@ -1,4 +1,18 @@
-"""Tier generation for knob importance using Jenks Natural Breaks."""
+"""Tier generation for knob importance.
+
+The tiering algorithm is now :mod:`src.analysis.scalpel` (SCALPEL —
+Significance-Coverage-stability Algorithm for Layered PErformance-knob
+Labeling). The module-level helpers and :func:`generate_tiers` shim
+below preserve the legacy ``(marginal_importances, workload_label)``
+API used by callers that only retain a precomputed importance dict
+(notably :func:`src.analysis.hardware_validator.validate_hardware_importance`);
+they are wired through to a Lorenz cumulative-mass fallback in
+:mod:`src.analysis.scalpel`. The full pipeline that runs on ``(X, y)``
+lives in :func:`src.analysis.scalpel.scalpel_tier`.
+
+See ``/home/eima40x4c/.claude/plans/distributed-toasting-sparrow.md``
+for design rationale.
+"""
 
 from __future__ import annotations
 
@@ -7,40 +21,15 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Optional, Sequence
 
-import numpy as np
 import pandas as pd
-
-try:
-    from jenkspy import jenks_breaks  # type: ignore
-except Exception:  # pragma: no cover - fallback for environments without jenkspy
-
-    def jenks_breaks(values: list[float], k: int) -> list[float]:
-        """Fallback Jenks-like breaks using equal-frequency quantiles.
-
-        This is a lightweight substitute for environments where `jenkspy`
-        isn't installed (e.g., some CI/test environments). It returns
-        k+1 breakpoints from min to max using empirical quantiles.
-        """
-        arr = np.array(values, dtype=float)
-        if arr.size == 0:
-            return []
-        if k < 1:
-            raise ValueError("k must be >= 1")
-        # include min and max, and k-1 internal quantiles
-        breaks: list[float] = [float(np.min(arr))]
-        for i in range(1, k):
-            q = float(np.quantile(arr, i / k))
-            breaks.append(q)
-        breaks.append(float(np.max(arr)))
-        return breaks
-
-
-from sklearn.metrics import silhouette_score
 
 from src.knobs.knob_metadata import KNOB_TUNING_METADATA
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover
+    from src.analysis.scalpel import SCALPELResult
 
 logger = get_logger(__name__)
 
@@ -79,15 +68,27 @@ class AgreementReport:
 
 @dataclass
 class TierResult:
-    """Result container for Jenks-based tiering.
+    """Result container for legacy-shape tier output.
 
-    Attributes:
-        optimal_k: Selected tier count.
-        silhouette_scores: Silhouette scores per candidate k.
-        tier_assignments: Mapping from knob name to tier name.
-        jenks_breaks: Breakpoints returned by Jenks Natural Breaks.
-        agreement_report: Expert vs data agreement report.
-        workload_label: Label identifying the workload.
+    Under SCALPEL the field semantics shift:
+
+    * ``optimal_k`` = 4 on a successful tier assignment, 1 in the
+      degenerate path. SCALPEL never emits other values.
+    * ``silhouette_scores`` is always ``{}`` (silhouette is no longer
+      part of the algorithm); the field is preserved for JSON
+      compatibility with downstream readers.
+    * ``tier_assignments`` only contains knobs that landed in
+      ``minimal``/``core``/``standard`` — non-confirmed knobs are
+      ABSENT (canonical ``extensive`` is ``null`` in the JSON contract,
+      meaning "all tunable knobs"). This avoids
+      ``hardware_validator._build_tier_rank_map`` KeyErrors.
+    * ``jenks_breaks`` carries the Lorenz cumulative-mass cutoffs
+      (default ``[0.50, 0.80]``) so the ``tier_generation`` JSON block
+      remains schema-stable.
+    * ``agreement_report`` is computed against ``EXPERT_TIER_ORDER``.
+
+    For full per-knob diagnostics (BORUTA hits, BH p-values, stability
+    probabilities, DBA-prior violations), use the SCALPELResult.
     """
 
     optimal_k: int
@@ -115,11 +116,8 @@ class TierResult:
 def _clean_score(score: float) -> float | None:
     """Convert NaN scores to None for JSON output.
 
-    Args:
-        score: Silhouette score value.
-
-    Returns:
-        Score as a float, or None when the score is NaN.
+    Retained for callers that still serialize legacy ``silhouette_scores``
+    dicts; SCALPEL emits an empty silhouette mapping so this is rarely hit.
     """
     if math.isnan(score):
         return None
@@ -129,16 +127,16 @@ def _clean_score(score: float) -> float | None:
 def get_tier_names(k: int) -> list[str]:
     """Return tier labels for the requested tier count.
 
-    Args:
-        k: Number of tiers.
-
-    Returns:
-        List of tier names ordered from most important to least important.
+    With SCALPEL, ``k`` is always 4 on success or 1 in the degenerate
+    path; older callers passing arbitrary k still work via the
+    ``tier_1..tier_k`` fallback.
     """
     if k == 3:
         return ["minimal", "standard", "extensive"]
     if k == 4:
         return ["minimal", "core", "standard", "extensive"]
+    if k == 1:
+        return ["minimal"]
 
     logger.warning(
         "Non-standard tier count requested (k=%d); using tier_1..tier_%d.",
@@ -149,107 +147,8 @@ def get_tier_names(k: int) -> list[str]:
 
 
 def get_tier_rank_map(tier_names: Sequence[str]) -> dict[str, int]:
-    """Build a ranking map for tier names.
-
-    Args:
-        tier_names: Ordered tier names from most important to least important.
-
-    Returns:
-        Mapping from tier name to rank (1 = most important).
-    """
+    """Build a ranking map for tier names."""
     return {tier: idx + 1 for idx, tier in enumerate(tier_names)}
-
-
-def _assign_interval_index(value: float, breaks: Sequence[float]) -> int:
-    """Assign a value to a Jenks interval index (ascending order).
-
-    Args:
-        value: Importance score value.
-        breaks: Jenks breakpoints in ascending order.
-
-    Returns:
-        Zero-based interval index.
-    """
-    last_index = len(breaks) - 2
-    for idx in range(last_index):
-        if value <= breaks[idx + 1]:
-            return idx
-    return last_index
-
-
-def _assign_labels(scores: np.ndarray, breaks: Sequence[float]) -> list[int]:
-    """Assign Jenks cluster labels for each score.
-
-    Args:
-        scores: Array of importance scores.
-        breaks: Jenks breakpoints in ascending order.
-
-    Returns:
-        List of cluster labels in ascending importance order.
-    """
-    return [_assign_interval_index(float(score), breaks) for score in scores]
-
-
-def _safe_silhouette(scores: np.ndarray, labels: list[int]) -> float:
-    """Compute silhouette score or return NaN when undefined.
-
-    Args:
-        scores: Array of importance scores.
-        labels: Cluster labels from Jenks.
-
-    Returns:
-        Silhouette score or NaN if undefined.
-    """
-    unique_labels = set(labels)
-    if len(unique_labels) < 2 or len(unique_labels) >= len(scores):
-        return float("nan")
-
-    try:
-        return float(silhouette_score(scores.reshape(-1, 1), labels))
-    except ValueError:
-        return float("nan")
-
-
-def _resolve_optimal_k(
-    scores: np.ndarray,
-    k_values: Sequence[int],
-    fallback_k: int,
-) -> tuple[int, dict[int, float]]:
-    """Evaluate silhouette scores and select the best k.
-
-    Args:
-        scores: Array of importance scores.
-        k_values: Candidate k values to evaluate.
-        fallback_k: Fallback k when silhouettes are undefined.
-
-    Returns:
-        Tuple of optimal k and silhouette score mapping.
-    """
-    silhouette_scores: dict[int, float] = {}
-    n_samples = len(scores)
-    unique_count = len(np.unique(scores))
-
-    for k in k_values:
-        if k < 2 or k > n_samples or k > unique_count:
-            silhouette_scores[k] = float("nan")
-            continue
-
-        breaks = jenks_breaks(scores.tolist(), k)
-        labels = _assign_labels(scores, breaks)
-        silhouette_scores[k] = _safe_silhouette(scores, labels)
-
-    valid_scores = {
-        k: score for k, score in silhouette_scores.items() if not math.isnan(score)
-    }
-    if not valid_scores:
-        logger.warning(
-            "Unable to compute silhouette scores; falling back to k=%d.",
-            fallback_k,
-        )
-        return min(fallback_k, n_samples), silhouette_scores
-
-    optimal_k = max(valid_scores.items(), key=lambda item: item[1])[0]
-    return optimal_k, silhouette_scores
 
 
 def compare_to_expert(
@@ -258,12 +157,9 @@ def compare_to_expert(
 ) -> AgreementReport:
     """Compare data-driven tiers against expert tiers.
 
-    Args:
-        tier_assignments: Mapping of knob name to data-driven tier.
-        data_rank_map: Mapping of data-driven tier to rank.
-
-    Returns:
-        AgreementReport with agreements, promotions, and demotions.
+    Knobs absent from ``tier_assignments`` (under SCALPEL: not
+    BORUTA-confirmed) and knobs whose tier is not in ``data_rank_map``
+    are silently skipped.
     """
     agreements: list[str] = []
     promotions: list[tuple[str, str, str]] = []
@@ -300,78 +196,147 @@ def generate_tiers(
     k_values: Sequence[int] = DEFAULT_K_VALUES,
     fallback_k: int = DEFAULT_FALLBACK_K,
 ) -> TierResult:
-    """Generate tier assignments from marginal importance scores.
+    """Generate tier assignments from a precomputed importance dict.
 
-    Args:
-        marginal_importances: Mapping of knob name to fANOVA importance score.
-        workload_label: Workload label to tag the output.
-        k_values: Candidate k values for silhouette validation.
-        fallback_k: Fallback tier count when silhouette is undefined.
+    Wraps :func:`src.analysis.scalpel.lorenz_tier_from_importances` to
+    preserve the legacy ``(marginal_importances, workload_label)`` API
+    used by :mod:`src.analysis.hardware_validator`. ``k_values`` and
+    ``fallback_k`` are accepted for signature compatibility but unused
+    — SCALPEL does not perform silhouette-driven k selection.
 
-    Returns:
-        TierResult containing tier assignments and validation metadata.
+    For the full ``(X, y)`` pipeline (BORUTA + Lorenz + stability),
+    call :func:`src.analysis.scalpel.scalpel_tier` directly.
 
-    Raises:
-        ValueError: If no importance scores are provided.
+    Raises
+    ------
+    ValueError
+        If no importance scores are provided.
     """
-    if not marginal_importances:
-        raise ValueError("Marginal importance scores are required.")
+    from src.analysis.scalpel import lorenz_tier_from_importances  # local import to break cycle
 
-    knobs = list(marginal_importances.keys())
-    scores = np.array([float(marginal_importances[knob]) for knob in knobs])
-    n_samples = len(scores)
-
-    if n_samples == 1:
-        tier_names = get_tier_names(1)
-        tier_assignments = {knobs[0]: tier_names[0]}
-        data_rank_map = get_tier_rank_map(tier_names)
-        agreement_report = compare_to_expert(tier_assignments, data_rank_map)
-        return TierResult(
-            optimal_k=1,
-            silhouette_scores={},
-            tier_assignments=tier_assignments,
-            jenks_breaks=[scores[0], scores[0]],
-            agreement_report=agreement_report,
-            workload_label=workload_label,
-        )
-
-    use_uniform_breaks = False
-    if np.allclose(scores, scores[0]):
-        logger.warning(
-            "All importance scores are equal; silhouette is undefined. "
-            "Falling back to k=%d.",
-            fallback_k,
-        )
-        optimal_k = min(fallback_k, n_samples)
-        silhouette_scores = {k: float("nan") for k in k_values}
-        use_uniform_breaks = True
-    else:
-        optimal_k, silhouette_scores = _resolve_optimal_k(scores, k_values, fallback_k)
-
-    if use_uniform_breaks:
-        breaks = [float(scores[0])] * (optimal_k + 1)
-        labels = [0] * n_samples
-    else:
-        breaks = jenks_breaks(scores.tolist(), optimal_k)
-        labels = _assign_labels(scores, breaks)
-    tier_names = get_tier_names(optimal_k)
-
-    tier_assignments: dict[str, str] = {}
-    for knob, label in zip(knobs, labels, strict=True):
-        tier_index = (optimal_k - 1) - label
-        tier_assignments[knob] = tier_names[tier_index]
-
-    data_rank_map = get_tier_rank_map(tier_names)
-    agreement_report = compare_to_expert(tier_assignments, data_rank_map)
-
-    return TierResult(
-        optimal_k=optimal_k,
-        silhouette_scores=silhouette_scores,
-        tier_assignments=tier_assignments,
-        jenks_breaks=[float(value) for value in breaks],
-        agreement_report=agreement_report,
+    return lorenz_tier_from_importances(
+        marginal_importances=marginal_importances,
         workload_label=workload_label,
     )
+
+
+def export_data_driven_tiers(
+    marginal_importances: Optional[dict[str, float]] = None,
+    workload_label: str = "unknown",
+    output_path: Path | None = None,
+    source_results: str = "",
+    *,
+    scalpel_result: Optional["SCALPELResult"] = None,
+    write_diagnostics: bool = False,
+) -> TierResult:
+    """Export tier assignments as a ``data_driven_tiers.json`` file.
+
+    Two call modes:
+
+    * **SCALPEL primary** — pass a populated :class:`SCALPELResult`. The
+      tier assignments + diagnostics come from the full pipeline.
+    * **Lorenz fallback** — pass ``marginal_importances`` only. Used by
+      :mod:`src.analysis.hardware_validator` for cross-hardware combined
+      models, which only retain a precomputed importance dict.
+
+    Tier shape on disk is unchanged from the legacy schema (the canonical
+    keys ``minimal``, ``core``, ``standard`` carry NON-cumulative knob
+    lists; ``extensive`` is ``null``). New keys appear under ``metadata``:
+    ``algorithm = "scalpel-v1"``, ``scalpel_version``, and a pruned
+    ``diagnostics`` block. Optional ``scalpel_diagnostics.json`` sibling
+    holds the full per-knob payload when ``write_diagnostics=True``.
+
+    Returns
+    -------
+    TierResult
+        Adapted view of the SCALPEL run (or the Lorenz fallback) for
+        callers that still consume legacy fields.
+    """
+    from datetime import datetime, timezone
+    import os
+
+    from src.analysis.scalpel import (  # local import to break cycle
+        DEFAULT_LORENZ_BREAKPOINTS,
+        SCALPEL_ALGORITHM_SLUG,
+        SCALPEL_VERSION,
+        lorenz_tier_from_importances,
+    )
+
+    if scalpel_result is None and not marginal_importances:
+        raise ValueError(
+            "export_data_driven_tiers requires either scalpel_result or "
+            "non-empty marginal_importances."
+        )
+
+    if output_path is None:
+        output_path = (
+            Path("data")
+            / "data_driven_knobs"
+            / workload_label
+            / "data_driven_tiers.json"
+        )
+
+    if scalpel_result is not None:
+        tier_assignments = dict(scalpel_result.tier_assignments)
+        diagnostics_block = scalpel_result.diagnostics_pruned()
+        tier_result = scalpel_result.to_tier_result(workload_label=workload_label)
+    else:
+        tier_result = lorenz_tier_from_importances(
+            marginal_importances=marginal_importances,  # type: ignore[arg-type]
+            workload_label=workload_label,
+        )
+        tier_assignments = dict(tier_result.tier_assignments)
+        diagnostics_block = {
+            "lorenz_cutoffs": list(DEFAULT_LORENZ_BREAKPOINTS),
+            "source": "lorenz_fallback",
+        }
+
+    canonical_assignments: dict[str, list[str]] = {
+        "minimal": [],
+        "core": [],
+        "standard": [],
+    }
+    for knob, tier_name in tier_assignments.items():
+        if tier_name in canonical_assignments:
+            canonical_assignments[tier_name].append(knob)
+
+    tiers: dict[str, list[str] | None] = {
+        "minimal": sorted(canonical_assignments["minimal"]),
+        "core": sorted(canonical_assignments["core"]),
+        "standard": sorted(canonical_assignments["standard"]),
+        "extensive": None,
+    }
+
+    payload = {
+        "metadata": {
+            "workload_type": workload_label,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "algorithm": SCALPEL_ALGORITHM_SLUG,
+            "scalpel_version": SCALPEL_VERSION,
+            "source_results": source_results,
+            "diagnostics": diagnostics_block,
+        },
+        "tiers": tiers,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, output_path)
+
+    if write_diagnostics and scalpel_result is not None:
+        diag_path = output_path.parent / "scalpel_diagnostics.json"
+        diag_tmp = diag_path.with_suffix(diag_path.suffix + ".tmp")
+        with diag_tmp.open("w", encoding="utf-8") as f:
+            json.dump(scalpel_result.diagnostics_full(), f, indent=2)
+            f.write("\n")
+        os.replace(diag_tmp, diag_path)
+        logger.info("Wrote SCALPEL diagnostics to %s", diag_path)
+
+    logger.info("Exported data-driven tiers to %s", output_path)
+    return tier_result
 
 
 def load_importances_csv(csv_path: Path) -> dict[str, float]:

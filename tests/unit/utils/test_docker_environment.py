@@ -15,6 +15,7 @@ import requests
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import InstanceConfig
 from src.utils.environments.docker import DockerEnvironment
+from src.utils.hardware_info import WorkerResources
 
 
 class _DummySchemaProvider:
@@ -43,12 +44,14 @@ def _make_environment() -> DockerEnvironment:
     env.schema_provider = _DummySchemaProvider()
     env.cpu_cores = 1.0
     env.ram_bytes = 256 * 1024 * 1024
+    env.worker_resources = None
     env.image_name = "postgres:18"
     env.network_name = "pbt-network"
     env.base_port = 5440
     env.base_dir = Path("/tmp")
     env.container_prefix = "pbt-worker"
     env.force_recreate_baseline = False
+    env.data_device_node = None
     env.instances = {
         0: InstanceConfig(
             worker_id=0, port=5440, data_dir=Path("/tmp/worker_0"), running=True
@@ -58,6 +61,7 @@ def _make_environment() -> DockerEnvironment:
     env._ready_timeout = 60
     env._restore_ready_timeout = 180
     env._restore_api_timeout = 180
+    env._num_parallel_workers = 1  # Default: sequential execution
     env._wait_for_ready = MagicMock()
     env._checkpoint_instance = MagicMock()
 
@@ -66,6 +70,147 @@ def _make_environment() -> DockerEnvironment:
     env.client.volumes = MagicMock()
 
     return env
+
+
+def test_worker_cpu_budget_prefers_worker_resources() -> None:
+    """Cpuset sizing should use the canonical per-worker budget when available."""
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+    )
+    env.cpu_cores = 1.0
+
+    assert env._worker_cpu_budget() == 2
+
+
+def test_nano_cpus_follows_worker_budget_not_legacy_scalar() -> None:
+    """nano_cpus (CPU quota) must agree with the cpuset budget.
+
+    Regression: nano_cpus previously read the legacy ``cpu_cores`` scalar
+    while cpuset read ``worker_resources.cpu_cores``. When a caller leaves
+    ``cpu_cores`` at its 0.0 default but supplies ``worker_resources``, the
+    quota would silently drop to None while cpuset still pinned cores. Both
+    must now derive from ``_worker_cpu_budget()``.
+    """
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=4,
+        disk_type="SSD",
+    )
+    env.cpu_cores = 0.0  # legacy scalar left unset
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert kwargs["nano_cpus"] == 4 * 1_000_000_000
+    # cpuset and quota agree on the same 4-core budget.
+    assert kwargs["cpuset_cpus"] is not None
+
+
+def test_nano_cpus_none_when_no_budget_available() -> None:
+    """No CPU budget (no worker_resources, zero legacy scalar) → unlimited."""
+    env = _make_environment()
+    env.worker_resources = None
+    env.cpu_cores = 0.0
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert kwargs["nano_cpus"] is None
+
+
+from unittest.mock import MagicMock, patch
+
+
+@patch("os.cpu_count", return_value=4)
+def test_worker_cpuset_cpus_uses_budget_only(mock_cpu_count: MagicMock) -> None:
+    """Cpuset slices should be derived from the budget and parallel batch position.
+
+    Workers cycle through the same CPU slices across sequential batches.
+    Example: 4 workers, 2 parallel, 2 CPUs per worker on 4-CPU host:
+    - Batch 1 (workers 0-1): [0,1], [2,3]
+    - Batch 2 (workers 2-3): [0,1], [2,3] (cycles)
+    """
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+    )
+    env._num_parallel_workers = 2
+
+    # Batch 1: workers 0-1 (parallel)
+    assert env._worker_cpuset_cpus(worker_id=0, num_workers=4) == "0,1"
+    assert env._worker_cpuset_cpus(worker_id=1, num_workers=4) == "2,3"
+
+    # Batch 2: workers 2-3 (sequential to batch 1, so they cycle back to same CPUs)
+    assert env._worker_cpuset_cpus(worker_id=2, num_workers=4) == "0,1"
+    assert env._worker_cpuset_cpus(worker_id=3, num_workers=4) == "2,3"
+
+
+def test_container_runtime_kwargs_includes_blkio_when_resources_set() -> None:
+    """blkio kwargs are emitted when worker_resources carry a non-zero budget."""
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+        disk_read_bps=20_000_000,
+        disk_write_bps=10_000_000,
+        disk_read_iops=5_000,
+        disk_write_iops=3_000,
+        disk_class="sata_ssd",
+    )
+    env.data_device_node = "/dev/sda"
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert kwargs["device_read_bps"] == [{"Path": "/dev/sda", "Rate": 20_000_000}]
+    assert kwargs["device_write_bps"] == [{"Path": "/dev/sda", "Rate": 10_000_000}]
+    assert kwargs["device_read_iops"] == [{"Path": "/dev/sda", "Rate": 5_000}]
+    assert kwargs["device_write_iops"] == [{"Path": "/dev/sda", "Rate": 3_000}]
+
+
+def test_container_runtime_kwargs_omits_blkio_when_zero_budget() -> None:
+    """blkio kwargs absent when WorkerResources keeps disk fields at default 0."""
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+    )
+    env.data_device_node = "/dev/sda"
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert "device_read_bps" not in kwargs
+    assert "device_write_bps" not in kwargs
+    assert "device_read_iops" not in kwargs
+    assert "device_write_iops" not in kwargs
+
+
+def test_container_runtime_kwargs_omits_blkio_when_no_device_node() -> None:
+    """Never emit blkio kwargs when the device node couldn't be resolved.
+
+    This is the safe path on tmpfs / overlayfs / non-Linux hosts where
+    Docker would otherwise reject the kwarg with an unparseable Path.
+    """
+    env = _make_environment()
+    env.worker_resources = WorkerResources(
+        ram_bytes=512 * 1024 * 1024,
+        cpu_cores=2,
+        disk_type="SSD",
+        disk_write_bps=10_000_000,
+    )
+    env.data_device_node = None
+
+    kwargs = env._container_runtime_kwargs(worker_id=0, num_workers=1)
+
+    assert "device_read_bps" not in kwargs
+    assert "device_write_bps" not in kwargs
+    assert "device_read_iops" not in kwargs
+    assert "device_write_iops" not in kwargs
 
 
 def test_restore_snapshot_returns_false_when_image_missing() -> None:
@@ -84,6 +229,70 @@ def test_restore_snapshot_returns_false_when_container_run_fails() -> None:
     env.client.containers.run.side_effect = docker.errors.APIError("boom")
 
     assert env.restore_snapshot(worker_id=0, snapshot_id="pbt-snapshot-test") is False
+
+
+def test_seed_pgdata_dir_preserves_auto_conf_across_restore(tmp_path: Path) -> None:
+    """The copy container must preserve postgresql.auto.conf so the worker's
+    freshly-applied knobs (written by apply_only just before restore) survive
+    the wipe-and-reseed.
+
+    Regression test for the bug where `_prepare_worker_pgdata_dir` wiped the
+    PGDATA bind mount from the host, destroying the auto.conf that
+    `apply_only` had just written. The fix moves the wipe + auto.conf
+    preserve + copy into a single atomic shell command inside the copy
+    container.
+    """
+    env = _make_environment()
+    env.base_dir = tmp_path
+
+    # Make the snapshot dir exist so the early-return guard passes.
+    snapshot_dir = env._snapshot_host_dir()
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    # Capture what command the copy container actually receives.
+    captured: dict = {}
+
+    def _run_capture(*args, **kwargs):
+        captured.update(kwargs)
+        m = MagicMock()
+        m.wait.return_value = {"StatusCode": 0}
+        return m
+
+    env.client.containers.run.side_effect = _run_capture
+
+    result = env._seed_pgdata_dir_from_snapshot(worker_id=0, quiet=True)
+    assert result is not None
+
+    cmd = captured.get("command")
+    assert cmd is not None, "containers.run must be called with a command"
+    cmd_str = cmd[0] if isinstance(cmd, list) else cmd
+
+    # Three invariants that prevent the auto.conf-wipe regression:
+    # 1. The pre-copy preservation hop must exist (cp before delete).
+    assert "/dest/postgresql.auto.conf" in cmd_str, (
+        "Command must reference /dest/postgresql.auto.conf for preservation"
+    )
+    assert "auto.conf.preserve" in cmd_str, (
+        "Command must save auto.conf to a tmp location before wiping /dest"
+    )
+    # 2. The wipe + copy + restore sequence must be ordered correctly:
+    #    preserve -> delete -> copy -> restore. We assert ordering by string
+    #    position in the single shell command.
+    save_pos = cmd_str.find("auto.conf.preserve")
+    delete_pos = cmd_str.find("find /dest")
+    copy_pos = cmd_str.find("cp -R /source")
+    restore_pos = cmd_str.rfind("auto.conf.preserve")
+    assert 0 <= save_pos < delete_pos < copy_pos < restore_pos, (
+        f"Sequence must be preserve→delete→copy→restore; got positions "
+        f"save={save_pos} delete={delete_pos} copy={copy_pos} restore={restore_pos}"
+    )
+    # 3. The destructive host-side wipe must NOT be used: that's what caused
+    #    the bug. _prepare_worker_pgdata_dir calls _force_remove_host_dir,
+    #    which would destroy auto.conf before the container ever runs.
+    #    Patching here would silently regress us — assert via call count.
+    assert not any(
+        "force_remove" in str(call) for call in env.client.containers.run.mock_calls
+    ), "Host-side _force_remove_host_dir must not be invoked during restore"
 
 
 @pytest.mark.skip(reason="Legacy volume tests")
@@ -291,7 +500,7 @@ def test_setup_instances_uses_absolute_bind_paths_for_relative_base_dir() -> Non
     env.snapshot_exists = MagicMock(return_value=True)
     env.create_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     worker_run_call = next(
         call
@@ -316,7 +525,7 @@ def test_setup_instances_reuses_existing_snapshot_without_recommit() -> None:
     env.snapshot_exists = MagicMock(return_value=True)
     env.create_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     first_get_call = env.client.containers.get.call_args_list[0]
     assert first_get_call.args[0] == "eval-worker-0"
@@ -339,7 +548,7 @@ def test_setup_instances_recreates_worker0_when_baseline_snapshot_missing() -> N
     env.snapshot_exists = MagicMock(return_value=False)
     env.create_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     existing_container.remove.assert_called_once_with(force=True)
     env.client.containers.run.assert_called_once()
@@ -363,7 +572,7 @@ def test_setup_instances_raises_when_baseline_snapshot_creation_fails() -> None:
         RuntimeError,
         match="Failed to create baseline Docker snapshot for worker 0",
     ):
-        env.setup_instances(num_workers=1, force_recreate=False)
+        env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     env.create_snapshot.assert_called_once_with(worker_id=0)
 
@@ -383,7 +592,7 @@ def test_setup_instances_force_recreate_baseline_removes_snapshot_once() -> None
     env.create_snapshot = MagicMock()
     env._remove_baseline_snapshot = MagicMock()
 
-    env.setup_instances(num_workers=1, force_recreate=False)
+    env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     env._remove_baseline_snapshot.assert_called_once()
 
@@ -397,7 +606,7 @@ def test_setup_instances_tracks_worker_before_ready_wait() -> None:
     env._wait_for_ready = MagicMock(side_effect=RuntimeError("readiness failed"))
 
     with pytest.raises(RuntimeError, match="readiness failed"):
-        env.setup_instances(num_workers=1, force_recreate=False)
+        env.setup_instances(num_workers=1, force_recreate=False, num_parallel_workers=1)
 
     assert 0 in env.instances
     assert env.instances[0].running is True

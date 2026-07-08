@@ -10,14 +10,14 @@ test:
 	$(PYTHON) -m pytest -q tests/unit
 
 lint:
-	$(PYTHON) -m ruff check src tests
+	$(PYTHON) -m ruff check src tests scripts
 
 lint-fix:
-	$(PYTHON) -m ruff check --fix src tests
-	$(PYTHON) -m ruff format src tests
+	$(PYTHON) -m ruff check --fix src tests scripts
+	$(PYTHON) -m ruff format src tests scripts
 
 typecheck:
-	$(PYTHON) -m mypy src/evaluation src/utils src/scripts
+	$(PYTHON) -m mypy src scripts
 
 check-all: lint typecheck test
 

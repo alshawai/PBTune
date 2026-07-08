@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.config.database import DatabaseConfig
+from src.tuner.core.evolution import truncation_selection
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import (
@@ -187,7 +187,7 @@ def test_evaluate_worker_consumes_force_restart_marker() -> None:
         ),
         patch.object(evaluator, "_vacuum_after_dml", return_value=None),
     ):
-        _metrics, _score, restart_occurred, _db_config = evaluator.evaluate_worker(
+        _metrics, _score, restart_occurred, _db_config, _timing = evaluator.evaluate_worker(
             worker,
             apply_config=True,
             generation=4,
@@ -198,8 +198,8 @@ def test_evaluate_worker_consumes_force_restart_marker() -> None:
     assert worker.force_restart_next_eval is False
 
 
-def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
-    """Generation should attempt clean-slate rebuild when snapshot restore fails."""
+def test_train_generation_sets_restore_due_flag_when_interval_matches() -> None:
+    """train_generation should set _restore_due_this_gen when on restore interval."""
     knob_space = MagicMock()
     population = Population(
         knob_space=knob_space,
@@ -213,8 +213,6 @@ def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
     population.restore_interval = 5
     population.current_generation = 5
     population.env = MagicMock()
-    population.env.restore_snapshot.side_effect = [True, False]
-    population.env.rebuild_worker_instance.return_value = True
     population.evaluate_generation = MagicMock()
     population.rescue_dead_workers = MagicMock(return_value=0)
     population.update_metric_ranges_if_needed = MagicMock()
@@ -235,12 +233,12 @@ def test_train_generation_rebuilds_worker_when_snapshot_restore_fails() -> None:
         parallel=False,
     )
 
-    population.env.rebuild_worker_instance.assert_called_once_with(1)
+    assert population._restore_due_this_gen is True
     population.evaluate_generation.assert_called_once()
 
 
-def test_train_generation_raises_when_snapshot_restore_and_rebuild_fail() -> None:
-    """Generation should abort only if both restore and rebuild fail for a worker."""
+def test_train_generation_clears_restore_due_flag_off_interval() -> None:
+    """train_generation should NOT set _restore_due_this_gen off-interval."""
     knob_space = MagicMock()
     population = Population(
         knob_space=knob_space,
@@ -252,19 +250,30 @@ def test_train_generation_raises_when_snapshot_restore_and_rebuild_fail() -> Non
     ]
     population.enable_snapshots = True
     population.restore_interval = 5
-    population.current_generation = 5
+    population.current_generation = 3
     population.env = MagicMock()
-    population.env.restore_snapshot.side_effect = [True, False]
-    population.env.rebuild_worker_instance.return_value = False
     population.evaluate_generation = MagicMock()
-
-    with pytest.raises(RuntimeError, match="Snapshot restore recovery failed"):
-        population.train_generation(
-            lambda _w: (PerformanceMetrics(), 0.0),
-            parallel=False,
+    population.rescue_dead_workers = MagicMock(return_value=0)
+    population.update_metric_ranges_if_needed = MagicMock()
+    population._finalize_scores = MagicMock()
+    population.record_generation = MagicMock(
+        return_value=MagicMock(
+            generation=3,
+            best_score=0.0,
+            mean_score=0.0,
+            std_score=0.0,
+            converged=False,
+            num_exploited=0,
         )
+    )
 
-    population.evaluate_generation.assert_not_called()
+    population.train_generation(
+        lambda _w: (PerformanceMetrics(), 0.0),
+        parallel=False,
+    )
+
+    assert population._restore_due_this_gen is False
+    population.evaluate_generation.assert_called_once()
 
 
 def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
@@ -312,7 +321,9 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     population.record_generation = MagicMock(return_value=MagicMock(num_exploited=0))
 
     with patch("src.tuner.core.population.log_worker_metrics_table") as log_table:
-        with patch("src.tuner.core.population.execute_exploit_explore", return_value=0):
+        with patch(
+            "src.tuner.core.population.execute_exploit_explore", return_value=[]
+        ):
             population.train_generation(
                 _evaluate,
                 parallel=False,
@@ -323,7 +334,9 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     assert log_table.call_count == 1
     args, kwargs = log_table.call_args
     assert len(args[1]) == 2
-    assert kwargs["title"] == "\nGeneration 7 Worker Metrics"
+    # The title may include ANSI color/glyph decorations; assert the
+    # essential substring is present instead of exact equality.
+    assert "Generation 7 Worker Metrics" in kwargs["title"]
     assert kwargs["best_worker_label"] == "Best Worker"
     assert kwargs["best_worker_metric"] is not None
     assert kwargs["best_worker_metric"]["score"] == 99.1234
@@ -348,6 +361,13 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     population.orchestrator.config.metric_config = metric_config
     population._ranges_calibrated = True
     population.current_generation = 5
+
+    # Provide a mock scoring engine so rescoring uses a deterministic final_score
+    mock_engine = MagicMock()
+    mock_engine.compute_breakdown = lambda m, worker_logger=None: SimpleNamespace(
+        final_score=float(getattr(m, "throughput", 0.0) / 10.0)
+    )
+    population.orchestrator.scorer = mock_engine
 
     workers = []
     worker_points = [(240.0, 70.0, 0.12), (230.0, 75.0, 0.13)]
@@ -393,3 +413,162 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
             "throughput", (1, old_thr_low, old_thr_high)
         )
         assert new_thr_low < old_thr_low
+
+
+def test_truncation_selection_rescues_dead_workers_before_ready_interval() -> None:
+    """Dead workers must enter the rescue pool even when no worker is ready.
+
+    Regression: previously ``truncation_selection`` returned ``[]`` whenever
+    fewer than two workers had ``step_count >= ready_interval``, which
+    silently skipped dead-worker rescue during the warm-up window of
+    presets like ``thorough`` (ready_interval=3).
+    """
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=3,
+        )
+        for idx in range(8)
+    ]
+
+    # Every worker has only 1 evaluation under its belt — none is "ready".
+    for worker in workers:
+        worker.step_count = 1
+
+    # Two workers crashed (score below the dead threshold); six are alive.
+    workers[4].performance_score = 0.0
+    workers[5].performance_score = 0.0
+    for idx in (0, 1, 2, 3, 6, 7):
+        workers[idx].performance_score = 80.0 + idx
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.2,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    poor_ids = {workers[poor_idx].worker_id for poor_idx, _ in pairs}
+    elite_ids = {workers[elite_idx].worker_id for _, elite_idx in pairs}
+
+    # Both dead workers must be paired for rescue.
+    assert {4, 5}.issubset(poor_ids)
+    # Elites must come from the alive pool, not from dead workers.
+    assert elite_ids.isdisjoint({4, 5})
+    # No worker should appear as both poor and elite in the same pairing.
+    assert poor_ids.isdisjoint(elite_ids)
+
+
+def test_truncation_selection_returns_empty_when_no_dead_and_no_ready() -> None:
+    """The early-return guard still fires when there is nothing to do."""
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=5,
+        )
+        for idx in range(4)
+    ]
+    for worker in workers:
+        worker.step_count = 1
+        worker.performance_score = 80.0  # all healthy, none ready
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.2,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    assert pairs == []
+
+
+def test_truncation_selection_uses_whole_population_as_quantile_basis() -> None:
+    """Quantile is computed against the entire population (Jaderberg 2017 §4.1.1).
+
+    Regression: previously the basis was ``ready_workers`` when any
+    worker was ready, shrinking the quantile cohort when the population
+    was only partially warmed up. The paper ranks ALL agents.
+    """
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=2,
+        )
+        for idx in range(12)
+    ]
+
+    # Mark 8 of 12 ready; the other 4 are still warming up.
+    for idx in range(8):
+        workers[idx].step_count = 2
+    for idx in range(8, 12):
+        workers[idx].step_count = 1
+
+    # Spread distinct scores so ranking is deterministic.
+    for idx, worker in enumerate(workers):
+        worker.performance_score = 10.0 + idx  # all non-dead
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.25,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    # Whole-population basis: int(12 * 0.25) = 3 elites, bottom 3 candidates.
+    # Bottom 3 worker_ids by score are {0, 1, 2}; all three have step_count=2
+    # and is_ready(), so all three should pair this generation.
+    poor_ids = {workers[poor_idx].worker_id for poor_idx, _ in pairs}
+    elite_ids = {workers[elite_idx].worker_id for _, elite_idx in pairs}
+
+    assert poor_ids == {0, 1, 2}
+    # Elites: top 3 of the whole population = {9, 10, 11}.
+    assert elite_ids.issubset({9, 10, 11})
+    assert len(pairs) == 3
+
+
+def test_truncation_selection_elite_can_be_unready_when_ranked_top() -> None:
+    """Elites are drawn from any non-dead worker, regardless of readiness.
+
+    The paper's truncation rule samples the top quantile from the
+    population ranking — readiness gates whether a poor worker exploits
+    this generation, not whether a high-scorer is a valid donor.
+    """
+    workers = [
+        Worker(
+            worker_id=idx,
+            knob_space=MagicMock(),
+            knob_config={"shared_buffers": "256MB"},
+            ready_interval=3,
+        )
+        for idx in range(10)
+    ]
+
+    # Bottom 5 are ready, top 5 are NOT ready (still warming).
+    for idx in range(5):
+        workers[idx].step_count = 3  # ready
+        workers[idx].performance_score = 10.0 + idx  # 10..14
+    for idx in range(5, 10):
+        workers[idx].step_count = 1  # not ready
+        workers[idx].performance_score = 50.0 + idx  # 55..59
+
+    pairs = truncation_selection(
+        workers,
+        exploit_quantile=0.2,
+        require_ready=True,
+        dead_config_threshold=6.0,
+    )
+
+    # int(10 * 0.2) = 2. Elites = top 2 of all = {8, 9} (unready but high).
+    # Poor pool = bottom 2 of all = {0, 1}, both ready.
+    elite_ids = {workers[elite_idx].worker_id for _, elite_idx in pairs}
+    poor_ids = {workers[poor_idx].worker_id for poor_idx, _ in pairs}
+
+    assert elite_ids.issubset({8, 9})
+    assert poor_ids == {0, 1}
+    assert len(pairs) == 2

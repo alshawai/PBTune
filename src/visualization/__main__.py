@@ -3,6 +3,7 @@ Command-line entry point for the visualization framework.
 """
 
 import argparse
+import inspect
 from pathlib import Path
 import sys
 
@@ -12,7 +13,7 @@ from src.visualization.types import ExportFormat
 from src.visualization.exceptions import FigureRegistryError
 from src.utils.logger import get_logger, setup_logging
 
-LOGGER = get_logger("VisualizationCLI")
+LOGGER = get_logger("Visualizer")
 
 # Ensure all plots are discovered and registered
 import src.visualization.plots  # noqa
@@ -70,6 +71,24 @@ def parse_args() -> argparse.Namespace:
         help="Formats to export (default: pdf png).",
     )
 
+    parser.add_argument(
+        "--importance-top-k",
+        type=int,
+        help="Number of knobs to show in the importance bar/beeswarm plots.",
+    )
+
+    parser.add_argument(
+        "--dependence-top-k",
+        type=int,
+        help="Number of knobs to show in dependence plots.",
+    )
+
+    parser.add_argument(
+        "--interaction-top-k",
+        type=int,
+        help="Number of knobs to include in the interaction heatmap.",
+    )
+
     return parser.parse_args()
 
 
@@ -119,11 +138,23 @@ def main() -> int:
         try:
             # We pass the unresolved data_dir to the generator.
             # It's up to each specific plot module to fetch the exact subdirectories it needs.
+            extra_args = {
+                "top_k_importance": args.importance_top_k,
+                "top_k_dependence": args.dependence_top_k,
+                "top_k_interactions": args.interaction_top_k,
+            }
+            sig = inspect.signature(spec.generator)
+            filtered_args = {
+                key: value
+                for key, value in extra_args.items()
+                if value is not None and key in sig.parameters
+            }
             spec.generator(
                 data_dir=args.data_dir,
                 output_dir=args.output_dir,
                 theme=theme,
                 formats=formats,
+                **filtered_args,
             )
             success_count += 1
         except Exception as e:

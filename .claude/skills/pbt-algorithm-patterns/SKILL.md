@@ -51,23 +51,25 @@ Worker lifecycle:
 ```
 
 ### Scoring Formula
+
+The canonical scoring contract is:
+
 ```
-For latency (lower is better):
-    normalized = (max - clamped_value) / (max - min)   → ∈ [0, 1]
-
-For throughput (higher is better):
-    normalized = (clamped_value - min) / (max - min)   → ∈ [0, 1]
-
-For memory/error (already ∈ [0,1], lower is better):
-    normalized = 1 - clamped_value
-
-Final = Σ(weight_i × normalized_i) × 100
+S = 100 × G × Σ(w_i × u_i)
 ```
 
-All weights sum to 1.0. Presets:
-- **OLTP:** latency=0.50, throughput=0.40, memory=0.05, error=0.05
-- **OLAP:** latency=0.55, throughput=0.30, memory=0.10, error=0.05
-- **MIXED:** latency=0.40, throughput=0.35, memory=0.15, error=0.10
+Where:
+- **G** ∈ [0, 1] — reliability gate (0 on fatal failure or high error rate)
+- **w_i** — metric weight from the active scoring policy (Σw_i = 1)
+- **u_i** ∈ [0, 1] — normalized utility from the quantile normalizer
+- **S** ∈ [0, 100] — final bounded score
+
+Active scoring policies (see `src/utils/scoring/policies.py`):
+- `feature_driven_v2` — default for new runs (dynamic weights from workload features)
+- `fixed_v1` — compatibility-only static weights
+
+See the `scoring-pipeline` skill for full details on `CompositeScorer`,
+`QuantileUtilityNormalizer`, and feature-driven weights.
 
 ### Adaptive Normalization
 - Activates at generation ≥ 2 (need observed data)
@@ -105,8 +107,9 @@ with a diversity-preserving resampling strategy:
 | Orchestrator | `src/tuner/main.py` | `PBTTuner` |
 | Population | `src/tuner/core/population.py` | `Population`, `PopulationConfig`, `GenerationResult` |
 | Evolution | `src/tuner/core/evolution.py` | `truncation_selection()`, `execute_exploit_explore()`, `get_best_worker()`, `check_convergence()` |
+| Generation barriers | `src/tuner/core/barriers.py` | B1..B17 lockstep barriers |
 | Worker | `src/tuner/core/worker.py` | `Worker` |
-| Scoring | `src/utils/metrics.py` | `MetricConfig`, `PerformanceMetrics`, `WorkloadType` |
+| Scoring | `src/utils/scoring/scorer.py`, `src/utils/metrics.py` | `CompositeScorer`, `PerformanceMetrics`, `WorkloadType` |
 
 ## Design Decisions (Deviations from Original PBT Paper)
 

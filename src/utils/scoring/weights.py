@@ -10,6 +10,11 @@ importance for all metrics while dynamically shifting emphasis.
 import numpy as np
 from typing import Dict, List
 
+from src.utils.logger import get_logger, get_color_context
+
+LOGGER = get_logger("MetricWeights")
+COLORS = get_color_context()
+
 
 class FeatureDrivenWeightModel:
     """
@@ -54,7 +59,12 @@ class FeatureDrivenWeightModel:
         if total_floor >= 1.0:
             raise ValueError(f"Sum of weight floors must be < 1.0, got {total_floor}")
 
-    def compute_weights(self, features: Dict[str, float]) -> Dict[str, float]:
+    def compute_weights(
+        self,
+        features: Dict[str, float],
+        *,
+        log_weights: bool = True,
+    ) -> Dict[str, float]:
         """
         Compute final normalized weights given workload features.
 
@@ -97,5 +107,13 @@ class FeatureDrivenWeightModel:
         for i, metric in enumerate(self.metrics):
             alpha = self.floors.get(metric, 0.0)
             final_weights[metric] = float(alpha + remaining_mass * softmax[i])
+
+        if log_weights:
+            LOGGER.debug(
+                "  %s➤ Computed Weights: %s%s",
+                COLORS.italic,
+                ", ".join(f"{m} >> {w:.4f}" for m, w in final_weights.items()),
+                COLORS.reset,
+            )
 
         return final_weights

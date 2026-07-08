@@ -69,7 +69,7 @@ class TuningMetadata:
 
 def _load_metadata(path: str = "data/knob_metadata.json") -> Dict[str, TuningMetadata]:
     """Load knob tuning metadata from JSON and coerce values to TuningMetadata."""
-    path = Path(path)
+    path = str(Path(path))
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -113,9 +113,14 @@ IMPACT_TIERS = {
 DATA_DRIVEN_TIERS: Optional[Dict[str, Optional[List[str]]]] = None
 
 
-def load_data_driven_tiers(json_path: str = "data/data_driven_tiers.json") -> None:
+def load_data_driven_tiers(json_path: Optional[str] = None) -> None:
     """Load data-driven tiers from JSON and populate DATA_DRIVEN_TIERS."""
     global DATA_DRIVEN_TIERS
+    if json_path is None:
+        raise ValueError(
+            "json_path must be specified. "
+            "Use the path: data/data_driven_knobs/{workload_type}/data_driven_tiers.json"
+        )
     path = Path(json_path)
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -140,11 +145,26 @@ def get_knobs_by_tier(tier: str, source: str = "expert") -> list:
 
     if source == "data_driven":
         if DATA_DRIVEN_TIERS is not None:
-            if tier_lower in DATA_DRIVEN_TIERS:
-                result = DATA_DRIVEN_TIERS[tier_lower]
-                return result if result is not None else []
-            elif tier_lower in IMPACT_TIERS:
-                return []
+            if tier_lower in DATA_DRIVEN_TIERS or tier_lower in IMPACT_TIERS:
+                if tier_lower == "extensive":
+                    return []
+
+                tier_order = ["minimal", "core", "standard", "extensive"]
+                if tier_lower not in tier_order:
+                    result = DATA_DRIVEN_TIERS.get(tier_lower)
+                    return result if result is not None else []
+
+                requested_idx = tier_order.index(tier_lower)
+                active_tiers = tier_order[: requested_idx + 1]
+
+                knobs = []
+                for t in active_tiers:
+                    t_knobs = DATA_DRIVEN_TIERS.get(t)
+                    if t_knobs is not None:
+                        for k in t_knobs:
+                            if k not in knobs:
+                                knobs.append(k)
+                return knobs
             else:
                 raise ValueError(
                     f"Unknown tier: {tier}. Must be one of {list(DATA_DRIVEN_TIERS.keys())} or {list(IMPACT_TIERS.keys())}"

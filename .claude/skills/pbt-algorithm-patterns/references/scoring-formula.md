@@ -1,5 +1,11 @@
 # Scoring Formula — Detailed Reference
 
+> This file documents the legacy `fixed_v1` scoring math implemented in
+> `MetricConfig.compute_score()`. The current default for new runs is
+> `feature_driven_v2` — see the `scoring-pipeline` skill (canonical contract:
+> `S = 100 × G × Σ(w_i × u_i)`). `fixed_v1` is retained for compatibility with
+> legacy sessions.
+
 ## Core Computation (`MetricConfig.compute_score()`)
 
 Located in `src/utils/metrics.py`.

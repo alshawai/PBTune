@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.utils.metrics import MetricConfig, PerformanceMetrics
+from src.utils.scoring import create_scoring_engine
 
 
 def _metric(
@@ -38,7 +39,8 @@ def test_compute_score_respects_failure_gate() -> None:
     crashed = _metric(latency_p95=10, throughput=800)
     crashed.failure_type = "EXECUTION_CRASH"
 
-    score = config.compute_score(crashed).final_score
+    engine = create_scoring_engine(config)
+    score = engine.compute_breakdown(crashed).final_score
     assert score == pytest.approx(0.0)
 
 
@@ -69,9 +71,47 @@ def test_feature_driven_policy_responds_to_workload_features() -> None:
     }
     write_heavy.update_ranges(baseline)
 
-    read_score = read_heavy.compute_score(metrics).final_score
-    write_score = write_heavy.compute_score(metrics).final_score
+    read_engine = create_scoring_engine(read_heavy)
+    write_engine = create_scoring_engine(write_heavy)
+    read_score = read_engine.compute_breakdown(metrics).final_score
+    write_score = write_engine.compute_breakdown(metrics).final_score
 
     assert read_score > 0.0
     assert write_score > 0.0
     assert read_score != write_score
+
+
+def test_throughput_variance_retained_for_multithreaded_sysbench() -> None:
+    """Regression: 8-thread sysbench must retain throughput_variance.
+
+    CompositeScorer strips ``throughput_variance`` when
+    ``concurrency_pressure < 0.15`` (single-threaded bypass). The bug
+    fixed alongside this test had ``extract_sysbench_features`` producing
+    exactly 0.125 for the 8-thread / 8-core case, falsely tripping the
+    cutoff and dropping a metric that should always be present for
+    multi-threaded sysbench OLTP workloads.
+    """
+    from src.utils.scoring.workload_features import WorkloadFeatureExtractor
+
+    extractor = WorkloadFeatureExtractor()
+    features = extractor.extract_sysbench_features(
+        script="oltp_read_write",
+        threads=8,
+        cpu_cores=8,
+        table_size=1_000_000,
+        tables=4,
+    )
+
+    config = MetricConfig.for_oltp()
+    config.scoring_policy = "feature_driven_v2"
+    config.workload_features = features
+    baseline = [
+        _metric(latency_p95=20 + i, throughput=400 + (i * 10)) for i in range(15)
+    ]
+    config.update_ranges(baseline)
+
+    engine = create_scoring_engine(config)
+    engine.compute_breakdown(_metric(latency_p95=30.0, throughput=500.0))
+
+    assert "throughput_variance" in engine._weights
+    assert engine._weights["throughput_variance"] > 0.0

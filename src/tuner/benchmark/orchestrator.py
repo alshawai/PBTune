@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Union, List
 import logging
+import threading
 import time
 import numpy as np
 import psycopg2
@@ -39,12 +40,13 @@ from psycopg2.extensions import connection as PostgresConnection, register_adapt
 from src.database.connection import get_connection
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import DatabaseEnvironment
-from src.utils.logger.helpers import log_section_header
 from src.utils.metrics import (
     PerformanceMetrics,
     WorkloadType,
     MetricConfig,
 )
+from src.utils.metric_instrumentation import MetricInstrumentationEngine
+from src.utils.scoring import create_scoring_engine
 from src.benchmarks.executor import BenchmarkExecutor
 from src.tuner.benchmark.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
@@ -53,6 +55,7 @@ from src.tuner.benchmark.restart_policy import should_restart
 from src.tuner.core.barriers import GenerationBarrier
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger, get_color_context
+from src.utils.timing import TimingRecorder
 
 LOGGER = get_logger("WorkloadOrchestrator")
 COLORS = get_color_context()
@@ -148,7 +151,7 @@ class WorkloadOrchestrator:
     >>> orchestrator = WorkloadOrchestrator(config, executor)
     >>>
     >>> # Evaluate a worker
-    >>> metrics, score = orchestrator.evaluate_worker(worker)
+    >>> metrics, score, _, _, timing = orchestrator.evaluate_worker(worker)
     >>> print(f"Score: {score:.4f}, Throughput: {metrics.throughput:.2f} TPS")
     """
 
@@ -173,6 +176,9 @@ class WorkloadOrchestrator:
         self.config = config
         self.workload_executor = workload_executor
         self.env = env
+        self._scoring_engine = None
+        self._scoring_engine_lock = threading.Lock()
+        self._pending_feature_deltas: Dict[str, float] = {}
 
         LOGGER.info(
             "➤ Created WorkloadOrchestrator: workload=%s, mode=%s, duration=%ss",
@@ -180,6 +186,31 @@ class WorkloadOrchestrator:
             config.tuning_mode.value.capitalize(),
             config.measurement_duration,
         )
+
+    def _get_scoring_engine(self):
+        if self._scoring_engine is not None:
+            return self._scoring_engine
+
+        with self._scoring_engine_lock:
+            if self._scoring_engine is None:
+                self._scoring_engine = create_scoring_engine(self.config.metric_config)
+
+        return self._scoring_engine
+
+    def reload_scoring_engine(self) -> None:
+        """
+        Invalidate the cached scoring engine and rebuild it.
+        This is typically called after the metric configuration ranges
+        have been recalibrated (e.g. after a pilot phase).
+        """
+        with self._scoring_engine_lock:
+            self._scoring_engine = None
+        self._get_scoring_engine()
+        LOGGER.info("Rebuilt scoring engine with calibrated normalizer")
+
+    @property
+    def scorer(self):
+        return self._get_scoring_engine()
 
     def connect(
         self,
@@ -280,13 +311,16 @@ class WorkloadOrchestrator:
         knob_applicator: KnobApplicator,
         force_restart: bool = False,
         generation: Optional[int] = None,
+        restore_due: bool = False,
+        recorder: Optional[TimingRecorder] = None,
     ) -> bool:
         """
         Apply knob configuration and optionally restart via policy.
 
-        This method applies knobs directly through KnobApplicator,
-        then uses RestartPolicy (should_restart) for restart decisions,
-        with env.restart_instance() for the actual restart mechanism.
+        This method writes knobs via apply_only (ALTER SYSTEM only), then
+        decides activation strategy (reload/restart/none) via RestartPolicy.
+        When ``restore_due`` is True, activation is skipped because the
+        caller will perform a snapshot restore that serves as the restart.
 
         Parameters
         ----------
@@ -295,11 +329,15 @@ class WorkloadOrchestrator:
         worker : Worker
             Worker instance for which to apply configuration
         knob_applicator : KnobApplicator
-            Applicator for this worker's instance (legacy compat)
+            Applicator for this worker's instance
         force_restart : bool
             Force immediate restart regardless of mode/interval
         generation : Optional[int]
             Current generation number
+        restore_due : bool
+            When True, skip activation — snapshot restore will serve as
+            the restart. The caller is responsible for calling
+            env.restore_snapshot() after this method returns.
 
         Returns
         -------
@@ -307,7 +345,11 @@ class WorkloadOrchestrator:
             True if restart occurred during this application
         """
         try:
-            result = knob_applicator.apply(worker.knob_config)  # type: ignore
+            if recorder is not None:
+                with recorder.span("apply_only"):
+                    result = knob_applicator.apply_only(worker.knob_config)  # type: ignore
+            else:
+                result = knob_applicator.apply_only(worker.knob_config)  # type: ignore
 
             restart_required = bool(
                 result.restart_required and len(result.restart_required) > 0
@@ -329,6 +371,14 @@ class WorkloadOrchestrator:
                     COLORS.reset,
                 )
 
+            # When snapshot restore is due, the restore IS the restart.
+            # Skip activation here; the orchestrator handles it.
+            if restore_due:
+                worker.logger.debug(
+                    " Snapshot restore due — skipping activation (restore IS the restart)"
+                )
+                return False
+
             do_restart = should_restart(
                 mode=self.config.tuning_mode,
                 restart_required=restart_required,
@@ -339,6 +389,9 @@ class WorkloadOrchestrator:
 
             if do_restart:
                 worker.logger.debug(" Restarting PostgreSQL instance...")
+                if recorder is not None:
+                    with recorder.span("activate_restart", strategy="restart"):
+                        return self._perform_restart(connection, worker=worker)
                 return self._perform_restart(connection, worker=worker)
 
             if restart_required and not do_restart:
@@ -360,6 +413,27 @@ class WorkloadOrchestrator:
                         " %s➤ ONLINE mode: restart-required knobs written but restart skipped%s",
                         COLORS.bold,
                         COLORS.reset,
+                    )
+
+            # Non-restart activation: reload for sighup params
+            if not do_restart and result.applied_count > 0 and not restart_required:
+                # Reload to pick up sighup/user params without restart
+                if recorder is not None:
+                    with recorder.span("activate_reload", strategy="reload"):
+                        activation = knob_applicator.activate(
+                            restart_required=False,
+                            env=self.env,
+                            worker_id=worker.worker_id,
+                        )
+                else:
+                    activation = knob_applicator.activate(
+                        restart_required=False,
+                        env=self.env,
+                        worker_id=worker.worker_id,
+                    )
+                if not activation.success:
+                    worker.logger.warning(
+                        " ➤ Configuration reload failed: %s", activation.message
                     )
 
             return False
@@ -434,12 +508,108 @@ class WorkloadOrchestrator:
 
         wid = worker_id if worker_id is not None else 0
 
-        metrics["memory_utilization"] = self.env.collect_memory_utilization(wid)
-        metrics["cache_hit_ratio"] = self.env.collect_cache_hit_ratio(wid)
+        # Retry once because worker restarts and transient reconnect windows can
+        # briefly make environment-backed metrics unavailable.
+        for attempt in range(2):
+            try:
+                metrics["memory_utilization"] = self.env.collect_memory_utilization(wid)
+                metrics["cache_hit_ratio"] = self.env.collect_cache_hit_ratio(wid)
+                break
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ) as exc:
+                LOGGER.debug(
+                    "System metric collection attempt %d failed for worker %d: %s",
+                    attempt + 1,
+                    wid,
+                    exc,
+                )
+                if attempt == 0:
+                    time.sleep(0.1)
         return metrics
 
+    def _fetch_pg_stat_database_snapshot(
+        self,
+        db_config: DatabaseConfig,
+        *,
+        connection: Any | None = None,
+        worker_logger: Optional[logging.Logger] = None,
+    ) -> tuple[int, int, int, int, int, int, int] | None:
+        """Read pg_stat_database counters with a retry for transient failures."""
+        query = """
+            SELECT
+                blks_read,
+                blks_hit,
+                tup_returned,
+                tup_fetched,
+                tup_inserted,
+                tup_updated,
+                tup_deleted
+            FROM pg_stat_database
+            WHERE datname = current_database()
+        """
+
+        logger = worker_logger or LOGGER
+        last_error: Exception | None = None
+
+        for attempt in range(2):
+            active_connection = connection
+            owns_connection = False
+            try:
+                if active_connection is None or getattr(active_connection, "closed", True):
+                    active_connection = self.connect(
+                        db_config, max_retries=2, retry_delay=1.0
+                    )
+                    owns_connection = True
+
+                if not active_connection:
+                    continue
+
+                cursor = active_connection.cursor()
+                cursor.execute(query)
+                row = cursor.fetchone()
+                cursor.close()
+
+                if owns_connection:
+                    self.disconnect(active_connection)
+
+                if row is None:
+                    return None
+
+                return (
+                    int(row[0] or 0),
+                    int(row[1] or 0),
+                    int(row[2] or 0),
+                    int(row[3] or 0),
+                    int(row[4] or 0),
+                    int(row[5] or 0),
+                    int(row[6] or 0),
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.debug(
+                    " ➤ Failed to capture pg_stat_database snapshot (attempt %d): %s",
+                    attempt + 1,
+                    exc,
+                )
+                if owns_connection and active_connection is not None:
+                    self.disconnect(active_connection)
+                if attempt == 0:
+                    time.sleep(0.2)
+
+        if last_error is not None:
+            logger.debug(" ➤ Last pg_stat_database snapshot error: %s", last_error)
+        return None
+
     def _vacuum_after_dml(
-        self, db_config: DatabaseConfig, worker_logger: Optional[logging.Logger] = None
+        self,
+        db_config: DatabaseConfig,
+        worker_logger: Optional[logging.Logger] = None,
+        next_eval_will_restore: bool = False,
     ) -> None:
         """
         Run bounded post-workload maintenance after DML-heavy workloads.
@@ -447,11 +617,30 @@ class WorkloadOrchestrator:
         Full-database VACUUM ANALYZE is too expensive for short sysbench-style
         generations and frequently times out while scanning toast/system tables.
         Instead, analyze only user tables that were actually modified.
+
+        When ``next_eval_will_restore`` is True, the caller has guaranteed the
+        next evaluation begins with a baseline snapshot restore (PGDATA copied
+        over from the post-prepare baseline, which already contains a clean
+        VACUUM ANALYZE). Any per-eval VACUUM we run now is:
+          1. Too late to influence the just-collected metrics — those are
+             captured at B12 before this method is reached.
+          2. About to be discarded by the next restore.
+        Skipping eliminates 20–60s of dead wall-clock per generation on
+        sysbench RW/WO with high table/row counts.
         """
         # Skip for read-only workloads (OLAP, TPC-H)
         if self.config.workload_type.value in ("olap", "tpch"):
             return
         worker_logger = worker_logger or LOGGER
+
+        if next_eval_will_restore:
+            worker_logger.debug(
+                " ➤ Skipping post-workload VACUUM ANALYZE %s(next eval restores"
+                " baseline snapshot)%s",
+                COLORS.italic,
+                COLORS.reset,
+            )
+            return
 
         timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
         if timeout_seconds <= 0:
@@ -560,7 +749,10 @@ class WorkloadOrchestrator:
         apply_config: bool = True,
         generation: Optional[int] = None,
         barriers: Optional[GenerationBarrier] = None,
-    ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any]]:
+        random_seed: Optional[int] = None,
+        restore_due: bool = False,
+        next_eval_will_restore: bool = False,
+    ) -> tuple[PerformanceMetrics, float, bool, Dict[str, Any], TimingRecorder]:
         """
         Evaluate a Worker's configuration.
 
@@ -568,10 +760,12 @@ class WorkloadOrchestrator:
 
         Process:
         1. Apply worker's knob configuration (if apply_config=True)
-        2. Execute workload with warmup and measurement phases
-        3. Collect performance metrics
-        4. Collect system metrics
-        5. Compute composite performance score
+        2. If restore_due: snapshot restore (which IS the restart)
+        3. Otherwise: activate (reload or restart per policy)
+        4. Execute workload with warmup and measurement phases
+        5. Collect performance metrics
+        6. Collect system metrics
+        7. Compute composite performance score
 
         All sub-steps are gated by optional ``GenerationBarrier`` synchronization
         points (B1–B17) so that workers advance in lockstep when barriers are
@@ -589,24 +783,41 @@ class WorkloadOrchestrator:
             Optional lockstep barriers.  When provided and enabled, this
             method will ``wait()`` at each barrier so all workers stay
             in phase.
+        restore_due : bool, default=False
+            When True, perform snapshot restore after apply_only instead of
+            the normal activate step. The snapshot restore serves as the
+            restart (instance stops, PGDATA restored preserving auto.conf,
+            instance starts with new knobs).
+        next_eval_will_restore : bool, default=False
+            When True, the *next* eval on this worker is guaranteed to begin
+            with a baseline snapshot restore. Skips the post-workload VACUUM
+            ANALYZE because its on-disk effects would be wiped by the next
+            restore (and it cannot influence the metrics we just collected).
+            For PBT with ``snapshot_restore_interval=1`` this is always True
+            after generation 0; for BO with the same interval it is always
+            True after the first iteration.
 
         Returns
         -------
-        tuple[PerformanceMetrics, float, bool, Dict[str, Any]]
-            (metrics, score, restart_occurred, actual_db_config) tuple.
+        tuple[PerformanceMetrics, float, bool, Dict[str, Any], TimingRecorder]
+            (metrics, score, restart_occurred, actual_db_config, timing) tuple.
             ``actual_db_config`` contains the true values currently active
             in PostgreSQL after apply + optional restart, as read back
             from ``pg_settings``.
+            ``timing`` contains per-component wall-clock durations for this
+            evaluation.
 
         Example
         -------
-        >>> metrics, score, restarted, db_cfg = evaluator.evaluate_worker(worker)
+        >>> metrics, score, restarted, db_cfg, timing = evaluator.evaluate_worker(worker)
         >>> worker.update_metrics(metrics, score)
         """
         if not worker.db_config:
             raise ValueError(
                 f"[Worker-{worker.worker_id}] Missing db_config for evaluation"
             )
+
+        recorder = TimingRecorder()
 
         # Helper: wait at a named barrier (no-op when barriers is None/disabled).
         def _barrier(name: str) -> None:
@@ -650,7 +861,41 @@ class WorkloadOrchestrator:
                     knob_applicator=knob_applicator,
                     force_restart=force_restart,
                     generation=generation,
+                    restore_due=restore_due,
+                    recorder=recorder,
                 )
+
+                # ── B2a: Snapshot restore (when due) ────────────────────
+                if restore_due:
+                    worker.logger.debug(
+                        " Performing snapshot restore (serves as restart)..."
+                    )
+                    # Close connection before restore (instance will stop)
+                    self.disconnect(connection, worker_id=worker.worker_id)
+                    connection = None
+
+                    with recorder.span("snapshot_restore"):
+                        restored = self.env.restore_snapshot(worker.worker_id, quiet=True)
+                    if restored:
+                        restart_occurred = True
+                        worker.logger.info(
+                            " %s➤ Snapshot restore successful (restart via restore)%s",
+                            COLORS.italic,
+                            COLORS.reset,
+                        )
+                    else:
+                        # Attempt rebuild on restore failure
+                        worker.logger.error(
+                            "Snapshot restore failed for [Worker-%d]; attempting rebuild",
+                            worker.worker_id,
+                        )
+                        rebuilt = self.env.rebuild_worker_instance(worker.worker_id)
+                        if not rebuilt:
+                            raise RuntimeError(
+                                f"Snapshot restore and rebuild both failed for worker {worker.worker_id}"
+                            )
+                        restart_occurred = True
+
                 _barrier("config_applied")
                 last_completed_barrier = "config_applied"
 
@@ -682,7 +927,8 @@ class WorkloadOrchestrator:
             # ── B5: Verify configuration ─────────────────────────────
             if apply_config and worker.knob_config:
                 worker.logger.debug(" Verifying knob configuration...")
-                verification = knob_applicator.verify(worker.knob_config)
+                with recorder.span("knob_verify"):
+                    verification = knob_applicator.verify(worker.knob_config)
                 if verification.failed_params:
                     worker.logger.warning(
                         " ➤ Configuration verification failed for %d parameters: %s",
@@ -711,26 +957,11 @@ class WorkloadOrchestrator:
                 worker.logger.debug(
                     " Capturing pre-workload database stats for I/O metrics..."
                 )
-                stats_before = None
-                if connection and not connection.closed:
-                    try:
-                        cursor = connection.cursor()
-                        cursor.execute("""
-                            SELECT 
-                                blks_read,
-                                blks_hit,
-                                tup_returned,
-                                tup_fetched,
-                                tup_inserted,
-                                tup_updated,
-                                tup_deleted
-                            FROM pg_stat_database
-                            WHERE datname = current_database()
-                        """)
-                        stats_before = cursor.fetchone()
-                        cursor.close()
-                    except Exception as e:
-                        worker.logger.debug(" ➤ Failed to capture initial stats: %s", e)
+                stats_before = self._fetch_pg_stat_database_snapshot(
+                    worker.db_config,
+                    connection=connection,
+                    worker_logger=worker.logger,
+                )
 
                 _barrier("pre_stats_captured")
                 last_completed_barrier = "pre_stats_captured"
@@ -757,25 +988,31 @@ class WorkloadOrchestrator:
                     _barrier("warmup_done")
                     last_completed_barrier = "warmup_done"
 
-                    metrics = self.workload_executor.execute(
-                        db_config=worker.db_config,
-                        worker_id=worker.worker_id,
-                        random_seed=self.config.random_seed,
-                        duration=self.config.measurement_duration,
-                        warmup=self.config.warmup_duration,
-                        warmup_passes=self.config.warmup_passes,
-                    )
+                    with recorder.span("workload", executor="benchmark"):
+                        metrics = self.workload_executor.execute(
+                            db_config=worker.db_config,
+                            worker_id=worker.worker_id,
+                            random_seed=random_seed
+                            if random_seed is not None
+                            else self.config.random_seed,
+                            duration=self.config.measurement_duration,
+                            warmup=self.config.warmup_duration,
+                            warmup_passes=self.config.warmup_passes,
+                        )
                 else:
                     # Internal workload executor: warmup then measurement.
                     # Warmup is run first, barrier, then measurement.
-                    metrics = self.workload_executor.execute(
-                        connection=connection,
-                        duration=self.config.measurement_duration,
-                        warmup=self.config.warmup_duration,
-                        worker_id=worker.worker_id,
-                        random_seed=self.config.random_seed,
-                        pre_measurement_callback=lambda: _barrier("warmup_done"),
-                    )
+                    with recorder.span("workload", executor="internal"):
+                        metrics = self.workload_executor.execute(
+                            connection=connection,
+                            duration=self.config.measurement_duration,
+                            warmup=self.config.warmup_duration,
+                            worker_id=worker.worker_id,
+                            random_seed=random_seed
+                            if random_seed is not None
+                            else self.config.random_seed,
+                            pre_measurement_callback=lambda: _barrier("warmup_done"),
+                        )
                     last_completed_barrier = "warmup_done"
 
                 worker.logger.debug(
@@ -788,29 +1025,10 @@ class WorkloadOrchestrator:
                 # ── B10: Capture pg_stat_database AFTER ──────────────
                 stats_after = None
                 if stats_before:
-                    try:
-                        fresh_conn = self.connect(
-                            worker.db_config, max_retries=2, retry_delay=1.0
-                        )
-                        if fresh_conn:
-                            cursor = fresh_conn.cursor()
-                            cursor.execute("""
-                                SELECT 
-                                    blks_read,
-                                    blks_hit,
-                                    tup_returned,
-                                    tup_fetched,
-                                    tup_inserted,
-                                    tup_updated,
-                                    tup_deleted
-                                FROM pg_stat_database
-                                WHERE datname = current_database()
-                            """)
-                            stats_after = cursor.fetchone()
-                            cursor.close()
-                            self.disconnect(fresh_conn, worker_id=worker.worker_id)
-                    except Exception as e:
-                        worker.logger.debug(" ➤ Failed to capture final stats: %s", e)
+                    stats_after = self._fetch_pg_stat_database_snapshot(
+                        worker.db_config,
+                        worker_logger=worker.logger,
+                    )
 
                 _barrier("post_stats_captured")
                 last_completed_barrier = "post_stats_captured"
@@ -847,6 +1065,50 @@ class WorkloadOrchestrator:
                         io_read_mb = (blocks_read_delta * 8) / 1024.0
                         metrics.io_read_mb = max(0, io_read_mb)
 
+                        # Estimate write MB from row modification counts when
+                        # filesystem-level write counters aren't directly
+                        # available. This is a conservative heuristic: assume
+                        # an average row size (bytes) and multiply by the number
+                        # of inserted/updated/deleted rows observed.
+                        try:
+                            tup_inserted_delta = (
+                                tup_inserted_after - tup_inserted_before
+                            )
+                            tup_updated_delta = tup_updated_after - tup_updated_before
+                            tup_deleted_delta = tup_deleted_after - tup_deleted_before
+                        except Exception:
+                            tup_inserted_delta = tup_updated_delta = (
+                                tup_deleted_delta
+                            ) = 0
+
+                        total_rows_written = max(
+                            0,
+                            tup_inserted_delta + tup_updated_delta + tup_deleted_delta,
+                        )
+                        # Conservative average row size in bytes; adjustable later
+                        avg_row_bytes = 128
+                        io_write_bytes = total_rows_written * avg_row_bytes
+                        metrics.io_write_mb = max(
+                            0.0, io_write_bytes / (1024.0 * 1024.0)
+                        )
+
+                        # Diagnostic: if we observed no written rows but the workload
+                        # appears to have read/fetched rows or the DB changed, emit a
+                        # debug message to help trace why writes are zero.
+                        if total_rows_written == 0 and (
+                            tup_fetched_delta > 0 or blocks_read_delta > 0
+                        ):
+                            worker.logger.debug(
+                                "IO write estimation produced 0 bytes (inserted=%s updated=%s deleted=%s). "
+                                "Blocks read delta=%s, tup_returned_delta=%s, tup_fetched_delta=%s",
+                                tup_inserted_delta,
+                                tup_updated_delta,
+                                tup_deleted_delta,
+                                blocks_read_delta,
+                                tup_returned_delta,
+                                tup_fetched_delta,
+                            )
+
                         # Populate DB counters
                         metrics.rows_returned = max(0, tup_returned_delta)
                         metrics.rows_examined = max(0, tup_fetched_delta)
@@ -860,15 +1122,6 @@ class WorkloadOrchestrator:
                         else:
                             metrics.buffer_miss_rate = 0.0
 
-                        # Compute scan efficiency
-                        if tup_fetched_delta > 0:
-                            metrics.scan_efficiency = max(
-                                0.0,
-                                min(1.0, tup_returned_delta / tup_fetched_delta),
-                            )
-                        else:
-                            metrics.scan_efficiency = 1.0
-
                     except Exception as e:
                         worker.logger.debug("Failed to calculate IO stats: %s", e)
 
@@ -878,7 +1131,8 @@ class WorkloadOrchestrator:
             except Exception as e:
                 worker.logger.error(" ➤ Workload execution failed: %s", e)
                 metrics = PerformanceMetrics(failure_type="EXECUTION_CRASH")
-                score_breakdown = self.config.metric_config.compute_score(
+                engine = self._get_scoring_engine()
+                score_breakdown = engine.compute_breakdown(
                     metrics, worker_logger=worker.logger
                 )
                 worker.score_breakdown = score_breakdown
@@ -890,7 +1144,7 @@ class WorkloadOrchestrator:
                     if next_name:
                         barriers.drain_remaining(next_name, worker_id=worker.worker_id)
                 _barriers_drained = True
-                return metrics, score, restart_occurred, actual_db_config
+                return metrics, score, restart_occurred, actual_db_config, recorder
 
             # ── B12: Collect system metrics ──────────────────────────
             system_metrics = self.collect_system_metrics(worker_id=worker.worker_id)
@@ -899,6 +1153,18 @@ class WorkloadOrchestrator:
                 metrics.cache_hit_ratio = system_metrics["cache_hit_ratio"]
             if "memory_utilization" in system_metrics:
                 metrics.memory_utilization = system_metrics["memory_utilization"]
+
+            metrics.scan_efficiency = (
+                MetricInstrumentationEngine.calculate_scan_efficiency(
+                    metrics.cache_hit_ratio,
+                    rows_examined=metrics.rows_examined
+                    if metrics.rows_examined > 0
+                    else None,
+                    rows_returned=metrics.rows_returned
+                    if metrics.rows_returned > 0
+                    else None,
+                )
+            )
 
             _barrier("system_metrics_collected")
             last_completed_barrier = "system_metrics_collected"
@@ -921,14 +1187,20 @@ class WorkloadOrchestrator:
             worker.logger.debug(
                 " Running post-workload maintenance (VACUUM ANALYZE) if needed..."
             )
-            self._vacuum_after_dml(worker.db_config, worker_logger=worker.logger)
+            self._vacuum_after_dml(
+                worker.db_config,
+                worker_logger=worker.logger,
+                next_eval_will_restore=next_eval_will_restore,
+            )
             _barrier("vacuum_done")
             last_completed_barrier = "vacuum_done"
 
             worker.logger.info(" Computing performance score...")
-            score_breakdown = self.config.metric_config.compute_score(
-                metrics, worker_logger=worker.logger
-            )
+            with recorder.span("score"):
+                engine = self._get_scoring_engine()
+                score_breakdown = engine.compute_breakdown(
+                    metrics, worker_logger=worker.logger
+                )
             worker.score_breakdown = score_breakdown
             score = score_breakdown.final_score
             _barrier("score_computed")
@@ -936,7 +1208,7 @@ class WorkloadOrchestrator:
 
             worker.logger.info("➤ Evaluated successfully.")
 
-            return metrics, score, restart_occurred, actual_db_config
+            return metrics, score, restart_occurred, actual_db_config, recorder
 
         except Exception:
             # Top-level safety net: drain all remaining barriers.
@@ -1032,114 +1304,94 @@ class WorkloadOrchestrator:
     def _refine_workload_features(
         self,
         metrics: PerformanceMetrics,
-    ) -> bool:
+    ) -> Dict[str, tuple[float, float]]:
         """Refine static workload features with runtime observations using EMA blending.
 
         Blends observed runtime metrics into the static feature vector to capture
         dynamic workload characteristics. Uses exponential moving average with
         alpha=0.7 to keep static features dominant while allowing runtime correction.
+        Refined features are damped with a 15% soft minimum retention floor of the
+        original static prior to prevent prior erasure.
 
         Refinement rules (bounded to [0, 1]):
-        - High throughput_variance -> increase concurrency_pressure (runtime contention)
-        - High latency_variance -> increase tail_latency_sensitivity
-        - High buffer_miss_rate -> increase working_set_millions proxy
-        - Low scan_efficiency -> increase join_intensity (inefficient scans suggest complex joins)
+        - High throughput CV -> increase concurrency_pressure (concurrency pressure signal = CV / 0.20)
+        - High tail amplification (p99/p50) -> increase tail_latency_sensitivity (sensitivity signal = tail_amp / 10.0)
         """
         if not self.config.metric_config.workload_features:
             LOGGER.debug(" ➤ No workload features to refine")
-            return False
+            return {}
+
+        features = self.config.metric_config.workload_features
+
+        # Cache static feature priors on first call to establish the damping baseline
+        if not hasattr(self, "_static_feature_priors"):
+            self._static_feature_priors = dict(features)
 
         alpha = 0.7  # EMA blending factor: keep static features dominant
-        features = self.config.metric_config.workload_features
         refinements = {}
 
-        # Throughput variance -> concurrency pressure
+        # 1. Throughput Coefficient of Variation (CV) -> concurrency pressure
         if (
             hasattr(metrics, "throughput_variance")
             and metrics.throughput_variance is not None
+            and hasattr(metrics, "throughput")
+            and metrics.throughput is not None
         ):
-            throughput_variance_signal = min(1.0, metrics.throughput_variance)
+            if metrics.throughput > 0:
+                # metrics.throughput_variance holds stddev (np.std)
+                throughput_cv = metrics.throughput_variance / metrics.throughput
+                throughput_variance_signal = min(1.0, throughput_cv / 0.20)
+            else:
+                throughput_variance_signal = 0.0
+
             if "concurrency_pressure" in features:
                 old_val = features["concurrency_pressure"]
-                features["concurrency_pressure"] = (
+                refined_val = (
                     alpha * features["concurrency_pressure"]
                     + (1 - alpha) * throughput_variance_signal
                 )
+                # Apply 15% soft minimum floor based on the original static prior
+                floor = 0.15 * self._static_feature_priors.get(
+                    "concurrency_pressure", 0.0
+                )
+                features["concurrency_pressure"] = max(floor, min(1.0, refined_val))
+
                 refinements["concurrency_pressure"] = (
                     old_val,
                     features["concurrency_pressure"],
                 )
 
-        # Latency variance -> tail latency sensitivity
+        # 2. Tail Latency Amplification (p99/p50) -> tail latency sensitivity
         if (
-            hasattr(metrics, "latency_variance")
-            and metrics.latency_variance is not None
+            hasattr(metrics, "latency_p99")
+            and metrics.latency_p99 is not None
+            and hasattr(metrics, "latency_p50")
+            and metrics.latency_p50 is not None
         ):
-            latency_variance_signal = min(1.0, metrics.latency_variance)
+            if metrics.latency_p50 > 0:
+                tail_amp = metrics.latency_p99 / metrics.latency_p50
+                tail_sensitivity_signal = min(1.0, tail_amp / 10.0)
+            else:
+                tail_sensitivity_signal = 0.0
+
             if "tail_latency_sensitivity" in features:
                 old_val = features["tail_latency_sensitivity"]
-                features["tail_latency_sensitivity"] = (
+                refined_val = (
                     alpha * features["tail_latency_sensitivity"]
-                    + (1 - alpha) * latency_variance_signal
+                    + (1 - alpha) * tail_sensitivity_signal
                 )
+                # Apply 15% soft minimum floor based on the original static prior
+                floor = 0.15 * self._static_feature_priors.get(
+                    "tail_latency_sensitivity", 0.0
+                )
+                features["tail_latency_sensitivity"] = max(floor, min(1.0, refined_val))
+
                 refinements["tail_latency_sensitivity"] = (
                     old_val,
                     features["tail_latency_sensitivity"],
                 )
 
-        # Buffer miss rate -> working set millions proxy
-        if (
-            hasattr(metrics, "buffer_miss_rate")
-            and metrics.buffer_miss_rate is not None
-        ):
-            buffer_miss_signal = min(1.0, metrics.buffer_miss_rate)
-            if "working_set_millions" in features:
-                old_val = features["working_set_millions"]
-                features["working_set_millions"] = (
-                    alpha * features["working_set_millions"]
-                    + (1 - alpha) * buffer_miss_signal
-                )
-                refinements["working_set_millions"] = (
-                    old_val,
-                    features["working_set_millions"],
-                )
-
-        # Scan efficiency (inverse) -> join intensity
-        if hasattr(metrics, "scan_efficiency") and metrics.scan_efficiency is not None:
-            # Low scan efficiency (inefficient scans) suggests complex joins
-            scan_inefficiency_signal = 1.0 - metrics.scan_efficiency
-            if "join_intensity" in features:
-                old_val = features["join_intensity"]
-                features["join_intensity"] = (
-                    alpha * features["join_intensity"]
-                    + (1 - alpha) * scan_inefficiency_signal
-                )
-                refinements["join_intensity"] = (old_val, features["join_intensity"])
-
-        if refinements:
-            log_section_header(
-                LOGGER,
-                "%sRefined workload features: %s",
-                COLORS.bold,
-                COLORS.reset,
-                top_separator=False,
-            )
-            for feature, (old, new) in refinements.items():
-                LOGGER.info(
-                    "  %s%-25s:%s %s%.4f >> %s%s%.4f%s",
-                    COLORS.bold,
-                    feature,
-                    COLORS.reset,
-                    COLORS.purple,
-                    old,
-                    COLORS.bold,
-                    COLORS.magenta,
-                    new,
-                    COLORS.reset,
-                )
-            return True
-
-        return False
+        return refinements
 
     def refine_workload_features_from_generation(self, workers: List[Any]) -> bool:
         """Refine workload features using aggregated metrics from all workers in a generation.
@@ -1161,7 +1413,11 @@ class WorkloadOrchestrator:
             return False
 
         # Aggregate metrics from all healthy workers
-        health_metrics = [w.metrics for w in workers if w.metrics is not None]
+        health_metrics = [
+            w.metrics
+            for w in workers
+            if w.metrics is not None and w.metrics.failure_type is None
+        ]
         if not health_metrics:
             logger.debug(" No valid metrics to aggregate for feature refinement")
             return False
@@ -1187,6 +1443,9 @@ class WorkloadOrchestrator:
         aggregated_metrics.latency_variance = sum(
             m.latency_variance for m in health_metrics
         ) / len(health_metrics)
+        aggregated_metrics.throughput = sum(m.throughput for m in health_metrics) / len(
+            health_metrics
+        )
         aggregated_metrics.throughput_variance = sum(
             m.throughput_variance for m in health_metrics
         ) / len(health_metrics)
@@ -1205,7 +1464,51 @@ class WorkloadOrchestrator:
         )
 
         logger.debug(" Refining features using aggregated metrics...")
-        return self._refine_workload_features(aggregated_metrics)
+        refinements = self._refine_workload_features(aggregated_metrics)
+        if refinements:
+            for feature, (old, new) in refinements.items():
+                self._pending_feature_deltas[feature] = (
+                    self._pending_feature_deltas.get(feature, 0.0) + (new - old)
+                )
+        return bool(refinements)
+
+    def maybe_update_feature_weights(
+        self,
+        generation: int,
+        *,
+        force: bool = False,
+        log_every: int = 5,
+    ) -> bool:
+        if not self._pending_feature_deltas and not force:
+            return False
+
+        should_update = force or (log_every > 0 and (generation + 1) % log_every == 0)
+        if not should_update:
+            return False
+
+        if self._pending_feature_deltas:
+            delta_line = ", ".join(
+                f"{feature} {delta:+.4f}"
+                for feature, delta in self._pending_feature_deltas.items()
+            )
+            LOGGER.info(
+                "%sΔ features (accumulated):%s %s%s%s",
+                COLORS.bold,
+                COLORS.reset,
+                COLORS.italic,
+                delta_line,
+                COLORS.reset,
+            )
+
+        updated = self.scorer.update_context(
+            features=self.config.metric_config.workload_features,
+            update_reason="feature_refinement",
+        )
+        if updated or force:
+            self.scorer.schedule_log_next_generation()
+
+        self._pending_feature_deltas.clear()
+        return updated
 
     def __repr__(self) -> str:
         """String representation."""

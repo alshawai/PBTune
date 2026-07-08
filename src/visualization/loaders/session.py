@@ -5,13 +5,14 @@ Loader for Population-Based Training session JSONs.
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
-from src.utils.rescoring import rescore_metrics_globally
+from src.utils.scoring import create_scoring_engine
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 
 LOGGER = get_logger("SessionLoader")
@@ -133,8 +134,11 @@ def load_session(
     use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
     if use_raw:
         new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
-    else:
+    elif hasattr(metric_config, "compute_score_value"):
         new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
+    else:
+        engine = create_scoring_engine(metric_config)
+        new_scores = [engine.compute_breakdown(m).final_score for m in all_metrics]
 
     # Initialize arrays
     generations = np.arange(1, n_gens + 1)
@@ -143,7 +147,7 @@ def load_session(
     std_scores = np.zeros(n_gens)
     wall_clock_seconds = np.zeros(n_gens)
     generation_elapsed_seconds = np.zeros(n_gens)
-    worker_configs = [[] for _ in range(n_gens)]
+    worker_configs: list[list[dict]] = [[] for _ in range(n_gens)]
 
     # Collect all unique worker IDs to track individual traces
     worker_ids = set()
@@ -251,7 +255,7 @@ def load_sessions(
 
     # Pass 1: Gather ALL metrics from ALL files to form a super-global range
     super_global_metrics = []
-    shared_metadata = {}
+    shared_metadata: dict[str, Any] = {}
 
     for f in json_files:
         try:

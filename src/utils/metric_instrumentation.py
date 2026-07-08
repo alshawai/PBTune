@@ -69,11 +69,46 @@ class MetricInstrumentationEngine:
         return latency_p99 / latency_p50
 
     @staticmethod
-    def calculate_scan_efficiency(cache_hit_ratio: float) -> float:
-        """Calculate scan efficiency from cache hit ratio."""
-        if cache_hit_ratio >= 0.99:
-            return 1.0
-        return max(0.0, cache_hit_ratio)
+    def calculate_scan_efficiency(
+        cache_hit_ratio: float,
+        rows_examined: int | None = None,
+        rows_returned: int | None = None,
+    ) -> float:
+        """Calculate scan efficiency.
+
+        Prefer using both row counters when available by measuring how closely
+        rows examined and rows returned track one another. This keeps the metric
+        bounded in [0, 1] while still responding to large imbalances.
+
+        If row counters are not available, fall back to cache_hit_ratio with
+        conservative clamping.
+        """
+        # Prefer a bounded row-balance ratio when available.
+        try:
+            if rows_examined is not None and rows_examined > 0:
+                examined = float(rows_examined)
+                returned = float(rows_returned or 0)
+                if returned <= 0:
+                    return 0.0
+                eff = min(examined, returned) / max(examined, returned)
+                return max(0.0, min(1.0, eff))
+        except (TypeError, ValueError):
+            # Defensive: fall back to cache hit ratio
+            logger.debug(
+                "calculate_scan_efficiency: failed to compute from rows (examined=%s returned=%s)",
+                rows_examined,
+                rows_returned,
+            )
+
+        # Fallback: clamp cache_hit_ratio
+        try:
+            if cache_hit_ratio is None:
+                return 0.0
+            if cache_hit_ratio >= 0.99:
+                return 1.0
+            return max(0.0, min(1.0, float(cache_hit_ratio)))
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def compute_derived_metrics(
@@ -97,7 +132,9 @@ class MetricInstrumentationEngine:
                 metrics.latency_p50, metrics.latency_p99
             ),
             scan_efficiency=MetricInstrumentationEngine.calculate_scan_efficiency(
-                metrics.cache_hit_ratio
+                metrics.cache_hit_ratio,
+                rows_examined=metrics.rows_examined,
+                rows_returned=metrics.rows_returned,
             ),
             latency_variance=metrics.latency_variance,
         )

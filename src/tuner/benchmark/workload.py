@@ -209,9 +209,7 @@ class WorkloadExecutor:
         )
 
         # Use a dedicated random instance for reproducibility without affecting global RNG
-        self.rng = (
-            np.random.default_rng(random_seed) if random_seed is not None else np.random
-        )
+        self.rng = np.random.default_rng(random_seed)
 
         if random_seed is not None:
             work_logger.debug(
@@ -265,7 +263,7 @@ class WorkloadExecutor:
             else None,
         }
 
-        results_queue = Queue()
+        results_queue: Queue = Queue()
         start_time = time.time()
         stop_event = threading.Event()
 
@@ -340,10 +338,10 @@ class WorkloadExecutor:
             p50 = latencies_sorted[len(latencies_sorted) // 2]
             p95 = latencies_sorted[int(len(latencies_sorted) * 0.95)]
             p99 = latencies_sorted[int(len(latencies_sorted) * 0.99)]
-            stddev = float(np.std(all_latencies))
+            variance = float(np.var(all_latencies))
         else:
             p50 = p95 = p99 = 0.0
-            stddev = 0.0
+            variance = 0.0
 
         throughput = total_queries / total_time if total_time > 0 else 0.0
         error_rate = total_errors / total_queries if total_queries > 0 else 0.0
@@ -352,7 +350,7 @@ class WorkloadExecutor:
             latency_p50=p50,
             latency_p95=p95,
             latency_p99=p99,
-            latency_stddev=stddev,
+            latency_variance=variance,
             throughput=throughput,
             total_queries=total_queries,
             total_time=total_time,
@@ -398,10 +396,10 @@ class WorkloadExecutor:
             p50 = latencies_sorted[len(latencies_sorted) // 2]
             p95 = latencies_sorted[int(len(latencies_sorted) * 0.95)]
             p99 = latencies_sorted[int(len(latencies_sorted) * 0.99)]
-            stddev = float(np.std(latencies))
+            variance = float(np.var(latencies))
         else:
             p50 = p95 = p99 = 0.0
-            stddev = 0.0
+            variance = 0.0
 
         throughput = query_count / total_time if total_time > 0 else 0.0
         error_rate = error_count / query_count if query_count > 0 else 0.0
@@ -410,7 +408,7 @@ class WorkloadExecutor:
             latency_p50=p50,
             latency_p95=p95,
             latency_p99=p99,
-            latency_stddev=stddev,
+            latency_variance=variance,
             throughput=throughput,
             total_queries=query_count,
             total_time=total_time,
@@ -477,17 +475,17 @@ class WorkloadFileLoader:
         ValueError
             If file format is invalid or queries are malformed
         """
-        filepath = Path(filepath)
+        path = Path(filepath)
 
-        if not filepath.exists():
-            raise FileNotFoundError(f"Workload file not found: {filepath}")
+        if not path.exists():
+            raise FileNotFoundError(f"Workload file not found: {path}")
 
-        if filepath.suffix == ".json":
-            with open(filepath, "r", encoding="utf-8") as f:
+        if path.suffix == ".json":
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        elif filepath.suffix in [".yaml", ".yml"]:
+        elif path.suffix in [".yaml", ".yml"]:
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
             except ImportError as exc:
                 raise ImportError(
@@ -496,7 +494,7 @@ class WorkloadFileLoader:
                 ) from exc
         else:
             raise ValueError(
-                f"Unsupported file format: {filepath.suffix}. Use .json, .yaml, or .yml"
+                f"Unsupported file format: {path.suffix}. Use .json, .yaml, or .yml"
             )
 
         if not isinstance(data, dict):
@@ -541,7 +539,7 @@ class WorkloadFileLoader:
             else:
                 raise ValueError(f"Query {i} must be a string or dict with 'sql' field")
 
-        name = data.get("name", filepath.stem)
+        name = data.get("name", path.stem)
         description = data.get("description", "Custom workload")
 
         schema = data.get("schema", {})

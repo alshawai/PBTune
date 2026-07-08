@@ -8,7 +8,6 @@ from typing import Any, Iterator, Optional
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-import numpy as np
 
 from src.visualization.types import VenuePreset, FigureSize
 from src.utils.logger import get_logger
@@ -183,10 +182,16 @@ class PBTuneTheme:
         size_hint: str = "single",
         aspect: Optional[float] = None,
         **kwargs,
-    ) -> tuple[Figure, np.ndarray]:
+    ) -> tuple[Figure, Any]:
         """
         Create a new figure and grid of subplots with the correct dimensions.
         Must be called within a `with theme.apply():` block.
+
+        The second element is an ``np.ndarray`` of :class:`Axes` for
+        ``nrows*ncols > 1`` and a single :class:`Axes` otherwise. The return
+        is typed as ``Any`` because numpy's stubs cannot express
+        "ndarray of Axes" without introducing recursive ndarray narrowing
+        that breaks attribute access on indexed elements.
         """
         size = self.get_figure_size(size_hint, aspect)
         fig, axes = plt.subplots(

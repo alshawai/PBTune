@@ -45,11 +45,19 @@ class _DummyEnvironment(DatabaseEnvironment):
     def restore_snapshot(self, worker_id: int) -> bool:
         return False
 
+    def clone_instances(
+        self, source_worker_id: int, target_worker_ids: list[int]
+    ) -> bool:
+        return True
+
     def get_db_config(self, worker_id: int) -> DatabaseConfig:
         return self.base_config
 
     def collect_memory_utilization(self, worker_id: int) -> float:
         return 0.0
+
+    def get_resource_allocations(self):
+        return []
 
     def rebuild_worker_instance(self, worker_id: int) -> bool:
         return True
@@ -197,3 +205,58 @@ def test_initialize_schema_resets_after_snapshot_restore() -> None:
     )
     assert env._reset_persisted_configuration.call_count == 2
     schema_provider.prepare.assert_not_called()
+
+
+def test_pg_server_version_defaults_to_none() -> None:
+    """pg_server_version is unpopulated until ``_capture_pg_server_version`` runs."""
+    env = _make_env()
+    assert env.pg_server_version is None
+
+
+def test_docker_version_defaults_to_none_on_base_class() -> None:
+    """docker_version is set per-backend; the base class default is ``None``."""
+    env = _make_env()
+    assert env.docker_version is None
+
+
+def test_capture_pg_server_version_stores_value() -> None:
+    """Calling ``_capture_pg_server_version`` populates the attribute."""
+    env = _make_env()
+
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("18.0",)
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    result = env._capture_pg_server_version(conn)
+
+    cursor.execute.assert_called_once_with("SHOW server_version")
+    assert env.pg_server_version == "18.0"
+    assert result == "18.0"
+
+
+def test_capture_pg_server_version_is_idempotent() -> None:
+    """Repeated capture calls should not re-issue the query once populated."""
+    env = _make_env()
+    env.pg_server_version = "16.4"
+
+    conn = MagicMock()
+    cursor = MagicMock()
+    conn.cursor.return_value = cursor
+
+    result = env._capture_pg_server_version(conn)
+
+    assert result == "16.4"
+    cursor.execute.assert_not_called()
+
+
+def test_capture_pg_server_version_handles_query_failure() -> None:
+    """A psycopg2 error during capture leaves the field as ``None``."""
+    env = _make_env()
+    conn = MagicMock()
+    conn.cursor.side_effect = psycopg2.Error("boom")
+
+    result = env._capture_pg_server_version(conn)
+
+    assert result is None
+    assert env.pg_server_version is None

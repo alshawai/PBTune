@@ -85,10 +85,10 @@ class TestPBTSessionParity:
         config = BOConfig.from_args(args)
         benchmark_config = config.benchmark_config
 
-        assert config.n_iterations == 40
+        assert config.n_iterations == 320
         assert config.random_seed == 123
         assert config.knob_tier == "minimal"
-        assert config.max_workers == 4
+        assert config.max_workers == 1
         assert benchmark_config.benchmark == "sysbench"
         assert benchmark_config.workload_type == "oltp"
         assert benchmark_config.evaluation_duration == 15.0
@@ -148,7 +148,8 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
@@ -197,13 +198,14 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
         config = BOConfig.from_args(args)
 
-        assert config.n_iterations == 40
+        assert config.n_iterations == 320
         assert config.max_workers == 1
 
     def test_bo_config_falls_back_when_pbt_session_invalid(self, tmp_path):
@@ -234,13 +236,14 @@ class TestPBTSessionParity:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
         config = BOConfig.from_args(args)
 
-        assert config.n_iterations == 120
+        assert config.n_iterations == 80
         assert config.max_workers == 1
 
     def test_bo_config_requires_tier_without_pbt_session(self):
@@ -390,14 +393,16 @@ class TestObjectiveEvaluation:
                 self.received_worker = None
                 self.config = DummyConfig()
 
-            def evaluate_worker(self, worker, apply_config=True):
+            def evaluate_worker(self, worker, apply_config=True, random_seed=None, restore_due=False):
                 self.received_worker = worker
+                self.received_restore_due = restore_due
                 worker.score_breakdown = ScoreBreakdown(final_score=87.5)
-                return expected_metrics, 87.5, False, {}
+                from src.utils.timing import TimingRecorder
+                return expected_metrics, 87.5, False, {}, TimingRecorder()
 
         orchestrator = DummyOrchestrator()
 
-        cost, knob_config, metrics, score, score_breakdown, restarted, wall_time = (
+        cost, knob_config, metrics, score, score_breakdown, restarted, wall_time, eval_timing = (
             evaluate_config(
                 config=config,
                 worker=worker,
@@ -414,7 +419,10 @@ class TestObjectiveEvaluation:
         assert metrics == expected_metrics
         assert knob_config == worker.knob_config
         assert orchestrator.received_worker is worker
-        assert worker.force_restart_next_eval is False
+        assert worker.force_restart_next_eval is True
+        # The recorder returned by the orchestrator is propagated unchanged.
+        from src.utils.timing import TimingRecorder as _TR
+        assert isinstance(eval_timing, _TR)
 
 
 class TestResultFormat:
@@ -535,7 +543,173 @@ class TestResultFormat:
             written["generation_history"][0]["worker_scores"][0]["score_breakdown"],
             dict,
         )
-        assert written["generation_history"][0]["worker_scores"][0]["score_breakdown"]["final_score"] == 0.5
+        assert (
+            written["generation_history"][0]["worker_scores"][0]["score_breakdown"][
+                "final_score"
+            ]
+            == 0.5
+        )
+
+    def test_result_includes_session_environment_and_timing_schema(self, tmp_path):
+        """write_bo_results emits session_environment + timing_schema_version."""
+        from src.utils.types import (
+            SessionEnvironment,
+            WorkerResourceAllocation,
+        )
+
+        knob_space = get_knob_space("minimal")
+        resources = detect_worker_resources()
+        knob_space.resolve_hardware_ranges(resources)
+
+        config = BOConfig(
+            n_iterations=1,
+            random_seed=11,
+            knob_tier="minimal",
+            benchmark_config=BenchmarkConfig(
+                benchmark="sysbench",
+                workload_type="oltp",
+            ),
+            max_workers=1,
+        )
+
+        iteration_log = [
+            {
+                "iteration": 0,
+                "config": {"shared_buffers": 1024},
+                "metrics": {"throughput": 100.0},
+                "score": 0.5,
+                "cost": 50.0,
+                "wall_clock_seconds": 10.0,
+                "restarted": False,
+                "timestamp": 1234567890.0,
+                "score_breakdown": {"total": 0.5},
+            }
+        ]
+
+        class DummyMetricConfig:
+            scoring_policy = "default"
+            scoring_policy_version = "1.0"
+            metric_reference_version = "1.0"
+            workload_features = {}
+
+            def get_normalization_metadata(self):
+                return {}
+
+        session_environment = SessionEnvironment(
+            cpu_model="Test CPU",
+            cpu_cores_physical=4,
+            cpu_cores_logical=8,
+            ram_bytes_total=16 * 1024**3,
+            disk_type="SSD",
+            data_disk_type=None,
+            kernel_version="6.5.0-test",
+            os_system="Linux",
+            os_release="6.5.0",
+            os_version="#1 SMP",
+            os_machine="x86_64",
+            pg_client_version="PostgreSQL 18.0",
+            pg_server_version="18.0",
+            docker_version="25.0.3",
+            use_docker=True,
+            num_parallel_workers=1,
+            population_size=1,
+            cpu_pinning_scheme="cpuset",
+            per_worker_resources=[
+                WorkerResourceAllocation(
+                    worker_id=0,
+                    cpu_cores=4,
+                    cpuset_cpus="0,1,2,3",
+                    ram_bytes=8 * 1024**3,
+                    docker_memory_limit_bytes=8 * 1024**3,
+                )
+            ],
+        )
+
+        results = write_bo_results(
+            knob_space=knob_space,
+            config=config,
+            worker_resources=WorkerResources(
+                ram_bytes=8 * 1024**3, cpu_cores=4, disk_type="SSD"
+            ),
+            system_info={"cpu_count": 8},
+            iteration_log=iteration_log,
+            total_time=10.0,
+            output_dir=tmp_path,
+            metric_config=DummyMetricConfig(),
+            bo_surrogate="gp",
+            session_environment=session_environment,
+        )
+
+        assert results["tuning_session"]["timing_schema_version"] == "1.1"
+        assert "session_environment" in results
+        se = results["session_environment"]
+        assert se["cpu_model"] == "Test CPU"
+        assert se["pg_server_version"] == "18.0"
+        assert se["docker_version"] == "25.0.3"
+        assert se["use_docker"] is True
+        assert se["per_worker_resources"][0]["cpuset_cpus"] == "0,1,2,3"
+
+        result_files = list(tmp_path.glob("**/bo_results_*.json"))
+        assert len(result_files) == 1
+        written = json.loads(result_files[0].read_text(encoding="utf-8"))
+        assert written["tuning_session"]["timing_schema_version"] == "1.1"
+        assert written["session_environment"]["pg_server_version"] == "18.0"
+
+    def test_result_omits_session_environment_when_not_provided(self, tmp_path):
+        """Backwards-compatibility: callers without a SessionEnvironment still work."""
+        knob_space = get_knob_space("minimal")
+        resources = detect_worker_resources()
+        knob_space.resolve_hardware_ranges(resources)
+
+        config = BOConfig(
+            n_iterations=1,
+            random_seed=12,
+            knob_tier="minimal",
+            benchmark_config=BenchmarkConfig(
+                benchmark="sysbench",
+                workload_type="oltp",
+            ),
+            max_workers=1,
+        )
+
+        class DummyMetricConfig:
+            scoring_policy = "default"
+            scoring_policy_version = "1.0"
+            metric_reference_version = "1.0"
+            workload_features = {}
+
+            def get_normalization_metadata(self):
+                return {}
+
+        results = write_bo_results(
+            knob_space=knob_space,
+            config=config,
+            worker_resources=WorkerResources(
+                ram_bytes=8 * 1024**3, cpu_cores=4, disk_type="SSD"
+            ),
+            system_info={},
+            iteration_log=[
+                {
+                    "iteration": 0,
+                    "config": {"shared_buffers": 1024},
+                    "metrics": {},
+                    "score": 0.0,
+                    "cost": 0.0,
+                    "wall_clock_seconds": 1.0,
+                    "restarted": False,
+                    "timestamp": 0.0,
+                    "score_breakdown": {"total": 0.0},
+                }
+            ],
+            total_time=1.0,
+            output_dir=tmp_path,
+            metric_config=DummyMetricConfig(),
+            bo_surrogate="gp",
+        )
+
+        # Even without a SessionEnvironment, the schema version is present.
+        assert results["tuning_session"]["timing_schema_version"] == "1.1"
+        assert "session_environment" not in results
 
     def test_result_generation_history(self, tmp_path):
         """Test that generation history is properly formatted."""
@@ -669,13 +843,14 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=str(pbt_session),
         )
 
         config = BOConfig.from_args(args)
 
-        assert config.max_workers == 4
+        assert config.max_workers == 1
         assert config.pbt_worker_resources is not None
         assert config.pbt_worker_resources["ram_bytes"] == 8589934592
         assert config.pbt_worker_resources["cpu_cores"] == 4
@@ -724,13 +899,14 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=2,
+            batched_bo=True,
+            resource_division=2,
             pbt_session=str(pbt_session),
         )
 
         config = BOConfig.from_args(args)
 
-        assert config.max_workers == 2
+        assert config.max_workers == 1
 
     def test_bo_config_default_max_workers(self):
         """Test that max_workers defaults to 1."""
@@ -758,7 +934,8 @@ class TestParallelBOConfiguration:
             verbose="INFO",
             range_update_interval=5,
             bo_surrogate="rf",
-            batched_bo=True, resource_division=None,
+            batched_bo=True,
+            resource_division=None,
             pbt_session=None,
         )
 

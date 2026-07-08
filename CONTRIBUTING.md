@@ -1,6 +1,6 @@
 # Contributing to PBT PostgreSQL Tuning
 
-> Last reviewed: 2026-03-13
+> Last reviewed: 2026-06-15
 
 See also: [Documentation Index](./docs/README.md)
 
@@ -274,7 +274,7 @@ Current baseline quality gates:
 - **Missing Python dev tools (`pytest`, `ruff`, `mypy`)**:
     Reinstall with `make install-dev` or `pip install -r requirements-dev.txt`.
 - **Fixture/data path issues**:
-    Confirm expected repository paths exist (`workloads/`, `data/tuner_knobs/`) and run commands from the repository root.
+    Confirm expected repository paths exist (`workloads/`, `data/expert_defined_knobs/`) and run commands from the repository root.
 
 ## 📚 Documentation Standards
 
