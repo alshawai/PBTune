@@ -28,6 +28,7 @@ import pandas as pd
 
 from src.knobs.policy import (
     SUPPORTED_AUTOTUNING_VARTYPES,
+    annotate_autotuning_policy,
     apply_bounds_safety_gate,
     ensure_autotuning_policy_annotations,
 )
@@ -106,7 +107,7 @@ def load_raw_knobs(csv_path: Optional[str] = None) -> pd.DataFrame:
         retriever = PostgreSQLKnobRetriever()
         df = retriever.get_all_knobs_with_metadata()
 
-    return _clean_enumvals(ensure_autotuning_policy_annotations(df))
+    return _clean_enumvals(annotate_autotuning_policy(df))
 
 
 def add_tuning_metadata(df: pd.DataFrame) -> pd.DataFrame:
@@ -203,7 +204,7 @@ def filter_tunable_knobs(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Filtered to tunable knobs only
     """
-    df = ensure_autotuning_policy_annotations(df)
+    df = annotate_autotuning_policy(df)
 
     tunable = df[df["eligible_for_autotuning"]].copy()
 

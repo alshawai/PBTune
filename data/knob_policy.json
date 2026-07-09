@@ -52,6 +52,38 @@
       "benchmark_validity",
       "Artificially delays post-auth processing and distorts benchmark latency."
     ],
+    "log_statement": [
+      "log_volume",
+      "Log verbosity control; 'all' floods container logs at ~8 MB/s under benchmark load, exhausting disk."
+    ],
+    "log_duration": [
+      "log_volume",
+      "Logs duration of every completed statement; high-volume output under benchmark load."
+    ],
+    "log_checkpoints": [
+      "log_volume",
+      "Checkpoint logging toggle; observability control, not a performance driver."
+    ],
+    "log_disconnections": [
+      "log_volume",
+      "Session-end logging toggle; observability control, not a performance driver."
+    ],
+    "log_error_verbosity": [
+      "log_volume",
+      "Error message verbosity; observability control, not a performance driver."
+    ],
+    "log_hostname": [
+      "log_volume",
+      "Hostname logging toggle; observability control, not a performance driver."
+    ],
+    "log_lock_waits": [
+      "log_volume",
+      "Lock-wait logging toggle; observability control, not a performance driver."
+    ],
+    "log_lock_failures": [
+      "log_volume",
+      "Lock-failure logging toggle; observability control, not a performance driver."
+    ],
     "log_statement_stats": [
       "mutual_exclusion",
       "Mutually exclusive with parser/planner/executor stats and can cause config errors."
