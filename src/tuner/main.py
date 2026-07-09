@@ -1049,8 +1049,10 @@ class PBTTuner:
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_dir, COLORS.reset
         )
 
+        bootstrap_start = time.time()
         self.start_time = time.time()
         self.bootstrap_timing = TimingRecorder()
+        bootstrap_start = self.start_time
         try:
             log_section_header(
                 LOGGER,
@@ -1173,6 +1175,16 @@ class PBTTuner:
                 COLORS.reset,
             )
 
+            # Reset wall-clock origin to exclude bootstrap (instance creation,
+            # snapshot setup).  Bootstrap is a one-time amortized cost that the
+            # notes prescribe excluding from the convergence-plot time axis.
+            self.start_time = time.time()
+            bootstrap_seconds = self.start_time - bootstrap_start
+            LOGGER.info(
+                "Bootstrap completed in %.1fs (excluded from tuning wall-clock)",
+                bootstrap_seconds,
+            )
+
             try:
                 self.tuning_start_time = time.time()
                 for generation in range(self.pbt_config.num_generations):
@@ -1226,7 +1238,7 @@ class PBTTuner:
                         e,
                     )
 
-        total_time = time.time() - self.start_time
+        total_time = time.time() - bootstrap_start  # includes bootstrap for summary
         tuning_time = time.time() - getattr(self, "tuning_start_time", self.start_time)
         bootstrap_seconds = total_time - tuning_time
 

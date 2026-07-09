@@ -3,19 +3,25 @@ Reusable plot utilities for formatting, labeling, and annotations.
 """
 
 from typing import Literal, Sequence
+import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 
 
 def despine(
     ax: Axes,
-    top: bool = True,
-    right: bool = True,
+    top: bool = False,
+    right: bool = False,
     left: bool = False,
     bottom: bool = False,
 ) -> None:
     """
-    Remove the top and right spines from plot(s).
+    Selectively remove spines from a plot.
+
+    Defaults changed to False (no-op) to preserve the fully-boxed axes
+    style used in the CDBTune+ reference paper.  Callers that explicitly
+    need despining can still pass ``top=True, right=True``.
     """
     if top:
         ax.spines["top"].set_visible(False)
@@ -28,25 +34,109 @@ def despine(
 
 
 def add_panel_labels(
-    axes: Sequence[Axes], start_char: str = "a", x: float = -0.1, y: float = 1.05
+    axes: Sequence[Axes],
+    start_char: str = "a",
+    x: float = 0.5,
+    y: float = -0.18,
+    location: str = "below",
+    include_title: bool = True,
 ) -> None:
     """
-    Add (a), (b), (c) style labels to a sequence of axes.
-    Useful for multi-panel figures.
+    Add **(a)**, **(b)**, **(c)** style labels to a sequence of axes.
+
+    Default placement is *below* each subplot (centered), matching the
+    CDBTune+ bar-chart reference.  Pass ``location="above"`` with custom
+    *x*/*y* to revert to the old top-left placement.
     """
     start_ord = ord(start_char)
     for i, ax in enumerate(axes):
         label = f"({chr(start_ord + i)})"
-        ax.text(
-            x,
-            y,
-            label,
-            transform=ax.transAxes,
-            fontsize=11,
-            fontweight="bold",
-            va="bottom",
-            ha="right",
-        )
+        
+        if include_title:
+            title = ax.get_title()
+            if title:
+                label = f"{label} {title}"
+                ax.set_title("")
+        if location == "above":
+            ax.text(
+                -0.1 if x == 0.5 else x,
+                1.05 if y == -0.18 else y,
+                label,
+                transform=ax.transAxes,
+                fontsize=11,
+                fontweight="bold",
+                va="bottom",
+                ha="right",
+            )
+        else:
+            ax.text(
+                x,
+                y,
+                label,
+                transform=ax.transAxes,
+                fontsize=11,
+                fontweight="bold",
+                va="top",
+                ha="center",
+            )
+
+
+def add_top_shared_legend(
+    fig: Figure,
+    axes,
+    ncol: int = 0,
+    **legend_kwargs,
+) -> None:
+    """
+    Extract unique handles/labels from all *axes* and place a single
+    shared legend above the figure area.
+
+    Matches the CDBTune+ grouped-bar-chart style where a multi-column
+    legend spans the full figure width above the subplot grid.
+
+    Parameters
+    ----------
+    fig : Figure
+        The parent figure.
+    axes : array-like of Axes
+        All subplot axes to collect legend entries from.
+    ncol : int
+        Number of legend columns.  ``0`` (default) auto-sets to the
+        number of unique entries.
+    **legend_kwargs
+        Forwarded to ``fig.legend()``.
+    """
+    handles, labels = [], []
+    seen: set[str] = set()
+    flat_axes = axes.flat if hasattr(axes, "flat") else axes
+    for ax in flat_axes:
+        for h, lbl in zip(*ax.get_legend_handles_labels()):
+            if lbl not in seen:
+                handles.append(h)
+                labels.append(lbl)
+                seen.add(lbl)
+        # Remove per-axis legends so only the shared one remains
+        per_legend = ax.get_legend()
+        if per_legend is not None:
+            per_legend.remove()
+
+    if not handles:
+        return
+
+    if ncol <= 0:
+        ncol = len(handles)
+
+    defaults = dict(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.0),
+        ncol=ncol,
+        frameon=True,
+        edgecolor="0.8",
+        fancybox=False,
+        fontsize=plt.rcParams.get("legend.fontsize", 9),
+    )
+    defaults.update(legend_kwargs)
+    fig.legend(handles, labels, **defaults)
 
 
 def add_baseline_line(
