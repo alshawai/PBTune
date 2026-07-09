@@ -27,6 +27,7 @@ from pathlib import Path
 import psycopg2
 import requests
 from docker import errors as docker_errors
+from docker.types import LogConfig
 
 from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
 from src.utils.hardware_info import WorkerResources
@@ -223,6 +224,10 @@ class DockerEnvironment(DatabaseEnvironment):
             "cpuset_cpus": self._worker_cpuset_cpus(worker_id, num_workers),
             "network": self.network_name,
             "detach": True,
+            "log_config": LogConfig(
+                type=LogConfig.types.JSON,
+                config={"max-size": "50m", "max-file": "3"},
+            ),
         }
 
         # Per-worker disk I/O bandwidth + IOPS limits via cgroup blkio /
