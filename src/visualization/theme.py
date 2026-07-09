@@ -79,32 +79,36 @@ class PBTuneTheme:
             # Typography
             "font.family": self.preset.font_family,
             "font.size": self.preset.base_font_size_pt,
-            "axes.titlesize": self.preset.base_font_size_pt + 1,
-            "axes.labelsize": self.preset.base_font_size_pt,
+            "axes.titlesize": self.preset.base_font_size_pt + 2,
+            "axes.labelsize": self.preset.base_font_size_pt + 1,
             "xtick.labelsize": self.preset.base_font_size_pt - 1,
             "ytick.labelsize": self.preset.base_font_size_pt - 1,
             "legend.fontsize": self.preset.base_font_size_pt - 1,
             "legend.title_fontsize": self.preset.base_font_size_pt,
             # Lines and markers
             "lines.linewidth": 1.5,
-            "lines.markersize": 5,
-            "lines.markeredgewidth": 0.5,
+            "lines.markersize": 7,
+            "lines.markeredgecolor": "white",
+            "lines.markeredgewidth": 0.8,
             # Axes and Spines
             "axes.linewidth": 0.8,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
+            "axes.spines.top": True,
+            "axes.spines.right": True,
             "axes.axisbelow": True,  # Grid behind data
             # Grid
             "grid.linestyle": "--",
             "grid.linewidth": 0.5,
-            "grid.alpha": 0.5,
+            "grid.alpha": 0.4,
+            "axes.grid": True,
             # Ticks
             "xtick.major.width": 0.8,
             "ytick.major.width": 0.8,
             "xtick.minor.width": 0.5,
             "ytick.minor.width": 0.5,
             # Legend
-            "legend.frameon": False,
+            "legend.frameon": True,
+            "legend.edgecolor": "0.8",
+            "legend.fancybox": False,
             "legend.loc": "best",
             # Export
             "savefig.bbox": "tight",
@@ -128,7 +132,10 @@ class PBTuneTheme:
                 }
             )
             if self.preset.font_family == "serif":
-                params["font.serif"] = ["Times New Roman", "DejaVu Serif"]
+                params["font.serif"] = [
+                    "STIX Two Text", "STIXGeneral",
+                    "Times New Roman", "DejaVu Serif",
+                ]
             else:
                 params["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
 

@@ -5,7 +5,7 @@ This layer transforms raw JSON / result objects into numpy arrays ready for plot
 isolating the plot implementations from evolving JSON schemas.
 """
 
-from src.visualization.loaders.session import load_session, load_sessions, SessionTrace
+from src.visualization.loaders.session import load_session, load_sessions, SessionTrace, RAW_METRIC_KEYS
 from src.visualization.loaders.multi_seed import aggregate_seeds, MultiSeedAggregate
 from src.visualization.loaders.comparison import (
     load_comparison,

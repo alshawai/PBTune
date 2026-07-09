@@ -122,6 +122,9 @@ results/*
 # But keep the specific files we want to track
 !results/.gitignore
 !results/README.md
+PBTune-experiments/
+figures/
+karim/
 
 # Generated TPC-H dbgen scale markers
 src/benchmarks/tpch/tpch-dbgen/.generated_sf*

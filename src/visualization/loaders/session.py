@@ -35,12 +35,32 @@ class SessionTrace:
     metric_config: MetricConfig  # The normalization config used for scoring
 
 
+# Recognised raw-metric keys that bypass composite scoring.
+RAW_METRIC_KEYS = {"latency_p95", "latency_p99", "throughput"}
+
+
+def _extract_raw_value(pm: PerformanceMetrics, metric_key: str) -> float:
+    """Pull a single raw field from a PerformanceMetrics dataclass."""
+    return float(getattr(pm, metric_key, 0.0))
+
+
 def load_session(
-    path: Path | str, metric_config: Optional[MetricConfig] = None
+    path: Path | str,
+    metric_config: Optional[MetricConfig] = None,
+    metric_key: Optional[str] = None,
 ) -> SessionTrace:
     """
     Load a PBT session JSON file, optionally rescore it with a provided metric_config
     (or compute a new global range if none is provided), and parse it into arrays for plotting.
+
+    Parameters
+    ----------
+    metric_key : str | None
+        If set to a raw metric name (``latency_p95``, ``latency_p99``,
+        ``throughput``), the returned ``best_scores`` / ``mean_scores`` /
+        ``std_scores`` / ``worker_scores`` arrays will contain that raw value
+        instead of the composite score.  ``None`` (default) keeps the
+        existing composite-score behaviour.
     """
     path = Path(path)
     if not path.exists():
@@ -111,8 +131,14 @@ def load_session(
             metric_config = create_metric_config(workload)
 
     # Compute new scores for all metrics using the config
-    engine = create_scoring_engine(metric_config)
-    new_scores = [engine.compute_breakdown(m).final_score for m in all_metrics]
+    use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
+    if use_raw:
+        new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
+    elif hasattr(metric_config, "compute_score_value"):
+        new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
+    else:
+        engine = create_scoring_engine(metric_config)
+        new_scores = [engine.compute_breakdown(m).final_score for m in all_metrics]
 
     # Initialize arrays
     generations = np.arange(1, n_gens + 1)
@@ -149,7 +175,10 @@ def load_session(
                     gen_scores.append(score)
 
         if gen_scores:
-            best_scores[i] = max(gen_scores)
+            if use_raw and metric_key.startswith("latency"):
+                best_scores[i] = min(gen_scores)  # lower latency is better
+            else:
+                best_scores[i] = max(gen_scores)
             mean_scores[i] = np.mean(gen_scores)
             std_scores[i] = np.std(gen_scores)
 
@@ -166,14 +195,30 @@ def load_session(
                 event_data["generation"] = i + 1
                 exploit_events.append(event_data)
 
-    # Enforce monotonically increasing best scores
-    running_best = np.maximum.accumulate(best_scores)
+    # Enforce monotonically increasing best scores (lower-is-better for latency)
+    if use_raw and metric_key.startswith("latency"):
+        running_best = np.minimum.accumulate(best_scores)
+    else:
+        running_best = np.maximum.accumulate(best_scores)
+
+    # Extract best configuration metrics
+    best_config_metrics = None
+    if "best_configuration" in data and "metrics" in data["best_configuration"]:
+        metrics_dict = data["best_configuration"]["metrics"]
+        valid_keys = PerformanceMetrics.__dataclass_fields__.keys()
+        filtered = {k: v for k, v in metrics_dict.items() if k in valid_keys}
+        try:
+            best_config_metrics = PerformanceMetrics(**filtered)
+        except Exception:
+            pass
 
     # Compile metadata
     metadata = {
         "file_name": path.name,
         "n_workers": len(sorted_worker_ids),
         "tuning_session": tuning_session,
+        "best_config_metrics": best_config_metrics,
+        "metric_key": metric_key,
     }
 
     return SessionTrace(
@@ -191,7 +236,10 @@ def load_session(
     )
 
 
-def load_sessions(directory: Path | str) -> list[SessionTrace]:
+def load_sessions(
+    directory: Path | str,
+    metric_key: Optional[str] = None,
+) -> list[SessionTrace]:
     """
     Load all PBT session JSON files in a directory, computing a single super-global
     normalization range across ALL files to ensure completely consistent scoring.
@@ -267,7 +315,7 @@ def load_sessions(directory: Path | str) -> list[SessionTrace]:
     sessions = []
     for f in json_files:
         try:
-            sessions.append(load_session(f, metric_config=metric_config))
+            sessions.append(load_session(f, metric_config=metric_config, metric_key=metric_key))
         except Exception as e:
             LOGGER.error("Failed to load session %s: %s", f.name, e)
 
