@@ -966,6 +966,37 @@ class DockerEnvironment(DatabaseEnvironment):
             )
             return False
 
+    def _checkpoint_instance(self, worker_id: int) -> bool:
+        """Issue a CHECKPOINT to flush dirty buffers and recycle WAL.
+
+        Called before ``container.restart()`` so PostgreSQL has minimal
+        work during shutdown and can exit cleanly within the Docker
+        stop-timeout.  Without this, large ``shared_buffers`` configs
+        (common with LHS-sampled knob values) cause the shutdown
+        checkpoint to exceed the timeout — Docker SIGKILLs the
+        process, WAL is never recycled, and disk usage grows
+        monotonically across iterations.
+        """
+        try:
+            db_config = self.get_db_config(worker_id)
+            conn = get_connection(config=db_config, connect_timeout=5)
+            conn.autocommit = True
+            cursor = conn.cursor()
+            cursor.execute("CHECKPOINT")
+            cursor.close()
+            conn.close()
+            LOGGER.debug(
+                "Pre-restart CHECKPOINT completed for worker %d", worker_id
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug(
+                "Pre-restart CHECKPOINT for worker %d failed (non-fatal): %s",
+                worker_id,
+                exc,
+            )
+            return False
+
     def restart_instance(self, worker_id: int, quiet: bool = False) -> bool:
         """
         Restart a specific worker's Docker container.
@@ -976,9 +1007,10 @@ class DockerEnvironment(DatabaseEnvironment):
         container_name = self._container_name(worker_id)
         try:
             container = self.client.containers.get(container_name)
+            self._checkpoint_instance(worker_id)
             if not quiet:
                 LOGGER.info("Restarting container '%s'...", container_name)
-            container.restart(timeout=10)
+            container.restart(timeout=30)
             db_config = self.get_db_config(worker_id)
             self._wait_for_ready(
                 container_name,
@@ -1135,7 +1167,7 @@ class DockerEnvironment(DatabaseEnvironment):
             return None
         return 180
 
-    def _checkpoint_instance(self, worker_id: int) -> None:
+    def _checkpoint_before_snapshot(self, worker_id: int) -> None:
         """Issue a CHECKPOINT before snapshot creation to reduce recovery time on restore."""
         db_config = self.get_db_config(worker_id)
         conn = None
@@ -1288,7 +1320,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
         try:
             container = self.client.containers.get(container_name)
-            self._checkpoint_instance(worker_id)
+            self._checkpoint_before_snapshot(worker_id)
 
             # Stop for a clean shutdown — avoids crash-recovery on restore.
             container.reload()
@@ -1458,7 +1490,7 @@ class DockerEnvironment(DatabaseEnvironment):
 
         try:
             # 1. Checkpoint source to flush WAL (minimize recovery on targets)
-            self._checkpoint_instance(source_worker_id)
+            self._checkpoint_before_snapshot(source_worker_id)
 
             # 2. Stop source cleanly
             source_container = self.client.containers.get(source_container_name)

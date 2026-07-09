@@ -123,6 +123,7 @@ class ParameterInfo:
     enumvals: Optional[List[str]]
     boot_val: Optional[str]
     reset_val: Optional[str]
+    setting: Optional[str] = None
 
 
 @dataclass
@@ -320,7 +321,7 @@ class KnobApplicator:
 
         placeholders = ",".join(["%s"] * len(param_names))
         query = f"""
-            SELECT 
+            SELECT
                 name,
                 vartype,
                 context,
@@ -329,7 +330,8 @@ class KnobApplicator:
                 max_val,
                 enumvals,
                 boot_val,
-                reset_val
+                reset_val,
+                setting
             FROM pg_settings
             WHERE name IN ({placeholders})
         """
@@ -352,6 +354,7 @@ class KnobApplicator:
                     else (row[6].split(",") if isinstance(row[6], str) else None),
                     boot_val=row[7],
                     reset_val=row[8],
+                    setting=row[9],
                 )
                 self.param_cache[param_info.name] = param_info
 
@@ -444,6 +447,28 @@ class KnobApplicator:
                 return False, f"{name} must be one of {param_info.enumvals}: {value}"
 
         return True, None
+
+    @staticmethod
+    def _postmaster_value_matches(
+        desired: Any, current_setting: Optional[str], vartype: str
+    ) -> bool:
+        """Check if a postmaster parameter's running value already matches."""
+        if current_setting is None:
+            return False
+        try:
+            if isinstance(desired, bool):
+                return (current_setting.lower() in ("on", "true", "1")) == desired
+            if isinstance(desired, int):
+                return int(round(float(current_setting))) == desired
+            if isinstance(desired, float):
+                import math
+
+                return math.isclose(
+                    float(current_setting), desired, rel_tol=1e-6, abs_tol=0.01
+                )
+            return str(current_setting) == str(desired)
+        except (ValueError, TypeError):
+            return False
 
     def _apply_parameter(
         self, name: str, value: Any, param_info: ParameterInfo
@@ -738,7 +763,10 @@ class KnobApplicator:
                     result.applied_count += 1
 
                     if param_info.context == "postmaster":
-                        result.restart_required.add(name)
+                        if not self._postmaster_value_matches(
+                            value, param_info.setting, param_info.vartype
+                        ):
+                            result.restart_required.add(name)
                 else:
                     result.failed[name] = error_msg if error_msg else "Unknown error"
                     result.failed_count += 1
