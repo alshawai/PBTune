@@ -94,6 +94,7 @@ class CoTenantLoadController:
         knob_space: KnobSpace,
         base_db_config: DatabaseConfig,
         seed: int = 0,
+        bg_restore_interval: int = 10,
     ) -> None:
         self.degree = max(1, int(degree))
         self.env = env
@@ -101,6 +102,8 @@ class CoTenantLoadController:
         self.knob_space = knob_space
         self.base_db_config = base_db_config
         self.seed = seed
+        self.bg_restore_interval = max(1, int(bg_restore_interval))
+        self._round_counter: int = 0
 
         self._bg_worker_ids: List[int] = list(range(1, self.degree))
         self._bg_workers: List[Worker] = []
@@ -154,7 +157,11 @@ class CoTenantLoadController:
             self._bg_workers.append(worker)
 
     def _run_one_background(
-        self, worker: Worker, barriers: GenerationBarrier
+        self,
+        worker: Worker,
+        barriers: GenerationBarrier,
+        restore_due: bool = False,
+        next_eval_will_restore: bool = False,
     ) -> None:
         """Run a single background loader through the lockstep B1–B17 path.
 
@@ -177,10 +184,8 @@ class CoTenantLoadController:
                 worker,
                 apply_config=True,
                 barriers=barriers,
-                # No snapshot restore for background load: keep contention
-                # constant and avoid per-trial restore cost/drift handling.
-                restore_due=False,
-                next_eval_will_restore=False,
+                restore_due=restore_due,
+                next_eval_will_restore=next_eval_will_restore,
             )
         except Exception as exc:  # noqa: BLE001 - background load is best-effort
             LOGGER.debug(
@@ -209,8 +214,32 @@ class CoTenantLoadController:
         """
         if not self.enabled or barriers is None or self._pool is None:
             return []
+
+        self._round_counter += 1
+        bg_restore_due = (
+            self._round_counter > 1
+            and self._round_counter % self.bg_restore_interval == 0
+        )
+        bg_next_restore = (
+            (self._round_counter + 1) % self.bg_restore_interval == 0
+        )
+
+        if bg_restore_due:
+            LOGGER.info(
+                "Background workers: snapshot restore due (round %d, "
+                "interval=%d)",
+                self._round_counter,
+                self.bg_restore_interval,
+            )
+
         futures = [
-            self._pool.submit(self._run_one_background, worker, barriers)
+            self._pool.submit(
+                self._run_one_background,
+                worker,
+                barriers,
+                restore_due=bg_restore_due,
+                next_eval_will_restore=bg_next_restore,
+            )
             for worker in self._bg_workers
         ]
         return futures
@@ -239,4 +268,5 @@ class CoTenantLoadController:
             "foreground_worker_id": 0,
             "load_config_seed": self.seed,
             "load_config_source": "lhs_diverse",
+            "bg_restore_interval": self.bg_restore_interval,
         }
