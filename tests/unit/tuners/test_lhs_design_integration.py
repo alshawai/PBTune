@@ -174,7 +174,7 @@ _DESIGN = [
 class TestLHSDesignRun:
     def test_run_evaluates_whole_design(self, tmp_path):
         tuner = _make(tmp_path, _DESIGN, workers=2)
-        results = tuner.run()
+        tuner.run()
 
         # All 5 design points recorded across batches.
         assert len(tuner.design_records) == 5

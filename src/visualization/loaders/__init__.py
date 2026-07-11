@@ -28,6 +28,7 @@ __all__ = [
     "load_session",
     "load_sessions",
     "SessionTrace",
+    "RAW_METRIC_KEYS",
     "aggregate_seeds",
     "MultiSeedAggregate",
     "load_comparison",

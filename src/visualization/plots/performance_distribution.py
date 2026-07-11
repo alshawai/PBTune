@@ -1,8 +1,6 @@
 import logging
-from typing import Optional
 from pathlib import Path
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 import seaborn as sns
 from scipy.stats import mannwhitneyu
@@ -13,9 +11,8 @@ from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
-    load_sessions, load_session, load_bo_trace, load_comparison, SessionTrace, BOTrace, ComparisonData
+    load_sessions, load_session, load_bo_trace, load_comparison
 )
-from src.visualization.utils import auto_grid
 from src.visualization.plots.convergence_curve import (
     _build_shared_metric_config,
     _rescore_comparison_arm,

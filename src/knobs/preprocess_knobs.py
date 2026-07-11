@@ -30,7 +30,6 @@ from src.knobs.policy import (
     SUPPORTED_AUTOTUNING_VARTYPES,
     annotate_autotuning_policy,
     apply_bounds_safety_gate,
-    ensure_autotuning_policy_annotations,
 )
 from src.knobs.retrieval import PostgreSQLKnobRetriever
 from src.knobs.knob_metadata import KNOB_TUNING_METADATA, get_knobs_by_tier

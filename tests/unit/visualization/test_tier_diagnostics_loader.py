@@ -130,8 +130,14 @@ def test_load_tier_diagnostics_reads_scalpel_block(tmp_path: Path):
     assert diag.has_full_payload is True
 
 
-def test_load_tier_diagnostics_handles_missing_diagnostics_sibling(tmp_path: Path):
+def test_load_tier_diagnostics_handles_missing_diagnostics_sibling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """When scalpel_diagnostics.json is absent, the loader returns minimal payload."""
+    # The loader probes a CWD-relative fallback candidate
+    # (data/data_driven_knobs/<workload>/scalpel_diagnostics.json). Chdir into
+    # the empty tmp dir so a real repo sibling can't leak into this test.
+    monkeypatch.chdir(tmp_path)
     path = _write_importance_results(
         tmp_path / "importance_results.json", include_full_payload=False
     )
@@ -145,8 +151,12 @@ def test_load_tier_diagnostics_handles_missing_diagnostics_sibling(tmp_path: Pat
     assert diag.has_full_payload is False
 
 
-def test_load_tier_diagnostics_legacy_jenks_file_returns_minimal_payload(tmp_path: Path):
+def test_load_tier_diagnostics_legacy_jenks_file_returns_minimal_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """A pre-SCALPEL ``importance_results.json`` (no metadata block) loads cleanly."""
+    # See sibling test: isolate from any real CWD-relative diagnostics file.
+    monkeypatch.chdir(tmp_path)
     legacy = {
         "workload_type": "oltp_read_write",
         "model_r2": 0.83,

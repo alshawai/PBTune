@@ -1,6 +1,4 @@
 import pytest
-import numpy as np
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from src.visualization.loaders import SessionTrace, BOTrace, ComparisonData
@@ -157,7 +155,7 @@ def test_skips_test_when_n_lt_2(mock_load_comp, mock_load_bo, mock_load_sessions
     mock_load_comp.return_value = comparison_with_multi_default
     
     with patch("src.visualization.plots.performance_distribution.Path.is_dir", return_value=True):
-        fig = generate(
+        generate(
             pbt_paths=["pbt_dir"],
             bo_paths=["bo1"],
             comparison_path="comp.json",
