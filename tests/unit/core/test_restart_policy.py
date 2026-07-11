@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from src.tuner.benchmark.restart_policy import TuningMode, should_restart
+from src.tuners.engine.restart_policy import TuningMode, should_restart
 
 
 # ── ONLINE mode ──────────────────────────────────────────────────────────

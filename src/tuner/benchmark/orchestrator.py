@@ -51,8 +51,8 @@ from src.benchmarks.executor import BenchmarkExecutor
 from src.benchmarks.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
 from src.utils.types import TuningMode
-from src.tuner.benchmark.restart_policy import should_restart
-from src.tuner.core.barriers import GenerationBarrier
+from src.tuners.engine.restart_policy import should_restart
+from src.tuners.engine.barriers import GenerationBarrier
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger, get_color_context
 from src.utils.timing import TimingRecorder

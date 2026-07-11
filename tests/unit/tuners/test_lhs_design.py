@@ -318,7 +318,7 @@ class TestSnapshotCadence:
         captured = []
         self._wire_single_worker_batch(tuner, captured)
 
-        from src.tuner.core.barriers import GenerationBarrier
+        from src.tuners.engine.barriers import GenerationBarrier
 
         barriers = GenerationBarrier(num_workers=1, enabled=False)
         tuner._evaluate_batch_parallel(
@@ -338,7 +338,7 @@ class TestSnapshotCadence:
         captured = []
         self._wire_single_worker_batch(tuner, captured)
 
-        from src.tuner.core.barriers import GenerationBarrier
+        from src.tuners.engine.barriers import GenerationBarrier
 
         barriers = GenerationBarrier(num_workers=1, enabled=False)
         tuner._evaluate_batch_parallel(

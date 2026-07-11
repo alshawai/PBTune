@@ -36,7 +36,7 @@ from src.tuner.core.evolution import (
     get_population_statistics,
     check_convergence,
 )
-from src.tuner.core.barriers import GenerationBarrier
+from src.tuners.engine.barriers import GenerationBarrier
 
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.knobs.knob_space import KnobSpace
