@@ -9,7 +9,7 @@ from src.config.database import DatabaseConfig
 from src.tuner.core.evolution import truncation_selection
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuners.engine.worker import Worker
-from src.tuner.benchmark.orchestrator import (
+from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
 )

@@ -69,23 +69,23 @@ COLORS = get_color_context()
 
 # Canonical ordered list of all barrier names.
 BARRIER_NAMES: List[str] = [
-    "connected",  # B1
-    "config_applied",  # B2
-    "restarted",  # B3
-    "reconnected",  # B4
-    "config_verified",  # B5
-    "pre_stats_captured",  # B6
-    "benchmark_ready",  # B7
-    "warmup_done",  # B8
-    "measurement_done",  # B9
-    "post_stats_captured",  # B10
-    "io_computed",  # B11
+    "connected",                 # B1
+    "config_applied",            # B2
+    "restarted",                 # B3
+    "reconnected",               # B4
+    "config_verified",           # B5
+    "pre_stats_captured",        # B6
+    "benchmark_ready",           # B7
+    "warmup_done",               # B8
+    "measurement_done",          # B9
+    "post_stats_captured",       # B10
+    "io_computed",               # B11
     "system_metrics_collected",  # B12
     "memory_pressure_computed",  # B13
-    "reliability_gated",  # B14
-    "vacuum_done",  # B15
-    "score_computed",  # B16
-    "disconnected",  # B17
+    "reliability_gated",         # B14
+    "vacuum_done",               # B15
+    "score_computed",            # B16
+    "disconnected",              # B17
 ]
 
 

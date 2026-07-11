@@ -26,7 +26,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-ORCHESTRATOR_PATH = PROJECT_ROOT / "src" / "tuner" / "benchmark" / "orchestrator.py"
+ORCHESTRATOR_PATH = PROJECT_ROOT / "src" / "tuners" / "engine" / "orchestrator.py"
 POPULATION_PATH = PROJECT_ROOT / "src" / "tuner" / "core" / "population.py"
 PBT_MAIN_PATH = PROJECT_ROOT / "src" / "tuner" / "main.py"
 BO_RUNNER_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "runner.py"
@@ -40,9 +40,9 @@ def test_vacuum_after_dml_skips_when_next_eval_will_restore():
     """``_vacuum_after_dml(next_eval_will_restore=True)`` must short-circuit
     before opening a DB connection. We monkey-patch ``get_connection`` to
     raise — if it gets called, the test fails."""
-    from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+    from src.tuners.engine.orchestrator import WorkloadOrchestrator
     from src.utils.metrics import WorkloadType
-    from src.tuner.benchmark.orchestrator import WorkloadOrchestratorConfig
+    from src.tuners.engine.orchestrator import WorkloadOrchestratorConfig
     from src.utils.metrics import PerformanceMetrics  # noqa: F401 — module load
 
     # Build a config that would normally call VACUUM (sysbench RW workload)
@@ -83,7 +83,7 @@ def test_vacuum_after_dml_skip_log_message():
 def test_evaluate_worker_signature_includes_next_eval_will_restore():
     """The new keyword must reach ``evaluate_worker`` so PBT and BO can
     pass it without monkey-patching."""
-    from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+    from src.tuners.engine.orchestrator import WorkloadOrchestrator
 
     sig = inspect.signature(WorkloadOrchestrator.evaluate_worker)
     assert "next_eval_will_restore" in sig.parameters

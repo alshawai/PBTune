@@ -55,7 +55,7 @@ from src.config.database import DatabaseConfig
 from src.knobs.knob_space import KnobSpace
 from src.tuners.engine.barriers import GenerationBarrier
 from src.tuners.engine.worker import Worker
-from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+from src.tuners.engine.orchestrator import WorkloadOrchestrator
 from src.utils.environments.base import DatabaseEnvironment
 from src.utils.logger import get_logger
 
