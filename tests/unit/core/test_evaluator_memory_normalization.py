@@ -8,7 +8,7 @@ import pytest
 import psycopg2
 
 from src.config.database import DatabaseConfig
-from src.tuner.benchmark.orchestrator import (
+from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
 )

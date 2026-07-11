@@ -38,7 +38,7 @@ from src.tuner.core.evolution import (
 )
 from src.tuners.engine.barriers import GenerationBarrier
 
-from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+from src.tuners.engine.orchestrator import WorkloadOrchestrator
 from src.knobs.knob_space import KnobSpace
 from src.utils.environments import DatabaseEnvironment
 from src.utils.logger.helpers import log_section_header, log_worker_metrics_table

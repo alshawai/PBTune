@@ -18,7 +18,7 @@ from smac.runhistory.enumerations import StatusType
 
 from src.knobs import get_knob_space
 from src.tuners.engine.worker import Worker
-from src.tuner.benchmark.orchestrator import (
+from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
 )

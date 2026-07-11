@@ -7,7 +7,7 @@ from ConfigSpace import Configuration
 from src.knobs.knob_space import KnobSpace
 from src.tuners.engine.worker import Worker
 from src.tuners.engine.barriers import GenerationBarrier
-from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+from src.tuners.engine.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
