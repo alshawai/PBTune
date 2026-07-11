@@ -42,10 +42,6 @@ from src.tuners.engine.orchestrator import (
     WorkloadOrchestratorConfig,
 )
 from src.knobs import get_knob_space
-from src.utils.calibration import (
-    RecalibrationResult,
-    maybe_recalibrate_scores,
-)
 from src.tuners.utils.executors import build_workload_bundle
 from src.tuners.utils.knob_filter import (
     compute_unsupported_knobs,
@@ -139,9 +135,11 @@ class BaseTuner(ABC):
 
         self._best_score_so_far: float = 0.0
 
-        # Populated by run() after the loop: the outcome of the optional
-        # global post-hoc recalibration pass (unapplied by default).
-        self.recalibration: RecalibrationResult = RecalibrationResult(applied=False)
+        # Count of generations (a.k.a. rounds / batches / iterations) whose
+        # step() actually ran. Tracked centrally by run() — it is the one
+        # depth axis every strategy shares — and serialized as
+        # ``tuning_session.num_rounds``.
+        self._rounds_completed: int = 0
 
     @abstractmethod
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
@@ -181,38 +179,43 @@ class BaseTuner(ABC):
         (generation history, score breakdown, provenance, ...).
         """
 
-    def collect_metric_history(self) -> List[PerformanceMetrics]:
+    def total_evaluations(self) -> int:
+        """Number of configurations actually benchmarked across the run.
+
+        This is the fair cross-strategy *budget* axis (PBT evaluates
+        population×generations, BO one config per iteration, LHS one per design
+        point), serialized as ``tuning_session.total_evaluations``. Distinct
+        from ``num_rounds`` (the count of ``step()`` calls). The base default
+        returns 0; every concrete strategy overrides it.
         """
-        Return every measured :class:`PerformanceMetrics` across the run.
+        return 0
 
-        The shared ``run()`` feeds this flat history to the global post-hoc
-        recalibration pass (:func:`maybe_recalibrate_scores`) so the serialized
-        session can be rescored against one calibrated normalization range
-        before the per-config scores are frozen into the payload.
+    def converged(self) -> bool:
+        """Whether the strategy reached its planned terminal state.
 
-        The base default returns an empty list, which makes recalibration a
-        no-op (below the observation floor) — a strategy that wants the
-        pre-rescored session overrides this to surface its observations. The
-        ordering of the returned list is the strategy's contract with its own
-        :meth:`apply_recalibration`: ``recalibration.scores[i]`` /
-        ``recalibration.breakdowns[i]`` correspond to ``history[i]``.
+        Serialized as the shared ``tuning_session.converged`` flag. Each
+        strategy defines convergence in its own terms (PBT: early-stop on no
+        improvement; LHS: the full design was swept). The base default is
+        ``False`` so a strategy that never converges needs no override.
         """
-        return []
+        return False
 
-    def apply_recalibration(self, result: RecalibrationResult) -> None:
-        """
-        Fold a successful recalibration back into the strategy's state.
+    def build_optimizer(self) -> None:
+        """Construct and wire the strategy's persistent optimizer core.
 
-        Called by ``run()`` after the loop when
-        :func:`maybe_recalibrate_scores` returns an applied result, *before*
-        results are assembled and serialized. The positional alignment between
-        ``result.scores`` / ``result.breakdowns`` and the list returned by
-        :meth:`collect_metric_history` is guaranteed by the shared pass, so an
-        override can rewrite per-config scores, ``best_configuration``, and
-        ``generation_history`` to reflect the globally calibrated rubric.
+        Called once at the end of :meth:`setup`, *after*
+        :meth:`propose_initial_configs` has drawn the initial configs and the
+        shared bring-up has left live instances, snapshots, and the
+        orchestrator in place. This is the seam where a strategy that carries
+        optimizer state across generations builds it: PBT wires its
+        :class:`Population` (binding workers to the live instances and the
+        baseline snapshot) from ``self.initial_configs``; BO constructs its
+        surrogate here. Keeping this separate from
+        :meth:`propose_initial_configs` keeps that hook a pure, side-effect-free
+        config draw.
 
-        The base default is a no-op: strategies that do not surface a metric
-        history (or do not want pre-rescoring) inherit local scores unchanged.
+        The base default is a no-op — LHS-design evaluates a fixed sample with
+        no persistent optimizer to build, so it does not override.
         """
         return None
 
@@ -337,9 +340,28 @@ class BaseTuner(ABC):
         self.enable_snapshots = self.lifecycle.enable_snapshots and bundle.enable_snapshots
         workload_executor = bundle.executor
 
+        # Thread the session's scoring-policy provenance into the metric
+        # config so every strategy scores against the same rubric. Only
+        # forward fields that are actually set — ``create_metric_config`` reads
+        # via ``custom_weights.get(k, <workload default>)``, so passing an
+        # explicit ``None`` would clobber the workload default rather than fall
+        # back to it.
+        scoring_overrides: Dict[str, Any] = {
+            "workload_features": dict(self.workload_features),
+        }
+        if self.lifecycle.scoring_policy is not None:
+            scoring_overrides["scoring_policy"] = self.lifecycle.scoring_policy
+        if self.lifecycle.scoring_policy_version is not None:
+            scoring_overrides["scoring_policy_version"] = (
+                self.lifecycle.scoring_policy_version
+            )
+        if self.lifecycle.metric_reference_version is not None:
+            scoring_overrides["metric_reference_version"] = (
+                self.lifecycle.metric_reference_version
+            )
         self.metric_config = create_metric_config(
             self._workload_type.value,
-            workload_features=dict(self.workload_features),
+            **scoring_overrides,
         )
 
         self.env = EnvironmentFactory.create(
@@ -392,6 +414,11 @@ class BaseTuner(ABC):
         )
 
         self.initial_configs = self.propose_initial_configs()
+
+        # Build the strategy's persistent optimizer (PBT Population, BO
+        # surrogate) now that configs are drawn and instances are live. No-op
+        # for stateless strategies like LHS-design.
+        self.build_optimizer()
 
     @property
     def population_size(self) -> int:
@@ -514,6 +541,7 @@ class BaseTuner(ABC):
             )
             for generation in range(self.max_generations):
                 outcome = self.step(generation)
+                self._rounds_completed += 1
 
                 if self.should_stop(outcome):
                     LOGGER.info(
@@ -543,8 +571,6 @@ class BaseTuner(ABC):
         total_time = time.time() - self.start_time
         tuning_time = time.time() - (self.tuning_start_time or self.start_time)
         bootstrap_seconds = total_time - tuning_time
-
-        self._recalibrate_scores()
 
         results = self._assemble_results(
             total_time=total_time,
@@ -613,62 +639,6 @@ class BaseTuner(ABC):
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
         )
 
-    def _recalibrate_scores(self) -> None:
-        """
-        Run the optional global post-hoc recalibration pass after the loop.
-
-        Collects the strategy's flat metric history and, when there are enough
-        observations, recomputes every score against one globally calibrated
-        normalization range. A successful pass is stored on
-        ``self.recalibration`` and handed to :meth:`apply_recalibration` so the
-        strategy can fold the rescored values + breakdowns back into its state
-        *before* :meth:`_assemble_results` freezes the session payload.
-
-        Threads the live scoring provenance (policy, version, metric reference,
-        and the session's static workload-feature prior) through so the
-        rescored rubric matches the one the loop scored against. Below the
-        observation floor the result is unapplied and local scores stand.
-        """
-        history = self.collect_metric_history()
-        if not history:
-            return
-
-        metric_config = self.metric_config
-        result = maybe_recalibrate_scores(
-            history,
-            benchmark=self.benchmark,
-            workload=self._workload_type.value,
-            scoring_policy=getattr(metric_config, "scoring_policy", None),
-            scoring_policy_version=getattr(
-                metric_config, "scoring_policy_version", None
-            ),
-            metric_reference_version=getattr(
-                metric_config, "metric_reference_version", None
-            ),
-            workload_features=dict(self.workload_features) or None,
-        )
-        self.recalibration = result
-
-        if not result.applied:
-            LOGGER.info(
-                "%sGlobal recalibration skipped (%d observations < floor); "
-                "keeping local scores%s",
-                COLORS.orange,
-                len(history),
-                COLORS.reset,
-            )
-            return
-
-        LOGGER.info(
-            "%sGlobal recalibration applied across %d observations "
-            "(ranges_calibrated=%s)%s",
-            COLORS.teal,
-            len(history),
-            result.metadata.get("ranges_calibrated"),
-            COLORS.reset,
-        )
-        self.apply_recalibration(result)
-
     def _assemble_results(
         self,
         *,
@@ -691,6 +661,10 @@ class BaseTuner(ABC):
         )
         header.update(
             {
+                "num_rounds": self._rounds_completed,
+                "total_evaluations": self.total_evaluations(),
+                "tuning_mode": self.lifecycle.tuning_mode.value,
+                "converged": self.converged(),
                 "total_time_seconds": total_time,
                 "tuning_time_seconds": tuning_time,
                 "bootstrap_seconds": bootstrap_seconds,

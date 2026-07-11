@@ -312,13 +312,19 @@ def _build_session_metadata(
         if key not in {"workload_type", "benchmark_name", "tuning_strategy"}:
             metadata[key] = value
 
-    # Also grab scoring overrides from the root data object if present
+    # Also grab scoring overrides. The unified schema (2a′+) namespaces these
+    # under ``tuning_session.scoring``; promote them flat (nested-first) so the
+    # downstream global-rescoring reads see a uniform metadata dict regardless
+    # of session shape. Older/BO-flat sessions fall back to the root object.
+    scoring_block = session_meta.get("scoring") or {}
     for scoring_key in [
         "scoring_policy",
         "scoring_policy_version",
         "metric_reference_version",
     ]:
-        if scoring_key not in metadata and scoring_key in data:
+        if scoring_key in scoring_block:
+            metadata[scoring_key] = scoring_block[scoring_key]
+        elif scoring_key not in metadata and scoring_key in data:
             metadata[scoring_key] = data[scoring_key]
 
     return metadata

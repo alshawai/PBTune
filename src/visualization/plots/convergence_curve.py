@@ -66,19 +66,29 @@ def _collect_worker_metrics(paths: list[Path]) -> tuple[list[PerformanceMetrics]
 
         if not metadata:
             tuning_session = data.get("tuning_session", {})
+            scoring = tuning_session.get("scoring") or {}
             metadata = {
                 "workload": tuning_session.get("workload_type", "oltp"),
                 "benchmark": tuning_session.get("benchmark_name"),
-                "scoring_policy": data.get(
-                    "scoring_policy", tuning_session.get("scoring_policy")
+                "scoring_policy": scoring.get(
+                    "scoring_policy",
+                    data.get(
+                        "scoring_policy", tuning_session.get("scoring_policy")
+                    ),
                 ),
-                "scoring_policy_version": data.get(
+                "scoring_policy_version": scoring.get(
                     "scoring_policy_version",
-                    tuning_session.get("scoring_policy_version"),
+                    data.get(
+                        "scoring_policy_version",
+                        tuning_session.get("scoring_policy_version"),
+                    ),
                 ),
-                "metric_reference_version": data.get(
+                "metric_reference_version": scoring.get(
                     "metric_reference_version",
-                    tuning_session.get("metric_reference_version"),
+                    data.get(
+                        "metric_reference_version",
+                        tuning_session.get("metric_reference_version"),
+                    ),
                 ),
             }
 

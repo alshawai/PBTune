@@ -106,6 +106,40 @@ def build_session_header(
     return header
 
 
+def build_scoring_block(
+    scoring_metadata: Dict[str, Any],
+    score_breakdown: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build the unified ``tuning_session.scoring`` sub-block.
+
+    Every strategy scores its configs through the same engine, so the scoring
+    provenance (policy, versions, the static workload-feature prior, the
+    normalization ranges) and the winning config's ``score_breakdown`` are
+    serialized under one namespaced block regardless of strategy. Downstream
+    loaders read ``tuning_session.scoring`` first and fall back to the legacy
+    flat keys, so folding these six fields here keeps a single code path for
+    PBT and LHS while remaining tolerant of older/BO-flat sessions.
+
+    ``scoring_metadata`` is the dict returned by ``MetricConfig
+    .get_scoring_metadata()``; ``score_breakdown`` is the best config's
+    breakdown (``{}`` when unavailable).
+    """
+    return {
+        "scoring_policy": scoring_metadata.get("scoring_policy", "fixed_v1"),
+        "scoring_policy_version": scoring_metadata.get(
+            "scoring_policy_version", "1.0"
+        ),
+        "metric_reference_version": scoring_metadata.get(
+            "metric_reference_version", "v1"
+        ),
+        "workload_features": scoring_metadata.get("workload_features", {}),
+        "normalization_metadata": scoring_metadata.get(
+            "normalization_metadata", {}
+        ),
+        "score_breakdown": score_breakdown or {},
+    }
+
+
 def write_session_json(
     results: Dict[str, Any],
     *,

@@ -110,21 +110,35 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
 
                 if not shared_metadata:
                     tuning_session = data.get("tuning_session", {})
+                    scoring = tuning_session.get("scoring") or {}
                     shared_metadata = {
                         "workload": tuning_session.get("workload_type", "oltp"),
                         "benchmark": tuning_session.get("benchmark_name"),
-                        "scoring_policy": data.get(
-                            "scoring_policy", tuning_session.get("scoring_policy")
+                        "scoring_policy": scoring.get(
+                            "scoring_policy",
+                            data.get(
+                                "scoring_policy",
+                                tuning_session.get("scoring_policy"),
+                            ),
                         ),
-                        "scoring_policy_version": data.get(
+                        "scoring_policy_version": scoring.get(
                             "scoring_policy_version",
-                            tuning_session.get("scoring_policy_version"),
+                            data.get(
+                                "scoring_policy_version",
+                                tuning_session.get("scoring_policy_version"),
+                            ),
                         ),
-                        "metric_reference_version": data.get(
+                        "metric_reference_version": scoring.get(
                             "metric_reference_version",
-                            tuning_session.get("metric_reference_version"),
+                            data.get(
+                                "metric_reference_version",
+                                tuning_session.get("metric_reference_version"),
+                            ),
                         ),
-                        "workload_features": data.get("workload_features"),
+                        "workload_features": scoring.get(
+                            "workload_features",
+                            data.get("workload_features"),
+                        ),
                     }
 
                 history = data.get("generation_history", [])
@@ -196,7 +210,16 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     for _, traces in final_groups.items():
         for trace in traces:
             session_meta = trace.metadata.get("tuning_session", {})
-            current_config = {k: session_meta.get(k) for k in invariant_keys}
+            # Strategy-specific hyperparameters (population_size, exploit_quantile,
+            # ready_interval, ...) move under ``tuning_session.strategy_params`` in
+            # the unified schema (2a′+); shared identity keys stay flat. Read each
+            # invariant from the flat header first, then strategy_params, so both
+            # incumbent-flat and unified-nested PBT sessions validate.
+            strategy_params = session_meta.get("strategy_params") or {}
+            current_config = {
+                k: session_meta.get(k, strategy_params.get(k))
+                for k in invariant_keys
+            }
 
             if base_config is None:
                 base_config = current_config
