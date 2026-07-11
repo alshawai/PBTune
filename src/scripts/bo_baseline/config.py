@@ -136,6 +136,13 @@ class BOConfig:
         """Apply comparable benchmark/search settings from a PBT tuning session."""
         payload = self._load_pbt_session(path)
         session = payload["tuning_session"]
+        # Unified schema (2a′+) namespaces PBT hyperparameters under
+        # ``strategy_params`` and scoring provenance under ``scoring``, renames
+        # ``total_generations`` → ``num_rounds``. Read nested-first, then fall
+        # back to the incumbent flat keys so both PBT session shapes size a BO
+        # run identically.
+        strategy_params = session.get("strategy_params") or {}
+        scoring = session.get("scoring") or {}
 
         self.pbt_session_path = path
         self.knob_tier = str(session.get("knob_tier", self.knob_tier))
@@ -198,7 +205,12 @@ class BOConfig:
             warmup_passes=warmup_passes,
         )
         if set_iteration_budget:
-            population_size = int(session.get("population_size", 0) or 0)
+            population_size = int(
+                strategy_params.get(
+                    "population_size", session.get("population_size", 0)
+                )
+                or 0
+            )
 
             generation_history = payload.get("generation_history")
             if isinstance(generation_history, list) and generation_history:
@@ -207,7 +219,13 @@ class BOConfig:
                 # Legacy session without generation_history; fall back to the
                 # configured target. Will overshoot when PBT early-stopped,
                 # but that is preferable to silently swapping in the preset.
-                actual_generations = int(session.get("total_generations", 0) or 0)
+                # ``total_generations`` → ``num_rounds`` in the unified schema.
+                actual_generations = int(
+                    session.get(
+                        "num_rounds", session.get("total_generations", 0)
+                    )
+                    or 0
+                )
 
             if population_size > 0 and actual_generations > 0:
                 preset_iterations = self.n_iterations
@@ -288,22 +306,31 @@ class BOConfig:
                 "load (this breaks the fair-comparison invariant)."
             )
 
-        # Extract snapshot settings
-        if "enable_snapshots" in session:
+        # Extract snapshot settings (strategy_params in the unified schema).
+        if "enable_snapshots" in strategy_params:
+            self.enable_snapshots = bool(strategy_params["enable_snapshots"])
+        elif "enable_snapshots" in session:
             self.enable_snapshots = bool(session["enable_snapshots"])
 
-        if self.enable_snapshots and "snapshot_restore_interval" in session:
+        snapshot_interval_raw = strategy_params.get(
+            "snapshot_restore_interval",
+            session.get("snapshot_restore_interval"),
+        )
+        if self.enable_snapshots and snapshot_interval_raw is not None:
             # PBT restores every N generations.
             # BO now operates per-generation as well, so no pop_size multiplier.
-            pbt_interval = int(session["snapshot_restore_interval"])
+            pbt_interval = int(snapshot_interval_raw)
             self.snapshot_restore_interval = pbt_interval
             LOGGER.info(
                 f"Extracted PBT snapshot interval ({pbt_interval} gens) "
                 f"-> BO interval: {self.snapshot_restore_interval} iterations"
             )
 
-        # Extract scoring policy from PBT session if present
-        if "scoring_policy" in session:
+        # Extract scoring policy from PBT session if present (scoring block in
+        # the unified schema, flat in incumbent/BO-flat sessions).
+        if "scoring_policy" in scoring:
+            self.scoring_policy = str(scoring["scoring_policy"])
+        elif "scoring_policy" in session:
             self.scoring_policy = str(session["scoring_policy"])
 
         # ── Consolidated summary of everything copied from the PBT session ──

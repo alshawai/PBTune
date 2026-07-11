@@ -25,6 +25,7 @@ from src.tuners.utils.output_paths import resolve_tuner_output_root
 from src.tuners.utils.resources import resolve_worker_resources
 from src.tuners.utils.session_writer import (
     TIMING_SCHEMA_VERSION,
+    build_scoring_block,
     build_session_header,
     convert_numpy_types,
     worker_resources_to_dict,
@@ -51,6 +52,7 @@ __all__ = [
     "resolve_tuner_output_root",
     "resolve_worker_resources",
     "TIMING_SCHEMA_VERSION",
+    "build_scoring_block",
     "build_session_header",
     "convert_numpy_types",
     "worker_resources_to_dict",

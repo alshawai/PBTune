@@ -149,17 +149,26 @@ def load_bo_trace(
         # Either use provided metric config or compute a new one
         if metric_config is None:
             tuning_session = data.get("tuning_session", {})
+            scoring = tuning_session.get("scoring") or {}
             workload = tuning_session.get("workload_type", "oltp")
             benchmark = tuning_session.get("benchmark_name")
-            scoring_policy = data.get(
-                "scoring_policy", tuning_session.get("scoring_policy")
+            scoring_policy = scoring.get(
+                "scoring_policy",
+                data.get("scoring_policy", tuning_session.get("scoring_policy")),
             )
-            policy_version = data.get(
-                "scoring_policy_version", tuning_session.get("scoring_policy_version")
+            policy_version = scoring.get(
+                "scoring_policy_version",
+                data.get(
+                    "scoring_policy_version",
+                    tuning_session.get("scoring_policy_version"),
+                ),
             )
-            metric_ref = data.get(
+            metric_ref = scoring.get(
                 "metric_reference_version",
-                tuning_session.get("metric_reference_version"),
+                data.get(
+                    "metric_reference_version",
+                    tuning_session.get("metric_reference_version"),
+                ),
             )
 
             metric_config, _, _ = rescore_metrics_globally(

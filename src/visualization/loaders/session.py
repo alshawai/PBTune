@@ -104,14 +104,25 @@ def load_session(
                     )
 
     tuning_session = data.get("tuning_session", {})
+    scoring = tuning_session.get("scoring") or {}
     workload = tuning_session.get("workload_type", "oltp")
     benchmark = tuning_session.get("benchmark_name")
-    scoring_policy = data.get("scoring_policy", tuning_session.get("scoring_policy"))
-    scoring_policy_version = data.get(
-        "scoring_policy_version", tuning_session.get("scoring_policy_version")
+    scoring_policy = scoring.get(
+        "scoring_policy",
+        data.get("scoring_policy", tuning_session.get("scoring_policy")),
     )
-    metric_ref = data.get(
-        "metric_reference_version", tuning_session.get("metric_reference_version")
+    scoring_policy_version = scoring.get(
+        "scoring_policy_version",
+        data.get(
+            "scoring_policy_version", tuning_session.get("scoring_policy_version")
+        ),
+    )
+    metric_ref = scoring.get(
+        "metric_reference_version",
+        data.get(
+            "metric_reference_version",
+            tuning_session.get("metric_reference_version"),
+        ),
     )
 
     # 2. Rescore Globally
@@ -265,16 +276,25 @@ def load_sessions(
             if not shared_metadata:
                 # Grab metadata from first file to guide rescoring policy
                 ts = data.get("tuning_session", {})
+                ts_scoring = ts.get("scoring") or {}
                 shared_metadata["workload"] = ts.get("workload_type", "oltp")
                 shared_metadata["benchmark"] = ts.get("benchmark_name")
-                shared_metadata["scoring_policy"] = data.get(
-                    "scoring_policy", ts.get("scoring_policy")
+                shared_metadata["scoring_policy"] = ts_scoring.get(
+                    "scoring_policy",
+                    data.get("scoring_policy", ts.get("scoring_policy")),
                 )
-                shared_metadata["policy_version"] = data.get(
-                    "scoring_policy_version", ts.get("scoring_policy_version")
+                shared_metadata["policy_version"] = ts_scoring.get(
+                    "scoring_policy_version",
+                    data.get(
+                        "scoring_policy_version", ts.get("scoring_policy_version")
+                    ),
                 )
-                shared_metadata["metric_ref"] = data.get(
-                    "metric_reference_version", ts.get("metric_reference_version")
+                shared_metadata["metric_ref"] = ts_scoring.get(
+                    "metric_reference_version",
+                    data.get(
+                        "metric_reference_version",
+                        ts.get("metric_reference_version"),
+                    ),
                 )
 
             for gen in data.get("generation_history", []):
