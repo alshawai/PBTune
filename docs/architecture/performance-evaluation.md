@@ -272,7 +272,7 @@ There are **no** workload-specific scoring functions any more. A single `Composi
 
 ### 1. Single orchestrator, no per-workload subclasses
 
-The orchestrator stays workload-agnostic. Workload-specific logic lives in [`BenchmarkExecutor`](../../src/benchmarks/executor.py) implementations ([`SysbenchExecutor`](../../src/benchmarks/sysbench/executor.py), [`TPCHExecutor`](../../src/benchmarks/tpch/executor.py), [`WorkloadExecutor`](../../src/tuner/benchmark/workload.py)). This keeps the scoring contract and the barrier sequence shared across benchmarks.
+The orchestrator stays workload-agnostic. Workload-specific logic lives in [`BenchmarkExecutor`](../../src/benchmarks/executor.py) implementations ([`SysbenchExecutor`](../../src/benchmarks/sysbench/executor.py), [`TPCHExecutor`](../../src/benchmarks/tpch/executor.py), [`WorkloadExecutor`](../../src/benchmarks/workload.py)). This keeps the scoring contract and the barrier sequence shared across benchmarks.
 
 ### 2. Score in `[0, 1]`, not `[0, 100]`
 
@@ -316,7 +316,7 @@ A configuration that fails should not be ranked by accident on its non-failing d
 
 - `PerformanceMetrics`, `MetricConfig`, `WorkloadType`: [src/utils/metrics.py](../../src/utils/metrics.py)
 - `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
-- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py)
+- `WorkloadExecutor`, `WorkloadFileLoader`: [src/benchmarks/workload.py](../../src/benchmarks/workload.py)
 - `should_restart`: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
 - `CompositeScorer`, `ScoreBreakdown`: [src/utils/scoring/scorer.py](../../src/utils/scoring/scorer.py), [src/utils/scoring/contracts.py](../../src/utils/scoring/contracts.py)
 - Metric instrumentation: [src/utils/metric_instrumentation.py](../../src/utils/metric_instrumentation.py)

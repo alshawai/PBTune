@@ -12,7 +12,7 @@ The orchestrator package lives at [src/tuner/benchmark/](../../src/tuner/benchma
 
 - **[orchestrator.py](../../src/tuner/benchmark/orchestrator.py)** — `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`. Drives the B1–B17 lockstep flow.
 - **[restart_policy.py](../../src/tuner/benchmark/restart_policy.py)** — Pure decision function `should_restart()`. The CDBTune-inspired adaptive batching lives here.
-- **[workload.py](../../src/tuner/benchmark/workload.py)** — `WorkloadExecutor` for SQL-template workloads + `WorkloadFileLoader` for JSON/YAML workload files.
+- **[workload.py](../../src/benchmarks/workload.py)** — `WorkloadExecutor` for SQL-template workloads + `WorkloadFileLoader` for JSON/YAML workload files.
 
 This split — *policy* vs. *mechanism* vs. *workload-specific execution* — is what lets the orchestrator stay benchmark-agnostic while the same plumbing handles Sysbench, TPC-H, and arbitrary user workloads.
 
@@ -207,7 +207,7 @@ The orchestrator accepts any object that satisfies a small contract — `prepare
 | --- | --- | --- | --- |
 | **`SysbenchExecutor`** | [src/benchmarks/sysbench/executor.py](../../src/benchmarks/sysbench/executor.py) | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | Wraps the `sysbench` C-binary (1.1.0+). The score's TPS/latency metrics come from sysbench's own output. |
 | **`TPCHExecutor`** | [src/benchmarks/tpch/executor.py](../../src/benchmarks/tpch/executor.py) | TPC-H 22-query power test | Uses `dbgen` for data generation, `psycopg2.copy_expert()` for bulk load, raw psycopg2 for query execution. Scale factor configurable. |
-| **`WorkloadExecutor`** | [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
+| **`WorkloadExecutor`** | [src/benchmarks/workload.py](../../src/benchmarks/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
 
 Selection is decided in [`src/tuner/main.py`](../../src/tuner/main.py) based on CLI flags:
 
@@ -224,7 +224,7 @@ The full strategy comparison — when to use external C-binaries vs internal tem
 
 ## Template workloads
 
-**Location**: [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py)
+**Location**: [src/benchmarks/workload.py](../../src/benchmarks/workload.py)
 
 `WorkloadExecutor` is the engine behind both the built-in OLTP/OLAP/MIXED templates and any user-supplied JSON/YAML workload file.
 
@@ -328,6 +328,6 @@ The retry loop knows about PostgreSQL-specific recovery messages (`"starting up"
 
 - `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
 - `should_restart`: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
-- `WorkloadExecutor`, `WorkloadFileLoader`: [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py)
+- `WorkloadExecutor`, `WorkloadFileLoader`: [src/benchmarks/workload.py](../../src/benchmarks/workload.py)
 - `TuningMode`: [src/utils/types.py](../../src/utils/types.py)
 - Tests: [tests/unit/core/test_restart_policy.py](../../tests/unit/core/test_restart_policy.py), [tests/unit/core/test_evaluator_fault_injection.py](../../tests/unit/core/test_evaluator_fault_injection.py), [tests/unit/core/test_evaluator_memory_normalization.py](../../tests/unit/core/test_evaluator_memory_normalization.py)

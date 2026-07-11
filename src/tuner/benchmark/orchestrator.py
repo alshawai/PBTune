@@ -48,7 +48,7 @@ from src.utils.metrics import (
 from src.utils.metric_instrumentation import MetricInstrumentationEngine
 from src.utils.scoring import create_scoring_engine
 from src.benchmarks.executor import BenchmarkExecutor
-from src.tuner.benchmark.workload import WorkloadExecutor
+from src.benchmarks.workload import WorkloadExecutor
 from src.tuner.core.worker import Worker
 from src.utils.types import TuningMode
 from src.tuner.benchmark.restart_policy import should_restart

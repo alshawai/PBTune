@@ -70,7 +70,7 @@ from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestratorConfig,
     WorkloadExecutor,
 )
-from src.tuner.benchmark.workload import (
+from src.benchmarks.workload import (
     WorkloadFileLoader,
     extract_workload_template_metadata,
 )
