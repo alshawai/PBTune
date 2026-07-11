@@ -163,13 +163,13 @@ def test_logger_name_helpers_strip_src_prefix_and_align():
     normalize = _logger_helpers.normalize_logger_name
     format_name = _logger_helpers.format_logger_name
 
-    assert normalize("src.tuner.config.knob_space") == "tuner.config.knob_space"
+    assert normalize("src.knobs.knob_space") == "knobs.knob_space"
     assert normalize("PBTuner") == "PBTuner"
-    assert format_name("src.tuner.config.knob_space", width=32) == (
-        "tuner.config.knob_space".ljust(32)
+    assert format_name("src.knobs.knob_space", width=32) == (
+        "knobs.knob_space".ljust(32)
     )
     assert format_name("PBTuner", width=32) == "PBTuner".ljust(32)
-    assert len(format_name("src.tuner.config.knob_space", width=32)) == 32
+    assert len(format_name("src.knobs.knob_space", width=32)) == 32
 
 
 def test_logger_level_helper_centers_text():
@@ -185,8 +185,8 @@ def test_logger_level_helper_centers_text():
 def test_module_colors_ignore_src_prefix():
     """Module colors should stay stable whether or not the src prefix is present."""
     assert ColorPalette.get_module_color(
-        "src.tuner.config.knob_space", "ansi"
-    ) == ColorPalette.get_module_color("tuner.config.knob_space", "ansi")
+        "src.knobs.knob_space", "ansi"
+    ) == ColorPalette.get_module_color("knobs.knob_space", "ansi")
 
 
 def test_global_color_switch_disables_all_color_sources():

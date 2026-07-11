@@ -17,8 +17,8 @@ import pandas as pd
 
 from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
 from src.tuners.utils.calibration import rescore_metrics_globally
-from src.tuner.config.knob_loader import get_knob_space
-from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
+from src.knobs.knob_loader import get_knob_space
+from src.knobs.knob_space import HARDWARE_RELATIVE_SPECS
 from src.utils.hardware_info import WorkerResources
 from src.utils.logger import get_logger
 

@@ -41,7 +41,7 @@ from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
 )
-from src.tuner.config import get_knob_space
+from src.knobs import get_knob_space
 from src.tuners.utils.calibration import (
     RecalibrationResult,
     maybe_recalibrate_scores,

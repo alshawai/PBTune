@@ -39,7 +39,7 @@ from src.tuner.core.evolution import (
 from src.tuner.core.barriers import GenerationBarrier
 
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
-from src.tuner.config.knob_space import KnobSpace
+from src.knobs.knob_space import KnobSpace
 from src.utils.environments import DatabaseEnvironment
 from src.utils.logger.helpers import log_section_header, log_worker_metrics_table
 from src.utils.metrics import PerformanceMetrics
@@ -153,7 +153,7 @@ class Population:
 
     Example
     -------
-    >>> from src.tuner.config import get_knob_space
+    >>> from src.knobs import get_knob_space
     >>> knob_space = get_knob_space('minimal')
     >>> config = PopulationConfig(population_size=4, max_generations=50)
     >>>

@@ -5,9 +5,9 @@ Configuration Package Initialization
 Exports knob space definitions, loaders, and PBT configuration classes.
 """
 
-from src.tuner.config.knob_space import KnobSpace, KnobDefinition, KnobType, KnobScale
+from src.knobs.knob_space import KnobSpace, KnobDefinition, KnobType, KnobScale
 
-from src.tuner.config.knob_loader import (
+from src.knobs.knob_loader import (
     load_knob_space_from_csv,
     load_knob_space_for_tier,
     get_knob_space,

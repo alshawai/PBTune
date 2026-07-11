@@ -52,7 +52,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 from src.config.database import DatabaseConfig
-from src.tuner.config.knob_space import KnobSpace
+from src.knobs.knob_space import KnobSpace
 from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.core.worker import Worker
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator

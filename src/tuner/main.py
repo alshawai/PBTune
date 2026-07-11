@@ -53,8 +53,8 @@ from src.utils.timing import TimingRecorder
 from src.config.database import get_db_config
 from src.database.connection import get_connection
 
+from src.knobs import get_knob_space
 from src.tuner.config import (
-    get_knob_space,
     PBTConfig,
     RAPID_CONFIG,
     STANDARD_CONFIG,

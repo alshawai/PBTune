@@ -22,7 +22,7 @@ from ConfigSpace.hyperparameters import (
     CategoricalHyperparameter,
 )
 
-from src.tuner.config.knob_space import KnobSpace, KnobType, KnobScale
+from src.knobs.knob_space import KnobSpace, KnobType, KnobScale
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("SearchSpace")

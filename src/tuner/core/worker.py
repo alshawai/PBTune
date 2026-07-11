@@ -17,7 +17,7 @@ Worker Lifecycle in PBT:
 
 Example:
 --------
->>> from src.tuner.config import get_knob_space
+>>> from src.knobs import get_knob_space
 >>> knob_space = get_knob_space('minimal')
 >>>
 >>> worker = Worker(
@@ -43,7 +43,7 @@ from typing import Dict, Any, Optional, Tuple, List
 from logging import Logger
 import copy
 
-from src.tuner.config.knob_space import KnobSpace
+from src.knobs.knob_space import KnobSpace
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder

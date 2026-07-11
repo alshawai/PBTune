@@ -51,7 +51,7 @@ from src.benchmarks.sysbench.executor import (
 )
 from src.benchmarks.tpch.executor import TPCHExecutor
 from src.benchmarks.executor import BenchmarkExecutor
-from src.tuner.config import get_knob_space
+from src.knobs import get_knob_space
 from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
 from src.evaluation.loader import load_tuning_session

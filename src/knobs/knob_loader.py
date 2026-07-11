@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import pandas as pd
 
-from src.tuner.config.knob_space import (
+from src.knobs.knob_space import (
     KnobSpace,
     KnobDefinition,
     KnobType,
@@ -153,7 +153,7 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
 
     Example
     -------
-    >>> from src.tuner.config.knob_loader import load_knob_space_from_csv
+    >>> from src.knobs.knob_loader import load_knob_space_from_csv
     >>> knob_space = load_knob_space_from_csv("data/expert_defined_knobs/minimal_knobs.csv")
     >>> print(f"Loaded {len(knob_space)} knobs")
     """
