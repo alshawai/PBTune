@@ -10,7 +10,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from src.config.database import DatabaseConfig
-from src.tuner.config import get_knob_space
+from src.knobs import get_knob_space
 from src.tuner.core.barriers import GenerationBarrier
 from src.scripts.bo_baseline.cotenant import CoTenantLoadController
 

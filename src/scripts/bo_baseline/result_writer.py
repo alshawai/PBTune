@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.tuner.config.knob_space import KnobSpace
+from src.knobs.knob_space import KnobSpace
 from src.utils.hardware_info import WorkerResources
 from src.utils.session_clock import format_session_id
 from src.utils.timing import TimingRecorder

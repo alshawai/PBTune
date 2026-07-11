@@ -4,7 +4,7 @@ import pytest
 import json
 import argparse
 
-from src.tuner.config import get_knob_space
+from src.knobs import get_knob_space
 from src.scripts.bo_baseline.search_space import build_configspace, configspace_to_knobs
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.objective import evaluate_config

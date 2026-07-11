@@ -14,8 +14,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.tuner.config import knob_loader as knob_loader_module
-from src.tuner.config.knob_loader import (
+from src.knobs import knob_loader as knob_loader_module
+from src.knobs.knob_loader import (
     CANONICAL_TIER_ORDER,
     load_knob_space_for_tier,
 )

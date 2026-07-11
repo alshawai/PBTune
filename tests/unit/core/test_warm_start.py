@@ -14,7 +14,7 @@ from src.config.database import DatabaseConfig
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.main import PBTTuner
 from src.tuner.config import PBTConfig
-from src.tuner.config.knob_space import (
+from src.knobs.knob_space import (
     KnobSpace,
     WorkerResources,
     KnobDefinition,

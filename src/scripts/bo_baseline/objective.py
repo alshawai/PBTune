@@ -4,7 +4,7 @@ import time
 from typing import Dict, Optional, Tuple, TYPE_CHECKING
 from ConfigSpace import Configuration
 
-from src.tuner.config.knob_space import KnobSpace
+from src.knobs.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
 from src.tuner.core.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator

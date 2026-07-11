@@ -20,7 +20,7 @@ Unit tests for hardware normalization logic in KnobSpace.
 
 import pytest
 
-from src.tuner.config.knob_space import (
+from src.knobs.knob_space import (
     KnobSpace,
     KnobDefinition,
     KnobType,

@@ -138,7 +138,7 @@ def test_pbt_lhs_init_dedupes_default_from_lhs() -> None:
     all-categorical knob subsets), the dedup ensures we drop the
     duplicate rather than seating it twice.
     """
-    from src.tuner.config.knob_space import KnobSpace, KnobDefinition, KnobType
+    from src.knobs.knob_space import KnobSpace, KnobDefinition, KnobType
 
     # Build a tiny all-categorical KnobSpace where collisions are likely.
     knob_space = KnobSpace.__new__(KnobSpace)
@@ -191,7 +191,7 @@ def test_get_default_config_reads_knob_defaults() -> None:
     every knob to its declared default. Behavioral test for the helper
     that fix #3 depends on.
     """
-    from src.tuner.config.knob_space import KnobSpace, KnobDefinition, KnobType
+    from src.knobs.knob_space import KnobSpace, KnobDefinition, KnobType
 
     knob_space = KnobSpace.__new__(KnobSpace)
     knob_space.knobs = {
