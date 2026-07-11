@@ -9,7 +9,7 @@ from src.scripts.bo_baseline.search_space import build_configspace, configspace_
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.objective import evaluate_config
 from src.scripts.bo_baseline.result_writer import write_bo_results
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
 from src.utils.types import BenchmarkConfig, TuningMode
 from src.utils.metrics import PerformanceMetrics

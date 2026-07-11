@@ -8,7 +8,7 @@ This module contains the core PBT algorithm implementation:
 - Population: Population management and PBT loop (TODO)
 """
 
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.tuner.core.evolution import (
     truncation_selection,
     execute_exploit_explore,

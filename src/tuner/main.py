@@ -63,7 +63,7 @@ from src.tuner.config import (
     EXTREME_CONFIG,
 )
 from src.tuner.core.population import Population, PopulationConfig
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.tuners.engine.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,

@@ -29,7 +29,7 @@ from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
 
 from src.config.database import DatabaseConfig
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.tuner.core.evolution import (
     execute_exploit_explore,
     get_best_worker,

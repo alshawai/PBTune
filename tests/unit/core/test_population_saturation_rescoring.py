@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from src.tuner.core.population import Population, PopulationConfig
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 

@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.config.data_root import resolve_data_root
 from src.tuners.engine.barriers import GenerationBarrier
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.tuners.base import BaseTuner
 from src.tuners.utils.exceptions import (
     GenerationEvaluationError,

@@ -27,7 +27,7 @@ License: MIT
 __version__ = "0.1.0"
 __author__ = "Data-Vanta"
 
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 
 from src.tuner.config.tuner_config import PBTConfig
 from src.knobs.knob_space import KnobSpace

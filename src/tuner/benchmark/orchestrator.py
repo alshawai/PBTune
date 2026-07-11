@@ -49,7 +49,7 @@ from src.utils.metric_instrumentation import MetricInstrumentationEngine
 from src.utils.scoring import create_scoring_engine
 from src.benchmarks.executor import BenchmarkExecutor
 from src.benchmarks.workload import WorkloadExecutor
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.utils.types import TuningMode
 from src.tuners.engine.restart_policy import should_restart
 from src.tuners.engine.barriers import GenerationBarrier

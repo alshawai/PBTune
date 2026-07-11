@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from src.config.database import DatabaseConfig
 from src.tuner.core.evolution import truncation_selection
 from src.tuner.core.population import Population, PopulationConfig
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,

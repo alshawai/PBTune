@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.config.database import DatabaseConfig
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
