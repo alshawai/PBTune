@@ -42,7 +42,7 @@ from src.tuners.engine.orchestrator import (
     WorkloadOrchestratorConfig,
 )
 from src.knobs import get_knob_space
-from src.tuners.utils.calibration import (
+from src.utils.calibration import (
     RecalibrationResult,
     maybe_recalibrate_scores,
 )

@@ -53,7 +53,7 @@ from src.evaluation.types import (
     TuningSessionData,
     WorkerResources,
 )
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 
 
 # ===========================================================================

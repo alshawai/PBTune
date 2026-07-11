@@ -136,7 +136,7 @@ class TestRecalibrationWiring:
         assert all(h is not None for h in history)
 
     def test_apply_recalibration_rewrites_records_and_best(self, tmp_path):
-        from src.tuners.utils.calibration import maybe_recalibrate_scores
+        from src.utils.calibration import maybe_recalibrate_scores
 
         tuner = _make_tuner(design_size=3, workers=1, tmp_path=tmp_path)
         self._seed_records(tuner)
@@ -163,7 +163,7 @@ class TestRecalibrationWiring:
         assert tuner.metric_config is result.metric_config
 
     def test_apply_recalibration_noop_without_history(self, tmp_path):
-        from src.tuners.utils.calibration import RecalibrationResult
+        from src.utils.calibration import RecalibrationResult
 
         tuner = _make_tuner(design_size=3, tmp_path=tmp_path)
         # No records seeded → collect returns empty → unapplied result.

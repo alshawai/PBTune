@@ -1,7 +1,10 @@
-"""Unit tests for the canonical rescoring home, src.tuners.utils.calibration.
+"""Unit tests for the canonical rescoring home, src.utils.calibration.
 
 This is the relocated coverage for the former ``src/utils/rescoring.py``
-module (ADR-006; the file was lifted into the unified tuners package). Two
+module (ADR-006 lifted it into the unified tuners package; Phase 1 of the
+tuners unification returned it to ``src.utils`` since — once the tuner-time
+pathway is retired — its only consumers are post-hoc analysis, visualization,
+and evaluation, which must not import upward from ``src.tuners``). Two
 public surfaces sit on one private core:
 
   - :func:`rescore_metrics_globally` — the long-standing flat
@@ -19,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.tuners.utils.calibration import (
+from src.utils.calibration import (
     MIN_OBSERVATIONS_FOR_RECALIBRATION,
     RecalibrationResult,
     maybe_recalibrate_scores,
