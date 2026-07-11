@@ -388,7 +388,7 @@ def test_memory_budget_repair_ratios(mock_knob_space):
 
 def test_worker_clone_memory_budget_repair(mock_knob_space):
     """Test Worker clone_from enforces bounds AND budget repair."""
-    from src.tuner.core.worker import Worker
+    from src.tuners.engine.worker import Worker
 
     wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="ssd")
     mock_knob_space.resolve_hardware_ranges(wr)

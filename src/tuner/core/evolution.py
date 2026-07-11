@@ -33,7 +33,7 @@ Where:
 from typing import List, Tuple, Optional
 import numpy as np
 
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import Worker
 from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("Evolution")
