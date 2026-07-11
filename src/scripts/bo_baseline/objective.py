@@ -6,7 +6,7 @@ from ConfigSpace import Configuration
 
 from src.knobs.knob_space import KnobSpace
 from src.tuner.core.worker import Worker
-from src.tuner.core.barriers import GenerationBarrier
+from src.tuners.engine.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown

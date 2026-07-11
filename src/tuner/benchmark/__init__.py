@@ -18,7 +18,7 @@ from src.utils.metrics import (
 )
 
 from src.utils.types import TuningMode
-from src.tuner.benchmark.restart_policy import should_restart
+from src.tuners.engine.restart_policy import should_restart
 
 __all__ = [
     "PerformanceMetrics",

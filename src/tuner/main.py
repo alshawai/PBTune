@@ -64,7 +64,7 @@ from src.tuner.config import (
 )
 from src.tuner.core.population import Population, PopulationConfig
 from src.tuner.core.worker import Worker
-from src.tuner.core.barriers import GenerationBarrier
+from src.tuners.engine.barriers import GenerationBarrier
 from src.tuner.benchmark.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,

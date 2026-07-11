@@ -15,7 +15,7 @@ from typing import List
 
 import pytest
 
-from src.tuner.core.barriers import GenerationBarrier, BARRIER_NAMES
+from src.tuners.engine.barriers import GenerationBarrier, BARRIER_NAMES
 
 
 class TestGenerationBarrierBasic:
