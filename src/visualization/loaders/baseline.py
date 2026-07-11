@@ -13,7 +13,7 @@ from dateutil import parser as dateutil_parser
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 from src.visualization.loaders.session import RAW_METRIC_KEYS, _extract_raw_value
 

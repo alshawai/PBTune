@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from src.utils.metrics import PerformanceMetrics
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.visualization.theme import PBTuneTheme
 from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure

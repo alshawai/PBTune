@@ -18,16 +18,18 @@ Two public surfaces sit on top of one private core:
     objects, so a tuner can serialize an already-rescored session with
     accurate ``score_breakdown`` fields.
 
-Import direction (interim, see ADR-006)
----------------------------------------
-This relocation (was ``src/utils/rescoring.py``) is part of unifying the
-tuning strategies under ``src/tuners/``. Until PBT and BO are themselves
-refactored into this package, several downstream consumers (evaluation,
-analysis, visualization) import this module — i.e. ``src/...`` depends on
-``src/tuners/...``. That direction is intentional but temporary. Exit
-criterion: once PBT/BO run through :class:`~src.tuners.base.BaseTuner`, every
-session serializes already-recalibrated, so those consumers drop their own
-rescoring pass and the back-import disappears.
+Location (foundation leaf)
+--------------------------
+This module (formerly ``src/utils/rescoring.py``, briefly ``src/tuners/utils/
+calibration.py`` under ADR-006) lives in ``src.utils`` because it imports only
+other ``src.utils`` leaves (logger, metrics, scoring) and its consumers —
+post-hoc evaluation, analysis, and visualization — must not import upward into
+``src.tuners``. The tuner-facing :func:`maybe_recalibrate_scores` adapter is the
+one exception the tuners package still calls *downward* into here, which is the
+correct dependency direction. Once PBT and BO run through
+:class:`~src.tuners.base.BaseTuner` and every session serializes
+already-recalibrated, the downstream consumers can drop their own rescoring pass
+entirely — but this module stays put as their shared rescoring library.
 """
 
 from __future__ import annotations
