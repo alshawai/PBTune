@@ -16,6 +16,13 @@ extend-select = ["F401", "F841", "I", "UP", "B"]
 "tests/**/*.py" = ["I001", "UP"]
 "scripts/**/*.py" = ["I001"]
 
+[tool.pytest.ini_options]
+# Use importlib import mode so same-basename test modules in different
+# directories (e.g. tests/unit/tuners/test_types.py and
+# tests/unit/visualization/test_types.py) don't collide under the legacy
+# prepend importer. src.* imports still resolve via the repo-root rootdir.
+addopts = "--import-mode=importlib"
+
 [tool.mypy]
 python_version = "3.11"
 pretty = true

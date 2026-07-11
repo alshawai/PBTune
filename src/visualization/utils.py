@@ -110,7 +110,7 @@ def add_top_shared_legend(
     seen: set[str] = set()
     flat_axes = axes.flat if hasattr(axes, "flat") else axes
     for ax in flat_axes:
-        for h, lbl in zip(*ax.get_legend_handles_labels()):
+        for h, lbl in zip(*ax.get_legend_handles_labels(), strict=False):
             if lbl not in seen:
                 handles.append(h)
                 labels.append(lbl)

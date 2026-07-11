@@ -150,7 +150,7 @@ class TestRecalibrationWiring:
 
         # Every record now carries the rescored score + a breakdown dict.
         for rec, score, breakdown in zip(
-            tuner.design_records, result.scores, result.breakdowns
+            tuner.design_records, result.scores, result.breakdowns, strict=True
         ):
             assert rec["score"] == score
             assert rec["score_breakdown"] == breakdown.to_dict()
@@ -183,7 +183,7 @@ class TestGenerationHistoryProjection:
     """
 
     def _seed(self, tuner, records, configs):
-        for rec, cfg in zip(records, configs):
+        for rec, cfg in zip(records, configs, strict=True):
             tuner.design_records.append(rec)
             tuner._eval_configs.append(cfg)
 

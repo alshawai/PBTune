@@ -1,13 +1,11 @@
 import logging
 import json
-from typing import Optional
 from pathlib import Path
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from src.utils.metrics import PerformanceMetrics
-from src.utils.rescoring import rescore_metrics_globally
+from src.tuners.utils.calibration import rescore_metrics_globally
 from src.visualization.theme import PBTuneTheme
 from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure
@@ -15,11 +13,11 @@ from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.exceptions import DataLoadError
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
-    load_sessions, load_session, load_bo_trace, aggregate_seeds, SessionTrace, BOTrace, MultiSeedAggregate, load_comparison, ComparisonData, RAW_METRIC_KEYS
+    load_sessions, load_session, load_bo_trace, aggregate_seeds, load_comparison
 )
 from src.visualization.loaders.session import _extract_raw_value
 from src.visualization.utils import (
-    add_panel_labels, add_baseline_line, auto_grid, set_integer_ticks
+    add_panel_labels, auto_grid, set_integer_ticks
 )
 
 logger = logging.getLogger(__name__)

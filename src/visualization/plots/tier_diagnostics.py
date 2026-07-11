@@ -65,7 +65,7 @@ def _resolve_results_path(target: Path) -> Path:
 def _draw_tier_summary(ax: Axes, diag: TierDiagnostics) -> None:
     """Top-level tier counts + nuisance-dropped count + DBA prior."""
     counts = {"minimal": 0, "core": 0, "standard": 0}
-    for knob, tier in diag.tier_assignments.items():
+    for _knob, tier in diag.tier_assignments.items():
         if tier in counts:
             counts[tier] += 1
 

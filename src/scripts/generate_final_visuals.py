@@ -1,5 +1,4 @@
 import argparse
-import logging
 from pathlib import Path
 
 from src.visualization.plots.convergence_curve import generate as generate_convergence
