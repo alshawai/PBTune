@@ -22,7 +22,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUNNER_PATH = PROJECT_ROOT / "src" / "evaluation" / "runner.py"
-TUNER_MAIN_PATH = PROJECT_ROOT / "src" / "tuner" / "main.py"
+TUNER_MAIN_PATH = PROJECT_ROOT / "src" / "tuners" / "pbt" / "tuner.py"
 
 
 def _find_rescore_calls(source: str) -> list[ast.Call]:
@@ -116,12 +116,12 @@ def test_pbt_lhs_init_prepends_default_config() -> None:
                 has_lhs_call = True
 
     assert has_default_call, (
-        "src/tuner/main.py must call get_default_config() in the "
+        "src/tuners/pbt/tuner.py must call get_default_config() in the "
         "cold-start init path so worker 0 starts from the PG default, "
         "matching BO's pilot-seed convention."
     )
     assert has_lhs_call, (
-        "src/tuner/main.py must still call sample_diverse_configs() "
+        "src/tuners/pbt/tuner.py must still call sample_diverse_configs() "
         "for the remaining (population_size - 1) workers."
     )
 

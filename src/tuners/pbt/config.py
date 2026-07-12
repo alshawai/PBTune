@@ -23,7 +23,6 @@ from src.utils.types import (
     STANDARD_BENCHMARK_CONFIG,
     THOROUGH_BENCHMARK_CONFIG,
     RESEARCH_BENCHMARK_CONFIG,
-    EXTREME_BENCHMARK_CONFIG,
     clone_benchmark_config,
 )
 
@@ -293,17 +292,6 @@ RESEARCH_CONFIG = PBTConfig(
     ready_interval=4,
     num_parallel_workers=12,
     benchmark_config=clone_benchmark_config(RESEARCH_BENCHMARK_CONFIG),
-    snapshot_restore_interval=1,
-    verbose=True,
-)
-
-EXTREME_CONFIG = PBTConfig(
-    population_size=16,
-    num_generations=200,
-    exploit_quantile=0.2,
-    ready_interval=10,
-    num_parallel_workers=16,
-    benchmark_config=clone_benchmark_config(EXTREME_BENCHMARK_CONFIG),
     snapshot_restore_interval=1,
     verbose=True,
 )
