@@ -33,7 +33,7 @@ operator playbook.
 SCALPEL attributes importance best over a **space-filling design** where every
 knob varies independently of performance feedback. A PBT trace works, but its
 trajectory variance is narrow — the optimizer collapses the per-knob spread it
-needs. The [`LHSDesignTuner`](../../src/tuners/lhs_design.py) produces a clean
+needs. The [`LHSDesignTuner`](../../src/tuners/lhs_design/tuner.py) produces a clean
 substrate instead: a fixed Latin Hypercube design swept once, with no
 evolution.
 

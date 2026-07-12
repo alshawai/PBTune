@@ -36,7 +36,7 @@ from src.tuners.cli import (
     resolve_data_dir,
     resolve_output_root,
 )
-from src.tuners.lhs_design import LHSDesignTuner
+from src.tuners.lhs_design.tuner import LHSDesignTuner
 from src.tuners.utils.types import TuningStrategy
 from src.utils.logger import (
     add_html_file_logging,

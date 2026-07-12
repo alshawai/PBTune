@@ -437,10 +437,3 @@ class LHSDesignTuner(BaseTuner):
         if self.session_environment is not None:
             payload["session_environment"] = self.session_environment.to_dict()
         return payload
-
-
-if __name__ == "__main__":
-    # Allow `python -m src.tuners.lhs_design` to drive the CLI directly.
-    from src.tuners.lhs_design_cli import main
-
-    raise SystemExit(main())
