@@ -27,7 +27,7 @@ import argparse
 import sys
 from typing import Callable, Dict, List, Optional
 
-from src.tuners.lhs_design_cli import main as lhs_main
+from src.tuners.lhs_design.cli import main as lhs_main
 from src.tuners.pbt.cli import main as pbt_main
 
 # Strategy token → standalone CLI entry point. Aliases map to the same callable

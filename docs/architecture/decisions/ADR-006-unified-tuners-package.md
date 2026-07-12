@@ -136,7 +136,7 @@ field and fall back to a path heuristic (`/pbt_runs/`, `/bo_runs/`,
 
 ## Addendum (2026-06-19): `LHSDesignTuner` — the first concrete strategy
 
-[`src/tuners/lhs_design.py`](../../src/tuners/lhs_design.py) is the first
+[`src/tuners/lhs_design/tuner.py`](../../src/tuners/lhs_design/tuner.py) is the first
 concrete `BaseTuner`. It evaluates a **fixed** Latin Hypercube Sampling design
 over the knob space — no evolution, no exploit/explore, no perturbation:
 

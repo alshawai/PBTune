@@ -5,8 +5,8 @@ from unittest import mock
 import pytest
 
 from src.tuners.lhs_design import LHSDesignTuner
-from src.tuners import lhs_design_cli
-from src.tuners.lhs_design_cli import build_tuner, parse_args
+from src.tuners.lhs_design import cli as lhs_design_cli
+from src.tuners.lhs_design.cli import build_tuner, parse_args
 from src.tuners.utils.exceptions import TunerConfigError
 from src.tuners.utils.types import TunerLifecycleConfig, TuningStrategy
 from src.utils.types import TuningMode
