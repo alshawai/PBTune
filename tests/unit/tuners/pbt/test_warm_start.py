@@ -6,14 +6,19 @@ cloning. Tests include:
 - Automatic repair of memory budget when cloning workers with invalid configurations.
 - Building warm start configurations from a JSON file with fractional values and
   verifying the structure and provenance tracking
+
+Repointed in refactor step 2f from the retired legacy ``src.tuner.main.PBTTuner``
+to the unified ``src.tuners.pbt.tuner.PBTTuner``. The warm-start helpers under
+test (``_build_warm_start_configs``, ``_compute_warm_start_perturbation_factors``)
+are pure and read only ``self.full_knob_space`` / ``self.warm_start_provenance``,
+so the tests construct a bare instance via ``__new__`` and set just those two
+attributes — no constructor/setup coupling, no dependency monkeypatching.
 """
 
 import pytest
 import json
-from src.config.database import DatabaseConfig
 from src.tuners.pbt.population import Population, PopulationConfig
-from src.tuner.main import PBTTuner
-from src.tuners.pbt.config import PBTConfig
+from src.tuners.pbt.tuner import PBTTuner
 from src.knobs.knob_space import (
     KnobSpace,
     WorkerResources,
@@ -22,35 +27,17 @@ from src.knobs.knob_space import (
 )
 
 
-@pytest.fixture(autouse=True)
-def patch_pbttuner_knob_loader(monkeypatch, request):
-    """Patch PBTTuner init-time dependencies to avoid filesystem coupling in CI."""
-    mock_knob_space = request.getfixturevalue("mock_knob_space")
-    fake_db_config = DatabaseConfig(
-        user="postgres",
-        password="test-password",
-        host="127.0.0.1",
-        port=5432,
-        dbname="test_dataset",
-    )
-    fixed_resources = WorkerResources(
-        ram_bytes=4 * 1024 * 1024 * 1024,
-        cpu_cores=4,
-        disk_type="ssd",
-    )
+def _make_warm_start_tuner(knob_space: KnobSpace) -> PBTTuner:
+    """Build a bare PBTTuner exposing only what the warm-start helpers read.
 
-    monkeypatch.setattr(
-        "src.tuner.main.get_knob_space",
-        lambda tier, *args, **kwargs: mock_knob_space,
-    )
-    monkeypatch.setattr(
-        "src.tuner.main.detect_worker_resources",
-        lambda *args, **kwargs: fixed_resources,
-    )
-    monkeypatch.setattr(
-        "src.tuner.main.get_db_config",
-        lambda: fake_db_config,
-    )
+    The helpers are pure functions of ``full_knob_space`` and write
+    ``warm_start_provenance``; the full constructor (which brings up instances,
+    the orchestrator, and scoring) is deliberately bypassed via ``__new__``.
+    """
+    tuner = PBTTuner.__new__(PBTTuner)
+    tuner.full_knob_space = knob_space
+    tuner.warm_start_provenance = {"enabled": False}
+    return tuner
 
 
 @pytest.fixture
@@ -153,15 +140,7 @@ def test_warm_start_provenance(mock_knob_space, tmp_path):
     with open(warm_start_path, "w") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(
-            population_size=4, num_generations=1, num_parallel_workers=4
-        ),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     configs = tuner._build_warm_start_configs(
         warm_start_path=warm_start_path, population_size=4, seed=42
@@ -189,15 +168,7 @@ def test_warm_start_cross_tier_minimal_to_core(mock_knob_space, tmp_path, caplog
     with open(warm_start_path, "w") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="core",
-        pbt_config=PBTConfig(
-            population_size=2, num_generations=1, num_parallel_workers=2
-        ),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     configs = tuner._build_warm_start_configs(
         warm_start_path=warm_start_path, population_size=2, seed=42
@@ -224,17 +195,9 @@ def test_warm_start_cross_tier_core_to_minimal(mock_knob_space, tmp_path, caplog
     with open(warm_start_path, "w") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(
-            population_size=2, num_generations=1, num_parallel_workers=2
-        ),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
     # Simulate a minimal tier by removing maintenance_work_mem from the mock space
     del mock_knob_space.knobs["maintenance_work_mem"]
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     configs = tuner._build_warm_start_configs(
         warm_start_path=warm_start_path, population_size=2, seed=42
@@ -242,7 +205,7 @@ def test_warm_start_cross_tier_core_to_minimal(mock_knob_space, tmp_path, caplog
     base = configs[0]
     assert "maintenance_work_mem" not in base
     assert "extra_knob" not in base
-    assert "Warm-start config dropping extra knobs" in caplog.text
+    assert "Warm-start config dropped extra knobs" in caplog.text
 
 
 def test_warm_start_invalid_absolute_values(mock_knob_space, tmp_path):
@@ -255,15 +218,7 @@ def test_warm_start_invalid_absolute_values(mock_knob_space, tmp_path):
     with open(warm_start_path, "w") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(
-            population_size=2, num_generations=1, num_parallel_workers=2
-        ),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     with pytest.raises(
         ValueError,
@@ -298,15 +253,7 @@ def test_warm_start_accepts_tuning_session_results_json(
     with open(warm_start_path, "w", encoding="utf-8") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(
-            population_size=4, num_generations=1, num_parallel_workers=4
-        ),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     configs = tuner._build_warm_start_configs(
         warm_start_path=warm_start_path,
@@ -335,15 +282,7 @@ def test_warm_start_rejects_malformed_tuning_session_json(mock_knob_space, tmp_p
     with open(warm_start_path, "w", encoding="utf-8") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(
-            population_size=2, num_generations=1, num_parallel_workers=2
-        ),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     with pytest.raises(ValueError, match="best_configuration.knobs"):
         tuner._build_warm_start_configs(
@@ -355,13 +294,7 @@ def test_warm_start_rejects_malformed_tuning_session_json(mock_knob_space, tmp_p
 
 def test_warm_start_graduated_perturbation():
     """Graduated perturbation scale correctly across variant span."""
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(
-            population_size=2, num_generations=1, num_parallel_workers=2
-        ),
-        skip_schema_init=True,
-    )
+    tuner = PBTTuner.__new__(PBTTuner)
     p0 = tuner._compute_warm_start_perturbation_factors(0)
     assert p0 == []
 
@@ -385,13 +318,7 @@ def test_warm_start_deterministic_seed(mock_knob_space, tmp_path):
     with open(warm_start_path, "w") as f:
         json.dump(warm_start_data, f)
 
-    tuner = PBTTuner(
-        knob_tier="minimal",
-        pbt_config=PBTConfig(population_size=4, num_generations=1),
-        warm_start_path=str(warm_start_path),
-        skip_schema_init=True,
-    )
-    tuner.knob_space = mock_knob_space
+    tuner = _make_warm_start_tuner(mock_knob_space)
 
     c1 = tuner._build_warm_start_configs(warm_start_path, 4, seed=42)
     c2 = tuner._build_warm_start_configs(warm_start_path, 4, seed=42)

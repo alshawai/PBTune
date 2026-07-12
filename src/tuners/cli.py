@@ -206,6 +206,16 @@ def _add_instance_group(parser: argparse.ArgumentParser) -> None:
         help="Run on bare-metal PostgreSQL instead of Docker",
     )
     group.add_argument(
+        "--docker-image",
+        type=str,
+        default=None,
+        help=(
+            "Docker image override for PostgreSQL workers (e.g. postgres:18). "
+            "If omitted, auto-resolved from the host server version. Ignored "
+            "with --no-docker."
+        ),
+    )
+    group.add_argument(
         "--force-recreate-instances",
         action="store_true",
         help="Force recreation of PostgreSQL instances (default: reuse existing)",
@@ -465,6 +475,7 @@ def build_lifecycle_config(
         num_parallel_workers=num_parallel_workers,
         cleanup_instances=args.cleanup_instances,
         use_docker=not args.no_docker,
+        docker_image=getattr(args, "docker_image", None),
         random_seed=args.random_seed,
         synchronize_workers=getattr(args, "synchronize_workers", True),
         disable_early_stopping=getattr(args, "disable_early_stopping", False),

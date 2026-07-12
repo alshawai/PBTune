@@ -84,7 +84,7 @@ from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
 from src.utils.types import TuningMode, build_session_environment
 
-LOGGER = get_logger("BaseTuner")
+LOGGER = get_logger("Tuner")
 COLORS = get_color_context()
 
 
@@ -419,6 +419,7 @@ class BaseTuner(ABC):
             db_config=db_config,
             worker_resources=self.worker_resources,
             run_id=self.snapshot_identifier,
+            image_name=self.lifecycle.docker_image,
             force_recreate_baseline=self.lifecycle.force_recreate_baseline,
         )
 
@@ -755,7 +756,7 @@ class BaseTuner(ABC):
                 prev_best = self._safe_best_score()
                 outcome = self.step(generation)
                 self._rounds_completed += 1
-                self._log_round_end(generation, outcome, prev_best)
+                self._log_round_end(outcome, prev_best)
 
                 if self.should_stop(outcome):
                     LOGGER.info(
@@ -875,11 +876,11 @@ class BaseTuner(ABC):
 
     def _log_round_end(
         self,
-        generation: int,
         outcome: GenerationOutcome,
         prev_best: float,
     ) -> None:
-        """Announce a new best and log the generation summary.
+        """
+        Announce a new best and log the generation summary.
 
         The generation-summary table is strategy-neutral: population-only rows
         (mean/std/exploited/restarts) render only when the round carried those

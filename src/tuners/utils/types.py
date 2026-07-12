@@ -174,6 +174,12 @@ class TunerLifecycleConfig:
         Whether to remove instance data after the run.
     use_docker
         Whether to use the Docker environment backend.
+    docker_image
+        Explicit Docker image override for PostgreSQL workers (e.g.
+        ``postgres:18``). When ``None`` the environment factory auto-resolves an
+        image from the host server version. Cross-cutting: every Docker-backed
+        strategy (PBT/LHS/BO) honors the same override; ignored when
+        ``use_docker`` is False.
     random_seed
         Seed for reproducible sampling.
     tuning_mode
@@ -223,6 +229,7 @@ class TunerLifecycleConfig:
     num_parallel_workers: int = 1
     cleanup_instances: bool = False
     use_docker: bool = True
+    docker_image: Optional[str] = None
     random_seed: Optional[int] = 42
     synchronize_workers: bool = True
     disable_early_stopping: bool = False

@@ -32,7 +32,6 @@ from src.tuners.pbt.config import (
     STANDARD_CONFIG,
     THOROUGH_CONFIG,
     RESEARCH_CONFIG,
-    EXTREME_CONFIG,
 )
 from src.tuners.pbt.tuner import PBTTuner
 
@@ -47,7 +46,6 @@ __all__ = [
     "STANDARD_CONFIG",
     "THOROUGH_CONFIG",
     "RESEARCH_CONFIG",
-    "EXTREME_CONFIG",
     "truncation_selection",
     "execute_exploit_explore",
     "get_elite_workers",

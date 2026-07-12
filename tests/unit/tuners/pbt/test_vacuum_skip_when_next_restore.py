@@ -25,10 +25,10 @@ import inspect
 from pathlib import Path
 from unittest.mock import MagicMock
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR_PATH = PROJECT_ROOT / "src" / "tuners" / "engine" / "orchestrator.py"
 POPULATION_PATH = PROJECT_ROOT / "src" / "tuners" / "pbt" / "population.py"
-PBT_MAIN_PATH = PROJECT_ROOT / "src" / "tuner" / "main.py"
+PBT_TUNER_PATH = PROJECT_ROOT / "src" / "tuners" / "pbt" / "tuner.py"
 BO_RUNNER_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "runner.py"
 BO_OBJECTIVE_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "objective.py"
 
@@ -113,16 +113,16 @@ def test_population_exposes_restore_due_next_gen():
     )
 
 
-def test_pbt_main_forwards_next_eval_will_restore():
+def test_pbt_tuner_forwards_next_eval_will_restore():
     """``PBTTuner.evaluate_worker`` must thread the predicate through to
     the orchestrator. Without this, BO would skip VACUUM but PBT would
     not, reintroducing the asymmetry."""
-    source = PBT_MAIN_PATH.read_text()
+    source = PBT_TUNER_PATH.read_text()
     assert "_restore_due_next_gen" in source, (
-        "main.py must read population._restore_due_next_gen"
+        "tuner.py must read population._restore_due_next_gen"
     )
     assert "next_eval_will_restore=next_eval_will_restore" in source, (
-        "main.py must forward next_eval_will_restore to evaluate_worker"
+        "tuner.py must forward next_eval_will_restore to evaluate_worker"
     )
 
 

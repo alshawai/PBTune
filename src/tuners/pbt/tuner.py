@@ -49,7 +49,7 @@ from src.utils.logger import get_color_context, get_logger, log_section_header
 from src.utils.metrics import PerformanceMetrics
 from src.utils.types import BenchmarkConfig
 
-LOGGER = get_logger("PBTTuner")
+LOGGER = get_logger("PBTune")
 COLORS = get_color_context()
 
 
@@ -253,6 +253,18 @@ class PBTTuner(BaseTuner):
         )
 
         LOGGER.info("Configuring snapshot restoration...")
+        # Reconcile the PBT config with the base-resolved snapshot decision
+        # before Population.setup_snapshots reads it. base.setup() computes
+        # ``self.enable_snapshots = lifecycle.enable_snapshots AND
+        # bundle.enable_snapshots`` — the bundle force-disables snapshots for
+        # read-only sysbench / TPC-H — but ``setup_snapshots`` reads
+        # ``pbt_config.enable_snapshots`` directly, so without this sync a
+        # read-only run would still snapshot. Mirrors legacy main.py, which
+        # mutated ``pbt_config.enable_snapshots`` for read-only workloads.
+        self.pbt_config.enable_snapshots = self.enable_snapshots
+        self.pbt_config.snapshot_restore_interval = (
+            self.lifecycle.snapshot_restore_interval
+        )
         with self.bootstrap_timing.span("setup_snapshots"):
             self.population.setup_snapshots(env=self.env, pbt_config=self.pbt_config)
 
@@ -673,11 +685,3 @@ class PBTTuner(BaseTuner):
                         f"hardware-relative knob {knob_name}. Fraction {knob_val} "
                         f"resolves to {raw_abs:.0f}, exceeding max {knob.max_value}."
                     )
-
-
-if __name__ == "__main__":
-    # Allow `python -m src.tuners.pbt.tuner` once the CLI lands (step 2e).
-    raise SystemExit(
-        "PBTTuner has no standalone CLI yet; use `python -m src.tuner.main` "
-        "(the 2e step wires `python -m src.tuners.pbt`)."
-    )
