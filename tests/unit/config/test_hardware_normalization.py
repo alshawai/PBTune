@@ -388,19 +388,19 @@ def test_memory_budget_repair_ratios(mock_knob_space):
 
 def test_worker_clone_memory_budget_repair(mock_knob_space):
     """Test Worker clone_from enforces bounds AND budget repair."""
-    from src.tuners.engine.worker import Worker
+    from src.tuners.pbt.worker import PBTWorker
 
     wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="ssd")
     mock_knob_space.resolve_hardware_ranges(wr)
 
-    worker1 = Worker(worker_id=0, knob_space=mock_knob_space)
+    worker1 = PBTWorker(worker_id=0, knob_space=mock_knob_space)
     worker1.knob_config = {
         "shared_buffers": 400000,
         "work_mem": 20480,
         "maintenance_work_mem": 2000000,
     }
 
-    worker2 = Worker(worker_id=1, knob_space=mock_knob_space)
+    worker2 = PBTWorker(worker_id=1, knob_space=mock_knob_space)
     worker2.clone_from(worker1, current_generation=1)
 
     # clone_from copies the configuration as-is; repair is applied during perturb()

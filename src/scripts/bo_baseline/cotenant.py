@@ -54,7 +54,7 @@ from typing import List, Optional
 from src.config.database import DatabaseConfig
 from src.knobs.knob_space import KnobSpace
 from src.tuners.engine.barriers import GenerationBarrier
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import WorkloadOrchestrator
 from src.utils.environments.base import DatabaseEnvironment
 from src.utils.logger import get_logger
@@ -106,7 +106,7 @@ class CoTenantLoadController:
         self._round_counter: int = 0
 
         self._bg_worker_ids: List[int] = list(range(1, self.degree))
-        self._bg_workers: List[Worker] = []
+        self._bg_workers: List[BaseWorker] = []
         self._pool: Optional[ThreadPoolExecutor] = None
 
         if self.enabled:
@@ -149,7 +149,7 @@ class CoTenantLoadController:
             num_samples=len(self._bg_worker_ids), seed=self.seed, quiet=True
         )
         for idx, worker_id in enumerate(self._bg_worker_ids):
-            worker = Worker(worker_id=worker_id, knob_space=self.knob_space)
+            worker = BaseWorker(worker_id=worker_id, knob_space=self.knob_space)
             worker.db_config = self.env.get_db_config(worker_id)
             worker.knob_config = dict(designs[idx])
             # Background instances must restart once to install their config.
@@ -158,7 +158,7 @@ class CoTenantLoadController:
 
     def _run_one_background(
         self,
-        worker: Worker,
+        worker: BaseWorker,
         barriers: GenerationBarrier,
         restore_due: bool = False,
         next_eval_will_restore: bool = False,

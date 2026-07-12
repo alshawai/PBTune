@@ -49,7 +49,7 @@ from src.utils.metric_instrumentation import MetricInstrumentationEngine
 from src.utils.scoring import create_scoring_engine
 from src.benchmarks.executor import BenchmarkExecutor
 from src.benchmarks.workload import WorkloadExecutor
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.utils.types import TuningMode
 from src.tuners.engine.restart_policy import should_restart
 from src.tuners.engine.barriers import GenerationBarrier
@@ -307,7 +307,7 @@ class WorkloadOrchestrator:
     def apply_configuration(
         self,
         connection: PostgresConnection,
-        worker: Worker,
+        worker: BaseWorker,
         knob_applicator: KnobApplicator,
         force_restart: bool = False,
         generation: Optional[int] = None,
@@ -326,7 +326,7 @@ class WorkloadOrchestrator:
         ----------
         connection : PostgresConnection
             Active connection to worker's instance
-        worker : Worker
+        worker : BaseWorker
             Worker instance for which to apply configuration
         knob_applicator : KnobApplicator
             Applicator for this worker's instance
@@ -445,7 +445,7 @@ class WorkloadOrchestrator:
     def _perform_restart(
         self,
         connection: PostgresConnection,
-        worker: Worker,
+        worker: BaseWorker,
     ) -> bool:
         """Restart PostgreSQL via the injected environment.
 
@@ -453,7 +453,7 @@ class WorkloadOrchestrator:
         ----------
         connection : PostgresConnection
             Connection to close before restart
-        worker : Worker
+        worker : BaseWorker
             Worker instance for which to perform restart
 
         Returns
@@ -768,7 +768,7 @@ class WorkloadOrchestrator:
 
     def evaluate_worker(
         self,
-        worker: Worker,
+        worker: BaseWorker,
         apply_config: bool = True,
         generation: Optional[int] = None,
         barriers: Optional[GenerationBarrier] = None,
@@ -796,7 +796,7 @@ class WorkloadOrchestrator:
 
         Parameters
         ----------
-        worker : Worker
+        worker : BaseWorker
             Worker instance to evaluate
         apply_config : bool, default=True
             Whether to apply the worker's configuration
@@ -1426,7 +1426,7 @@ class WorkloadOrchestrator:
 
         Parameters
         ----------
-        workers : List[Worker]
+        workers : List[BaseWorker]
             List of all workers in the current generation
         """
         logger = get_logger("BenchmarkExecutor")

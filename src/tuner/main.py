@@ -54,7 +54,7 @@ from src.config.database import get_db_config
 from src.database.connection import get_connection
 
 from src.knobs import get_knob_space
-from src.tuner.config import (
+from src.tuners.pbt.config import (
     PBTConfig,
     RAPID_CONFIG,
     STANDARD_CONFIG,
@@ -62,8 +62,8 @@ from src.tuner.config import (
     RESEARCH_CONFIG,
     EXTREME_CONFIG,
 )
-from src.tuner.core.population import Population, PopulationConfig
-from src.tuners.engine.worker import Worker
+from src.tuners.pbt.population import Population, PopulationConfig
+from src.tuners.pbt.worker import PBTWorker
 from src.tuners.engine.barriers import GenerationBarrier
 from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
@@ -726,7 +726,7 @@ class PBTTuner:
 
     def evaluate_worker(
         self,
-        worker: Worker,
+        worker: PBTWorker,
         *,
         barriers: Optional[GenerationBarrier] = None,
     ) -> Tuple[PerformanceMetrics, float]:
@@ -737,7 +737,7 @@ class PBTTuner:
 
         Parameters
         ----------
-        worker : Worker
+        worker : PBTWorker
             Worker to evaluate
         barriers : GenerationBarrier | None
             Optional lockstep barriers for synchronized evaluation.
@@ -865,7 +865,7 @@ class PBTTuner:
 
     def _build_failure_result(
         self,
-        worker: Worker,
+        worker: PBTWorker,
         worker_logger: logging.Logger,
         reason: str,
         exception: Exception,

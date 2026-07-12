@@ -4,7 +4,7 @@ Tuner Execution Engine
 
 Tuner-agnostic execution primitives shared across all tuning strategies:
 
-- Worker: per-instance configuration + performance state
+- BaseWorker: per-instance configuration + evaluation vehicle
 - WorkloadOrchestrator: per-worker apply → run → measure pipeline
 - Lockstep generation barriers (B1–B17 synchronisation)
 - TuningMode-driven restart policy
@@ -17,7 +17,7 @@ strategy — so they sit below the individual tuners in the dependency graph.
 
 from src.tuners.engine.barriers import GenerationBarrier, BARRIER_NAMES
 from src.tuners.engine.restart_policy import should_restart
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -27,7 +27,7 @@ __all__ = [
     "GenerationBarrier",
     "BARRIER_NAMES",
     "should_restart",
-    "Worker",
+    "BaseWorker",
     "WorkloadOrchestrator",
     "WorkloadOrchestratorConfig",
 ]

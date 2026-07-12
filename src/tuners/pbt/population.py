@@ -29,8 +29,8 @@ from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
 
 from src.config.database import DatabaseConfig
-from src.tuners.engine.worker import Worker
-from src.tuner.core.evolution import (
+from src.tuners.pbt.worker import PBTWorker
+from src.tuners.pbt.evolution import (
     execute_exploit_explore,
     get_best_worker,
     get_population_statistics,
@@ -136,7 +136,7 @@ class Population:
 
     Attributes
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population of workers being trained
     knob_space : KnobSpace
         The search space for knob configurations
@@ -199,7 +199,7 @@ class Population:
         self.config = config or PopulationConfig()
         self.orchestrator = orchestrator
 
-        self.workers: List[Worker] = []
+        self.workers: List[PBTWorker] = []
         self.current_generation: int = 0
         self.history: List[GenerationResult] = []
 
@@ -289,7 +289,7 @@ class Population:
         self.workers = []
         for worker_id in range(self.config.population_size):
             config = initial_configs[worker_id] if initial_configs else None
-            worker = Worker(
+            worker = PBTWorker(
                 worker_id=worker_id,
                 knob_space=self.knob_space,
                 knob_config=config,
@@ -390,7 +390,7 @@ class Population:
 
         Parameters
         ----------
-        evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
+        evaluate_fn : Callable[[PBTWorker], tuple[PerformanceMetrics, float]]
             Function that takes a Worker and returns (metrics, score).
             This function should:
             1. Apply the worker's knob configuration to PostgreSQL
@@ -822,7 +822,7 @@ class Population:
             "memory_utilization": f"{metrics.memory_utilization * 100.0:.2f}%",
         }
 
-    def _build_worker_metric_payload(self, worker: Worker) -> dict[str, Any] | None:
+    def _build_worker_metric_payload(self, worker: PBTWorker) -> dict[str, Any] | None:
         """Build a reusable metric payload for the worker metrics table."""
         metrics = worker.metrics
         if metrics is None:
@@ -948,7 +948,7 @@ class Population:
 
         Parameters
         ----------
-        evaluate_fn : Callable[[Worker], tuple[PerformanceMetrics, float]]
+        evaluate_fn : Callable[[PBTWorker], tuple[PerformanceMetrics, float]]
             Function to evaluate each worker
         parallel : bool, default=True
             Whether to evaluate workers in parallel
@@ -1123,7 +1123,7 @@ class Population:
         )
         return False
 
-    def _determine_overall_best(self, best_current: Worker) -> None:
+    def _determine_overall_best(self, best_current: PBTWorker) -> None:
         if best_current.performance_score >= self.best_overall_score:
             self.best_overall_score = best_current.performance_score
             self.best_overall_metrics = best_current.metrics

@@ -11,7 +11,7 @@ from pathlib import Path
 from scripts.experiments.experiment_matrix import Experiment
 from src.config.data_root import resolve_data_root
 from src.utils.hardware_info import detect_worker_resources, _resolve_block_device_node
-from src.tuner.config.tuner_config import (
+from src.tuners.pbt.config import (
     RAPID_CONFIG,
     STANDARD_CONFIG,
     THOROUGH_CONFIG,

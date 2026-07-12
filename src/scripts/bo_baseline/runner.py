@@ -17,7 +17,7 @@ from smac.runhistory.dataclasses import TrialInfo, TrialValue
 from smac.runhistory.enumerations import StatusType
 
 from src.knobs import get_knob_space
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -383,7 +383,7 @@ class BOBaselineRunner:
     def _evaluate_with_cotenancy(
         self,
         config,
-        worker: Worker,
+        worker: BaseWorker,
         orchestrator: WorkloadOrchestrator,
         previous_engine_config,
         seed=None,
@@ -421,7 +421,7 @@ class BOBaselineRunner:
         self,
         facade,
         orchestrator: WorkloadOrchestrator,
-        worker: Worker,
+        worker: BaseWorker,
         iteration_log: list,
         pilot_size: int,
         sobol_configs: list,
@@ -457,7 +457,7 @@ class BOBaselineRunner:
             SMAC facade in ask-tell mode (created with empty initial design)
         orchestrator : WorkloadOrchestrator
             Workload orchestrator
-        worker : Worker
+        worker : BaseWorker
             Worker instance (single — strictly sequential)
         iteration_log : list
             Mutable iteration log shared with the caller
@@ -1349,7 +1349,7 @@ class BOBaselineRunner:
             self.logger.debug("Orchestrator configuration: %s", orchestrator_config)
 
             # Single (foreground) worker
-            worker = Worker(worker_id=0, knob_space=self.knob_space)
+            worker = BaseWorker(worker_id=0, knob_space=self.knob_space)
             worker.db_config = self.env.get_db_config(0)
 
             # Co-tenant load controller: drives the background load instances

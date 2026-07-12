@@ -33,7 +33,7 @@ Where:
 from typing import List, Tuple, Optional
 import numpy as np
 
-from src.tuners.engine.worker import Worker
+from src.tuners.pbt.worker import PBTWorker
 from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("Evolution")
@@ -41,7 +41,7 @@ COLORS = get_color_context()
 
 
 def truncation_selection(
-    workers: List[Worker],
+    workers: List[PBTWorker],
     exploit_quantile: float = 0.2,
     require_ready: bool = True,
     dead_config_threshold: float = 6.0,
@@ -61,7 +61,7 @@ def truncation_selection(
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population of workers
 
     exploit_quantile : float
@@ -143,7 +143,7 @@ def truncation_selection(
     ]
 
     elite_worker_ids = {w.worker_id for w in elite_workers}
-    poor_workers: List[Worker] = []
+    poor_workers: List[PBTWorker] = []
     seen_worker_ids: set = set()
 
     for worker in list(dead_workers) + poor_normal:
@@ -180,7 +180,7 @@ def truncation_selection(
 
 
 def execute_exploit_explore(
-    workers: List[Worker],
+    workers: List[PBTWorker],
     exploit_quantile: float = 0.2,
     perturbation_factors: Tuple[float, float] = (0.8, 1.2),
     current_generation: int = 0,
@@ -194,7 +194,7 @@ def execute_exploit_explore(
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population of workers (modified in-place)
 
     exploit_quantile : float
@@ -297,7 +297,7 @@ def execute_exploit_explore(
     return pairs
 
 
-def get_elite_workers(workers: List[Worker], quantile: float = 0.2) -> List[Worker]:
+def get_elite_workers(workers: List[PBTWorker], quantile: float = 0.2) -> List[PBTWorker]:
     """
     Get the elite (top-performing) workers from the population.
 
@@ -305,7 +305,7 @@ def get_elite_workers(workers: List[Worker], quantile: float = 0.2) -> List[Work
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population
 
     quantile : float
@@ -314,7 +314,7 @@ def get_elite_workers(workers: List[Worker], quantile: float = 0.2) -> List[Work
 
     Returns
     -------
-    List[Worker]
+    List[PBTWorker]
         Elite workers sorted by performance (best first)
     """
     quantile_size = max(1, int(len(workers) * quantile))
@@ -322,7 +322,7 @@ def get_elite_workers(workers: List[Worker], quantile: float = 0.2) -> List[Work
     return sorted_workers[:quantile_size]
 
 
-def get_poor_workers(workers: List[Worker], quantile: float = 0.2) -> List[Worker]:
+def get_poor_workers(workers: List[PBTWorker], quantile: float = 0.2) -> List[PBTWorker]:
     """
     Get the poor (bottom-performing) workers from the population.
 
@@ -330,7 +330,7 @@ def get_poor_workers(workers: List[Worker], quantile: float = 0.2) -> List[Worke
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population
 
     quantile : float
@@ -339,7 +339,7 @@ def get_poor_workers(workers: List[Worker], quantile: float = 0.2) -> List[Worke
 
     Returns
     -------
-    List[Worker]
+    List[PBTWorker]
         Poor workers sorted by performance (worst first)
     """
     quantile_size = max(1, int(len(workers) * quantile))
@@ -351,24 +351,24 @@ def get_poor_workers(workers: List[Worker], quantile: float = 0.2) -> List[Worke
     return sorted_workers[:quantile_size]
 
 
-def get_best_worker(workers: List[Worker]) -> Worker:
+def get_best_worker(workers: List[PBTWorker]) -> PBTWorker:
     """
     Get the single best worker from the population.
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population
 
     Returns
     -------
-    Worker
+    PBTWorker
         Worker with highest performance_score
     """
     return max(workers, key=lambda w: w.performance_score)
 
 
-def get_population_statistics(workers: List[Worker]) -> dict:
+def get_population_statistics(workers: List[PBTWorker]) -> dict:
     """
     Compute statistical summary of population performance.
 
@@ -376,7 +376,7 @@ def get_population_statistics(workers: List[Worker]) -> dict:
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population
 
     Returns
@@ -399,7 +399,7 @@ def get_population_statistics(workers: List[Worker]) -> dict:
 
 
 def check_convergence(
-    workers: List[Worker],
+    workers: List[PBTWorker],
     convergence_threshold: float = 0.01,
     dead_config_threshold: float = 0.0,
     min_valid_workers: int = 2,
@@ -414,7 +414,7 @@ def check_convergence(
 
     Parameters
     ----------
-    workers : List[Worker]
+    workers : List[PBTWorker]
         The population
 
     convergence_threshold : float

@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.config.data_root import resolve_data_root
 from src.tuners.engine.barriers import GenerationBarrier
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.tuners.base import BaseTuner
 from src.tuners.utils.exceptions import (
     GenerationEvaluationError,
@@ -254,12 +254,12 @@ class LHSDesignTuner(BaseTuner):
         )
         return outcome
 
-    def _build_batch_workers(self, batch_configs: List[Dict[str, Any]]) -> List[Worker]:
+    def _build_batch_workers(self, batch_configs: List[Dict[str, Any]]) -> List[BaseWorker]:
         """Construct Workers bound to instances for one batch."""
-        workers: List[Worker] = []
+        workers: List[BaseWorker] = []
         for local_id, config in enumerate(batch_configs):
             instance = self._instances[local_id]
-            worker = Worker(
+            worker = BaseWorker(
                 worker_id=local_id,
                 knob_space=self.knob_space,
                 knob_config=config,
@@ -272,10 +272,10 @@ class LHSDesignTuner(BaseTuner):
 
     def _evaluate_batch_parallel(
         self,
-        workers: List[Worker],
+        workers: List[BaseWorker],
         barriers: GenerationBarrier,
         generation: int,
-    ) -> List[Tuple[int, Worker, Optional[PerformanceMetrics], Optional[float]]]:
+    ) -> List[Tuple[int, BaseWorker, Optional[PerformanceMetrics], Optional[float]]]:
         """
         Run one batch concurrently, returning per-worker results.
 
@@ -284,7 +284,7 @@ class LHSDesignTuner(BaseTuner):
         """
         batch_size = self.lifecycle.num_parallel_workers
         results: List[
-            Tuple[int, Worker, Optional[PerformanceMetrics], Optional[float]]
+            Tuple[int, BaseWorker, Optional[PerformanceMetrics], Optional[float]]
         ] = []
 
         # Baseline-snapshot restore cadence (PBT/BO parity). ``generation`` is
@@ -301,7 +301,7 @@ class LHSDesignTuner(BaseTuner):
             and (generation + 1) % interval == 0
         )
 
-        def _eval(worker: Worker):
+        def _eval(worker: BaseWorker):
             metrics, score, _restart, _cfg, timing = self.orchestrator.evaluate_worker(  # type: ignore
                 worker,
                 apply_config=True,
