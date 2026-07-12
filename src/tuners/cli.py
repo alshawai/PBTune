@@ -103,6 +103,26 @@ def _add_tuning_group(parser: argparse.ArgumentParser) -> None:
         default=42,
         help="Random seed for reproducible sampling (default: 42)",
     )
+    group.add_argument(
+        "--no-sync",
+        dest="synchronize_workers",
+        action="store_false",
+        default=True,
+        help=(
+            "Disable lockstep barrier synchronization between workers. By "
+            "default, workers wait at each sub-step so they advance in lockstep "
+            "for fair resource sharing. Applies to every parallel/co-tenant "
+            "strategy, not just PBT."
+        ),
+    )
+    group.add_argument(
+        "--disable-early-stopping",
+        action="store_true",
+        help=(
+            "Disable the no-improvement early-stop gate (low-variance "
+            "convergence and the round budget still apply)."
+        ),
+    )
 
 
 def _add_workload_group(parser: argparse.ArgumentParser) -> None:
@@ -446,6 +466,8 @@ def build_lifecycle_config(
         cleanup_instances=args.cleanup_instances,
         use_docker=not args.no_docker,
         random_seed=args.random_seed,
+        synchronize_workers=getattr(args, "synchronize_workers", True),
+        disable_early_stopping=getattr(args, "disable_early_stopping", False),
         tuning_mode=tuning_mode,
         force_recreate_instances=args.force_recreate_instances,
         force_recreate_baseline=args.force_recreate_baseline,

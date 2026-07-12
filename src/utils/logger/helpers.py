@@ -1250,33 +1250,60 @@ def log_generation_summary(
     restart_count: int,
     generation: int,
     best_score: float,
-    mean_score: float,
-    std_score: float,
-    exploited: int,
-    converged: bool,
+    mean_score: Optional[float] = None,
+    std_score: Optional[float] = None,
+    exploited: Optional[int] = None,
+    converged: bool = False,
+    round_label: str = "Generation",
 ) -> None:
     """
-    Log a formatted generation summary.
+    Log a formatted generation/round summary (strategy-neutral).
+
+    The population-only rows — mean score, std dev, and exploited-worker count
+    — render only when the caller supplies them (``None`` omits the row). A
+    population strategy (PBT) passes all three; a stateless design sweep (LHS)
+    or single-config iterator (BO) passes ``None`` and those rows are skipped,
+    keeping the summary meaningful for every strategy.
 
     Parameters
     ----------
-    logger : logging.Logger
-        Logger instance
-    generation_result : GenerationResult
-        Result of the generation to summarize
+    logger
+        Logger instance.
+    elapsed
+        Seconds elapsed in the tuning loop so far.
+    restart_count
+        Cumulative instance-restart count.
+    generation
+        Zero-based round index.
+    best_score
+        Best score observed this round.
+    mean_score, std_score, exploited
+        Population statistics; each row is omitted when ``None``.
+    converged
+        Whether the strategy considers itself converged after this round.
+    round_label
+        Strategy-appropriate noun for one loop pass (PBT "Generation", LHS
+        "Batch", BO "Iteration"). Defaults to "Generation" for backward
+        compatibility with the legacy PBT caller.
     """
     log_section_header(
         logger,
-        "%sGeneration %s Summary:%s",
+        "%s%s %s Summary:%s",
         COLORS.bold,
+        round_label,
         generation,
         COLORS.reset,
         top_separator=False,
     )
     logger.info("  Best Score:  %s%.3f%%%s", COLORS.cyan, best_score, COLORS.reset)
-    logger.info("  Mean Score:  %s%.3f%%%s", COLORS.cyan, mean_score, COLORS.reset)
-    logger.info("  Std Dev:     %s%.4f%s", COLORS.cyan, std_score, COLORS.reset)
-    logger.info("  Exploited:   %s%s%s workers", COLORS.cyan, exploited, COLORS.reset)
+    if mean_score is not None:
+        logger.info("  Mean Score:  %s%.3f%%%s", COLORS.cyan, mean_score, COLORS.reset)
+    if std_score is not None:
+        logger.info("  Std Dev:     %s%.4f%s", COLORS.cyan, std_score, COLORS.reset)
+    if exploited is not None:
+        logger.info(
+            "  Exploited:   %s%s%s workers", COLORS.cyan, exploited, COLORS.reset
+        )
     logger.info("  Restarts:    %s%s%s total", COLORS.cyan, restart_count, COLORS.reset)
     logger.info("  Elapsed:     %s%.1f%s", COLORS.cyan, elapsed, COLORS.reset)
     logger.info(
@@ -1289,20 +1316,35 @@ def log_generation_summary(
 
 
 def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
-    """Print final summary of tuning session"""
-    log_section_header(logger, "%sPBT TUNING COMPLETE%s", COLORS.bold, COLORS.reset)
+    """Print final summary of a tuning session (strategy-neutral).
+
+    Reads the round count from the shared ``num_rounds`` header field, falling
+    back to the legacy ``total_generations`` so both new (BaseTuner) and legacy
+    (PBT ``main.py``) session dicts render. The title names the strategy from
+    ``tuning_session.tuning_strategy`` rather than hard-coding "PBT".
+    """
     session = results.get("tuning_session")
     best = results.get("best_configuration")
+
+    strategy_label = "TUNING"
+    if isinstance(session, dict):
+        strategy_label = str(
+            session.get("tuning_strategy", "tuning")
+        ).upper()
+    log_section_header(
+        logger, "%s%s COMPLETE%s", COLORS.bold, strategy_label, COLORS.reset
+    )
 
     if not isinstance(session, dict) or not isinstance(best, dict):
         logger.info("Final results: %s", results)
         return
 
     logger.info("%sSession Summary:%s", COLORS.green, COLORS.reset)
+    rounds_value = session.get("num_rounds", session.get("total_generations", 0))
     logger.info(
-        "  Total Generations:  %s%d%s",
+        "  Total Rounds:       %s%d%s",
         COLORS.cyan,
-        session["total_generations"],
+        int(rounds_value if rounds_value is not None else 0),
         COLORS.reset,
     )
     logger.info(

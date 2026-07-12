@@ -34,8 +34,10 @@ from src.tuners.pbt.config import (
     RESEARCH_CONFIG,
     EXTREME_CONFIG,
 )
+from src.tuners.pbt.tuner import PBTTuner
 
 __all__ = [
+    "PBTTuner",
     "PBTWorker",
     "Population",
     "PopulationConfig",

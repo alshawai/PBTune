@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.config.database import get_db_config
 from src.tuners.engine.orchestrator import (
@@ -51,6 +52,7 @@ from src.tuners.utils.knob_filter import (
 from src.tuners.utils.resources import resolve_worker_resources
 from src.tuners.utils.session_writer import (
     build_session_header,
+    convert_numpy_types,
     worker_resources_to_dict,
     write_best_config_json,
     write_session_json,
@@ -60,13 +62,17 @@ from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
     TuningStrategy,
+    WorkerEvalResult,
 )
 from src.utils.environments import EnvironmentFactory
 from src.utils.hardware_info import WorkerResources, get_system_info, log_system_info
 from src.utils.logger import (
     get_color_context,
     get_logger,
+    log_final_summary,
+    log_generation_summary,
     log_section_header,
+    log_worker_metrics_table,
     print_startup_banner,
 )
 from src.utils.metrics import (
@@ -201,7 +207,8 @@ class BaseTuner(ABC):
         return False
 
     def build_optimizer(self) -> None:
-        """Construct and wire the strategy's persistent optimizer core.
+        """
+        Construct and wire the strategy's persistent optimizer core.
 
         Called once at the end of :meth:`setup`, *after*
         :meth:`propose_initial_configs` has drawn the initial configs and the
@@ -210,9 +217,7 @@ class BaseTuner(ABC):
         optimizer state across generations builds it: PBT wires its
         :class:`Population` (binding workers to the live instances and the
         baseline snapshot) from ``self.initial_configs``; BO constructs its
-        surrogate here. Keeping this separate from
-        :meth:`propose_initial_configs` keeps that hook a pure, side-effect-free
-        config draw.
+        surrogate here.
 
         The base default is a no-op — LHS-design evaluates a fixed sample with
         no persistent optimizer to build, so it does not override.
@@ -220,9 +225,33 @@ class BaseTuner(ABC):
         return None
 
     @property
-    def max_generations(self) -> int:
-        """Upper bound on generations. Override for finite-budget strategies."""
+    def max_rounds(self) -> int:
+        """Upper bound on generation rounds (the ``run()`` loop budget).
+
+        Named to parallel the serialized ``tuning_session.num_rounds`` (the
+        count of rounds that *actually ran*, which is lower when early-stopping
+        fires): ``max_rounds`` is the planned ceiling, ``num_rounds`` the
+        realized count. Override for finite-budget strategies.
+        """
         return 1
+
+    @property
+    def round_label(self) -> str:
+        """Human-facing noun for one iteration of the ``run()`` loop.
+
+        The loop is strategy-neutral (``num_rounds`` is the serialized count),
+        but each strategy has its own natural vocabulary for one pass, and the
+        *display* logs should speak it. The default is the generic ``"Round"``;
+        concrete strategies override: PBT → ``"Generation"`` (an EA breeds a new
+        generation each pass), LHS → ``"Batch"`` (one parallel slice of a fixed
+        design), BO → ``"Iteration"`` (one sequential propose-evaluate step).
+
+        This governs only user-facing log strings ("GENERATION 3", "Generation
+        3 Summary"); the on-disk ``generation_history`` / ``generation`` JSON
+        keys are the fixed analysis-loader schema and are intentionally *not*
+        renamed.
+        """
+        return "Round"
 
     @property
     def num_instances(self) -> int:
@@ -262,11 +291,11 @@ class BaseTuner(ABC):
         Strategy-specific ``(label, value)`` rows for the startup summary.
 
         Rendered in ``run()``'s initialization block (bold label, cyan value),
-        matching PBT's banner. The base returns the generic generation budget;
+        matching PBT's banner. The base returns the generic round budget;
         concrete tuners override to name their own budget line (PBT:
         "Population Size", BO: "Iterations", LHS: "Design Size").
         """
-        return [("Max Generations:", str(self.max_generations))]
+        return [("Max Rounds:", str(self.max_rounds))]
 
     def session_filename(self) -> str:
         """Filename for the session JSON (``{strategy}_results_{ts}.json``)."""
@@ -297,6 +326,14 @@ class BaseTuner(ABC):
         """
         resolved_workload_type = self._resolve_granular_workload_type()
 
+        LOGGER.info(
+            "Loading knob space: %s%s%s (source: %s, workload: %s)",
+            COLORS.cyan,
+            self.lifecycle.knob_tier.capitalize(),
+            COLORS.reset,
+            self.lifecycle.knob_source,
+            resolved_workload_type,
+        )
         self.knob_space = get_knob_space(
             self.lifecycle.knob_tier,
             knob_source=self.lifecycle.knob_source,
@@ -304,6 +341,12 @@ class BaseTuner(ABC):
         )
         self.full_knob_space = self.knob_space
 
+        LOGGER.info(
+            "Detecting hardware resources for %s%d%s parallel workers...",
+            COLORS.bold,
+            self.lifecycle.num_parallel_workers,
+            COLORS.reset,
+        )
         self.worker_resources = resolve_worker_resources(
             num_workers=self.lifecycle.num_parallel_workers,
             data_path=self.data_root,
@@ -314,6 +357,10 @@ class BaseTuner(ABC):
             worker_disk_read_iops=self.lifecycle.worker_disk_read_iops,
             worker_disk_write_iops=self.lifecycle.worker_disk_write_iops,
             probe_disk=self.lifecycle.probe_disk,
+        )
+        LOGGER.info(
+            "Resolving hardware-relative knob ranges based on detected worker "
+            "resources..."
         )
         self.full_knob_space.resolve_hardware_ranges(self.worker_resources)
         self.knob_space.worker_resources = self.worker_resources
@@ -392,41 +439,61 @@ class BaseTuner(ABC):
             orchestrator_config, workload_executor, self.env
         )
 
+        LOGGER.info("Collecting system hardware and software information...")
         self.system_info = get_system_info(data_path=self.data_root)
 
+        log_section_header(
+            LOGGER,
+            "%sSetting Up PostgreSQL Instances%s",
+            COLORS.bold,
+            COLORS.reset,
+        )
+        LOGGER.info(
+            "Creating %d PostgreSQL instances (force_recreate=%s)",
+            self.num_instances,
+            self.lifecycle.force_recreate_instances,
+        )
         with self.bootstrap_timing.span("setup_instances"):
             self._instances = self.env.setup_instances(
                 num_workers=self.num_instances,
                 force_recreate=self.lifecycle.force_recreate_instances,
                 num_parallel_workers=self.num_instances,
             )
+        LOGGER.info("Verifying instance accessibility and configurations...")
         with self.bootstrap_timing.span("verify_instances"):
             self.env.verify_instances()
+        LOGGER.info("Pruning unsupported knobs based on runtime version...")
         with self.bootstrap_timing.span("prune_knobs"):
             self._prune_unsupported_runtime_knobs()
+        LOGGER.info(
+            "%s%sPostgreSQL instances are ready.%s",
+            COLORS.bold,
+            COLORS.green,
+            COLORS.reset,
+        )
 
         self.session_environment = build_session_environment(
             env=self.env,
             num_parallel_workers=self.lifecycle.num_parallel_workers,
-            population_size=self.population_size,
+            population_size=self.seeded_config_count,
             system_info=self.system_info,
             use_docker=self.lifecycle.use_docker,
         )
 
         self.initial_configs = self.propose_initial_configs()
 
-        # Build the strategy's persistent optimizer (PBT Population, BO
-        # surrogate) now that configs are drawn and instances are live. No-op
-        # for stateless strategies like LHS-design.
         self.build_optimizer()
 
     @property
-    def population_size(self) -> int:
+    def seeded_config_count(self) -> int:
         """
         Number of configurations seeded for ``session_environment``.
 
         Defaults to the count of initial configs drawn (parallel-workers if
-        not yet drawn). Override when the design size is known up front.
+        not yet drawn). Override when the design size is known up front. This
+        is the in-code analogue of PBT's "population size"; it is serialized
+        under ``strategy_params`` by strategies that carry the notion, never as
+        a shared header field.
         """
         return len(self.initial_configs) or self.lifecycle.num_parallel_workers
 
@@ -483,6 +550,141 @@ class BaseTuner(ABC):
             LOGGER.debug("Failed to compute score breakdown: %s", exc)
             return None
 
+    def _build_generation_record(
+        self,
+        *,
+        generation: int,
+        best_score_this_round: float,
+        converged: bool,
+        worker_results: Sequence[WorkerEvalResult],
+        generation_elapsed_seconds: float,
+        restart_count: int = 0,
+        generation_timing: Optional[Any] = None,
+        mean_score: Optional[float] = None,
+        std_score: Optional[float] = None,
+        num_exploited: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Assemble one uniform ``generation_history`` entry for any strategy.
+
+        This is the single seam every tuner feeds so that per-round records are
+        structurally identical across PBT, LHS, and (later) BO — the concrete
+        realization of "all tuners' session JSONs follow the same fields". Each
+        strategy differs only in *what* it puts in each ``WorkerEvalResult`` and
+        which optional population statistics it can supply; the *shape* is owned
+        here.
+
+        The shared fields (always present): ``generation``, ``best_score``,
+        ``converged``, ``restart_count``, ``timestamp`` (ISO-8601, per round),
+        ``wall_clock_seconds`` (since the tuning-loop start),
+        ``generation_elapsed_seconds``, per-round ``timing``, and the two
+        per-observation lists ``worker_scores`` / ``worker_configs`` that every
+        downstream loader consumes. Each ``worker_scores`` entry carries
+        ``score``, ``metrics``, ``score_breakdown`` and per-worker ``timing`` —
+        the last two are exactly what LHS used to capture then discard.
+
+        Optional population statistics (``mean_score``, ``std_score``,
+        ``num_exploited``) are only emitted when a strategy supplies them (PBT
+        does; a stateless design sweep leaves them ``None``). ``extra`` merges
+        any strategy-specific top-level keys (e.g. LHS's ``evaluated`` design
+        indices).
+        """
+        worker_scores: List[Dict[str, Any]] = []
+        worker_configs: List[Dict[str, Any]] = []
+        for result in worker_results:
+            breakdown = result.score_breakdown
+            if breakdown is None and result.metrics is not None:
+                # Lazy recompute so a record never silently drops a breakdown a
+                # strategy simply forgot to stash (PBT parity, main.py:964-972).
+                breakdown = self._safe_breakdown(result.metrics)
+            worker_scores.append(
+                {
+                    "worker_id": result.worker_id,
+                    "score": (
+                        float(result.score) if result.score is not None else None
+                    ),
+                    "metrics": (
+                        result.metrics.to_dict()
+                        if result.metrics is not None
+                        else None
+                    ),
+                    "score_breakdown": (
+                        convert_numpy_types(breakdown.to_dict())
+                        if breakdown is not None
+                        else None
+                    ),
+                    "timing": (
+                        result.timing.to_dict(include_summary=False)
+                        if result.timing is not None
+                        else None
+                    ),
+                }
+            )
+            worker_configs.append(
+                {
+                    "worker_id": result.worker_id,
+                    "config": convert_numpy_types(result.knob_config),
+                }
+            )
+
+        record: Dict[str, Any] = {
+            "generation": generation,
+            "best_score": float(best_score_this_round),
+            "converged": bool(converged),
+            "restart_count": int(restart_count),
+            "timestamp": datetime.now().isoformat(),
+            "wall_clock_seconds": time.time() - (self.tuning_start_time or self.start_time),
+            "generation_elapsed_seconds": float(generation_elapsed_seconds),
+            "timing": (
+                generation_timing.to_dict(include_summary=False)
+                if generation_timing is not None
+                else None
+            ),
+            "worker_scores": worker_scores,
+            "worker_configs": worker_configs,
+        }
+        if mean_score is not None:
+            record["mean_score"] = float(mean_score)
+        if std_score is not None:
+            record["std_score"] = float(std_score)
+        if num_exploited is not None:
+            record["num_exploited"] = int(num_exploited)
+        if extra:
+            record.update(extra)
+        return record
+
+    def _aggregate_session_timing(self) -> Dict[str, Any]:
+        """Aggregate per-component timing across every (round, worker) tuple.
+
+        Walks ``self.generation_history`` and merges every per-worker and
+        per-round ``timing.records`` block into a single recorder, then emits
+        ``aggregate()`` so callers get mean/std/n/min/max/total per component
+        for the whole session. Lifted verbatim (behavior-wise) from PBT's
+        ``main.py`` so every strategy emits a ``timing_summary`` — LHS produced
+        none before.
+        """
+        merged = TimingRecorder()
+        for gen in self.generation_history:
+            gen_timing = gen.get("timing")
+            if gen_timing and isinstance(gen_timing, dict):
+                for rec in gen_timing.get("records", []) or []:
+                    merged.add(
+                        rec.get("component", "unknown"),
+                        float(rec.get("seconds", 0.0)),
+                        **(rec.get("metadata") or {}),
+                    )
+            for ws in gen.get("worker_scores", []) or []:
+                ws_timing = ws.get("timing")
+                if not ws_timing or not isinstance(ws_timing, dict):
+                    continue
+                for rec in ws_timing.get("records", []) or []:
+                    merged.add(
+                        rec.get("component", "unknown"),
+                        float(rec.get("seconds", 0.0)),
+                        **(rec.get("metadata") or {}),
+                    )
+        return merged.aggregate()
+
     def teardown(self) -> None:
         """Stop instances and optionally clean up data. Always called."""
         if self.env is None:
@@ -529,6 +731,15 @@ class BaseTuner(ABC):
             with self.bootstrap_timing.span("setup"):
                 self.setup()
 
+            bootstrap_seconds = time.time() - self.start_time
+            LOGGER.info(
+                "Bootstrap completed in %s%.1fs%s (excluded from tuning "
+                "wall-clock)",
+                COLORS.cyan,
+                bootstrap_seconds,
+                COLORS.reset,
+            )
+
             self._log_optimization_header(strategy_label)
 
             self.tuning_start_time = time.time()
@@ -539,14 +750,18 @@ class BaseTuner(ABC):
                 strategy_label,
                 COLORS.reset,
             )
-            for generation in range(self.max_generations):
+            for generation in range(self.max_rounds):
+                self._log_round_start(generation)
+                prev_best = self._safe_best_score()
                 outcome = self.step(generation)
                 self._rounds_completed += 1
+                self._log_round_end(generation, outcome, prev_best)
 
                 if self.should_stop(outcome):
                     LOGGER.info(
-                        "%sStopping criterion met after generation %d%s",
+                        "%sStopping criterion met after %s %d%s",
                         COLORS.teal,
+                        self.round_label.lower(),
                         generation,
                         COLORS.reset,
                     )
@@ -589,22 +804,7 @@ class BaseTuner(ABC):
             output_dir=self.output_root,
             filename=self.best_config_filename(),
         )
-        log_section_header(
-            LOGGER,
-            "%s%s optimization complete%s",
-            COLORS.bold,
-            strategy_label,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Best Score:      %s%.4f%s",
-            COLORS.green,
-            float(best_score) if best_score else 0.0,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Total Time:      %s%.1fs%s", COLORS.cyan, total_time, COLORS.reset
-        )
+        log_final_summary(LOGGER, results)
         LOGGER.info(
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
         )
@@ -637,6 +837,109 @@ class BaseTuner(ABC):
         )
         LOGGER.info(
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
+        )
+
+    def _safe_best_score(self) -> float:
+        """Best score so far, tolerating a not-yet-populated optimizer."""
+        try:
+            return float(self.collect_best()[1] or 0.0)
+        except (RuntimeError, ValueError, AttributeError, IndexError):
+            return float(self._best_score_so_far)
+
+    def _log_round_start(self, generation: int) -> None:
+        """Emit the per-round section header and the live scoring-weight table.
+
+        Every strategy scores through the same ``orchestrator.scorer``, so the
+        feature-weight snapshot (and the live drift/saturation/outlier
+        diagnostics the scorer/normalizer emit *during* evaluation) are uniform
+        across PBT, LHS, and BO — this surfaces the weight table PBT logged and
+        LHS never did.
+        """
+        log_section_header(
+            LOGGER,
+            "%s%s %d%s",
+            COLORS.bold,
+            self.round_label.upper(),
+            generation,
+            COLORS.reset,
+        )
+        if self.orchestrator is not None and hasattr(
+            self.orchestrator, "scorer"
+        ):
+            try:
+                self.orchestrator.scorer.log_generation_weights(
+                    generation=generation
+                )
+            except (RuntimeError, ValueError, AttributeError) as exc:
+                LOGGER.debug("Weight-table logging skipped: %s", exc)
+
+    def _log_round_end(
+        self,
+        generation: int,
+        outcome: GenerationOutcome,
+        prev_best: float,
+    ) -> None:
+        """Announce a new best and log the generation summary.
+
+        The generation-summary table is strategy-neutral: population-only rows
+        (mean/std/exploited/restarts) render only when the round carried those
+        statistics (PBT supplies them via ``outcome.payload``; a design sweep
+        omits them). A new all-time best triggers the "NEW BEST SCORE" event
+        PBT emitted and LHS lacked.
+        """
+        new_best = self._safe_best_score()
+        if new_best > prev_best:
+            LOGGER.info(
+                "%s🔺 NEW BEST SCORE: %s%.4f%s",
+                COLORS.bold,
+                COLORS.teal,
+                new_best,
+                COLORS.reset,
+            )
+        payload = outcome.payload or {}
+        elapsed = time.time() - (self.tuning_start_time or self.start_time)
+        mean_score = payload.get("mean_score")
+        std_score = payload.get("std_score")
+        num_exploited = payload.get("num_exploited")
+        log_generation_summary(
+            LOGGER,
+            elapsed,
+            int(payload.get("restart_count", 0) or 0),
+            generation=outcome.index,
+            best_score=float(outcome.best_score_this_generation),
+            mean_score=float(mean_score) if mean_score is not None else None,
+            std_score=float(std_score) if std_score is not None else None,
+            exploited=int(num_exploited) if num_exploited is not None else None,
+            converged=bool(outcome.converged),
+            round_label=self.round_label,
+        )
+
+    def log_worker_metrics_table(
+        self,
+        worker_results: Sequence[WorkerEvalResult],
+        *,
+        title: Optional[str] = None,
+    ) -> None:
+        """Render the end-of-round per-worker performance table.
+
+        A reusable helper for strategies whose optimizer does not already log
+        this table (LHS, BO). PBT emits a richer variant from inside its
+        ``Population.record_generation`` and therefore does not call this.
+        """
+        payloads = [r.metrics for r in worker_results if r.metrics is not None]
+        if not payloads:
+            return
+        labels = [
+            f"Worker-{r.worker_id}"
+            for r in worker_results
+            if r.metrics is not None
+        ]
+        log_worker_metrics_table(
+            LOGGER,
+            payloads,
+            worker_labels=labels,
+            title=title
+            or f"\n{COLORS.bold}🔷 Round Worker Metrics 🔷{COLORS.reset}",
         )
 
     def _assemble_results(
@@ -690,6 +993,7 @@ class BaseTuner(ABC):
             ),
             "generation_history": self.generation_history,
             "bootstrap_breakdown": self.bootstrap_timing.to_dict(),
+            "timing_summary": self._aggregate_session_timing(),
         }
 
         # Merge strategy-specific sections last so subclasses can override or

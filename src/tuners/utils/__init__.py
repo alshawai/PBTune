@@ -36,6 +36,7 @@ from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
     TuningStrategy,
+    WorkerEvalResult,
 )
 
 __all__ = [
@@ -61,4 +62,5 @@ __all__ = [
     "GenerationOutcome",
     "TunerLifecycleConfig",
     "TuningStrategy",
+    "WorkerEvalResult",
 ]
