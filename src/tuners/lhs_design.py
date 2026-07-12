@@ -46,6 +46,7 @@ from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
     TuningStrategy,
+    WorkerEvalResult,
 )
 from src.tuners.utils.session_writer import build_scoring_block
 from src.utils.logger import get_color_context, get_logger
@@ -118,32 +119,36 @@ class LHSDesignTuner(BaseTuner):
 
         # Result accumulation.
         self.design_records: List[Dict[str, Any]] = []
-        # Parallel to ``design_records`` (same index): the live metric object
-        # and raw knob config behind each record. ``_eval_configs`` feeds the
-        # PBT-canonical ``_build_generation_history`` projection (decoded
-        # knob→value maps); ``_eval_metrics`` feeds ``total_evaluations`` /
-        # ``converged``. Failed points contribute ``None`` at their index.
+        # ``_eval_metrics`` (parallel to ``design_records``, same index; failed
+        # points contribute ``None``) feeds ``total_evaluations`` /
+        # ``converged``. The decoded per-observation configs now flow through
+        # the shared ``_build_generation_record`` seam directly, so no separate
+        # config side-array is needed.
         self._eval_metrics: List[Optional[PerformanceMetrics]] = []
-        self._eval_configs: List[Optional[Dict[str, Any]]] = []
         self._best_config: Optional[Dict[str, Any]] = None
         self._best_metrics: Optional[PerformanceMetrics] = None
         self._best_breakdown: Optional[ScoreBreakdown] = None
 
     @property
-    def max_generations(self) -> int:
+    def max_rounds(self) -> int:
         """Number of parallel batches needed to cover the design."""
         return max(1, math.ceil(self.design_size / self.lifecycle.num_parallel_workers))
 
     @property
-    def population_size(self) -> int:
+    def seeded_config_count(self) -> int:
         """The design size is known up front, so seed it directly."""
         return self.design_size
+
+    @property
+    def round_label(self) -> str:
+        """One LHS pass evaluates one parallel *batch* of the fixed design."""
+        return "Batch"
 
     def config_summary_lines(self) -> List[Tuple[str, str]]:
         """Name the LHS budget line ("Design Size") in the startup summary."""
         return [
             ("Design Size:", str(self.design_size)),
-            ("Design Batches:", str(self.max_generations)),
+            ("Design Batches:", str(self.max_rounds)),
         ]
 
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -190,33 +195,51 @@ class LHSDesignTuner(BaseTuner):
         workers = self._build_batch_workers(batch_configs)
         barriers = GenerationBarrier(
             num_workers=len(workers),
-            enabled=len(workers) > 1,
+            enabled=self.lifecycle.synchronize_workers and len(workers) > 1,
         )
 
         best_this_batch = 0.0
         gen_start = time.time()
         results = self._evaluate_batch_parallel(workers, barriers, generation)
 
+        # Per-worker results fed to the shared record builder. ``worker_id`` is
+        # the batch-local offset so the analysis loader's join-by-worker_id
+        # aligns configs with scores within this batch.
+        worker_results: List[WorkerEvalResult] = []
+        evaluated_indices: List[int] = []
         for design_index, worker, metrics, score in results:
             # The orchestrator already scored this worker during
             # evaluate_worker and stashed the breakdown on the worker (the
             # returned ``score`` IS ``worker.score_breakdown.final_score``).
             # Reuse it instead of re-running the composite scorer.
             breakdown = worker.score_breakdown if metrics is not None else None
-            record = {
-                "design_index": design_index,
-                "batch": generation,
-                "score": float(score) if score is not None else None,
-                "config": self.full_knob_space.config_to_fractions(worker.knob_config),
-                "metrics": metrics.to_dict() if metrics is not None else None,
-                "score_breakdown": (
-                    breakdown.to_dict() if breakdown is not None else None
-                ),
-            }
-            self.design_records.append(record)
+            # LHS-native, fraction-encoded artifact (unchanged shape).
+            self.design_records.append(
+                {
+                    "design_index": design_index,
+                    "batch": generation,
+                    "score": float(score) if score is not None else None,
+                    "config": self.full_knob_space.config_to_fractions(
+                        worker.knob_config
+                    ),
+                    "metrics": metrics.to_dict() if metrics is not None else None,
+                    "score_breakdown": (
+                        breakdown.to_dict() if breakdown is not None else None
+                    ),
+                }
+            )
             self._eval_metrics.append(metrics)
-            self._eval_configs.append(
-                dict(worker.knob_config) if metrics is not None else None  # type: ignore
+            evaluated_indices.append(design_index)
+
+            worker_results.append(
+                WorkerEvalResult(
+                    worker_id=design_index - start,
+                    knob_config=dict(worker.knob_config),  # type: ignore
+                    score=score,
+                    metrics=metrics,
+                    score_breakdown=breakdown,
+                    timing=worker.last_eval_timing,
+                )
             )
 
             if score is not None and score > self._best_score_so_far:
@@ -227,24 +250,43 @@ class LHSDesignTuner(BaseTuner):
             if score is not None:
                 best_this_batch = max(best_this_batch, float(score))
 
+        # Emit the per-worker metrics table (LHS's optimizer has none of its
+        # own); parity with PBT's end-of-generation table.
+        self.log_worker_metrics_table(
+            worker_results,
+            title=(
+                f"\n{COLORS.bold}🔷 Batch {generation} Worker Metrics 🔷"
+                f"{COLORS.reset}"
+            ),
+        )
+
+        # Append the UNIFORM generation record (shared shape, incl. per-worker
+        # timing + score_breakdown) so an LHS trace loads exactly like a PBT one.
+        self.generation_history.append(
+            self._build_generation_record(
+                generation=generation,
+                best_score_this_round=best_this_batch,
+                converged=(end >= len(self.design)),
+                worker_results=worker_results,
+                generation_elapsed_seconds=time.time() - gen_start,
+                extra={"evaluated": evaluated_indices},
+            )
+        )
+
         outcome = GenerationOutcome(
             index=generation,
             best_score_this_generation=best_this_batch,
             payload={
-                "evaluated": [
-                    r["design_index"]
-                    for r in self.design_records[-len(batch_configs):]
-                ],
+                "evaluated": evaluated_indices,
                 "batch_elapsed_seconds": time.time() - gen_start,
             },
         )
-        self.generation_history.append(outcome.to_dict())
         LOGGER.info(
             "%sBatch %d/%d complete%s: evaluated designs %d-%d, "
             "best-so-far=%s%.4f%s",
             COLORS.bold,
             generation + 1,
-            self.max_generations,
+            self.max_rounds,
             COLORS.reset,
             start,
             end - 1,
@@ -365,69 +407,6 @@ class LHSDesignTuner(BaseTuner):
             self._best_metrics,
         )
 
-    def _build_generation_history(self) -> List[Dict[str, Any]]:
-        """
-        Project the per-design records into a PBT-shaped ``generation_history``.
-
-        The shared analysis loader (:func:`src.analysis.data_loader.load_pbt_results`)
-        reads per-observation data exclusively from
-        ``generation_history[].worker_configs`` / ``worker_scores`` — it has no
-        ``design_records`` branch. To make an LHS trace natively loadable by the
-        SCALPEL pipeline (and honor the rollout guide's promise that an LHS dir
-        can be analyzed "exactly as you would a PBT trace"), we emit a second,
-        PBT-canonical *view* of the same observations here. ``design_records``
-        is left untouched as the LHS-native, fraction-encoded artifact.
-
-        Each LHS *batch* maps to one ``generation`` entry. Within a batch the
-        ``worker_id`` is the design's offset from the batch start
-        (``design_index - batch * num_parallel_workers``), so the loader's
-        join-by-``worker_id`` aligns configs with scores. Two deliberate
-        differences from ``design_records`` entries:
-
-        * **config** is sourced from :attr:`_eval_configs` (the raw decoded
-          ``knob_config``) rather than ``design_records[i]["config"]`` (knob
-          *fractions*), because the loader requires decoded knob→value maps —
-          ``config.keys()`` must match the PBT tunable-knob set.
-        * **score** / **metrics** are read from ``design_records`` — the
-          per-batch scores the orchestrator's live scorer produced.
-
-        Failed evaluations (``_eval_configs[i] is None``) are dropped — the
-        loader would skip them anyway (null score / ``failure_type``).
-        """
-        batch_size = self.lifecycle.num_parallel_workers
-        by_batch: Dict[int, Dict[str, List[Dict[str, Any]]]] = {}
-
-        for i, record in enumerate(self.design_records):
-            config = self._eval_configs[i] if i < len(self._eval_configs) else None
-            if config is None:
-                continue
-            batch = int(record.get("batch", 0))
-            design_index = int(record.get("design_index", i))
-            worker_id = design_index - batch * batch_size
-
-            bucket = by_batch.setdefault(
-                batch, {"worker_configs": [], "worker_scores": []}
-            )
-            bucket["worker_configs"].append(
-                {"worker_id": worker_id, "config": config}
-            )
-            bucket["worker_scores"].append(
-                {
-                    "worker_id": worker_id,
-                    "score": record.get("score"),
-                    "metrics": record.get("metrics") or {},
-                }
-            )
-
-        return [
-            {
-                "generation_index": batch,
-                "worker_configs": by_batch[batch]["worker_configs"],
-                "worker_scores": by_batch[batch]["worker_scores"],
-            }
-            for batch in sorted(by_batch)
-        ]
-
     def total_evaluations(self) -> int:
         """Design points that produced a measurement (failures excluded)."""
         return sum(1 for m in self._eval_metrics if m is not None)
@@ -453,7 +432,6 @@ class LHSDesignTuner(BaseTuner):
                 },
             },
             "design_records": self.design_records,
-            "generation_history": self._build_generation_history(),
             "system_info": self.system_info,
         }
         if self.session_environment is not None:
