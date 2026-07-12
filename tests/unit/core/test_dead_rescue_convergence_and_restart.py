@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.config.database import DatabaseConfig
-from src.tuner.core.evolution import truncation_selection
-from src.tuner.core.population import Population, PopulationConfig
-from src.tuners.engine.worker import Worker
+from src.tuners.pbt.evolution import truncation_selection
+from src.tuners.pbt.population import Population, PopulationConfig
+from src.tuners.pbt.worker import PBTWorker
 from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -68,8 +68,8 @@ def _make_evaluator(executor: BenchmarkExecutor) -> WorkloadOrchestrator:
     return WorkloadOrchestrator(config=config, workload_executor=executor, env=mock_env)
 
 
-def _make_worker() -> Worker:
-    worker = Worker(
+def _make_worker() -> PBTWorker:
+    worker = PBTWorker(
         worker_id=0, knob_space=MagicMock(), knob_config={"shared_buffers": "256MB"}
     )
     worker.db_config = DatabaseConfig(
@@ -102,7 +102,7 @@ def test_record_generation_not_converged_after_all_dead_resample() -> None:
     )
 
     population.workers = [
-        Worker(
+        PBTWorker(
             worker_id=idx,
             knob_space=MagicMock(),
             knob_config={"shared_buffers": "32MB"},
@@ -206,8 +206,8 @@ def test_train_generation_sets_restore_due_flag_when_interval_matches() -> None:
         config=PopulationConfig(population_size=2),
     )
     population.workers = [
-        Worker(worker_id=0, knob_space=MagicMock()),
-        Worker(worker_id=1, knob_space=MagicMock()),
+        PBTWorker(worker_id=0, knob_space=MagicMock()),
+        PBTWorker(worker_id=1, knob_space=MagicMock()),
     ]
     population.enable_snapshots = True
     population.restore_interval = 5
@@ -245,8 +245,8 @@ def test_train_generation_clears_restore_due_flag_off_interval() -> None:
         config=PopulationConfig(population_size=2),
     )
     population.workers = [
-        Worker(worker_id=0, knob_space=MagicMock()),
-        Worker(worker_id=1, knob_space=MagicMock()),
+        PBTWorker(worker_id=0, knob_space=MagicMock()),
+        PBTWorker(worker_id=1, knob_space=MagicMock()),
     ]
     population.enable_snapshots = True
     population.restore_interval = 5
@@ -294,8 +294,8 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     population.orchestrator = MagicMock()
     population.orchestrator.refine_workload_features_from_generation.return_value = True
     population.workers = [
-        Worker(worker_id=0, knob_space=MagicMock(), knob_config={}),
-        Worker(worker_id=1, knob_space=MagicMock(), knob_config={}),
+        PBTWorker(worker_id=0, knob_space=MagicMock(), knob_config={}),
+        PBTWorker(worker_id=1, knob_space=MagicMock(), knob_config={}),
     ]
 
     metrics = PerformanceMetrics(
@@ -309,7 +309,7 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
         worker.performance_score = 80.0 + worker.worker_id
     call_order: list[str] = []
 
-    def _evaluate(worker: Worker) -> tuple[PerformanceMetrics, float]:
+    def _evaluate(worker: PBTWorker) -> tuple[PerformanceMetrics, float]:
         return metrics, 80.0 + worker.worker_id
 
     population.evaluate_generation = MagicMock()
@@ -320,9 +320,9 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     )
     population.record_generation = MagicMock(return_value=MagicMock(num_exploited=0))
 
-    with patch("src.tuner.core.population.log_worker_metrics_table") as log_table:
+    with patch("src.tuners.pbt.population.log_worker_metrics_table") as log_table:
         with patch(
-            "src.tuner.core.population.execute_exploit_explore", return_value=[]
+            "src.tuners.pbt.population.execute_exploit_explore", return_value=[]
         ):
             population.train_generation(
                 _evaluate,
@@ -372,7 +372,7 @@ def test_saturation_detection_expands_ranges_for_high_latency_low_throughput() -
     workers = []
     worker_points = [(240.0, 70.0, 0.12), (230.0, 75.0, 0.13)]
     for worker_id, (latency, throughput, memory) in enumerate(worker_points):
-        worker = Worker(worker_id=worker_id, knob_space=MagicMock(), knob_config={})
+        worker = PBTWorker(worker_id=worker_id, knob_space=MagicMock(), knob_config={})
         worker.metrics = PerformanceMetrics(
             latency_p95=latency,
             throughput=throughput,
@@ -424,7 +424,7 @@ def test_truncation_selection_rescues_dead_workers_before_ready_interval() -> No
     presets like ``thorough`` (ready_interval=3).
     """
     workers = [
-        Worker(
+        PBTWorker(
             worker_id=idx,
             knob_space=MagicMock(),
             knob_config={"shared_buffers": "256MB"},
@@ -464,7 +464,7 @@ def test_truncation_selection_rescues_dead_workers_before_ready_interval() -> No
 def test_truncation_selection_returns_empty_when_no_dead_and_no_ready() -> None:
     """The early-return guard still fires when there is nothing to do."""
     workers = [
-        Worker(
+        PBTWorker(
             worker_id=idx,
             knob_space=MagicMock(),
             knob_config={"shared_buffers": "256MB"},
@@ -494,7 +494,7 @@ def test_truncation_selection_uses_whole_population_as_quantile_basis() -> None:
     was only partially warmed up. The paper ranks ALL agents.
     """
     workers = [
-        Worker(
+        PBTWorker(
             worker_id=idx,
             knob_space=MagicMock(),
             knob_config={"shared_buffers": "256MB"},
@@ -540,7 +540,7 @@ def test_truncation_selection_elite_can_be_unready_when_ranked_top() -> None:
     this generation, not whether a high-scorer is a valid donor.
     """
     workers = [
-        Worker(
+        PBTWorker(
             worker_id=idx,
             knob_space=MagicMock(),
             knob_config={"shared_buffers": "256MB"},

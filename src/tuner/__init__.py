@@ -15,10 +15,9 @@ evolutionary selection pressure.
 
 Package Structure:
 -----------------
-- core: PBT algorithm implementation (Population, Worker, Evolution)
-- evaluator: Workload execution and performance measurement
-- config: Knob space definition and PBT hyperparameters
-- utils: Helper utilities (knob application, logging)
+- The PBT optimizer core (Population, PBTWorker, Evolution, PBTConfig) now lives
+  under ``src.tuners.pbt``; this package retains the ``main`` CLI entry point and
+  re-exports the primary types for backward compatibility.
 
 Author: Data-Vanta
 License: MIT
@@ -27,15 +26,15 @@ License: MIT
 __version__ = "0.1.0"
 __author__ = "Data-Vanta"
 
-from src.tuners.engine.worker import Worker
+from src.tuners.pbt.worker import PBTWorker
 
-from src.tuner.config.tuner_config import PBTConfig
+from src.tuners.pbt.config import PBTConfig
 from src.knobs.knob_space import KnobSpace
-from src.tuner.core import GenerationResult
+from src.tuners.pbt import GenerationResult
 from src.knobs.knob_loader import get_knob_space
 
 __all__ = [
-    "Worker",
+    "PBTWorker",
     "PBTConfig",
     "KnobSpace",
     "GenerationResult",

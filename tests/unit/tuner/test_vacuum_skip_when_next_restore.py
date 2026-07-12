@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ORCHESTRATOR_PATH = PROJECT_ROOT / "src" / "tuners" / "engine" / "orchestrator.py"
-POPULATION_PATH = PROJECT_ROOT / "src" / "tuner" / "core" / "population.py"
+POPULATION_PATH = PROJECT_ROOT / "src" / "tuners" / "pbt" / "population.py"
 PBT_MAIN_PATH = PROJECT_ROOT / "src" / "tuner" / "main.py"
 BO_RUNNER_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "runner.py"
 BO_OBJECTIVE_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "objective.py"

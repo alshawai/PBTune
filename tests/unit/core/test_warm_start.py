@@ -11,9 +11,9 @@ cloning. Tests include:
 import pytest
 import json
 from src.config.database import DatabaseConfig
-from src.tuner.core.population import Population, PopulationConfig
+from src.tuners.pbt.population import Population, PopulationConfig
 from src.tuner.main import PBTTuner
-from src.tuner.config import PBTConfig
+from src.tuners.pbt.config import PBTConfig
 from src.knobs.knob_space import (
     KnobSpace,
     WorkerResources,

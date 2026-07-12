@@ -9,7 +9,7 @@ from src.scripts.bo_baseline.search_space import build_configspace, configspace_
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.objective import evaluate_config
 from src.scripts.bo_baseline.result_writer import write_bo_results
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
 from src.utils.types import BenchmarkConfig, TuningMode
 from src.utils.metrics import PerformanceMetrics
@@ -369,7 +369,7 @@ class TestObjectiveEvaluation:
 
         configspace = build_configspace(knob_space, seed=42)
         config = configspace.sample_configuration()
-        worker = Worker(worker_id=0, knob_space=knob_space)
+        worker = BaseWorker(worker_id=0, knob_space=knob_space)
 
         expected_metrics = PerformanceMetrics(throughput=120.0, latency_p95=18.0)
 

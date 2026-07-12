@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.config.database import DatabaseConfig
-from src.tuners.engine.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
@@ -82,8 +82,8 @@ def _make_evaluator(executor: BenchmarkExecutor) -> WorkloadOrchestrator:
     return WorkloadOrchestrator(config=config, workload_executor=executor, env=mock_env)
 
 
-def _make_worker() -> Worker:
-    worker = Worker(worker_id=0, knob_space=MagicMock(), knob_config={})
+def _make_worker() -> BaseWorker:
+    worker = BaseWorker(worker_id=0, knob_space=MagicMock(), knob_config={})
     worker.db_config = DatabaseConfig(
         user="postgres",
         password="postgres",

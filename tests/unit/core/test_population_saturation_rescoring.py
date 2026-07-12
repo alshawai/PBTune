@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from src.tuner.core.population import Population, PopulationConfig
-from src.tuners.engine.worker import Worker
+from src.tuners.pbt.population import Population, PopulationConfig
+from src.tuners.pbt.worker import PBTWorker
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 
@@ -41,10 +41,10 @@ class _MetricConfigStub:
         return ScoreBreakdown(final_score=final_score)
 
 
-def _make_worker(worker_id: int, throughput: float, score: float) -> Worker:
+def _make_worker(worker_id: int, throughput: float, score: float) -> PBTWorker:
     knob_space = MagicMock()
     knob_space.sample_random_config.return_value = {"shared_buffers": "256MB"}
-    worker = Worker(worker_id=worker_id, knob_space=knob_space)
+    worker = PBTWorker(worker_id=worker_id, knob_space=knob_space)
     worker.metrics = PerformanceMetrics(latency_p95=10.0, throughput=throughput)
     worker.performance_score = score
     return worker

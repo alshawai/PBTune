@@ -2,7 +2,7 @@
 Configuration Package Initialization
 ====================================
 
-Exports knob space definitions, loaders, and PBT configuration classes.
+Exports knob space definitions and loaders.
 """
 
 from src.knobs.knob_space import KnobSpace, KnobDefinition, KnobType, KnobScale
@@ -11,15 +11,6 @@ from src.knobs.knob_loader import (
     load_knob_space_from_csv,
     load_knob_space_for_tier,
     get_knob_space,
-)
-
-from src.tuner.config.tuner_config import (
-    PBTConfig,
-    RAPID_CONFIG,
-    STANDARD_CONFIG,
-    THOROUGH_CONFIG,
-    RESEARCH_CONFIG,
-    EXTREME_CONFIG,
 )
 
 __all__ = [
@@ -32,11 +23,4 @@ __all__ = [
     "load_knob_space_from_csv",
     "load_knob_space_for_tier",
     "get_knob_space",
-    # PBT Configuration
-    "PBTConfig",
-    "RAPID_CONFIG",
-    "STANDARD_CONFIG",
-    "THOROUGH_CONFIG",
-    "RESEARCH_CONFIG",
-    "EXTREME_CONFIG",
 ]
