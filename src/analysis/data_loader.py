@@ -24,12 +24,18 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger("Loader")
 
-# Session-file discovery patterns. PBT writes ``pbt_results_*.json``; the
-# LHS-design tuner writes ``lhs_results_*.json`` with a PBT-shaped
-# ``generation_history`` (see ``LHSDesignTuner._build_generation_history``), so
-# both are natively loadable here. Any new strategy that emits a PBT-shaped
-# ``generation_history`` should add its prefix to this tuple.
-RESULT_FILE_GLOBS = ("pbt_results_*.json", "lhs_results_*.json")
+# Session-file discovery patterns. The unified tuners write a strategy-agnostic
+# ``trace_*.json`` (the strategy is encoded in the ``sessions/<workload>/
+# <strategy>/`` path, not the filename). The legacy per-strategy stems
+# (``pbt_results_*.json`` / ``lhs_results_*.json`` / ``bo_results_*.json``) are
+# still globbed so pre-rename traces on disk keep loading. All emit a PBT-shaped
+# ``generation_history`` and are natively loadable here.
+RESULT_FILE_GLOBS = (
+    "trace_*.json",
+    "pbt_results_*.json",
+    "lhs_results_*.json",
+    "bo_results_*.json",
+)
 
 
 def find_result_files(directory):

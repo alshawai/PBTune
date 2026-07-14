@@ -550,25 +550,23 @@ def resolve_data_dir(args: argparse.Namespace) -> Path:
 def attach_session_html_log(
     output_root: Path,
     *,
-    stem: str,
     timestamp: str,
 ) -> Path:
     """Attach an HTML log handler under the run's ``logs/`` subdirectory.
 
-    Every strategy writes its session JSON to ``{output_root}/tuning_sessions/``
-    and its best config to ``{output_root}/best_configs/``; this places the
-    matching HTML run-log under ``{output_root}/logs/`` so all three session
-    artifacts share one root and one convention. Mirrors BO
-    (``bo_root/logs/bo_baseline_*.html``) and the evaluation runner
-    (``output_dir/logs/evaluation_*.html``), replacing the incumbent flat
+    Every strategy writes its session trace to ``{output_root}/traces/`` and
+    its best config to ``{output_root}/best_configs/``; this places the matching
+    HTML run-log at ``{output_root}/logs/session_{ts}.html`` so all three
+    session artifacts share one root and one strategy-agnostic convention
+    (``trace_*.json`` / ``best_*.json`` / ``session_*.html``). The stem is
+    fixed — the strategy is already encoded in the ``sessions/<workload>/
+    <strategy>/`` path — replacing the incumbent flat, per-strategy
     ``{output_root}/{stem}_{ts}.html`` that PBT and LHS both wrote.
 
     Parameters
     ----------
     output_root
         The strategy/tier-scoped results root (from :func:`resolve_output_root`).
-    stem
-        Strategy log-file stem (e.g. ``"pbt_tuning"``, ``"lhs_design"``).
     timestamp
         Session id used in the filename.
 
@@ -579,5 +577,5 @@ def attach_session_html_log(
     """
     log_dir = Path(output_root) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"{stem}_{timestamp}.html"
+    log_path = log_dir / f"session_{timestamp}.html"
     return add_html_file_logging(output_file=log_path, show_module=True)

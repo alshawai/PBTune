@@ -38,6 +38,7 @@ from src.tuners.engine.barriers import GenerationBarrier
 from src.tuners.pbt.config import PBTConfig
 from src.tuners.pbt.population import Population, PopulationConfig
 from src.tuners.pbt.worker import PBTWorker
+from src.tuners.utils.exceptions import TunerConfigError
 from src.tuners.utils.session_writer import build_scoring_block, convert_numpy_types
 from src.tuners.utils.types import (
     GenerationOutcome,
@@ -143,6 +144,11 @@ class PBTTuner(BaseTuner):
     def round_label(self) -> str:
         """PBT breeds a new *generation* of the population each pass."""
         return "Generation"
+
+    @property
+    def emits_stop_status(self) -> bool:
+        """PBT halts on a criterion (max-gens / early-stop / convergence)."""
+        return True
 
     @property
     def num_instances(self) -> int:
@@ -341,7 +347,11 @@ class PBTTuner(BaseTuner):
 
     def should_stop(self, outcome: GenerationOutcome) -> bool:
         assert self.population is not None
-        return self.population.should_stop()
+        stop = self.population.should_stop()
+        # Surface the population's stopping criterion as the round-summary
+        # Status line (base reads self.stop_reason when emits_stop_status).
+        self.stop_reason = self.population.stop_reason
+        return stop
 
     def collect_best(self) -> Tuple[Dict[str, Any], float, Optional[Any]]:
         if self.population is None:
@@ -591,19 +601,19 @@ class PBTTuner(BaseTuner):
             warm_start_data = json.load(f)
 
         if not isinstance(warm_start_data, dict):
-            raise ValueError(
+            raise TunerConfigError(
                 "Warm-start file must be a JSON object containing knob fractions"
             )
 
         if "best_configuration" in warm_start_data:
             best_configuration = warm_start_data.get("best_configuration")
             if not isinstance(best_configuration, dict):
-                raise ValueError(
+                raise TunerConfigError(
                     "Warm-start tuning session file has invalid best_configuration block"
                 )
             knobs = best_configuration.get("knobs")
             if not isinstance(knobs, dict):
-                raise ValueError(
+                raise TunerConfigError(
                     "Warm-start tuning session file is missing best_configuration.knobs"
                 )
             best_config_frac: Dict[str, Any] = knobs
@@ -681,7 +691,7 @@ class PBTTuner(BaseTuner):
                     raw_abs = knob_val * resources.cpu_cores
             if raw_abs is not None and knob.max_value is not None:
                 if raw_abs > knob.max_value * 1.05:  # 5% rounding tolerance
-                    raise ValueError(
+                    raise TunerConfigError(
                         f"Warm-start config contains absolute value for "
                         f"hardware-relative knob {knob_name}. Fraction {knob_val} "
                         f"resolves to {raw_abs:.0f}, exceeding max {knob.max_value}."

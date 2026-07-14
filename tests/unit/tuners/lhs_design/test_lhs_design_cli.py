@@ -251,7 +251,9 @@ class TestHtmlLogParity:
             lhs_design_cli.main(["--benchmark", "tpch", "--design-size", "4"])
         add_html.assert_called_once()
         log_path = add_html.call_args.kwargs["output_file"]
-        assert log_path.name.startswith("lhs_design_")
+        # Strategy-agnostic stem: session_{ts}.html (the strategy is encoded
+        # in the run's path, matching traces/trace_*.json and best_*.json).
+        assert log_path.name.startswith("session_")
         assert log_path.suffix == ".html"
-        # Nested under the run's logs/ directory alongside tuning_sessions/.
+        # Nested under the run's logs/ directory alongside traces/.
         assert log_path.parent.name == "logs"

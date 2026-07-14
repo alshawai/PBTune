@@ -14,6 +14,7 @@ from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
 from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
+from src.visualization.loaders.discovery import discover_session_traces
 
 LOGGER = get_logger("SessionLoader")
 
@@ -259,7 +260,7 @@ def load_sessions(
     if not dir_path.exists() or not dir_path.is_dir():
         raise DataLoadError(f"Directory not found: {directory}")
 
-    json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
+    json_files = discover_session_traces(dir_path)
     if not json_files:
         LOGGER.warning("No PBT result files found in %s", directory)
         return []

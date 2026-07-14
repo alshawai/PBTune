@@ -11,6 +11,7 @@ from src.utils.metrics import MetricConfig, PerformanceMetrics
 from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError
 from src.visualization.loaders.session import SessionTrace, load_sessions
+from src.visualization.loaders.discovery import discover_session_traces
 
 LOGGER = get_logger("AblationLoader")
 
@@ -102,7 +103,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
         if not tuning_dir.exists():
             continue
 
-        json_files = sorted(tuning_dir.glob("pbt_results_*.json"))
+        json_files = discover_session_traces(tuning_dir)
         for f in json_files:
             try:
                 with open(f, "r", encoding="utf-8") as file_obj:
@@ -177,7 +178,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
         val_name = val_dir.name
         final_groups[val_name] = []
 
-        for f in sorted(tuning_dir.glob("pbt_results_*.json")):
+        for f in discover_session_traces(tuning_dir):
             try:
                 trace = load_session(f, metric_config=super_config)
                 final_groups[val_name].append(trace)

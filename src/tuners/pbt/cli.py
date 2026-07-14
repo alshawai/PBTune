@@ -57,7 +57,6 @@ from src.tuners.utils.types import TuningStrategy
 from src.utils.logger import (
     get_color_context,
     get_logger,
-    print_startup_banner,
     set_colors_enabled,
     setup_logging,
 )
@@ -259,16 +258,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
 
     set_colors_enabled(not args.no_color)
-    print_startup_banner()
     setup_logging(verbosity=args.verbose, show_module=True)
 
     try:
         tuner = build_tuner(args)
 
         tuner.output_root.mkdir(parents=True, exist_ok=True)
-        attach_session_html_log(
-            tuner.output_root, stem="pbt_tuning", timestamp=tuner.timestamp
-        )
+        attach_session_html_log(tuner.output_root, timestamp=tuner.timestamp)
 
         LOGGER.info(
             "%sStarting PBT tuning%s: tier=%s%s%s, population=%s%d%s, "

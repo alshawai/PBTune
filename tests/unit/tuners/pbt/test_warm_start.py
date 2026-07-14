@@ -19,6 +19,7 @@ import pytest
 import json
 from src.tuners.pbt.population import Population, PopulationConfig
 from src.tuners.pbt.tuner import PBTTuner
+from src.tuners.utils.exceptions import TunerConfigError
 from src.knobs.knob_space import (
     KnobSpace,
     WorkerResources,
@@ -221,7 +222,7 @@ def test_warm_start_invalid_absolute_values(mock_knob_space, tmp_path):
     tuner = _make_warm_start_tuner(mock_knob_space)
 
     with pytest.raises(
-        ValueError,
+        TunerConfigError,
         match="Warm-start config contains absolute value for hardware-relative knob",
     ):
         tuner._build_warm_start_configs(
@@ -284,7 +285,7 @@ def test_warm_start_rejects_malformed_tuning_session_json(mock_knob_space, tmp_p
 
     tuner = _make_warm_start_tuner(mock_knob_space)
 
-    with pytest.raises(ValueError, match="best_configuration.knobs"):
+    with pytest.raises(TunerConfigError, match="best_configuration.knobs"):
         tuner._build_warm_start_configs(
             warm_start_path=warm_start_path,
             population_size=2,

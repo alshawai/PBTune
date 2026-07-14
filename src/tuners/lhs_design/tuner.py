@@ -281,19 +281,6 @@ class LHSDesignTuner(BaseTuner):
                 "batch_elapsed_seconds": time.time() - gen_start,
             },
         )
-        LOGGER.info(
-            "%sBatch %d/%d complete%s: evaluated designs %d-%d, "
-            "best-so-far=%s%.4f%s",
-            COLORS.bold,
-            generation + 1,
-            self.max_rounds,
-            COLORS.reset,
-            start,
-            end - 1,
-            COLORS.teal,
-            self._best_score_so_far,
-            COLORS.reset,
-        )
         return outcome
 
     def _build_batch_workers(self, batch_configs: List[Dict[str, Any]]) -> List[BaseWorker]:

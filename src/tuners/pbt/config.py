@@ -17,6 +17,7 @@ Key PBT Hyperparameters:
 from dataclasses import dataclass, field
 from typing import Tuple, Optional
 
+from src.tuners.utils.exceptions import TunerConfigError
 from src.utils.types import (
     BenchmarkConfig,
     RAPID_BENCHMARK_CONFIG,
@@ -144,35 +145,39 @@ class PBTConfig:
     def __post_init__(self):
         """Validate configuration after initialization"""
         if self.population_size < 2:
-            raise ValueError("population_size must be at least 2")
+            raise TunerConfigError("population_size must be at least 2")
 
         if self.num_generations < 1:
-            raise ValueError("num_generations must be at least 1")
+            raise TunerConfigError("num_generations must be at least 1")
 
         if not 0.0 < self.exploit_quantile < 0.5:
-            raise ValueError("exploit_quantile must be between 0 and 0.5")
+            raise TunerConfigError("exploit_quantile must be between 0 and 0.5")
 
         if self.ready_interval < 1:
-            raise ValueError("ready_interval must be at least 1")
+            raise TunerConfigError("ready_interval must be at least 1")
 
         if len(self.perturbation_factors) != 2:
-            raise ValueError("perturbation_factors must be a tuple of (min, max)")
+            raise TunerConfigError(
+                "perturbation_factors must be a tuple of (min, max)"
+            )
         if self.perturbation_factors[0] >= self.perturbation_factors[1]:
-            raise ValueError("perturbation min must be less than max")
+            raise TunerConfigError("perturbation min must be less than max")
         if self.perturbation_factors[0] <= 0:
-            raise ValueError("perturbation factors must be positive")
+            raise TunerConfigError("perturbation factors must be positive")
 
         if self.num_parallel_workers < 1:
-            raise ValueError("num_parallel_workers must be at least 1")
+            raise TunerConfigError("num_parallel_workers must be at least 1")
 
         if self.snapshot_restore_interval < 1:
-            raise ValueError("snapshot_restore_interval must be at least 1")
+            raise TunerConfigError("snapshot_restore_interval must be at least 1")
 
         if not 0.0 < self.dead_config_score < self.crash_score:
-            raise ValueError("dead_config_score must be > 0 and less than crash_score")
+            raise TunerConfigError(
+                "dead_config_score must be > 0 and less than crash_score"
+            )
 
         if not self.crash_score < self.dead_config_threshold < 100.0:
-            raise ValueError(
+            raise TunerConfigError(
                 "dead_config_threshold must be greater than crash_score and less than 100"
             )
 
@@ -182,10 +187,12 @@ class PBTConfig:
             raise TypeError("benchmark_config must be a BenchmarkConfig instance")
 
         if self.scoring_calibration_evals < 1:
-            raise ValueError("scoring_calibration_evals must be at least 1")
+            raise TunerConfigError("scoring_calibration_evals must be at least 1")
 
         if not 0.0 <= self.resample_probability <= 1.0:
-            raise ValueError("resample_probability must be between 0.0 and 1.0")
+            raise TunerConfigError(
+                "resample_probability must be between 0.0 and 1.0"
+            )
 
     @property
     def num_workers_per_quantile(self) -> int:

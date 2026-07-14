@@ -205,7 +205,7 @@ class TestLHSDesignRun:
         tuner = _make(tmp_path, _DESIGN, workers=2)
         tuner.run()
         session_file = (
-            tmp_path / "traces" / "lhs_results_20260619_1200.json"
+            tmp_path / "traces" / "trace_20260619_1200.json"
         )
         assert session_file.exists()
         loaded = json.loads(session_file.read_text())
