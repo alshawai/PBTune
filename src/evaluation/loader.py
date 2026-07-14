@@ -69,7 +69,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
     if not path.exists():
         raise TuningSessionLoadError(
             f"Tuning session file not found: {path}\n"
-            "    Expected path: results/{{workload}}/pbt_runs/{{tier}}/tuning_sessions/"
+            "    Expected path: results/sessions/{{workload}}/pbt/{{tier}}/traces/"
             "pbt_results_{{timestamp}}.json"
         )
 

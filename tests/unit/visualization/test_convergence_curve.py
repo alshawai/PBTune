@@ -14,6 +14,7 @@ def mock_pbt_session():
     trace.best_scores = np.linspace(0.1, 0.9, 10).tolist()
     trace.mean_scores = np.linspace(0.05, 0.85, 10).tolist()
     trace.wall_clock_seconds = np.linspace(10, 100, 10).tolist()
+    trace.generation_elapsed_seconds = np.full(10, 9.0)
     trace.metadata = {"n_workers": 4}
     return trace
 
@@ -135,35 +136,39 @@ def test_single_seed_no_fill(mock_load_comp, mock_load_bo, mock_load_session, mo
         fills = [c for c in ax.get_children() if isinstance(c, PolyCollection)]
         assert len(fills) == 0
 
+@patch("src.visualization.plots.convergence_curve.discover_bo_traces")
 @patch("src.visualization.plots.convergence_curve.load_sessions")
 @patch("src.visualization.plots.convergence_curve.load_bo_trace")
 @patch("src.visualization.plots.convergence_curve.load_comparison")
-def test_multi_seed_has_fill(mock_load_comp, mock_load_bo, mock_load_sessions, mock_pbt_session, mock_bo_trace, mock_comparison_data, tmp_output_dir):
+def test_multi_seed_has_fill(mock_load_comp, mock_load_bo, mock_load_sessions, mock_discover_bo, mock_pbt_session, mock_bo_trace, mock_comparison_data, tmp_output_dir):
     # Setup mock_pbt_session to return different objects so std is not exactly 0
     p2 = MagicMock(spec=SessionTrace)
     p2.generations = list(range(1, 11))
     p2.best_scores = np.linspace(0.1, 0.8, 10).tolist()
     p2.mean_scores = np.linspace(0.05, 0.75, 10).tolist()
     p2.wall_clock_seconds = np.linspace(10, 100, 10).tolist()
+    p2.generation_elapsed_seconds = np.full(10, 9.0)
     p2.metadata = {"n_workers": 4}
-    
+
     p3 = MagicMock(spec=SessionTrace)
     p3.generations = list(range(1, 11))
     p3.best_scores = np.linspace(0.1, 1.0, 10).tolist()
     p3.mean_scores = np.linspace(0.05, 0.95, 10).tolist()
     p3.wall_clock_seconds = np.linspace(10, 100, 10).tolist()
+    p3.generation_elapsed_seconds = np.full(10, 9.0)
     p3.metadata = {"n_workers": 4}
-    
+
     mock_load_sessions.return_value = [mock_pbt_session, p2, p3]
-    
+
     b2 = MagicMock(spec=BOTrace)
     b2.evaluations = list(range(1, 41))
     b2.best_scores = np.linspace(0.05, 0.75, 40).tolist()
     b2.wall_clock_seconds = np.linspace(5, 200, 40).tolist()
-    
+
     mock_load_bo.side_effect = [mock_bo_trace, b2]
+    mock_discover_bo.side_effect = [[Path("bo1.json")], [Path("bo2.json")]]
     mock_load_comp.return_value = mock_comparison_data
-    
+
     with patch("src.visualization.plots.convergence_curve.Path.is_dir", return_value=True):
         fig = generate(
             pbt_paths=["pbt_dir"],

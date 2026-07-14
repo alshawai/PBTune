@@ -36,7 +36,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
 
     Args:
         ablation_dir: Path to the root ablation directory
-            (e.g., `results/oltp/pbt_runs/minimal/ablations/population_size/`)
+            (e.g., `results/sessions/oltp_read_write/pbt/minimal/ablations/population_size/`)
 
     Returns:
         AblationGroup containing grouped traces and the shared metric config.
@@ -60,10 +60,10 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     raw_groups: dict[str, list[SessionTrace]] = {}
 
     for val_dir in value_dirs:
-        # PBT sessions are saved in `tuning_sessions/` under the ablation value dir
-        tuning_dir = val_dir / "tuning_sessions"
+        # PBT sessions are saved in `traces/` under the ablation value dir
+        tuning_dir = val_dir / "traces"
         if not tuning_dir.exists():
-            LOGGER.warning("No tuning_sessions/ directory found in %s", val_dir)
+            LOGGER.warning("No traces/ directory found in %s", val_dir)
             continue
 
         val_name = val_dir.name
@@ -99,7 +99,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     shared_metadata: dict[str, Any] = {}
 
     for val_dir in value_dirs:
-        tuning_dir = val_dir / "tuning_sessions"
+        tuning_dir = val_dir / "traces"
         if not tuning_dir.exists():
             continue
 
@@ -171,7 +171,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
 
     final_groups: dict[str, list[SessionTrace]] = {}
     for val_dir in value_dirs:
-        tuning_dir = val_dir / "tuning_sessions"
+        tuning_dir = val_dir / "traces"
         if not tuning_dir.exists():
             continue
 

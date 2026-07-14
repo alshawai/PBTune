@@ -670,9 +670,9 @@ class ExperimentRunner:
 
         The source experiment's PBT phase must have completed and recorded
         a session_json in the manifest. The best_config.json lives as a
-        sibling of the session JSON: ``.../pbt_runs/<tier>/best_configs/
-        best_config_<timestamp>.json`` (vs ``.../pbt_runs/<tier>/
-        tuning_sessions/pbt_results_<timestamp>.json``).
+        sibling of the session JSON: ``.../pbt/<tier>/best_configs/
+        best_<timestamp>.json`` (vs ``.../pbt/<tier>/traces/
+        trace_<timestamp>.json``).
 
         Returns None if the source isn't ready (caller should fail fast).
         """
