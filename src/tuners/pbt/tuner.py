@@ -181,7 +181,7 @@ class PBTTuner(BaseTuner):
         """
         population_size = self.pbt_config.population_size
         if self.warm_start_path:
-            LOGGER.info("Warm-starting from %s", self.warm_start_path)
+            LOGGER.info(" Warm-starting from %s", self.warm_start_path)
             warm_configs = self._build_warm_start_configs(
                 warm_start_path=Path(self.warm_start_path),
                 population_size=population_size,
@@ -194,6 +194,11 @@ class PBTTuner(BaseTuner):
                         num_samples=num_lhs, seed=self.lifecycle.random_seed
                     )
                 )
+            
+            LOGGER.debug(
+                "➤ Warm-started with %d configs, %d LHS configs",
+                len(warm_configs), num_lhs
+            )
             return warm_configs[:population_size]
 
         # Mirror BO's pilot-seed convention: worker 0 starts from the
@@ -206,6 +211,11 @@ class PBTTuner(BaseTuner):
         initial_configs = [default_config] + [
             c for c in lhs_configs if c != default_config
         ]
+
+        LOGGER.debug(
+            "➤ Proposed %d initial configs (1 default + %d LHS)",
+            len(initial_configs), len(initial_configs) - 1
+        )
         return initial_configs[:population_size]
 
     def build_optimizer(self) -> None:
@@ -216,9 +226,11 @@ class PBTTuner(BaseTuner):
         bring-up left instances + orchestrator in place. This is exactly the
         seam the ``build_optimizer`` hook exists for.
         """
+        LOGGER.info("")
         log_section_header(
-            LOGGER, "%sInitializing PBT population%s", COLORS.bold, COLORS.reset
+            LOGGER, "Initializing PBT population", top_separator=False,
         )
+
         pop_config = PopulationConfig(
             population_size=self.pbt_config.population_size,
             ready_interval=self.pbt_config.ready_interval,
@@ -253,14 +265,6 @@ class PBTTuner(BaseTuner):
         )
 
         LOGGER.info("Configuring snapshot restoration...")
-        # Reconcile the PBT config with the base-resolved snapshot decision
-        # before Population.setup_snapshots reads it. base.setup() computes
-        # ``self.enable_snapshots = lifecycle.enable_snapshots AND
-        # bundle.enable_snapshots`` — the bundle force-disables snapshots for
-        # read-only sysbench / TPC-H — but ``setup_snapshots`` reads
-        # ``pbt_config.enable_snapshots`` directly, so without this sync a
-        # read-only run would still snapshot. Mirrors legacy main.py, which
-        # mutated ``pbt_config.enable_snapshots`` for read-only workloads.
         self.pbt_config.enable_snapshots = self.enable_snapshots
         self.pbt_config.snapshot_restore_interval = (
             self.lifecycle.snapshot_restore_interval
@@ -269,16 +273,13 @@ class PBTTuner(BaseTuner):
             self.population.setup_snapshots(env=self.env, pbt_config=self.pbt_config)
 
         LOGGER.info(
-            "%s%sInitialized %d workers with dedicated instances.%s",
+            "Initialized %s%s%d%s workers with dedicated instances.",
             COLORS.bold,
-            COLORS.green,
+            COLORS.cyan,
             len(self.population.workers),
             COLORS.reset,
         )
 
-    # ------------------------------------------------------------------
-    # Generation loop
-    # ------------------------------------------------------------------
     def step(self, generation: int) -> GenerationOutcome:
         """Run one exploit/explore generation and record its uniform history."""
         assert self.population is not None  # built in build_optimizer()
