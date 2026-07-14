@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import psycopg2
 
 from src.config.data_root import resolve_data_root
@@ -127,9 +128,6 @@ class PBTTuner(BaseTuner):
         self.restart_count: int = 0
         self._restarted_this_generation: bool = False
 
-    # ------------------------------------------------------------------
-    # Budget / summary overrides
-    # ------------------------------------------------------------------
     @property
     def max_rounds(self) -> int:
         """PBT runs a fixed number of generations."""
@@ -368,9 +366,6 @@ class PBTTuner(BaseTuner):
             return False
         return bool(self.population.history[-1].converged)
 
-    # ------------------------------------------------------------------
-    # Per-worker evaluation (PBT crash/dead-config ladder)
-    # ------------------------------------------------------------------
     def evaluate_worker(
         self,
         worker: PBTWorker,
@@ -515,9 +510,6 @@ class PBTTuner(BaseTuner):
         )
         return fallback_metrics, score
 
-    # ------------------------------------------------------------------
-    # Session payload
-    # ------------------------------------------------------------------
     def build_session_payload(self) -> Dict[str, Any]:
         """Assemble PBT's strategy-specific session sections (nested schema)."""
         scoring_metadata = self.metric_config.get_scoring_metadata()
@@ -544,6 +536,7 @@ class PBTTuner(BaseTuner):
             "snapshot_restore_interval": self.lifecycle.snapshot_restore_interval,
             "generations_without_improvement": gens_without_improvement,
             "warm_start": self.warm_start_provenance,
+            "effective_seed": getattr(self.population, "master_seed", None),
         }
         if self.ablation_variable is not None:
             strategy_params["ablation_variable"] = self.ablation_variable
@@ -568,9 +561,6 @@ class PBTTuner(BaseTuner):
             payload["session_environment"] = self.session_environment.to_dict()
         return payload
 
-    # ------------------------------------------------------------------
-    # Warm-start config expansion (PBT-specific)
-    # ------------------------------------------------------------------
     def _compute_warm_start_perturbation_factors(
         self, num_variants: int
     ) -> List[Tuple[float, float]]:
@@ -655,10 +645,11 @@ class PBTTuner(BaseTuner):
         num_warm_start = math.ceil(population_size / 2)
         warm_configs = [base_config]
         factors = self._compute_warm_start_perturbation_factors(num_warm_start - 1)
+        warm_rng = np.random.default_rng(seed)
         for i, (f_min, f_max) in enumerate(factors):
             warm_configs.append(
                 self.full_knob_space.perturb_config(
-                    base_config, perturbation_factor=(f_min, f_max), seed=seed + i
+                    base_config, perturbation_factor=(f_min, f_max), rng=warm_rng
                 )
             )
 

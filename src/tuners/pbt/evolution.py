@@ -166,10 +166,9 @@ def truncation_selection(
 
     worker_to_idx = {w.worker_id: i for i, w in enumerate(workers)}
     pairs = []
-    rng = np.random.default_rng()
 
     for poor_worker in poor_workers:
-        elite_worker = rng.choice(elite_workers)  # type: ignore
+        elite_worker = poor_worker.rng.choice(elite_workers)  # type: ignore
 
         poor_idx = worker_to_idx[poor_worker.worker_id]
         elite_idx = worker_to_idx[elite_worker.worker_id]

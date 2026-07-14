@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple, List
 import copy
 
+import numpy as np
+
 from src.tuners.engine.worker import BaseWorker
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
@@ -95,6 +97,15 @@ class PBTWorker(BaseWorker):
     generation_created: int = 0
 
     config_history: list = field(default_factory=list)
+
+    _rng: Optional[np.random.Generator] = field(default=None, repr=False)
+
+    @property
+    def rng(self) -> np.random.Generator:
+        """Per-worker RNG stream. Seeded by Population; lazy fallback for tests."""
+        if self._rng is None:
+            self._rng = np.random.default_rng()
+        return self._rng
 
     def is_ready(self) -> bool:
         """
@@ -164,7 +175,6 @@ class PBTWorker(BaseWorker):
         self,
         perturbation_factors: Tuple[float, float] = (0.8, 1.2),
         current_generation: Optional[int] = None,
-        seed: Optional[int] = None,
         exclude_knobs: Optional[List[str]] = None,
         resample_probability: float = 0.0,
     ) -> None:
@@ -179,9 +189,6 @@ class PBTWorker(BaseWorker):
 
         current_generation : Optional[int]
             Current generation number for history tracking.
-
-        seed : Optional[int]
-            Random seed for reproducibility.
 
         exclude_knobs : Optional[List[str]]
             Knobs to exclude from perturbation (keep constant).
@@ -199,7 +206,7 @@ class PBTWorker(BaseWorker):
         self.knob_config = self.knob_space.perturb_config(
             config=self.knob_config,  # type: ignore
             perturbation_factor=perturbation_factors,
-            seed=seed,
+            rng=self.rng,
             worker_id=self.worker_id,
             exclude_knobs=exclude_knobs,
             resample_probability=resample_probability,

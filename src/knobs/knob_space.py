@@ -1056,7 +1056,7 @@ class KnobSpace:
         self,
         config: Dict[str, Any],
         perturbation_factor: Tuple[float, float] = (0.8, 1.2),
-        seed: Optional[int] = None,
+        rng: Optional[np.random.Generator] = None,
         worker_id: Optional[int] = None,
         exclude_knobs: Optional[List[str]] = None,
         resample_probability: float = 0.0,
@@ -1073,14 +1073,15 @@ class KnobSpace:
             Original configuration
         perturbation_factor : Tuple[float, float]
             (min_factor, max_factor) for perturbation. Default (0.8, 1.2) means ±20%
-        seed : Optional[int]
-            Random seed
+        rng : Optional[np.random.Generator]
+            Random number generator. Required for reproducible perturbation streams.
+            Falls back to an unseeded default_rng() if None.
         worker_id : Optional[int]
-            Worker ID for reproducibility
+            Worker ID (used by repair_config_dependencies)
         exclude_knobs : Optional[List[str]]
             List of knob names to exclude from perturbation (keep unchanged)
         resample_probability : float
-            Probability (0.0 to 1.0) of entirely resampling a knob from its prior 
+            Probability (0.0 to 1.0) of entirely resampling a knob from its prior
             instead of applying a local perturbation. Default is 0.0.
 
         Returns
@@ -1088,7 +1089,8 @@ class KnobSpace:
         Dict[str, Any]
             Perturbed configuration
         """
-        rng = np.random.default_rng(seed)
+        if rng is None:
+            rng = np.random.default_rng()
         perturbed = {}
         exclude_set = set(exclude_knobs or [])
 

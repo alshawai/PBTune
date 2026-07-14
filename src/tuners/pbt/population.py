@@ -28,6 +28,8 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
 
+import numpy as np
+
 from src.config.database import DatabaseConfig
 from src.tuners.pbt.worker import PBTWorker
 from src.tuners.pbt.evolution import (
@@ -256,8 +258,8 @@ class Population:
         initial_configs : Optional[List[Dict[str, Any]]]
             Optional list of initial configurations. Can be shorter than population_size
             (for partial seeding), in which case the rest are filled via LHS.
-        seed : Optional[int], default=None
-            Random seed for sampling.
+        random_seed : Optional[int], default=None
+            Random seed for sampling and evolution streams.
 
         Raises
         ------
@@ -268,6 +270,22 @@ class Population:
         ----
         After calling this, call setup_worker_instances() to assign instance configs.
         """
+        if random_seed is None:
+            random_seed = int(np.random.SeedSequence().entropy)  # type: ignore[arg-type]
+        self.master_seed: int = random_seed
+
+        seed_seq = np.random.SeedSequence(random_seed)
+        pop_child, *worker_children = seed_seq.spawn(
+            1 + self.config.population_size
+        )
+        self._population_rng = np.random.default_rng(pop_child)
+
+        LOGGER.info(
+            "➤ RNG seeded: master_seed=%d, population_stream + %d worker streams",
+            random_seed,
+            self.config.population_size,
+        )
+
         if initial_configs is not None:
             if len(initial_configs) > self.config.population_size:
                 raise TunerConfigError(
@@ -299,6 +317,7 @@ class Population:
                 knob_space=self.knob_space,
                 knob_config=config,
                 ready_interval=self.config.ready_interval,
+                _rng=np.random.default_rng(worker_children[worker_id]),
             )
             self.workers.append(worker)
 
@@ -577,7 +596,8 @@ class Population:
     ) -> tuple[Dict[str, Any], float]:
         """Pick and remove the most-diverse candidate from a shared candidate pool."""
         if not candidates:
-            fallback = self.knob_space.sample_random_config()
+            seed = int(self._population_rng.integers(0, 2**63 - 1))
+            fallback = self.knob_space.sample_random_config(seed=seed)
             return fallback, self._config_change_ratio(previous_config, fallback)
 
         best_index = 0
@@ -596,7 +616,7 @@ class Population:
         perturbed = self.knob_space.perturb_config(
             previous_config,
             perturbation_factor=(0.5, 1.5),
-            seed=((self.current_generation + 1) * 1000) + len(previous_config),
+            rng=self._population_rng,
         )
         perturbed_ratio = self._config_change_ratio(previous_config, perturbed)
         if perturbed_ratio > best_ratio:
