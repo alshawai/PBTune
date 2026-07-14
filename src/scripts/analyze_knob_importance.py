@@ -237,7 +237,7 @@ def parse_args() -> argparse.Namespace:
         metavar="RESULTS_ROOT",
         help=(
             "Glob the given root for tuning-session directories under "
-            "'<root>/*/pbt_runs/extensive/tuning_sessions' and run the "
+            "'<root>/sessions/*/pbt/extensive/traces' and run the "
             "analysis pipeline per discovered workload. Failures on one "
             "workload are logged and skipped, never fatal. Overrides "
             "--results-dir / --workload-label."
@@ -246,7 +246,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--results-glob",
         type=str,
-        default="*/pbt_runs/extensive/tuning_sessions",
+        default="sessions/*/pbt/extensive/traces",
         help=(
             "Glob (relative to --all-workloads) used to discover "
             "tuning-session directories. Default targets the canonical "
@@ -767,11 +767,11 @@ def _discover_workloads(
     results_root: Path,
     glob_pattern: str,
 ) -> list[tuple[str, Path]]:
-    """Discover ``(workload_label, tuning_sessions_dir)`` pairs under ``results_root``.
+    """Discover ``(workload_label, traces_dir)`` pairs under ``results_root``.
 
-    The workload label is derived from the first path segment under
+    The workload label is derived from the second path segment under
     ``results_root`` — matching the layout
-    ``results/<workload>/pbt_runs/<tier>/tuning_sessions``.
+    ``results/sessions/<workload>/<strategy>/<tier>/traces``.
     Empty discovery results are signalled by returning ``[]``.
     """
     if not results_root.is_dir():
@@ -790,7 +790,7 @@ def _discover_workloads(
             continue
         try:
             relative = path.relative_to(results_root)
-            workload_label = relative.parts[0]
+            workload_label = relative.parts[1]
         except (ValueError, IndexError):
             LOGGER.warning(
                 "Could not derive workload label from %s; skipping.", path

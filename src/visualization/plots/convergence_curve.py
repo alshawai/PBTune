@@ -395,11 +395,15 @@ def generate(
     logger.info("Generating %s figure (metric_key=%s)", FIG_ID, metric_key or "score")
 
     if not pbt_paths and data_dir:
-        d = Path(data_dir) / "oltp" / "oltp_read_write"
+        d = Path(data_dir) / "sessions" / "oltp_read_write"
         if d.exists():
-            pbt_paths = [str(d / "pbt_runs" / "extensive" / "tuning_sessions")]
-            bo_paths = [str(d / "bo_runs" / "extensive" / "baseline_sessions")]
-            comps = sorted((d / "comparisons" / "extensive").glob("multi_arm_comparison_*.json"))
+            pbt_paths = [str(d / "pbt" / "extensive" / "traces")]
+            bo_paths = [str(d / "bo" / "extensive" / "traces")]
+            comps = sorted(
+                (Path(data_dir) / "comparisons" / "oltp_read_write" / "extensive").glob(
+                    "multi_arm_comparison_*.json"
+                )
+            )
             if comps and not comparison_path:
                 comparison_path = str(comps[-1])
 

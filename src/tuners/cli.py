@@ -36,6 +36,7 @@ from src.config.data_root import resolve_data_root
 from src.tuners.utils.output_paths import resolve_tuner_output_root
 from src.tuners.utils.profiles import PROFILES
 from src.tuners.utils.types import TunerLifecycleConfig, TuningStrategy
+from src.utils.logger import add_html_file_logging
 from src.utils.types import (
     TuningMode,
     clone_benchmark_config,
@@ -502,35 +503,81 @@ def resolve_output_root(
     *,
     strategy: TuningStrategy,
     sysbench_workload: str,
+    ablation_variable: str | None = None,
+    ablation_value: str | None = None,
 ) -> Path:
     """Resolve the strategy/tier-scoped results directory from shared args.
 
-    Mirrors PBT's ``--colocate-output`` behavior: when set, results are rooted
-    at ``{data_root}/results`` so a session's outputs travel with its data;
-    otherwise the ``--output-dir`` value (default ``results``) is used. The knob
-    tier/source are read off ``args`` (they live in the shared Tuning
-    Configuration group).
+    Derives a single ``workload`` key from the benchmark / workload flags,
+    then delegates to :func:`resolve_tuner_output_root`.  When
+    ``--colocate-output`` is set, results are rooted at
+    ``{data_root}/results`` so a session's outputs travel with its data;
+    otherwise the ``--output-dir`` value (default ``results``) is used.
 
-    ``sysbench_workload`` is passed explicitly (rather than read off ``args``)
-    so callers can forward the *resolved* benchmark-config value, which already
-    has the default applied when the flag was omitted.
+    ``sysbench_workload`` is passed explicitly (rather than read off
+    ``args``) so callers can forward the *resolved* benchmark-config value,
+    which already has the default applied when the flag was omitted.
     """
     base_output_dir = (
         resolve_data_dir(args) / "results"
         if args.colocate_output
         else Path(args.output_dir)
     )
+
+    if args.benchmark == "sysbench":
+        workload = sysbench_workload
+    elif args.benchmark == "tpch":
+        workload = "olap"
+    else:
+        workload = args.workload
+
     return resolve_tuner_output_root(
         base_output_dir,
         strategy=strategy,
-        workload_type=("olap" if args.benchmark == "tpch" else args.workload),
-        benchmark=args.benchmark,
-        sysbench_workload=sysbench_workload,
+        workload=workload,
         knob_tier=args.tier,
         knob_source=args.knob_source,
+        ablation_variable=ablation_variable,
+        ablation_value=ablation_value,
     )
 
 
 def resolve_data_dir(args: argparse.Namespace) -> Path:
     """Resolve the data root from ``--data-dir`` or the environment default."""
     return Path(args.data_dir) if args.data_dir else resolve_data_root()
+
+
+def attach_session_html_log(
+    output_root: Path,
+    *,
+    stem: str,
+    timestamp: str,
+) -> Path:
+    """Attach an HTML log handler under the run's ``logs/`` subdirectory.
+
+    Every strategy writes its session JSON to ``{output_root}/tuning_sessions/``
+    and its best config to ``{output_root}/best_configs/``; this places the
+    matching HTML run-log under ``{output_root}/logs/`` so all three session
+    artifacts share one root and one convention. Mirrors BO
+    (``bo_root/logs/bo_baseline_*.html``) and the evaluation runner
+    (``output_dir/logs/evaluation_*.html``), replacing the incumbent flat
+    ``{output_root}/{stem}_{ts}.html`` that PBT and LHS both wrote.
+
+    Parameters
+    ----------
+    output_root
+        The strategy/tier-scoped results root (from :func:`resolve_output_root`).
+    stem
+        Strategy log-file stem (e.g. ``"pbt_tuning"``, ``"lhs_design"``).
+    timestamp
+        Session id used in the filename.
+
+    Returns
+    -------
+    Path
+        The normalized HTML log path actually written to.
+    """
+    log_dir = Path(output_root) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{stem}_{timestamp}.html"
+    return add_html_file_logging(output_file=log_path, show_module=True)

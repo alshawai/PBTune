@@ -39,6 +39,7 @@ from typing import Optional
 
 from src.tuners.cli import (
     add_common_groups,
+    attach_session_html_log,
     build_benchmark_config,
     build_lifecycle_config,
     resolve_data_dir,
@@ -54,7 +55,6 @@ from src.tuners.pbt.config import (
 from src.tuners.pbt.tuner import PBTTuner
 from src.tuners.utils.types import TuningStrategy
 from src.utils.logger import (
-    add_html_file_logging,
     get_color_context,
     get_logger,
     print_startup_banner,
@@ -63,7 +63,7 @@ from src.utils.logger import (
 )
 from src.utils.session_clock import format_session_id
 
-LOGGER = get_logger("PBTCLI")
+LOGGER = get_logger("Entry")
 COLORS = get_color_context()
 
 PBT_CONFIG_BY_PROFILE = {
@@ -235,6 +235,8 @@ def build_tuner(args: argparse.Namespace) -> PBTTuner:
         args,
         strategy=TuningStrategy.PBT,
         sysbench_workload=benchmark_config.sysbench_workload,
+        ablation_variable=args.ablation_variable,
+        ablation_value=args.ablation_value,
     )
 
     return PBTTuner(
@@ -264,8 +266,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         tuner = build_tuner(args)
 
         tuner.output_root.mkdir(parents=True, exist_ok=True)
-        log_path = tuner.output_root / f"pbt_tuning_{tuner.timestamp}.html"
-        add_html_file_logging(output_file=log_path, show_module=True)
+        attach_session_html_log(
+            tuner.output_root, stem="pbt_tuning", timestamp=tuner.timestamp
+        )
 
         LOGGER.info(
             "%sStarting PBT tuning%s: tier=%s%s%s, population=%s%d%s, "
@@ -296,7 +299,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     except (RuntimeError, ValueError, ConnectionError) as exc:
-        LOGGER.error("🔴 Fatal error: %s", exc)
+        LOGGER.error("%sFatal ERROR:%s %s", COLORS.red, COLORS.reset, exc)
         LOGGER.debug("Exception details:", exc_info=True)
         return 1
 

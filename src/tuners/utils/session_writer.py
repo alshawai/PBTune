@@ -146,11 +146,11 @@ def write_session_json(
     output_dir: Path,
     filename: str,
 ) -> Path:
-    """Write a session results dict to ``{output_dir}/tuning_sessions/{filename}``.
+    """Write a session results dict to ``{output_dir}/traces/{filename}``.
 
     Returns the path written. Numpy types are converted on the way out.
     """
-    tuning_output_dir = Path(output_dir) / "tuning_sessions"
+    tuning_output_dir = Path(output_dir) / "traces"
     tuning_output_dir.mkdir(parents=True, exist_ok=True)
     json_file = tuning_output_dir / filename
 

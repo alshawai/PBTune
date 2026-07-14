@@ -25,7 +25,7 @@ class TestAnalysisInferTuningStrategy:
 
     def test_explicit_field_wins_over_path(self):
         meta = {"tuning_strategy": "pbt"}
-        path = Path("/results/oltp/bo_runs/extensive/baseline_sessions/x.json")
+        path = Path("/results/sessions/olap/bo/extensive/traces/x.json")
         assert _infer_tuning_strategy(meta, path) == "pbt"
 
     def test_explicit_field_passes_through_unknown_label(self):
@@ -33,17 +33,32 @@ class TestAnalysisInferTuningStrategy:
         path = Path("/results/x.json")
         assert _infer_tuning_strategy(meta, path) == "custom_x"
 
-    def test_pbt_runs_path_fallback(self):
+    def test_pbt_path_fallback(self):
+        meta: dict = {}
+        path = Path("/results/sessions/oltp_read_write/pbt/extensive/traces/x.json")
+        assert _infer_tuning_strategy(meta, path) == "pbt"
+
+    def test_bo_path_fallback(self):
+        meta: dict = {}
+        path = Path("/results/sessions/oltp_read_write/bo/extensive/traces/x.json")
+        assert _infer_tuning_strategy(meta, path) == "bo"
+
+    def test_lhs_path_fallback(self):
+        meta: dict = {}
+        path = Path("/results/sessions/oltp_read_write/lhs/extensive/traces/x.json")
+        assert _infer_tuning_strategy(meta, path) == "lhs"
+
+    def test_legacy_pbt_runs_path_fallback(self):
         meta: dict = {}
         path = Path("/results/oltp/oltp_read_write/pbt_runs/extensive/tuning_sessions/x.json")
         assert _infer_tuning_strategy(meta, path) == "pbt"
 
-    def test_bo_runs_path_fallback(self):
+    def test_legacy_bo_runs_path_fallback(self):
         meta: dict = {}
         path = Path("/results/oltp/oltp_read_write/bo_runs/extensive/baseline_sessions/x.json")
         assert _infer_tuning_strategy(meta, path) == "bo"
 
-    def test_lhs_runs_path_fallback(self):
+    def test_legacy_lhs_runs_path_fallback(self):
         meta: dict = {}
         path = Path("/results/oltp/oltp_read_write/lhs_runs/extensive/lhs_sessions/x.json")
         assert _infer_tuning_strategy(meta, path) == "lhs"
@@ -55,7 +70,7 @@ class TestAnalysisInferTuningStrategy:
 
     def test_empty_string_field_falls_through_to_path(self):
         meta = {"tuning_strategy": ""}
-        path = Path("/results/oltp/pbt_runs/extensive/tuning_sessions/x.json")
+        path = Path("/results/sessions/oltp_read_write/pbt/extensive/traces/x.json")
         assert _infer_tuning_strategy(meta, path) == "pbt"
 
 
@@ -77,7 +92,7 @@ class TestBuildSessionMetadataPropagatesStrategy:
 
     def test_path_fallback_emitted_for_legacy_sessions(self):
         meta = _build_session_metadata(
-            file_path=Path("/results/oltp/oltp_read_write/pbt_runs/extensive/tuning_sessions/x.json"),
+            file_path=Path("/results/sessions/oltp_read_write/pbt/extensive/traces/x.json"),
             session_meta={
                 "workload_type": "oltp",
                 "benchmark_name": "sysbench",
@@ -102,7 +117,7 @@ class TestBuildSessionMetadataPropagatesStrategy:
     def test_strategy_not_double_stored_via_session_meta_loop(self):
         """The catch-all session_meta loop must not overwrite the resolved value."""
         meta = _build_session_metadata(
-            file_path=Path("/results/oltp/oltp_read_write/pbt_runs/extensive/x.json"),
+            file_path=Path("/results/sessions/oltp_read_write/pbt/extensive/x.json"),
             session_meta={
                 "workload_type": "oltp",
                 "benchmark_name": "sysbench",
@@ -125,6 +140,9 @@ class TestEvaluationInferTuningStrategy:
             ({"tuning_strategy": "pbt"}, Path("/x.json"), "pbt"),
             ({"tuning_strategy": "bo"}, Path("/x.json"), "bo"),
             ({"tuning_strategy": "lhs"}, Path("/x.json"), "lhs"),
+            ({}, Path("/r/sessions/olap/pbt/extensive/traces/x.json"), "pbt"),
+            ({}, Path("/r/sessions/olap/bo/extensive/traces/x.json"), "bo"),
+            ({}, Path("/r/sessions/olap/lhs/extensive/traces/x.json"), "lhs"),
             ({}, Path("/r/pbt_runs/x.json"), "pbt"),
             ({}, Path("/r/bo_runs/x.json"), "bo"),
             ({}, Path("/r/lhs_runs/x.json"), "lhs"),
@@ -135,8 +153,8 @@ class TestEvaluationInferTuningStrategy:
         assert _eval_infer(meta, path) == expected
 
     def test_explicit_field_beats_conflicting_path(self):
-        """A BO session written to a pbt_runs/ directory by accident still
+        """A BO session written to a pbt/ directory by accident still
         identifies as BO because the explicit field wins."""
         meta = {"tuning_strategy": "bo"}
-        path = Path("/results/oltp/pbt_runs/extensive/x.json")
+        path = Path("/results/sessions/olap/pbt/extensive/x.json")
         assert _eval_infer(meta, path) == "bo"

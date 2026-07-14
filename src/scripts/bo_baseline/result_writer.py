@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.knobs.knob_space import KnobSpace
+from src.tuners.utils.output_paths import resolve_tuner_output_root
+from src.tuners.utils.types import TuningStrategy
 from src.utils.hardware_info import WorkerResources
 from src.utils.session_clock import format_session_id
 from src.utils.timing import TimingRecorder
@@ -46,27 +48,22 @@ def resolve_bo_output_root(
 ) -> Path:
     """Resolve the base BO output directory under results.
 
-    When ``knob_source == "data_driven"``, the tier slug is suffixed with
-    ``@scalpel-v1`` to keep post-SCALPEL artifacts from colliding with
-    pre-SCALPEL Jenks-era results that contained a different knob set
-    under the same canonical tier name.
+    Thin wrapper over the unified :func:`resolve_tuner_output_root` that
+    derives the single ``workload`` key from the benchmark config.
     """
     if benchmark_config.benchmark == "sysbench":
-        benchmark_key = benchmark_config.sysbench_workload
+        workload = benchmark_config.sysbench_workload
+    elif benchmark_config.benchmark == "tpch":
+        workload = "olap"
     else:
-        benchmark_key = benchmark_config.benchmark
+        workload = benchmark_config.workload_type
 
-    tier_slug = knob_tier
-    if str(knob_source) == "data_driven":
-        tier_slug = f"{knob_tier}@scalpel-v1"
-
-    output_dir = Path(output_dir)
-    return (
-        output_dir
-        / benchmark_config.workload_type
-        / benchmark_key
-        / "bo_runs"
-        / tier_slug
+    return resolve_tuner_output_root(
+        output_dir,
+        strategy=TuningStrategy.BO,
+        workload=workload,
+        knob_tier=knob_tier,
+        knob_source=knob_source,
     )
 
 
@@ -397,7 +394,7 @@ def write_bo_results(
         knob_tier=config.knob_tier,
         knob_source=config.knob_source,
     )
-    bo_dir = bo_root / "baseline_sessions"
+    bo_dir = bo_root / "traces"
     bo_dir.mkdir(parents=True, exist_ok=True)
 
     # Write results to file

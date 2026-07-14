@@ -142,8 +142,8 @@ class TestLoadTuningSession:
     @pytest.mark.parametrize(
         "path_segment,expected",
         [
-            ("olap/pbt_runs", "tpch"),
-            ("oltp/pbt_runs", "sysbench"),
+            ("olap/pbt", "tpch"),
+            ("oltp/pbt", "sysbench"),
             ("tpch/results", "tpch"),
         ],
     )
@@ -752,7 +752,7 @@ class TestBenchmarkParameterResolution:
     ) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+                "results/sessions/oltp/pbt/core/traces/session.json"
             ),
             benchmark="sysbench",
         )
@@ -785,7 +785,7 @@ class TestBenchmarkParameterResolution:
     ) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+                "results/sessions/oltp/pbt/core/traces/session.json"
             ),
             benchmark="sysbench",
             sysbench_duration=99,
@@ -821,7 +821,7 @@ class TestBenchmarkParameterResolution:
     def test_cli_sysbench_workload_overrides_session(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+                "results/sessions/oltp/pbt/core/traces/session.json"
             ),
             benchmark="sysbench",
             sysbench_workload="oltp_read_only",
@@ -838,7 +838,7 @@ class TestBenchmarkParameterResolution:
     def test_session_sysbench_workload_used_when_cli_omits(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+                "results/sessions/oltp/pbt/core/traces/session.json"
             ),
             benchmark="sysbench",
         )
@@ -971,7 +971,7 @@ class TestOutputPathResolution:
     def test_default_output_dir_uses_workload_type(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+                "results/sessions/olap/pbt/extensive/traces/session.json"
             ),
             benchmark="sysbench",
             output_dir=None,
@@ -980,13 +980,13 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="olap")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "oltp_read_write" / "comparisons" / "extensive"
+            Path("results") / "comparisons" / "oltp_read_write" / "extensive"
         )
 
     def test_metadata_tier_preferred_over_path_tier(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+                "results/sessions/olap/pbt/extensive/traces/session.json"
             ),
             benchmark="sysbench",
             output_dir=None,
@@ -999,13 +999,13 @@ class TestOutputPathResolution:
         )
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "oltp_read_write" / "comparisons" / "core"
+            Path("results") / "comparisons" / "oltp_read_write" / "core"
         )
 
     def test_metadata_tier_field_supported(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+                "results/sessions/olap/pbt/extensive/traces/session.json"
             ),
             benchmark="sysbench",
             output_dir=None,
@@ -1018,7 +1018,7 @@ class TestOutputPathResolution:
         )
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "oltp_read_write" / "comparisons" / "minimal"
+            Path("results") / "comparisons" / "oltp_read_write" / "minimal"
         )
 
     def test_unknown_workload_falls_back_to_mixed(self) -> None:
@@ -1031,13 +1031,13 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="custom")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "mixed" / "oltp_read_write" / "comparisons" / "unknown"
+            Path("results") / "comparisons" / "oltp_read_write" / "unknown"
         )
 
     def test_default_output_dir_uses_explicit_sysbench_workload(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+                "results/sessions/oltp/pbt/core/traces/session.json"
             ),
             benchmark="sysbench",
             output_dir=None,
@@ -1047,13 +1047,13 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="oltp")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "oltp" / "oltp_write_only" / "comparisons" / "core"
+            Path("results") / "comparisons" / "oltp_write_only" / "core"
         )
 
     def test_tpch_output_dir_unchanged(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/olap/pbt_runs/extensive/tuning_sessions/session.json"
+                "results/sessions/olap/pbt/extensive/traces/session.json"
             ),
             benchmark="tpch",
             output_dir=None,
@@ -1062,7 +1062,7 @@ class TestOutputPathResolution:
         result = self._build_result(config, workload_type="olap")
 
         assert runner._resolve_output_dir(result) == (
-            Path("results") / "olap" / "comparisons" / "extensive"
+            Path("results") / "comparisons" / "olap" / "extensive"
         )
 
     def test_custom_output_dir_is_used_as_is(self, tmp_path: Path) -> None:
@@ -1100,7 +1100,7 @@ class TestTunedKnobResolution:
     def test_hardware_relative_knobs_are_resolved_from_fractions(self) -> None:
         config = ComparisonConfig(
             tuning_session_path=Path(
-                "results/oltp/pbt_runs/core/tuning_sessions/session.json"
+                "results/sessions/oltp/pbt/core/traces/session.json"
             ),
             benchmark="sysbench",
         )

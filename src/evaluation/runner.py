@@ -1149,11 +1149,6 @@ class ComparisonRunner:
         if self.config.output_dir:
             return self.config.output_dir
 
-        # Auto-detect workload from session or path
-        workload = session_data.workload_type.lower()
-        if workload not in ("oltp", "olap", "mixed"):
-            workload = "mixed"
-
         tier = self._resolve_tier_slug_from_session(
             session_data, self.config.tuning_session_path
         )
@@ -1163,14 +1158,22 @@ class ComparisonRunner:
             data_root / "results" if self.config.colocate_output else Path("results")
         )
 
-        if (self.config.benchmark or session_data.benchmark) == "sysbench":
-            sysbench_workload = str(
+        # Derive granular workload key (same convention as tuner CLI)
+        benchmark = self.config.benchmark or session_data.benchmark
+        if benchmark == "sysbench":
+            workload = str(
                 self.config.sysbench_workload
                 or session_data.sysbench_workload
                 or DEFAULT_SYSBENCH_WORKLOAD
             )
-            return base_dir / workload / sysbench_workload / "comparisons" / tier
-        return base_dir / workload / "comparisons" / tier
+        elif benchmark == "tpch":
+            workload = "olap"
+        else:
+            workload = session_data.workload_type.lower()
+            if workload not in ("oltp", "olap", "mixed"):
+                workload = "mixed"
+
+        return base_dir / "comparisons" / workload / tier
 
     def _resolve_log_output_path(
         self, output_dir: Path, timestamp: str | None = None
@@ -1200,16 +1203,16 @@ class ComparisonRunner:
             return metadata_tier
 
         parts = session_path.parts
-        try:
-            pbt_runs_idx = parts.index("pbt_runs")
-        except ValueError:
-            return "unknown"
-
-        if pbt_runs_idx + 1 >= len(parts):
-            return "unknown"
-
-        path_tier = _sanitize_tier_name(parts[pbt_runs_idx + 1])
-        return path_tier or "unknown"
+        for anchor in ("pbt", "bo", "lhs", "pbt_runs", "bo_runs", "lhs_runs"):
+            try:
+                idx = parts.index(anchor)
+                if idx + 1 < len(parts):
+                    path_tier = _sanitize_tier_name(parts[idx + 1])
+                    if path_tier:
+                        return path_tier
+            except ValueError:
+                continue
+        return "unknown"
 
     def _print_summary(self, result: ComparisonResult) -> None:
         """Print a formatted comparison summary table to stdout."""
