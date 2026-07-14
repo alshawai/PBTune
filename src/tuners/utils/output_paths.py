@@ -1,20 +1,28 @@
 """
 Output-path resolution shared across tuning strategies.
 
-Both PBT (``PBTTuner._build_output_dir``) and BO (``resolve_bo_output_root``)
-independently derive a results directory of the form::
+Every strategy emits results under a single workload-first layout::
 
-    {output_dir}/{workload_type}/[{sysbench_workload}/]{strategy}_runs/{tier_slug}/
+    {output_dir}/sessions/{workload}/{strategy}/{tier_slug}/
+                                                 ├── traces/
+                                                 ├── best_configs/
+                                                 └── logs/
 
-This module lifts that convention into a single strategy-parameterized helper
-so the LHS-design tuner produces a layout consistent with its siblings. The
-incumbent functions are left untouched (copy-not-refactor); this is the
-canonical implementation new strategies build on.
+The ``workload`` segment is a *single* granular key — e.g.
+``oltp_read_write`` for sysbench OLTP mixes, ``olap`` for TPC-H, or the
+raw ``workload_type`` for custom workloads. The two-level nesting that
+older layouts used for sysbench (``oltp/oltp_read_write/``) is gone; the
+caller resolves the key before calling :func:`resolve_tuner_output_root`.
+
+Strategy-specific sub-directories (``tuning_sessions/`` →
+``traces/``, ``best_configs/``, ``logs/``) are created by the leaf
+writers (:mod:`src.tuners.utils.session_writer`, the per-strategy CLI).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from src.tuners.utils.types import TuningStrategy
 
@@ -36,11 +44,11 @@ def resolve_tuner_output_root(
     output_dir: Path | str,
     *,
     strategy: TuningStrategy | str,
-    workload_type: str,
-    benchmark: str,
-    sysbench_workload: str,
+    workload: str,
     knob_tier: str,
     knob_source: str = "expert",
+    ablation_variable: Optional[str] = None,
+    ablation_value: Optional[str] = None,
 ) -> Path:
     """
     Resolve the base output directory for a tuning run.
@@ -50,19 +58,20 @@ def resolve_tuner_output_root(
     output_dir
         Base results directory (e.g. ``Path("results")``).
     strategy
-        Optimization strategy; selects the ``{strategy}_runs`` segment.
-    workload_type
-        Workload flavor ('oltp' | 'olap' | 'mixed' | ...).
-    benchmark
-        Benchmark driver name ('sysbench' | 'tpch' | custom).
-    sysbench_workload
-        Sysbench script name. Only consulted when ``benchmark == 'sysbench'``,
-        where it inserts an extra path segment to separate read-only /
-        read-write / write-only sysbench variants.
+        Optimization strategy; selects the strategy path segment.
+    workload
+        Granular workload key — ``"oltp_read_write"`` for sysbench OLTP
+        mixes, ``"olap"`` for TPC-H, or the raw ``workload_type`` for
+        custom workloads. The caller derives this from benchmark +
+        workload_type + sysbench_workload.
     knob_tier
         Knob tier slug.
     knob_source
         'expert' or 'data_driven' (the latter gets the ``@scalpel-v1`` suffix).
+    ablation_variable
+        Optional ablation study variable name (e.g. 'population_size').
+    ablation_value
+        Optional ablation study variable value (e.g. '4').
 
     Returns
     -------
@@ -70,10 +79,10 @@ def resolve_tuner_output_root(
         The strategy/tier-scoped output root (not yet created on disk).
     """
     strategy = TuningStrategy.from_value(strategy)
-    runs_segment = f"{strategy.value}_runs"
-    tier_slug = _tier_slug(knob_tier, knob_source)
-    base = Path(output_dir)
+    tier = _tier_slug(knob_tier, knob_source)
+    path = Path(output_dir) / "sessions" / workload / strategy.value / tier
 
-    if benchmark == "sysbench":
-        return base / workload_type / sysbench_workload / runs_segment / tier_slug
-    return base / workload_type / runs_segment / tier_slug
+    if ablation_variable and ablation_value is not None:
+        path = path / "ablations" / str(ablation_variable) / str(ablation_value)
+
+    return path

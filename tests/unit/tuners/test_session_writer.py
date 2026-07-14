@@ -122,7 +122,7 @@ class TestWriteHelpers:
             results, output_dir=tmp_path, filename="lhs_results_t.json"
         )
         assert out.exists()
-        assert out.parent.name == "tuning_sessions"
+        assert out.parent.name == "traces"
         loaded = json.loads(out.read_text())
         assert loaded["tuning_session"]["x"] == 3
 

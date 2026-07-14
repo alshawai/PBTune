@@ -129,7 +129,7 @@ class TestBaseTunerLifecycle:
         tuner.run()
 
         session_file = (
-            tmp_path / "tuning_sessions" / "lhs_results_20260619_1200.json"
+            tmp_path / "traces" / "lhs_results_20260619_1200.json"
         )
         best_file = tmp_path / "best_configs" / "best_config_20260619_1200.json"
         assert session_file.exists()

@@ -282,12 +282,12 @@ def _infer_tuning_strategy(ts_meta: dict[str, Any], path: Path) -> str:
     if explicit:
         return str(explicit)
     path_str = str(path)
-    if "/pbt_runs/" in path_str:
-        return "pbt"
-    if "/bo_runs/" in path_str:
-        return "bo"
-    if "/lhs_runs/" in path_str:
-        return "lhs"
+    for segment, label in [
+        ("/pbt/", "pbt"), ("/bo/", "bo"), ("/lhs/", "lhs"),
+        ("/pbt_runs/", "pbt"), ("/bo_runs/", "bo"), ("/lhs_runs/", "lhs"),
+    ]:
+        if segment in path_str:
+            return label
     return "unknown"
 
 

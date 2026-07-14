@@ -154,7 +154,7 @@ def generate(
     if comparison_paths is None and data_dir is not None:
         comparison_paths = {}
         for workload_dir, label in [("oltp_read_write", "rw"), ("oltp_read_only", "ro"), ("oltp_write_only", "wo")]:
-            d = Path(data_dir) / "oltp" / workload_dir / "comparisons" / "extensive"
+            d = Path(data_dir) / "comparisons" / workload_dir / "extensive"
             if d.exists():
                 comps = sorted(d.glob("multi_arm_comparison_*.json"))
                 if comps:

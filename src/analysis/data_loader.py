@@ -266,20 +266,21 @@ def _infer_tuning_strategy(
     """Resolve the tuning_strategy label for a session file.
 
     Prefers the explicit ``tuning_session.tuning_strategy`` field. Falls back
-    to a path heuristic for legacy sessions written before the field existed:
-    ``/pbt_runs/`` -> ``"pbt"``, ``/bo_runs/`` -> ``"bo"``, ``/lhs_runs/`` ->
-    ``"lhs"``. Returns ``"unknown"`` when neither path nor field resolves.
+    to a path heuristic for legacy and current session paths:
+    ``/pbt/`` or ``/pbt_runs/`` -> ``"pbt"``, ``/bo/`` or ``/bo_runs/`` ->
+    ``"bo"``, ``/lhs/`` or ``/lhs_runs/`` -> ``"lhs"``.
+    Returns ``"unknown"`` when neither path nor field resolves.
     """
     explicit = session_meta.get("tuning_strategy")
     if explicit:
         return str(explicit)
     path_str = str(file_path)
-    if "/pbt_runs/" in path_str:
-        return "pbt"
-    if "/bo_runs/" in path_str:
-        return "bo"
-    if "/lhs_runs/" in path_str:
-        return "lhs"
+    for segment, label in [
+        ("/pbt/", "pbt"), ("/bo/", "bo"), ("/lhs/", "lhs"),
+        ("/pbt_runs/", "pbt"), ("/bo_runs/", "bo"), ("/lhs_runs/", "lhs"),
+    ]:
+        if segment in path_str:
+            return label
     return "unknown"
 
 

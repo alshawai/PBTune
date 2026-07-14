@@ -19,8 +19,8 @@ from src.visualization.utils import auto_grid, despine
 LOGGER = get_logger("KnobImportancePlot")
 
 DEFAULT_IMPORTANCE_DIRS = (
-    Path("oltp") / "pbt_runs" / "extensive" / "tuning_sessions",
-    Path("olap") / "pbt_runs" / "extensive" / "tuning_sessions",
+    Path("sessions") / "oltp_read_write" / "pbt" / "extensive" / "traces",
+    Path("sessions") / "olap" / "pbt" / "extensive" / "traces",
 )
 
 

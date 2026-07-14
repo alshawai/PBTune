@@ -20,7 +20,7 @@ and are shared with every other strategy entry point; this module owns only
 the LHS-specific "Design Configuration" group and the run wiring.
 
 The session JSON is written under
-``{output_dir}/{workload}/[{sysbench_workload}/]lhs_runs/{tier}/tuning_sessions/``
+``{output_dir}/sessions/{workload}/lhs/{tier}/traces/``
 in a schema compatible with the analysis and evaluation loaders.
 """
 
@@ -31,6 +31,7 @@ from typing import Optional
 
 from src.tuners.cli import (
     add_common_groups,
+    attach_session_html_log,
     build_benchmark_config,
     build_lifecycle_config,
     resolve_data_dir,
@@ -39,7 +40,6 @@ from src.tuners.cli import (
 from src.tuners.lhs_design.tuner import LHSDesignTuner
 from src.tuners.utils.types import TuningStrategy
 from src.utils.logger import (
-    add_html_file_logging,
     get_color_context,
     get_logger,
     set_colors_enabled,
@@ -47,7 +47,7 @@ from src.utils.logger import (
 )
 from src.utils.session_clock import format_session_id
 
-LOGGER = get_logger("LHSDesignCLI")
+LOGGER = get_logger("Entry")
 COLORS = get_color_context()
 
 # Per-profile default design size. The shared profile (--config) supplies
@@ -131,13 +131,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     tuner = build_tuner(args)
 
     # HTML log parity with PBT/BO: attach a timestamped HTML file handler under
-    # the resolved output root. add_html_file_logging is additive to the console
-    # handler set up above and does not create parent dirs, so ensure the root
-    # exists first (cheap + idempotent). Placed before the startup banner so the
-    # banner is captured in the HTML file.
-    tuner.output_root.mkdir(parents=True, exist_ok=True)
-    log_path = tuner.output_root / f"lhs_design_{tuner.timestamp}.html"
-    add_html_file_logging(output_file=log_path, show_module=True)
+    # the run's logs/ subdirectory (shared helper ensures the dir exists and is
+    # placed alongside tuning_sessions/ and best_configs/). Placed before the
+    # startup banner so the banner is captured in the HTML file.
+    attach_session_html_log(
+        tuner.output_root, stem="lhs_design", timestamp=tuner.timestamp
+    )
 
     LOGGER.info(
         "%sStarting LHS-design sweep%s: tier=%s%s%s, design_size=%s%d%s, "

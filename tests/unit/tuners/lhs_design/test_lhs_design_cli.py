@@ -127,7 +127,8 @@ class TestBuildTuner:
         )
         tuner = build_tuner(args)
         parts = str(tuner.output_root)
-        assert "lhs_runs" in parts
+        assert "lhs" in parts
+        assert "sessions" in parts
         assert "oltp_read_write" in parts
         assert parts.endswith("core")
 
@@ -236,11 +237,14 @@ class TestSnapshotFlags:
 
 
 class TestHtmlLogParity:
-    """main() attaches an HTML file handler under the resolved output root."""
+    """main() attaches an HTML file handler under the run's logs/ subdir."""
 
     def test_main_attaches_html_handler(self):
-        with mock.patch.object(
-            lhs_design_cli, "add_html_file_logging"
+        # The shared helper resolves the path and calls add_html_file_logging;
+        # patch it at the point of use (src.tuners.cli) rather than in this
+        # module, which no longer imports it directly.
+        with mock.patch(
+            "src.tuners.cli.add_html_file_logging"
         ) as add_html, mock.patch.object(
             LHSDesignTuner, "run", return_value=None
         ):
@@ -249,3 +253,5 @@ class TestHtmlLogParity:
         log_path = add_html.call_args.kwargs["output_file"]
         assert log_path.name.startswith("lhs_design_")
         assert log_path.suffix == ".html"
+        # Nested under the run's logs/ directory alongside tuning_sessions/.
+        assert log_path.parent.name == "logs"
