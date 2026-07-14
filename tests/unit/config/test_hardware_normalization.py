@@ -18,6 +18,7 @@ Fixtures and mock objects are used to simulate various hardware environments and
 Unit tests for hardware normalization logic in KnobSpace.
 """
 
+import numpy as np
 import pytest
 
 from src.knobs.knob_space import (
@@ -418,7 +419,7 @@ def test_perturbation_bound_exceed_repairs(mock_knob_space):
         "max_connections": mock_knob_space.knobs["max_connections"].max_value,
     }
 
-    perturbed = mock_knob_space.perturb_config(config, (2.0, 2.0))
+    perturbed = mock_knob_space.perturb_config(config, (2.0, 2.0), rng=np.random.default_rng(0))
 
     assert (
         perturbed["shared_buffers"] <= mock_knob_space.knobs["shared_buffers"].max_value

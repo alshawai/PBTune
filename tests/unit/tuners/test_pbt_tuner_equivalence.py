@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock, patch
 
-import numpy as np
+
 import pytest
 
 from src.config.database import DatabaseConfig
@@ -39,15 +39,6 @@ WORKLOAD_FILE = "workloads/oltp.json"
 POP_SIZE = 4
 NUM_GENERATIONS = 3
 SEED = 42
-
-# PBT's exploit/explore perturbation draws from an UNSEEDED
-# ``np.random.default_rng()`` (src/tuners/pbt/evolution.py) — so a real PBT run
-# is not reproducible past its first perturbation, regardless of --random-seed.
-# Both the legacy and new tuners share that exact module, so to prove the
-# *scaffolding* is equivalent we pin that one nondeterministic seam to a fixed
-# generator for the duration of the comparison. (The unseeded RNG is tracked as
-# a separate reproducibility finding, out of scope for the 2d refactor.)
-_EVOLUTION_RNG_SEED = 20260712
 
 
 # ---------------------------------------------------------------------------
@@ -198,17 +189,6 @@ def _read_pop_size(session: Dict[str, Any]) -> Any:
     return session.get("strategy_params", {}).get("population_size")
 
 
-def _seeded_rng_factory():
-    """A ``default_rng`` replacement returning a fixed-seed generator each call.
-
-    Applied to ``src.tuners.pbt.evolution.np.random.default_rng`` so the
-    exploit/explore perturbation stream is identical across both tuner runs.
-    Binds the *real* ``default_rng`` up front so the replacement doesn't recurse
-    into the patched name.
-    """
-    real_default_rng = np.random.default_rng
-    return lambda *args, **kwargs: real_default_rng(_EVOLUTION_RNG_SEED)
-
 
 # ---------------------------------------------------------------------------
 # Drivers
@@ -277,8 +257,6 @@ def _run_legacy_tuner(tmp_path: Path) -> Dict[str, Any]:
         return_value=WorkerResources(ram_bytes=4 << 30, cpu_cores=4, disk_type="SSD"),
     ), patch(
         "src.tuner.main.get_system_info", return_value={"system": "test"}
-    ), patch(
-        "src.tuners.pbt.evolution.np.random.default_rng", _seeded_rng_factory()
     ):
         tuner = LegacyPBTTuner(
             knob_tier="minimal",
@@ -331,13 +309,6 @@ def _common_patches(pkg: str, fake_env: MagicMock, tuner: Any):
         patch(
             "src.tuners.engine.orchestrator.WorkloadOrchestrator.evaluate_worker",
             _DeterministicEval(),
-        )
-    )
-    # Pin the unseeded evolution RNG so both runs share one perturbation stream.
-    stack.enter_context(
-        patch(
-            "src.tuners.pbt.evolution.np.random.default_rng",
-            _seeded_rng_factory(),
         )
     )
     return stack
