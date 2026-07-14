@@ -45,10 +45,12 @@ from src.tuners.engine.orchestrator import (
 from src.knobs import get_knob_space
 from src.tuners.utils.executors import build_workload_bundle
 from src.tuners.utils.knob_filter import (
+    apply_tuning_mode_filter,
     compute_unsupported_knobs,
     log_pruning_summary,
     query_runtime_supported_knobs,
 )
+from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.resources import resolve_worker_resources
 from src.tuners.utils.session_writer import (
     build_session_header,
@@ -82,7 +84,7 @@ from src.utils.metrics import (
 )
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
-from src.utils.types import TuningMode, build_session_environment
+from src.utils.types import build_session_environment
 
 LOGGER = get_logger("Tuner")
 COLORS = get_color_context()
@@ -140,6 +142,11 @@ class BaseTuner(ABC):
         self.bootstrap_timing = TimingRecorder()
 
         self._best_score_so_far: float = 0.0
+
+        # Human-facing reason the loop halted, set by ``should_stop`` for
+        # strategies that report one (see ``emits_stop_status``). Rendered as
+        # the generation-summary ``Status`` line; ``None`` until a stop fires.
+        self.stop_reason: Optional[str] = None
 
         # Count of generations (a.k.a. rounds / batches / iterations) whose
         # step() actually ran. Tracked centrally by run() — it is the one
@@ -203,6 +210,20 @@ class BaseTuner(ABC):
         strategy defines convergence in its own terms (PBT: early-stop on no
         improvement; LHS: the full design was swept). The base default is
         ``False`` so a strategy that never converges needs no override.
+        """
+        return False
+
+    @property
+    def emits_stop_status(self) -> bool:
+        """Whether this strategy has a meaningful stopping-criterion concept.
+
+        Optimization tuners (PBT, BO) halt on a *criterion* — max rounds, an
+        early-stop patience budget, or population convergence — and the
+        per-round summary reports that as a ``Status`` line (``running`` while
+        the loop continues, ``stopped - <reason>`` on the terminal round). A
+        pure design sweep (LHS) has no such notion: it evaluates a fixed sample
+        to completion, so it returns ``False`` and the ``Status`` row is
+        omitted entirely. Override to ``True`` in optimization strategies.
         """
         return False
 
@@ -298,12 +319,18 @@ class BaseTuner(ABC):
         return [("Max Rounds:", str(self.max_rounds))]
 
     def session_filename(self) -> str:
-        """Filename for the session JSON (``{strategy}_results_{ts}.json``)."""
-        return f"{self.strategy.value}_results_{self.timestamp}.json"
+        """Filename for the session trace JSON (``trace_{ts}.json``).
+
+        Strategy-agnostic by design: the strategy is already encoded in the
+        ``sessions/<workload>/<strategy>/`` path, so the filename does not
+        restate it. Every reader can glob ``traces/trace_*.json`` uniformly
+        across PBT, BO, and LHS.
+        """
+        return f"trace_{self.timestamp}.json"
 
     def best_config_filename(self) -> str:
-        """Filename for the best-config JSON."""
-        return f"best_config_{self.timestamp}.json"
+        """Filename for the best-config JSON (``best_{ts}.json``)."""
+        return f"best_{self.timestamp}.json"
 
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -365,11 +392,13 @@ class BaseTuner(ABC):
         self.full_knob_space.resolve_hardware_ranges(self.worker_resources)
         self.knob_space.worker_resources = self.worker_resources
 
-        # ONLINE knob-view derivation. We keep ``full_knob_space`` as the 
+        # ONLINE knob-view derivation. We keep ``full_knob_space`` as the
         # complete space (fraction encoding, SCALPEL) and narrow ``knob_space``
-        # to the restart-free view the loop refines.
-        if self.lifecycle.tuning_mode == TuningMode.ONLINE:
-            self.knob_space = self.full_knob_space.create_online_view()
+        # to the restart-free view the loop refines. The mode→filter decision
+        # lives in knob_filter alongside the runtime pg_settings prune.
+        self.knob_space = apply_tuning_mode_filter(
+            self.full_knob_space, self.lifecycle.tuning_mode
+        )
 
         db_config = get_db_config()
 
@@ -717,19 +746,6 @@ class BaseTuner(ABC):
             strategy_label,
             COLORS.reset,
         )
-        LOGGER.info(
-            "Knob Tier:       %s%s (%s source)%s",
-            COLORS.cyan,
-            self.lifecycle.knob_tier,
-            self.lifecycle.knob_source,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Parallel Workers:%s%d%s",
-            COLORS.cyan,
-            self.lifecycle.num_parallel_workers,
-            COLORS.reset,
-        )
 
         self.start_time = time.time()
         try:
@@ -767,16 +783,13 @@ class BaseTuner(ABC):
                 prev_best = self._safe_best_score()
                 outcome = self.step(generation)
                 self._rounds_completed += 1
-                self._log_round_end(outcome, prev_best)
 
-                if self.should_stop(outcome):
-                    LOGGER.info(
-                        "%sStopping criterion met after %s %d%s",
-                        COLORS.teal,
-                        self.round_label.lower(),
-                        generation,
-                        COLORS.reset,
-                    )
+                # Decide the stop *before* logging the round summary so the
+                # summary's Status line can report which criterion fired on the
+                # terminal round (should_stop sets self.stop_reason).
+                stop = self.should_stop(outcome)
+                self._log_round_end(outcome, prev_best, stopped=stop)
+                if stop:
                     break
         except KeyboardInterrupt:
             LOGGER.warning(
@@ -891,6 +904,8 @@ class BaseTuner(ABC):
         self,
         outcome: GenerationOutcome,
         prev_best: float,
+        *,
+        stopped: bool = False,
     ) -> None:
         """
         Announce a new best and log the generation summary.
@@ -900,6 +915,13 @@ class BaseTuner(ABC):
         statistics (PBT supplies them via ``outcome.payload``; a design sweep
         omits them). A new all-time best triggers the "NEW BEST SCORE" event
         PBT emitted and LHS lacked.
+
+        ``stopped`` is the loop's decision for *this* round. Optimization
+        tuners (``emits_stop_status``) render a ``Status`` line — ``running``
+        while the loop continues, or ``stopped - <reason>`` on the terminal
+        round (the reason captured in ``self.stop_reason`` by ``should_stop``).
+        A pure design sweep omits Status and instead surfaces the design range
+        it covered this round via ``payload['evaluated']``.
         """
         new_best = self._safe_best_score()
         if new_best > prev_best:
@@ -915,18 +937,48 @@ class BaseTuner(ABC):
         mean_score = payload.get("mean_score")
         std_score = payload.get("std_score")
         num_exploited = payload.get("num_exploited")
+        restart_count = payload.get("restart_count")
+
+        status: Optional[str] = None
+        if self.emits_stop_status:
+            if stopped:
+                reason = self.stop_reason or "criterion met"
+                status = f"stopped - {reason}"
+            else:
+                status = "running"
+
+        design_points = self._format_design_points(payload.get("evaluated"))
+
         log_generation_summary(
             LOGGER,
             elapsed,
-            int(payload.get("restart_count", 0) or 0),
+            int(restart_count) if restart_count is not None else None,
             generation=outcome.index,
             best_score=float(outcome.best_score_this_generation),
             mean_score=float(mean_score) if mean_score is not None else None,
             std_score=float(std_score) if std_score is not None else None,
             exploited=int(num_exploited) if num_exploited is not None else None,
-            converged=bool(outcome.converged),
+            design_points=design_points,
+            status=status,
             round_label=self.round_label,
         )
+
+    @staticmethod
+    def _format_design_points(evaluated: Optional[Sequence[int]]) -> Optional[str]:
+        """Render a list of evaluated design indices as a compact range string.
+
+        ``[6, 7]`` -> ``"6-7"``, ``[4]`` -> ``"4"``, ``[]``/``None`` -> ``None``
+        (so the summary row is omitted). A non-contiguous set falls back to a
+        comma-joined list, which a batched sweep never produces in practice.
+        """
+        if not evaluated:
+            return None
+        ordered = sorted(int(i) for i in evaluated)
+        if ordered == list(range(ordered[0], ordered[-1] + 1)):
+            if ordered[0] == ordered[-1]:
+                return str(ordered[0])
+            return f"{ordered[0]}-{ordered[-1]}"
+        return ", ".join(str(i) for i in ordered)
 
     def log_worker_metrics_table(
         self,
@@ -939,8 +991,18 @@ class BaseTuner(ABC):
         A reusable helper for strategies whose optimizer does not already log
         this table (LHS, BO). PBT emits a richer variant from inside its
         ``Population.record_generation`` and therefore does not call this.
+
+        Each worker's metrics are projected through the shared
+        :func:`build_worker_metric_row` so the units / percentages / Score / row
+        order match PBT's table exactly (LHS previously fed raw ``to_dict``
+        floats, which rendered without units, without Score, and leaked a
+        ``failure_type`` row).
         """
-        payloads = [r.metrics for r in worker_results if r.metrics is not None]
+        payloads = [
+            build_worker_metric_row(r.metrics, r.score)
+            for r in worker_results
+            if r.metrics is not None
+        ]
         if not payloads:
             return
         labels = [

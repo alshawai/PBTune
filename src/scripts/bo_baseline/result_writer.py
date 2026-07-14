@@ -397,8 +397,9 @@ def write_bo_results(
     bo_dir = bo_root / "traces"
     bo_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write results to file
-    output_file = bo_dir / f"bo_results_{timestamp}.json"
+    # Write results to file (strategy-agnostic stem; matches the unified
+    # tuners' traces/trace_*.json — the strategy is encoded in the path).
+    output_file = bo_dir / f"trace_{timestamp}.json"
     with open(output_file, "w") as f:
         json.dump(result, f, indent=2)
 

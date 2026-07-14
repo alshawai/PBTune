@@ -11,7 +11,8 @@ from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
-    load_sessions, load_session, load_bo_trace, load_comparison
+    load_sessions, load_session, load_bo_trace, load_comparison,
+    discover_session_traces, discover_bo_traces,
 )
 from src.visualization.plots.convergence_curve import (
     _build_shared_metric_config,
@@ -154,9 +155,7 @@ def generate(
     for path in pbt_paths:
         path_obj = Path(path)
         if path_obj.is_dir() and shared_metric_config is not None:
-            for session_path in sorted(
-                path_obj.glob("pbt_results_*.json"), key=lambda p: p.name
-            ):
+            for session_path in discover_session_traces(path_obj):
                 sessions.append(
                     load_session(session_path, metric_config=shared_metric_config, metric_key=metric_key)
                 )
@@ -164,12 +163,12 @@ def generate(
             sessions.extend(load_sessions(path, metric_key=metric_key))
         else:
             sessions.append(load_session(path, metric_config=shared_metric_config, metric_key=metric_key))
-            
+
     bo_traces = []
     for path in bo_paths:
         path_obj = Path(path)
         if path_obj.is_dir():
-            for trace_path in sorted(path_obj.glob("bo_results_*.json"), key=lambda p: p.name):
+            for trace_path in discover_bo_traces(path_obj):
                 bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config, metric_key=metric_key))
         else:
             bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))

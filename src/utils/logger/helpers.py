@@ -1247,23 +1247,36 @@ def log_worker_metrics_table(
 def log_generation_summary(
     logger: logging.Logger,
     elapsed: float,
-    restart_count: int,
+    restart_count: Optional[int] = None,
+    *,
     generation: int,
     best_score: float,
     mean_score: Optional[float] = None,
     std_score: Optional[float] = None,
     exploited: Optional[int] = None,
-    converged: bool = False,
+    design_points: Optional[str] = None,
+    status: Optional[str] = None,
+    converged: Optional[bool] = None,
     round_label: str = "Generation",
 ) -> None:
     """
     Log a formatted generation/round summary (strategy-neutral).
 
-    The population-only rows — mean score, std dev, and exploited-worker count
-    — render only when the caller supplies them (``None`` omits the row). A
-    population strategy (PBT) passes all three; a stateless design sweep (LHS)
-    or single-config iterator (BO) passes ``None`` and those rows are skipped,
-    keeping the summary meaningful for every strategy.
+    Every row past ``Best Score`` is optional and renders only when the caller
+    supplies it, so the summary stays meaningful for every strategy:
+
+    - ``mean_score`` / ``std_score`` / ``exploited`` — population statistics; a
+      population strategy (PBT) passes all three, a stateless sweep (LHS) or a
+      single-config iterator (BO) passes ``None`` and those rows are skipped.
+    - ``restart_count`` — cumulative instance-restart count; ``None`` omits the
+      row for strategies with no restart concept (a pure design sweep).
+    - ``design_points`` — the design range this round covered (LHS), e.g.
+      ``"6-7"``; omitted when ``None``.
+    - ``status`` — the run's stopping status for optimization tuners (PBT/BO),
+      e.g. ``"running"`` or ``"stopped - max generations reached"``. A pure
+      random tuner (LHS) has no stopping criterion and passes ``None`` so the
+      row is skipped. ``converged`` is the legacy boolean fallback (renders the
+      old ``Converged: YES/NO`` line) kept for the incumbent PBT ``main.py``.
 
     Parameters
     ----------
@@ -1272,15 +1285,11 @@ def log_generation_summary(
     elapsed
         Seconds elapsed in the tuning loop so far.
     restart_count
-        Cumulative instance-restart count.
+        Cumulative instance-restart count, or ``None`` to omit the row.
     generation
         Zero-based round index.
     best_score
         Best score observed this round.
-    mean_score, std_score, exploited
-        Population statistics; each row is omitted when ``None``.
-    converged
-        Whether the strategy considers itself converged after this round.
     round_label
         Strategy-appropriate noun for one loop pass (PBT "Generation", LHS
         "Batch", BO "Iteration"). Defaults to "Generation" for backward
@@ -1304,14 +1313,25 @@ def log_generation_summary(
         logger.info(
             "  Exploited:   %s%s%s workers", COLORS.cyan, exploited, COLORS.reset
         )
-    logger.info("  Restarts:    %s%s%s total", COLORS.cyan, restart_count, COLORS.reset)
-    logger.info("  Elapsed:     %s%.1f%s", COLORS.cyan, elapsed, COLORS.reset)
-    logger.info(
-        "  Converged:   %s%s%s",
-        COLORS.orange,
-        "YES" if converged else "NO",
-        COLORS.reset,
-    )
+    if restart_count is not None:
+        logger.info(
+            "  Restarts:    %s%s%s total", COLORS.cyan, restart_count, COLORS.reset
+        )
+    logger.info("  Elapsed:     %s%.1fs%s", COLORS.cyan, elapsed, COLORS.reset)
+    if design_points is not None:
+        logger.info(
+            "  Design Pts:  %s%s%s", COLORS.cyan, design_points, COLORS.reset
+        )
+    if status is not None:
+        status_color = COLORS.orange if status.startswith("stopped") else COLORS.teal
+        logger.info("  Status:      %s%s%s", status_color, status, COLORS.reset)
+    elif converged is not None:
+        logger.info(
+            "  Converged:   %s%s%s",
+            COLORS.orange,
+            "YES" if converged else "NO",
+            COLORS.reset,
+        )
     logger.info("%s================================%s", COLORS.bold, COLORS.reset)
 
 

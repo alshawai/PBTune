@@ -339,7 +339,8 @@ def test_train_generation_logs_historical_best_worker_metrics_table() -> None:
     assert "Generation 7 Worker Metrics" in kwargs["title"]
     assert kwargs["best_worker_label"] == "Best Worker"
     assert kwargs["best_worker_metric"] is not None
-    assert kwargs["best_worker_metric"]["score"] == 99.1234
+    # Score renders through the shared formatter as a 0–100 percentage.
+    assert kwargs["best_worker_metric"]["score"] == "99.12%"
     assert kwargs["best_worker_metric"]["latency_p95"] == "5.00ms"
 
 

@@ -784,7 +784,7 @@ def _discover_workloads(
         # data_driven_tiers.json with empty SCALPEL output is by design.
         if not find_result_files(path):
             LOGGER.warning(
-                "Skipping %s: no pbt_results_*.json / lhs_results_*.json files found.",
+                "Skipping %s: no trace_*.json session files found.",
                 path,
             )
             continue

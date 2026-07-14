@@ -11,7 +11,9 @@ from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.registry import register_figure
-from src.visualization.loaders import load_sessions, load_session, load_bo_trace
+from src.visualization.loaders import (
+    load_sessions, load_session, load_bo_trace, discover_bo_traces,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -155,9 +157,7 @@ def generate(
         for path in bo_paths:
             path_obj = Path(path)
             if path_obj.is_dir():
-                for trace_path in sorted(
-                    path_obj.glob("bo_results_*.json"), key=lambda p: p.name
-                ):
+                for trace_path in discover_bo_traces(path_obj):
                     bo_traces.append(load_bo_trace(trace_path))
             else:
                 bo_traces.append(load_bo_trace(path))

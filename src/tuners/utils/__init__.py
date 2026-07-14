@@ -17,10 +17,12 @@ from src.tuners.utils.exceptions import (
 )
 from src.tuners.utils.executors import WorkloadBundle, build_workload_bundle
 from src.tuners.utils.knob_filter import (
+    apply_tuning_mode_filter,
     compute_unsupported_knobs,
     log_pruning_summary,
     query_runtime_supported_knobs,
 )
+from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.output_paths import resolve_tuner_output_root
 from src.tuners.utils.resources import resolve_worker_resources
 from src.tuners.utils.session_writer import (
@@ -47,9 +49,11 @@ __all__ = [
     "TunerSetupError",
     "KnobSpaceEmptyError",
     "GenerationEvaluationError",
+    "apply_tuning_mode_filter",
     "compute_unsupported_knobs",
     "log_pruning_summary",
     "query_runtime_supported_knobs",
+    "build_worker_metric_row",
     "resolve_tuner_output_root",
     "resolve_worker_resources",
     "TIMING_SCHEMA_VERSION",

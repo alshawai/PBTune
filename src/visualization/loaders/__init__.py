@@ -23,6 +23,12 @@ from src.visualization.loaders.tier_diagnostics import (
     TierDiagnostics,
 )
 from src.visualization.loaders.baseline import load_bo_trace, BOTrace
+from src.visualization.loaders.discovery import (
+    discover_session_traces,
+    discover_bo_traces,
+    SESSION_TRACE_GLOBS,
+    BO_TRACE_GLOBS,
+)
 
 __all__ = [
     "load_session",
@@ -42,4 +48,8 @@ __all__ = [
     "TierDiagnostics",
     "load_bo_trace",
     "BOTrace",
+    "discover_session_traces",
+    "discover_bo_traces",
+    "SESSION_TRACE_GLOBS",
+    "BO_TRACE_GLOBS",
 ]

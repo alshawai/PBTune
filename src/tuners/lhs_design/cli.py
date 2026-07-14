@@ -132,11 +132,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # HTML log parity with PBT/BO: attach a timestamped HTML file handler under
     # the run's logs/ subdirectory (shared helper ensures the dir exists and is
-    # placed alongside tuning_sessions/ and best_configs/). Placed before the
-    # startup banner so the banner is captured in the HTML file.
-    attach_session_html_log(
-        tuner.output_root, stem="lhs_design", timestamp=tuner.timestamp
-    )
+    # placed alongside traces/ and best_configs/). Placed before the startup
+    # banner so the banner is captured in the HTML file.
+    attach_session_html_log(tuner.output_root, timestamp=tuner.timestamp)
 
     LOGGER.info(
         "%sStarting LHS-design sweep%s: tier=%s%s%s, design_size=%s%d%s, "

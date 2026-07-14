@@ -379,10 +379,25 @@ class ExperimentRunner:
         except subprocess.CalledProcessError as e:
             LOGGER.error(f"Failed to commit/push results: {e}")
 
-    def _find_latest_session_json(self, output_dir: Path, prefix: str) -> Path | None:
+    def _find_latest_session_json(self, output_dir: Path, strategy: str) -> Path | None:
+        """Find the most-recently-written session trace for a ``strategy``.
+
+        Every strategy now writes a strategy-agnostic ``trace_*.json`` (the
+        strategy is encoded in the ``sessions/<workload>/<strategy>/<tier>/
+        traces/`` path, not the filename), so the ``/<strategy>/`` path segment
+        disambiguates PBT / BO / LHS. The legacy per-strategy stem
+        (``{strategy}_results_*.json``, written under the old ``<strategy>_runs/``
+        layout) is still matched so pre-rename runs resolve.
+        """
         if not output_dir.exists():
             return None
-        candidates = sorted(output_dir.rglob(f"{prefix}*.json"), key=lambda p: p.stat().st_mtime)
+        candidates: list[Path] = [
+            p
+            for p in output_dir.rglob("trace_*.json")
+            if f"/{strategy}/" in p.as_posix()
+        ]
+        candidates.extend(output_dir.rglob(f"{strategy}_results_*.json"))
+        candidates = sorted(set(candidates), key=lambda p: p.stat().st_mtime)
         return candidates[-1] if candidates else None
 
     def _get_run_key(self, exp_id: str, seed: int, phase: str) -> str:
@@ -550,7 +565,7 @@ class ExperimentRunner:
                 
                 if success:
                     # Find session JSON
-                    json_path = self._find_latest_session_json(RESULTS_DIR, "pbt_results_")
+                    json_path = self._find_latest_session_json(RESULTS_DIR, "pbt")
                     json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
                     self._mark_status(pbt_key, "done", duration_s=duration, session_json=json_str)
                     self._commit_and_push(exp, seed, "pbt")
@@ -581,7 +596,7 @@ class ExperimentRunner:
                         duration = time.time() - start_time
                         
                         if success:
-                            json_path = self._find_latest_session_json(RESULTS_DIR, "bo_results_")
+                            json_path = self._find_latest_session_json(RESULTS_DIR, "bo")
                             json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
                             self._mark_status(bo_key, "done", duration_s=duration, session_json=json_str)
                             self._commit_and_push(exp, seed, "bo")
@@ -643,7 +658,7 @@ class ExperimentRunner:
             duration = time.time() - start_time
 
             if success:
-                json_path = self._find_latest_session_json(RESULTS_DIR, "lhs_results_")
+                json_path = self._find_latest_session_json(RESULTS_DIR, "lhs")
                 json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
                 self._mark_status(key, "done", duration_s=duration, session_json=json_str)
                 self._commit_and_push(exp, seed, "lhs")
@@ -691,13 +706,17 @@ class ExperimentRunner:
 
         session_path = PROJECT_ROOT / session_json_str
         # Derive sibling best_config path. Filenames share the timestamp
-        # suffix; only the directory differs (tuning_sessions ↔ best_configs)
-        # and the prefix (pbt_results_ ↔ best_config_).
+        # suffix; only the directory differs (traces ↔ best_configs) and the
+        # stem prefix (trace_ ↔ best_). Legacy runs used pbt_results_ ↔
+        # best_config_, so fall back to that when the trace_ stem is absent.
         try:
+            name = session_path.name
+            if name.startswith("trace_"):
+                best_name = name.replace("trace_", "best_", 1)
+            else:
+                best_name = name.replace("pbt_results_", "best_config_", 1)
             best_config_path = (
-                session_path.parent.parent
-                / "best_configs"
-                / session_path.name.replace("pbt_results_", "best_config_", 1)
+                session_path.parent.parent / "best_configs" / best_name
             )
         except Exception as e:
             LOGGER.error("Failed to derive best_config path from %s: %s", session_path, e)

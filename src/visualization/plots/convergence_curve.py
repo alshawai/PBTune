@@ -13,7 +13,9 @@ from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.exceptions import DataLoadError
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
-    load_sessions, load_session, load_bo_trace, aggregate_seeds, load_comparison
+    load_sessions, load_session, load_bo_trace, aggregate_seeds, load_comparison,
+    discover_session_traces, discover_bo_traces,
+    SESSION_TRACE_GLOBS, BO_TRACE_GLOBS,
 )
 from src.visualization.loaders.session import _extract_raw_value
 from src.visualization.utils import (
@@ -26,12 +28,15 @@ FIG_ID = "convergence_curve"
 _DIVERGENCE_ANNOTATION_THRESHOLD = 2.0
 
 
-def _expand_json_paths(paths: list[str], pattern: str) -> list[Path]:
+def _expand_json_paths(paths: list[str], patterns: tuple[str, ...]) -> list[Path]:
     expanded: list[Path] = []
     for raw_path in paths:
         path = Path(raw_path)
         if path.is_dir():
-            expanded.extend(sorted(path.glob(pattern), key=lambda p: p.name))
+            matched: list[Path] = []
+            for pattern in patterns:
+                matched.extend(path.glob(pattern))
+            expanded.extend(sorted(set(matched), key=lambda p: p.name))
         elif path.exists():
             expanded.append(path)
     return expanded
@@ -150,8 +155,8 @@ def _build_shared_metric_config(
     bo_paths: list[str],
     comparison_path: str | None = None,
 ):
-    all_paths = _expand_json_paths(pbt_paths, "pbt_results_*.json")
-    all_paths.extend(_expand_json_paths(bo_paths, "bo_results_*.json"))
+    all_paths = _expand_json_paths(pbt_paths, SESSION_TRACE_GLOBS)
+    all_paths.extend(_expand_json_paths(bo_paths, BO_TRACE_GLOBS))
 
     metrics, metadata = _collect_worker_metrics(all_paths)
     comparison_arm_metrics, comparison_metadata = _collect_comparison_arm_metrics(
@@ -418,9 +423,7 @@ def generate(
     for path in pbt_paths:
         path_obj = Path(path)
         if path_obj.is_dir() and shared_metric_config is not None:
-            for session_path in sorted(
-                path_obj.glob("pbt_results_*.json"), key=lambda p: p.name
-            ):
+            for session_path in discover_session_traces(path_obj):
                 sessions.append(
                     load_session(session_path, metric_config=shared_metric_config, metric_key=metric_key)
                 )
@@ -438,7 +441,7 @@ def generate(
     for path in bo_paths:
         path_obj = Path(path)
         if path_obj.is_dir():
-            for trace_path in sorted(path_obj.glob("bo_results_*.json"), key=lambda p: p.name):
+            for trace_path in discover_bo_traces(path_obj):
                 bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config, metric_key=metric_key))
         else:
             bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))

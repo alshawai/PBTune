@@ -356,10 +356,10 @@ def test_session_and_best_config_filenames_share_timestamp(tuner_with_history):
     )
 
     json_files = list(
-        Path(tuner_with_history.output_root).glob("traces/pbt_results_*.json")
+        Path(tuner_with_history.output_root).glob("traces/trace_*.json")
     )
     best_files = list(
-        Path(tuner_with_history.output_root).glob("best_configs/best_config_*.json")
+        Path(tuner_with_history.output_root).glob("best_configs/best_*.json")
     )
     assert len(json_files) == 1
     assert len(best_files) == 1
@@ -368,6 +368,6 @@ def test_session_and_best_config_filenames_share_timestamp(tuner_with_history):
 
 
 def _written_session(output_root) -> dict:
-    json_files = list(Path(output_root).glob("traces/pbt_results_*.json"))
+    json_files = list(Path(output_root).glob("traces/trace_*.json"))
     assert len(json_files) == 1
     return json.loads(json_files[0].read_text(encoding="utf-8"))

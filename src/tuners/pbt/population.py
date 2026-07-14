@@ -39,6 +39,8 @@ from src.tuners.pbt.evolution import (
 from src.tuners.engine.barriers import GenerationBarrier
 
 from src.tuners.engine.orchestrator import WorkloadOrchestrator
+from src.tuners.utils.exceptions import TunerConfigError, TunerSetupError
+from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.knobs.knob_space import KnobSpace
 from src.utils.environments import DatabaseEnvironment
 from src.utils.logger.helpers import log_section_header, log_worker_metrics_table
@@ -208,6 +210,9 @@ class Population:
         self.best_overall_config: Dict[str, Any] = {}
         self.best_overall_score_breakdown: Optional[ScoreBreakdown] = None
         self.generations_without_improvement: int = 0
+        # Reason the last should_stop() decided to halt (surfaced by the tuner
+        # as the round-summary Status line); None until a stop fires.
+        self.stop_reason: Optional[str] = None
 
         # Snapshot support (configured via setup_snapshots() method)
         self.enable_snapshots: bool = False
@@ -265,7 +270,7 @@ class Population:
         """
         if initial_configs is not None:
             if len(initial_configs) > self.config.population_size:
-                raise ValueError(
+                raise TunerConfigError(
                     f"initial_configs length ({len(initial_configs)}) cannot exceed "
                     f"population_size ({self.config.population_size})"
                 )
@@ -328,7 +333,7 @@ class Population:
         """
 
         if len(instances) != len(self.workers):
-            raise ValueError(
+            raise TunerSetupError(
                 f"Number of instances ({len(instances)}) must match "
                 f"number of workers ({len(self.workers)})"
             )
@@ -796,31 +801,7 @@ class Population:
         score: float | None,
     ) -> dict[str, Any]:
         """Build a reusable metric payload for the worker metrics table."""
-        return {
-            "score": score,
-            "latency_p95": f"{metrics.latency_p95:.2f}{metrics.latency_unit}",
-            "latency_p99": f"{metrics.latency_p99:.2f}{metrics.latency_unit}",
-            "latency_variance": (
-                f"{metrics.latency_variance:.2f}{metrics.latency_unit}"
-            ),
-            "tail_amplification": f"{metrics.tail_amplification:.2f}",
-            "throughput": f"{metrics.throughput:.1f} {metrics.throughput_unit}",
-            "throughput_variance": (
-                f"{metrics.throughput_variance:.2f} {metrics.throughput_unit}"
-            ),
-            "error_rate": f"{metrics.error_rate * 100.0:.2f}%",
-            "memory_pressure": f"{metrics.memory_pressure * 100.0:.2f}%",
-            "buffer_miss_rate": f"{metrics.buffer_miss_rate * 100.0:.2f}%",
-            "scan_efficiency": f"{metrics.scan_efficiency * 100.0:.1f}%",
-            "total_queries": metrics.total_queries,
-            "total_time": f"{metrics.total_time:.2f}s",
-            "io_read_mb": f"{metrics.io_read_mb:.2f} MB",
-            "io_write_mb": f"{metrics.io_write_mb:.2f} MB",
-            "rows_examined": metrics.rows_examined,
-            "rows_returned": metrics.rows_returned,
-            "cache_hit_ratio": f"{metrics.cache_hit_ratio * 100.0:.1f}%",
-            "memory_utilization": f"{metrics.memory_utilization * 100.0:.2f}%",
-        }
+        return build_worker_metric_row(metrics, score)
 
     def _build_worker_metric_payload(self, worker: PBTWorker) -> dict[str, Any] | None:
         """Build a reusable metric payload for the worker metrics table."""
@@ -1081,18 +1062,12 @@ class Population:
         2. Early stopping patience exceeded (no improvement)
         3. Population has converged
 
-        Returns
-        -------
-        bool
-            True if training should stop
+        On a stop, records a human-facing reason in ``self.stop_reason`` (the
+        caller surfaces it as the round summary's ``Status`` line) rather than
+        emitting its own log lines. Returns ``True`` if training should stop.
         """
         if self.current_generation >= self.config.max_generations:
-            LOGGER.info(
-                "%s➤ Stopping: %smax_generations reached.%s",
-                COLORS.bold,
-                COLORS.violet,
-                COLORS.reset,
-            )
+            self.stop_reason = "max generations reached"
             return True
 
         if (
@@ -1100,27 +1075,13 @@ class Population:
             and self.generations_without_improvement
             >= self.config.early_stopping_patience
         ):
-            LOGGER.info(
-                "%s➤ Stopping: %sno improvement for %s generations.%s",
-                COLORS.bold,
-                COLORS.violet,
-                self.config.early_stopping_patience,
-                COLORS.reset,
-            )
+            self.stop_reason = "early stop (no improvement)"
             return True
 
         if self.history and self.history[-1].converged:
-            LOGGER.info(
-                "%s➤ Stopping: %spopulation converged.%s",
-                COLORS.bold,
-                COLORS.violet,
-                COLORS.reset,
-            )
+            self.stop_reason = "population converged"
             return True
 
-        LOGGER.info(
-            "%sStopping criteria not met, continuing...%s", COLORS.italic, COLORS.reset
-        )
         return False
 
     def _determine_overall_best(self, best_current: PBTWorker) -> None:
