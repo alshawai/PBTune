@@ -15,7 +15,7 @@ Standard sysbench OLTP session::
 Warm-start from a previous run's best config::
 
     python -m src.tuners.pbt --tier core \\
-        --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
+        --warm-start results/sessions/olap/pbt/extensive/best_configs/best_YYYYMMDD_HHMM.json
 
 Both doors reach this same ``main(argv)``:
 

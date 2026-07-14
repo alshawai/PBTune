@@ -84,7 +84,7 @@ class ComparisonRunner:
 
         runner = ComparisonRunner(ComparisonConfig(
             tuning_session_path=Path(
-                "results/olap/pbt_runs/extensive/tuning_sessions/"
+                "results/sessions/olap/pbt/extensive/traces/"
                 "pbt_results_20260326_2115.json"
             ),
             repetitions=5,

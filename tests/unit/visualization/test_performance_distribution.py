@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from src.visualization.loaders import SessionTrace, BOTrace, ComparisonData
@@ -80,11 +81,13 @@ def test_violin_fallback_when_no_ptitprince(mock_load_comp, mock_load_bo, mock_l
 @patch("src.visualization.plots.performance_distribution.load_sessions")
 @patch("src.visualization.plots.performance_distribution.load_bo_trace")
 @patch("src.visualization.plots.performance_distribution.load_comparison")
-def test_significance_brackets_drawn(mock_load_comp, mock_load_bo, mock_load_sessions, pbt_sessions_3_seeds, bo_traces_3_seeds, comparison_with_multi_default, tmp_output_dir):
+@patch("src.visualization.plots.performance_distribution.discover_bo_traces")
+def test_significance_brackets_drawn(mock_discover_bo, mock_load_comp, mock_load_bo, mock_load_sessions, pbt_sessions_3_seeds, bo_traces_3_seeds, comparison_with_multi_default, tmp_output_dir):
     mock_load_sessions.return_value = pbt_sessions_3_seeds
     mock_load_bo.side_effect = bo_traces_3_seeds
+    mock_discover_bo.side_effect = [[Path("bo1")], [Path("bo2")], [Path("bo3")]]
     mock_load_comp.return_value = comparison_with_multi_default
-    
+
     with patch("src.visualization.plots.performance_distribution.Path.is_dir", return_value=True):
         fig = generate(
             pbt_paths=["pbt_dir"],
@@ -146,14 +149,16 @@ def test_scalar_default_renders_as_marker(mock_load_comp, mock_load_bo, mock_loa
     # Seaborn stripplot will also add scatter, but we check that the code doesn't crash 
     assert len(scatters) > 0
 
+@patch("src.visualization.plots.performance_distribution.discover_bo_traces")
 @patch("src.visualization.plots.performance_distribution.load_sessions")
 @patch("src.visualization.plots.performance_distribution.load_bo_trace")
 @patch("src.visualization.plots.performance_distribution.load_comparison")
-def test_skips_test_when_n_lt_2(mock_load_comp, mock_load_bo, mock_load_sessions, pbt_sessions_3_seeds, bo_traces_3_seeds, comparison_with_multi_default, tmp_output_dir, caplog):
+def test_skips_test_when_n_lt_2(mock_load_comp, mock_load_bo, mock_load_sessions, mock_discover_bo, pbt_sessions_3_seeds, bo_traces_3_seeds, comparison_with_multi_default, tmp_output_dir, caplog):
     mock_load_sessions.return_value = pbt_sessions_3_seeds
     mock_load_bo.side_effect = [bo_traces_3_seeds[0]]
+    mock_discover_bo.return_value = [Path("bo1")]
     mock_load_comp.return_value = comparison_with_multi_default
-    
+
     with patch("src.visualization.plots.performance_distribution.Path.is_dir", return_value=True):
         generate(
             pbt_paths=["pbt_dir"],
