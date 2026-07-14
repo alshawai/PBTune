@@ -179,7 +179,7 @@ class TestBaseTunerLogging:
         assert "Tuner initialization" in messages
         assert "Setting up tuning environment" in messages
         assert "Starting Optimization" in messages
-        assert "optimization loop" in messages
+        assert "Optimization Loop" in messages
         # Final summary is emitted via the shared log_final_summary(), whose
         # title carries the uppercased strategy label ("LHS COMPLETE").
         assert "LHS COMPLETE" in messages
@@ -195,7 +195,7 @@ class TestBaseTunerLogging:
         messages = "\n".join(rec.getMessage() for rec in caplog.records)
         # lifecycle.strategy is LHS -> headers carry the uppercased label.
         assert "LHS Tuner initialization" in messages
-        assert "LHS optimization loop" in messages
+        assert "LHS Optimization Loop" in messages
 
     def test_key_info_surfaces_carry_ansi_styling(
         self, lifecycle, tmp_path, caplog

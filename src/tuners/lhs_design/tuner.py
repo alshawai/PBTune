@@ -171,8 +171,8 @@ class LHSDesignTuner(BaseTuner):
         )
         design = [default_config] + [c for c in lhs_configs if c != default_config]
         self.design = design[: self.design_size]
-        LOGGER.info(
-            "Drew LHS design of %s%d%s configurations over %s%d%s knobs",
+        LOGGER.debug(
+            "➤ Drew LHS design of %s%d%s configurations over %s%d%s knobs",
             COLORS.cyan,
             len(self.design),
             COLORS.reset,

@@ -443,11 +443,11 @@ class BaseTuner(ABC):
         LOGGER.info("Collecting system hardware and software information...")
         self.system_info = get_system_info(data_path=self.data_root)
 
+        LOGGER.info("")
         log_section_header(
             LOGGER,
-            "%sSetting Up PostgreSQL Instances%s",
-            COLORS.bold,
-            COLORS.reset,
+            "Setting Up PostgreSQL Instances",
+            top_separator=False,
         )
         LOGGER.info(
             "Creating %d PostgreSQL instances (force_recreate=%s)",
@@ -481,9 +481,19 @@ class BaseTuner(ABC):
             use_docker=self.lifecycle.use_docker,
         )
 
+        LOGGER.info("")
+        LOGGER.info(
+            "Seeding initial configurations for %s tuning session...",
+            self.strategy.upper()
+        )
         self.initial_configs = self.propose_initial_configs()
 
         self.build_optimizer()
+
+        LOGGER.info(
+            "%s%s%s Tuner Initialization Complete!%s",
+            COLORS.bold, COLORS.green, self.strategy.upper(), COLORS.reset
+        )
 
     @property
     def seeded_config_count(self) -> int:
@@ -723,20 +733,21 @@ class BaseTuner(ABC):
 
         self.start_time = time.time()
         try:
+            LOGGER.info("")
             log_section_header(
                 LOGGER,
-                "%sSetting up tuning environment%s",
-                COLORS.bold,
-                COLORS.reset,
+                "Setting up tuning environment",
+                top_separator=False,
             )
             with self.bootstrap_timing.span("setup"):
                 self.setup()
 
             bootstrap_seconds = time.time() - self.start_time
             LOGGER.info(
-                "Bootstrap completed in %s%.1fs%s (excluded from tuning "
+                "Bootstrap completed in %s%s%.1fs%s (excluded from tuning "
                 "wall-clock)",
                 COLORS.cyan,
+                COLORS.bold,
                 bootstrap_seconds,
                 COLORS.reset,
             )
@@ -746,7 +757,7 @@ class BaseTuner(ABC):
             self.tuning_start_time = time.time()
             log_section_header(
                 LOGGER,
-                "%sStarting %s optimization loop%s",
+                "%sStarting %s Optimization Loop%s",
                 COLORS.bold,
                 strategy_label,
                 COLORS.reset,
@@ -856,6 +867,7 @@ class BaseTuner(ABC):
         across PBT, LHS, and BO — this surfaces the weight table PBT logged and
         LHS never did.
         """
+        LOGGER.info("")
         log_section_header(
             LOGGER,
             "%s%s %d%s",
@@ -863,6 +875,7 @@ class BaseTuner(ABC):
             self.round_label.upper(),
             generation,
             COLORS.reset,
+            top_separator=False,
         )
         if self.orchestrator is not None and hasattr(
             self.orchestrator, "scorer"

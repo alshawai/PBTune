@@ -1312,7 +1312,7 @@ def log_generation_summary(
         "YES" if converged else "NO",
         COLORS.reset,
     )
-    logger.info("%s==========================%s", COLORS.bold, COLORS.reset)
+    logger.info("%s================================%s", COLORS.bold, COLORS.reset)
 
 
 def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
