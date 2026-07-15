@@ -9,7 +9,7 @@ from src.database.connection import get_connection
 from src.utils.logger import get_logger, get_color_context
 from src.utils.logger.helpers import log_section_header
 from src.utils.metrics import PerformanceMetrics
-from src.benchmarks.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 
 LOGGER = get_logger("SysbenchExecutor")
 COLORS = get_color_context()
@@ -197,15 +197,15 @@ class SysbenchExecutor(BenchmarkExecutor):
             if conn is not None:
                 conn.close()
 
-    def execute(
-        self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
-    ) -> PerformanceMetrics:
+    def execute(self, ctx: ExecutionContext) -> PerformanceMetrics:
         """Execute Sysbench benchmark and return performance metrics."""
-        logger = get_logger("SysbenchExecutor", worker_id=worker_id)
+        db_config = ctx.db_config
+        worker_id = ctx.worker_id
+        duration = ctx.duration
+        warmup = ctx.warmup
+        random_seed = ctx.random_seed
 
-        duration = kwargs.get("duration", 60.0)
-        warmup = kwargs.get("warmup", 30.0)
-        random_seed = kwargs.get("random_seed", None)
+        logger = get_logger("SysbenchExecutor", worker_id=worker_id)
 
         logger.info(
             "%s Sysbench measurement: %ss with %d threads (warmup=%ss, seed=%s)%s",

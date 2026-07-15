@@ -50,7 +50,7 @@ from src.benchmarks.sysbench.executor import (
     validate_sysbench_workload,
 )
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.benchmarks.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.knobs import get_knob_space
 from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
@@ -1063,17 +1063,19 @@ class ComparisonRunner:
 
             bench_started = time.monotonic()
             if benchmark_name == "tpch":
-                metrics = executor.execute(
+                ctx = ExecutionContext(
                     db_config=active_config,
+                    duration=0.0,
                     warmup_passes=int(self.config.tpch_warmup_passes or 1),
                 )
             else:
-                metrics = executor.execute(
+                ctx = ExecutionContext(
                     db_config=active_config,
                     duration=int(self.config.sysbench_duration or 60),
                     warmup=int(self.config.sysbench_warmup_seconds or 30),
                     random_seed=pair_seed,
                 )
+            metrics = executor.execute(ctx)
             bench_elapsed = time.monotonic() - bench_started
             LOGGER.debug(
                 "  Benchmark execution completed in %.1fs (setup=%.1fs)",
