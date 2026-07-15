@@ -1,6 +1,6 @@
 # SCALPEL — Tier Generation Architecture
 
-> Last reviewed: 2026-06-18 · See also:
+> See also:
 > [ADR-005](decisions/ADR-005-scalpel-tier-generation.md),
 > [knob importance analysis](knob-importance-analysis.md),
 > [SCALPEL rollout guide](../guides/scalpel-rollout.md),

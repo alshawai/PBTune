@@ -1,7 +1,5 @@
 # Workload Orchestrator
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Performance Evaluation](performance-evaluation.md), [Generation Barriers](generation-barriers.md), [Environment Backends](environment-backends.md), [Configuration Management](configuration-management.md), [Benchmarking](../reference/benchmarking.md)
 
 ## Overview

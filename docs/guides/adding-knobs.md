@@ -1,7 +1,5 @@
 # Adding a New Tunable Knob
 
-> Last reviewed: 2026-06-15
-
 See also: [configuration-management](../architecture/configuration-management.md), [postgresql-connection-and-knobs](../architecture/postgresql-connection-and-knobs.md), [autotuning-knob-policy](../reference/autotuning-knob-policy.md), [knob-importance-analysis](../architecture/knob-importance-analysis.md)
 
 This guide walks through everything required to add a PostgreSQL knob to the tunable search space — from researching its bounds to regenerating the tier CSVs and validating the result.

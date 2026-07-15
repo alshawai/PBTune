@@ -1,7 +1,5 @@
 # Architecture Overview
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation index](../README.md)
 
 This document is the **first thing to read** when onboarding to the codebase. It ties together every per-component architecture doc with a single high-level system map, then points you at the right deep dive for whatever you're touching.

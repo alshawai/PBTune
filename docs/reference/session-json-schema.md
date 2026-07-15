@@ -1,7 +1,5 @@
 # Session JSON Schema
 
-> Last reviewed: 2026-06-15
-
 See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [pbt-core](../architecture/pbt-core.md), [bo-baseline guide](../guides/bo-baseline.md), [timing instrumentation contributor guide](timing-instrumentation.md)
 
 Every tuning run, evaluation comparison, and analysis pass emits or consumes one of three JSON shapes:

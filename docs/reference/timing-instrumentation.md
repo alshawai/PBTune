@@ -1,6 +1,5 @@
 # Timing Instrumentation — Contributor Guide
 
-> Last reviewed: 2026-06-15
 > Schema version this guide describes: **v1.1**
 > See also: [session JSON schema (timing section)](session-json-schema.md#timing-instrumentation-v11), [timing instrumentation plan](../research/timing-instrumentation-plan.md)
 

@@ -1,7 +1,5 @@
 # Dual-Evaluation Benchmarking Strategy
 
-> Last reviewed: 2026-03-13
-
 See also: [Documentation Index](../README.md)
 
 The Population-Based Training (PBT) Auto-Tuning framework employs a unique **Dual-Evaluation Benchmarking Strategy** designed to support both rigorous academic peer-review and flexible real-world application tuning.

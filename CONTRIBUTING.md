@@ -1,7 +1,5 @@
 # Contributing to PBT PostgreSQL Tuning
 
-> Last reviewed: 2026-06-15
-
 See also: [Documentation Index](./docs/README.md)
 
 Thank you for your interest in contributing to this academic research project! This document outlines guidelines for collaboration and contributions.

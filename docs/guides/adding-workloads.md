@@ -1,7 +1,5 @@
 # Adding a Custom Workload
 
-> Last reviewed: 2026-06-07
-
 See also: [workload-orchestrator](../architecture/workload-orchestrator.md), [benchmarking](../reference/benchmarking.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [workloads/README](../../workloads/README.md)
 
 This guide walks through authoring a custom JSON or YAML workload template — the kind you'd use to tune PostgreSQL for your own production traffic rather than against a stock Sysbench / TPC-H benchmark.
