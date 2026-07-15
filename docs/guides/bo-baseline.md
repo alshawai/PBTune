@@ -1,7 +1,5 @@
 # Run the Bayesian Optimization baseline
 
-> Last reviewed: 2026-06-07
-
 See also: [reference/cli](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline), [architecture/bo-baseline](../architecture/bo-baseline.md), [pbt-vs-bo-comparison](pbt-vs-bo-comparison.md)
 
 This guide is for someone who wants to **run** the BO baseline. For the architecture and design rationale of the baseline, read [architecture/bo-baseline](../architecture/bo-baseline.md).

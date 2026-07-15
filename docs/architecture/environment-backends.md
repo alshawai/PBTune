@@ -1,7 +1,5 @@
 # Environment Backends
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [PBT Core Components](pbt-core.md), [Workload Orchestrator](workload-orchestrator.md), [Hardware-Aware Normalization](hardware-aware-normalization.md), [ADR-004](decisions/ADR-004-docker-cpu-subset-isolation.md)
 
 ## Overview

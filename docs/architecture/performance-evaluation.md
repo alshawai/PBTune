@@ -1,7 +1,5 @@
 # Performance Evaluation System
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Feature-Driven Scoring](feature-driven-scoring.md), [Workload Orchestrator](workload-orchestrator.md), [Generation Barriers](generation-barriers.md)
 
 ## Overview

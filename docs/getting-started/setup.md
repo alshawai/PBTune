@@ -1,7 +1,5 @@
 # Environment Setup Guide
 
-> Last reviewed: 2026-06-15
-
 See also: [Documentation Index](../README.md), [quickstart](quickstart.md)
 
 ## Recommended: one-shot bootstrap

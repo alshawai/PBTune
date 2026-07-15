@@ -1,6 +1,6 @@
 # SCALPEL Rollout Guide
 
-> Last reviewed: 2026-06-22 · See also:
+> See also:
 > [SCALPEL architecture](../architecture/scalpel.md),
 > [SCALPEL diagnostics reference](../reference/scalpel-diagnostics.md),
 > [ADR-005](../architecture/decisions/ADR-005-scalpel-tier-generation.md).

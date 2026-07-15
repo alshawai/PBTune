@@ -1,7 +1,5 @@
 # Quickstart
 
-> Last reviewed: 2026-06-07
-
 See also: [setup](setup.md), [overview](../architecture/overview.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md)
 
 This guide walks you through your first PBT tuning session and explains what's happening at each step. Targeted at someone who has just run `setup.md` successfully and wants to confirm the system works.

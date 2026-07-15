@@ -1,7 +1,5 @@
 # CLI Reference
 
-> Last reviewed: 2026-06-22
-
 See also: [getting-started/quickstart](../getting-started/quickstart.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md), [guides/bo-baseline](../guides/bo-baseline.md), [guides/pbt-vs-bo-comparison](../guides/pbt-vs-bo-comparison.md), [guides/scalpel-rollout](../guides/scalpel-rollout.md)
 
 Consolidated reference for every command-line flag across all six user-facing entry points. Use the per-guide docs for narrative context — this page is for **lookup**.
