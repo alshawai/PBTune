@@ -1,3 +1,33 @@
+[project]
+name = "pbtune"
+version = "1.0.0"
+description = "Evolutionary auto-tuning for PostgreSQL using Population-Based Training"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+readme = "README.md"
+authors = [
+  {name = "Ibrahim Al-Shawa", email = "contact.alshaw.ai@gmail.com"},
+  {name = "AbdelRahman Hedia"},
+  {name = "Mahmoud Darwish"},
+]
+keywords = ["postgresql", "database-tuning", "population-based-training", "evolutionary-optimization"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/alshawai/PBTune"
+Documentation = "https://alshawai.github.io/PBTune/"
+Repository = "https://github.com/alshawai/PBTune"
+Issues = "https://github.com/alshawai/PBTune/issues"
+Changelog = "https://github.com/alshawai/PBTune/blob/main/CHANGELOG.md"
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
