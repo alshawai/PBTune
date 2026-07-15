@@ -1,4 +1,8 @@
-# Population-Based Training for PostgreSQL Configuration Tuning
+# Population-Based Training for PostgreSQL Config
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/6fef48b3-6733-4400-a875-d95a9ce28611" alt="PBTune Banner" width="100%">
+</p>
 
 > Last reviewed: 2026-06-07
 
@@ -7,6 +11,10 @@
 > **Novel Application of Evolutionary Optimization for Autonomous Database Configuration**
 
 This repository contains a research implementation applying **Population-Based Training (PBT)**, originally developed by DeepMind for neural network hyperparameter optimization, to the domain of database configuration tuning. Our work demonstrates that evolutionary optimization strategies can autonomously discover high-performance PostgreSQL configurations without domain expertise.
+
+## Demo
+
+![PBTune Demo](https://github.com/user-attachments/assets/7054cd5b-8675-44af-ae12-2e158b4677f8)
 
 ---
 
