@@ -143,7 +143,7 @@ suffix the tier slug with `@scalpel-v1` so post-SCALPEL artifacts do
 not collide with pre-SCALPEL ones:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt \
   --workload oltp_read_write \
   --tier core \
   --knob-source data_driven

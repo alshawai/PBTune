@@ -21,7 +21,7 @@ Verify:
 
 ```bash
 source .venv/bin/activate
-python -m src.tuner.main --help     # should print the CLI help
+python -m src.tuners.pbt --help     # should print the CLI help
 docker info >/dev/null && echo OK   # should print "OK"
 ```
 
@@ -30,7 +30,7 @@ If `docker info` fails, the run will automatically fall back to bare-metal Postg
 ## Step 1 — Launch the smallest possible PBT run
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt \
     --tier minimal \
     --config rapid \
     --population 2 \

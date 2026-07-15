@@ -5,7 +5,7 @@ See also: [getting-started/quickstart](../getting-started/quickstart.md), [guide
 Consolidated reference for every command-line flag across all six user-facing entry points. Use the per-guide docs for narrative context — this page is for **lookup**.
 
 ```text
-python -m src.tuner.main                 # tuning sessions (PBT)
+python -m src.tuners.pbt                 # tuning sessions (PBT)
 python -m src.tuners                      # LHS-design importance-sampling tuner
 python -m src.evaluation                 # post-hoc default-vs-tuned comparison
 python -m src.scripts.bo_baseline        # SMAC3 Bayesian-Optimisation baseline
@@ -19,7 +19,7 @@ For the canonical authority on any flag's exact semantics, run the entry point w
 
 ## Table of contents
 
-1. [`src.tuner.main` — PBT tuning](#srctunermain--pbt-tuning)
+1. [`src.tuners.pbt` — PBT tuning](#srctunerspbt--pbt-tuning)
 2. [`src.tuners` — LHS-design tuning](#srctuners--lhs-design-tuning)
 3. [`src.evaluation` — default-vs-tuned comparison](#srcevaluation--default-vs-tuned-comparison)
 4. [`src.scripts.bo_baseline` — Bayesian-Optimisation baseline](#srcscriptsbo_baseline--bayesian-optimisation-baseline)
@@ -29,7 +29,7 @@ For the canonical authority on any flag's exact semantics, run the entry point w
 
 ---
 
-## `src.tuner.main` — PBT tuning
+## `src.tuners.pbt` — PBT tuning
 
 The primary entry point. See [getting-started/quickstart](../getting-started/quickstart.md) for a walkthrough and [pbt-core](../architecture/pbt-core.md) for what the flags actually do.
 

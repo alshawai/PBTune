@@ -12,7 +12,7 @@ A clear and concise description of what the bug is.
 
 ## Steps to Reproduce
 
-1. Run command: `python -m src.tuner.main ...`
+1. Run command: `python -m src.tuners.pbt ...`
 2. Configure: ...
 3. Observe: ...
 
