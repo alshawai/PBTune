@@ -9,7 +9,7 @@ when the user supplies custom SQL query templates.
 """
 
 from __future__ import annotations
-from typing import Callable, Optional
+from typing import Optional
 from pathlib import Path
 import json
 import subprocess
@@ -27,11 +27,12 @@ from src.config.database import DatabaseConfig
 from src.utils.metrics import PerformanceMetrics
 from src.utils.logger import get_logger
 from src.utils.scoring.workload_features import TemplateWorkloadMetadata
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 
 LOGGER = get_logger("WorkloadExecutor")
 
 
-class WorkloadExecutor:
+class WorkloadExecutor(BenchmarkExecutor):
     """
     Template-based SQL query executor.
 
@@ -39,6 +40,8 @@ class WorkloadExecutor:
     parameterization and concurrent execution.
     Standard OLTP, OLAP, and MIXED workloads also use this executor via internal templates.
     """
+
+    manages_own_connection: bool = False
 
     def __init__(
         self,
@@ -168,40 +171,35 @@ class WorkloadExecutor:
         conn.close()
         return count >= self.num_tables
 
-    def execute(
-        self,
-        connection: PostgresConnection,
-        duration: float,
-        warmup: float = 30.0,
-        worker_id: Optional[int] = None,
-        random_seed: Optional[int] = None,
-        pre_measurement_callback: Optional[Callable] = None,
-    ) -> PerformanceMetrics:
+    def execute(self, ctx: ExecutionContext) -> PerformanceMetrics:
         """
         Execute template queries with optional concurrent execution.
 
         Parameters
         ----------
-        connection : PostgresConnection
-            Active database connection to execute queries on
-        duration : float
-            Duration of the measurement period
-        warmup : float
-            Warmup period duration
-        worker_id : Optional[int]
-            Worker ID for logging differentiation
-        random_seed : Optional[int]
-            Optional random seed for reproducibility
-        pre_measurement_callback : Callable | None
-            Optional callback invoked after warmup completes but before
-            the timed measurement begins.  Used by the barrier system
-            to synchronize workers at the warmup→measurement boundary.
+        ctx : ExecutionContext
+            Unified execution context. This driver reads ``ctx.connection``,
+            ``ctx.duration``, ``ctx.warmup``, ``ctx.worker_id``,
+            ``ctx.random_seed``, and ``ctx.pre_measurement_callback``.
 
         Returns
         -------
             PerformanceMetrics
                 Collected metrics from the execution
         """
+        connection = ctx.connection
+        duration = ctx.duration
+        warmup = ctx.warmup
+        worker_id = ctx.worker_id
+        random_seed = ctx.random_seed
+        pre_measurement_callback = ctx.pre_measurement_callback
+
+        if connection is None:
+            raise ValueError(
+                "WorkloadExecutor requires a caller-supplied connection "
+                "via ExecutionContext.connection"
+            )
+
         work_logger = (
             get_logger(__name__, worker_id=worker_id)
             if worker_id is not None

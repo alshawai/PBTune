@@ -28,7 +28,7 @@ Design Patterns:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, List
 import logging
 import threading
 import time
@@ -47,8 +47,7 @@ from src.utils.metrics import (
 )
 from src.utils.metric_instrumentation import MetricInstrumentationEngine
 from src.utils.scoring import create_scoring_engine
-from src.benchmarks.executor import BenchmarkExecutor
-from src.benchmarks.workload import WorkloadExecutor
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.tuners.engine.worker import BaseWorker
 from src.utils.types import TuningMode
 from src.tuners.engine.restart_policy import should_restart
@@ -125,7 +124,7 @@ class WorkloadOrchestrator:
     ----------
     config : WorkloadOrchestratorConfig
         Configuration parameters
-    workload_executor : WorkloadExecutor
+    workload_executor : BenchmarkExecutor
         Workload-specific execution logic
     connection : Optional[PostgresConnection]
         Active database connection
@@ -158,7 +157,7 @@ class WorkloadOrchestrator:
     def __init__(
         self,
         config: WorkloadOrchestratorConfig,
-        workload_executor: Union[WorkloadExecutor, BenchmarkExecutor],
+        workload_executor: BenchmarkExecutor,
         env: DatabaseEnvironment,
     ):
         """
@@ -168,7 +167,7 @@ class WorkloadOrchestrator:
         ----------
         config : WorkloadOrchestratorConfig
             Orchestration configuration
-        workload_executor : Union[WorkloadExecutor, BenchmarkExecutor]
+        workload_executor : BenchmarkExecutor
             Workload execution strategy
         env : DatabaseEnvironment
             Database environment for instance management
@@ -727,7 +726,7 @@ class WorkloadOrchestrator:
         Transient connection errors under co-tenant load would otherwise
         trigger needless ``prepare()`` calls on every iteration.
         """
-        if not isinstance(self.workload_executor, BenchmarkExecutor):
+        if not self.workload_executor.manages_own_connection:
             return
 
         worker_logger = worker_logger or LOGGER
@@ -990,7 +989,7 @@ class WorkloadOrchestrator:
                 last_completed_barrier = "pre_stats_captured"
 
                 # ── B7: Ensure benchmark ready ───────────────────────
-                if isinstance(self.workload_executor, BenchmarkExecutor):
+                if self.workload_executor.manages_own_connection:
                     worker.logger.debug(
                         " %sEnsuring benchmark is ready...%s",
                         COLORS.italic,
@@ -1004,38 +1003,43 @@ class WorkloadOrchestrator:
                 last_completed_barrier = "benchmark_ready"
 
                 # ── B8: Warmup + B9: Measurement ─────────────────────
-                if isinstance(self.workload_executor, BenchmarkExecutor):
+                effective_seed = (
+                    random_seed
+                    if random_seed is not None
+                    else self.config.random_seed
+                )
+
+                if self.workload_executor.manages_own_connection:
                     # External benchmarks (sysbench, tpch) handle warmup
                     # internally; we still gate with barriers around the
                     # combined call.
                     _barrier("warmup_done")
                     last_completed_barrier = "warmup_done"
 
+                    ctx = ExecutionContext(
+                        db_config=worker.db_config,
+                        duration=self.config.measurement_duration,
+                        warmup=self.config.warmup_duration,
+                        worker_id=worker.worker_id,
+                        random_seed=effective_seed,
+                        warmup_passes=self.config.warmup_passes,
+                    )
                     with recorder.span("workload", executor="benchmark"):
-                        metrics = self.workload_executor.execute(
-                            db_config=worker.db_config,
-                            worker_id=worker.worker_id,
-                            random_seed=random_seed
-                            if random_seed is not None
-                            else self.config.random_seed,
-                            duration=self.config.measurement_duration,
-                            warmup=self.config.warmup_duration,
-                            warmup_passes=self.config.warmup_passes,
-                        )
+                        metrics = self.workload_executor.execute(ctx)
                 else:
                     # Internal workload executor: warmup then measurement.
-                    # Warmup is run first, barrier, then measurement.
+                    # Warmup is run first, barrier fires via callback, then measurement.
+                    ctx = ExecutionContext(
+                        db_config=worker.db_config,
+                        duration=self.config.measurement_duration,
+                        warmup=self.config.warmup_duration,
+                        worker_id=worker.worker_id,
+                        random_seed=effective_seed,
+                        connection=connection,
+                        pre_measurement_callback=lambda: _barrier("warmup_done"),
+                    )
                     with recorder.span("workload", executor="internal"):
-                        metrics = self.workload_executor.execute(
-                            connection=connection,
-                            duration=self.config.measurement_duration,
-                            warmup=self.config.warmup_duration,
-                            worker_id=worker.worker_id,
-                            random_seed=random_seed
-                            if random_seed is not None
-                            else self.config.random_seed,
-                            pre_measurement_callback=lambda: _barrier("warmup_done"),
-                        )
+                        metrics = self.workload_executor.execute(ctx)
                     last_completed_barrier = "warmup_done"
 
                 worker.logger.debug(
