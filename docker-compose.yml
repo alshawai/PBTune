@@ -25,7 +25,7 @@ services:
           cpus: '2.0'
           memory: 4G
     # Keep the container running or override with a specific command
-    command: [ "python", "-m", "src.tuner.main", "--tier", "minimal", "--config", "rapid" ]
+    command: [ "python", "-m", "src.tuners", "pbt", "--tier", "minimal", "--config", "rapid" ]
 
 # We purposefully do NOT define worker services here.
 # The `pbt-tuner` container will dynamically spawn `worker-0`, `worker-1`, etc.
