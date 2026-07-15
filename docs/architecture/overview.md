@@ -25,7 +25,7 @@ The design priorities, in order:
 
 ```text
                  ┌──────────────────────────────────────────────┐
-                 │   CLI: python -m src.tuner.main              │
+                 │   CLI: python -m src.tuners.pbt              │
                  │   --tier core --config standard --workload   │
                  └──────────────────┬───────────────────────────┘
                                     │
@@ -79,7 +79,7 @@ The arrow from tuning to the three downstream consumers is one-directional: the 
 
 | Package | Role | Read first |
 | --- | --- | --- |
-| [`src/tuner/`](../../src/tuner/) | PBT engine (entry: `python -m src.tuner.main`) | [pbt-core](pbt-core.md) |
+| [`src/tuner/`](../../src/tuner/) | PBT engine (entry: `python -m src.tuners.pbt.main`) | [pbt-core](pbt-core.md) |
 | [`src/tuner/core/`](../../src/tuner/core/) | Population, Worker, Evolution, GenerationBarrier | [pbt-core](pbt-core.md), [generation-barriers](generation-barriers.md) |
 | [`src/tuner/benchmark/`](../../src/tuner/benchmark/) | WorkloadOrchestrator, restart policy, workload templates | [workload-orchestrator](workload-orchestrator.md) |
 | [`src/tuner/config/`](../../src/tuner/config/) | KnobSpace, tier loading, TunerConfig | [configuration-management](configuration-management.md) |

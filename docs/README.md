@@ -35,7 +35,7 @@ Task-oriented. Assumes you know what you're trying to do.
 
 Information-oriented. For looking things up, not for reading top-to-bottom.
 
-- [cli](reference/cli.md) — consolidated CLI flag reference across `src.tuner.main`, `src.evaluation`, `src.scripts.bo_baseline`, `src.scripts.pbt_vs_bo_comarison`, `src.visualization`
+- [cli](reference/cli.md) — consolidated CLI flag reference across `src.tuners.pbt`, `src.evaluation`, `src.scripts.bo_baseline`, `src.scripts.pbt_vs_bo_comarison`, `src.visualization`
 - [session-json-schema](reference/session-json-schema.md) — schema of the PBT/BO session JSON artefacts and the comparison JSON
 - [benchmarking](reference/benchmarking.md) — dual-evaluation strategy and `SchemaProvider` protocol
 - [autotuning-knob-policy](reference/autotuning-knob-policy.md) — per-knob tuning rationale and safety classification

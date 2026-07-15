@@ -297,7 +297,7 @@ make check-all
 Optimize 5 core knobs with minimal population for quick testing:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier minimal \
   --config rapid \
   --generations 10 \
@@ -315,7 +315,7 @@ python -m src.tuner.main \
 Tune 13 core knobs with standard PBT configuration:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier core \
   --config standard \
   --generations 30 \
@@ -327,7 +327,7 @@ python -m src.tuner.main \
 Full knob space (36 parameters) with thorough evaluation:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier standard \
   --config thorough \
   --generations 50 \
@@ -338,7 +338,7 @@ python -m src.tuner.main \
 ### Example 4: Custom Workload
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier core \
   --config standard \
   --workload-file workloads/custom_queries.json
@@ -355,7 +355,7 @@ export DB_USER=admin
 export DB_PASSWORD=secret
 export DB_NAME=myapp
 
-python -m src.tuner.main --workload-file workloads/my_real_queries.json
+python -m src.tuners.pbt.main --workload-file workloads/my_real_queries.json
 ```
 
 ### Example 6: Manual Worker Resource Allocation
@@ -363,7 +363,7 @@ python -m src.tuner.main --workload-file workloads/my_real_queries.json
 Override automatic hardware detection to manually allocate RAM and CPU cores for each parallel worker (up to 95% of host capacity):
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --worker-ram 4G \
   --worker-cpus 2 \
   --parallel-workers 3
@@ -390,7 +390,7 @@ xdg-open "$LOG"
 ### CLI Reference
 
 ```bash
-python -m src.tuner.main --help
+python -m src.tuners.pbt.main --help
 ```
 
 **Key Arguments:**
@@ -416,13 +416,13 @@ Use explicit Sysbench workload mode selection when running OLTP benchmarks:
 
 ```bash
 # Read-only OLTP benchmark
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
+python -m src.tuners.pbt.main --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
 
 # Read-write OLTP benchmark (default)
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
+python -m src.tuners.pbt.main --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
 
 # Write-only OLTP benchmark
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
+python -m src.tuners.pbt.main --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
 ```
 
 Sysbench outputs are partitioned by mode:
@@ -437,7 +437,7 @@ Use feature-driven scoring during tuning for workload-aware metric weighting:
 
 ```bash
 # Use feature-driven scoring during tuning
-python -m src.tuner.main --tier core --config standard --scoring-policy feature_driven_v2
+python -m src.tuners.pbt.main --tier core --config standard --scoring-policy feature_driven_v2
 
 # Re-evaluate a session with a different scoring policy
 python -m src.evaluation \
@@ -485,7 +485,7 @@ Example JSON (`my_workload.json`):
 Run with:
 
 ```bash
-python -m src.tuner.main --workload-file path/to/my_workload.json
+python -m src.tuners.pbt.main --workload-file path/to/my_workload.json
 ```
 
 See the [workloads directory README](workloads/README.md) for full formatting details.
@@ -724,8 +724,8 @@ Under the supervision of:
 
 With contributions from:
 
-- [Karim AbdelAziz](https://github.com/karimali03) — Scoring pipeline, BO baseline
-- [Mohammad Ahmad](https://github.com/mohamed20o03) — SCALPEL analysis
+- [Karim AbdelAziz](https://github.com/karimali03) — Strong integration of BO baseline
+- [Mohammad Ahmad](https://github.com/mohamed20o03) — The first iteration of knob importance analysis
 
 This research was inspired by [DeepMind's Population-Based Training](https://arxiv.org/abs/1711.09846), the [CMU Database Group](https://db.cs.cmu.edu/) (OtterTune), and the [PostgreSQL Community](https://www.postgresql.org/).
 

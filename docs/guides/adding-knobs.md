@@ -146,7 +146,7 @@ grep 'your_knob_name' data/expert_defined_knobs/<tier>_knobs.csv
 ## Step 5 — Smoke-test with a quick PBT run
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt \
     --tier <the-tier-you-promoted-to> \
     --config rapid \
     --population 2 \
@@ -217,7 +217,7 @@ grep '^jit_above_cost' data/expert_defined_knobs/standard_knobs.csv
 **Step 5 — smoke test:**
 
 ```bash
-python -m src.tuner.main --tier standard --config rapid --population 2 --generations 3
+python -m src.tuners.pbt --tier standard --config rapid --population 2 --generations 3
 ```
 
 Inspect the resulting `pbt_results_*.json` for `best_configuration.knobs.jit_above_cost`. Done.

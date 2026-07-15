@@ -104,7 +104,7 @@ with a diversity-preserving resampling strategy:
 
 | Component | File | Key Class/Function |
 |-----------|------|-------------------|
-| Orchestrator | `src/tuner/main.py` | `PBTTuner` |
+| Orchestrator | `src/tuners/pbt/tuner.py` | `PBTTuner` |
 | Population | `src/tuner/core/population.py` | `Population`, `PopulationConfig`, `GenerationResult` |
 | Evolution | `src/tuner/core/evolution.py` | `truncation_selection()`, `execute_exploit_explore()`, `get_best_worker()`, `check_convergence()` |
 | Generation barriers | `src/tuner/core/barriers.py` | B1..B17 lockstep barriers |

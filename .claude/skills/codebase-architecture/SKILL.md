@@ -39,7 +39,7 @@ CLI args (main.py)
 
 ## Package Map
 
-### `src/tuner/` — PBT Tuning Engine (entry point: `python -m src.tuner.main`)
+### `src/tuner/` — PBT Tuning Engine (entry point: `python -m src.tuners.pbt`)
 | File | Responsibility |
 |------|---------------|
 | `main.py` | CLI arg parsing, orchestration, session output |
@@ -153,7 +153,7 @@ make fix-and-check  # auto-fix then re-run check-all
 ## CLI Entry Points (the five user-facing commands)
 
 ```bash
-python -m src.tuner.main                # PBT tuning
+python -m src.tuners.pbt                # PBT tuning
 python -m src.evaluation                # Post-hoc default-vs-tuned comparison
 python -m src.scripts.bo_baseline       # SMAC3 BO baseline
 python -m src.scripts.pbt_vs_bo_comarison  # Cross-method comparison (filename typo is intentional)

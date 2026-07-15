@@ -71,7 +71,7 @@ To regenerate tier CSVs after metadata changes: `python -m src.knobs`
 
 ## Warm-Start (Transfer Learning Level 1)
 ```bash
-python -m src.tuner.main --warm-start results/olap/pbt_runs/{tier}/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners.pbt --warm-start results/olap/pbt_runs/{tier}/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 - Loads `best_config.json` from previous run
 - Seeds 1-2 workers with loaded config (fractional representation)
