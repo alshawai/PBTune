@@ -3,21 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alshawai/PBTune/actions/workflows/ci.yml">
-    <img src="https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg" alt="CI">
-  </a>
-  <a href="https://www.python.org/downloads/">
-    <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+">
-  </a>
-  <a href="https://www.postgresql.org/">
-    <img src="https://img.shields.io/badge/postgresql-14+-336791.svg" alt="PostgreSQL 14+">
-  </a>
-  <a href="https://www.gnu.org/licenses/gpl-3.0">
-    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPLv3">
-  </a>
-  <a href="https://github.com/alshawai/PBTune/stargazers">
-    <img src="https://img.shields.io/github/stars/alshawai/PBTune" alt="GitHub stars">
-  </a>
+  <a href="https://github.com/alshawai/PBTune/actions/workflows/ci.yml"><img src="https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
+  <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/postgresql-14+-336791.svg" alt="PostgreSQL 14+"></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPLv3"></a>
+  <a href="https://github.com/alshawai/PBTune/stargazers"><img src="https://img.shields.io/github/stars/alshawai/PBTune" alt="GitHub stars"></a>
 </p>
 
 This repository contains a research implementation applying **Population-Based Training (PBT)**, originally developed by DeepMind for neural network hyperparameter optimization, to the domain of database configuration tuning. Our work demonstrates that evolutionary optimization strategies can autonomously discover high-performance PostgreSQL configurations without domain expertise.
