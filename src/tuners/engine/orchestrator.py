@@ -32,13 +32,11 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 import logging
 import threading
-import time
 import numpy as np
 import psycopg2
-from psycopg2 import sql
 from psycopg2.extensions import connection as PostgresConnection, register_adapter, AsIs
 
-from src.database.connection import get_connection, connect_with_retry, safe_disconnect
+from src.database.connection import connect_with_retry, safe_disconnect
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import DatabaseEnvironment
 from src.utils.metrics import (
@@ -58,6 +56,10 @@ from src.tuners.engine.worker_metrics import (
     collect_system_metrics as _collect_system_metrics,
     fetch_pg_stat_database_snapshot as _fetch_pg_stat_snapshot,
     compute_io_metrics as _compute_io_metrics_impl,
+)
+from src.tuners.engine.maintenance import (
+    vacuum_after_dml as _vacuum_after_dml_impl,
+    ensure_benchmark_ready as _ensure_benchmark_ready_impl,
 )
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger, get_color_context
@@ -595,91 +597,13 @@ class WorkloadOrchestrator:
         Skipping eliminates 20–60s of dead wall-clock per generation on
         sysbench RW/WO with high table/row counts.
         """
-        # Skip for read-only workloads (OLAP, TPC-H)
-        if self.config.workload_type.value in ("olap", "tpch"):
-            return
-        worker_logger = worker_logger or LOGGER
-
-        if next_eval_will_restore:
-            worker_logger.debug(
-                " ➤ Skipping post-workload VACUUM ANALYZE %s(next eval restores"
-                " baseline snapshot)%s",
-                COLORS.italic,
-                COLORS.reset,
-            )
-            return
-
-        timeout_seconds = max(0.0, float(self.config.vacuum_analyze_timeout_seconds))
-        if timeout_seconds <= 0:
-            worker_logger.debug(
-                " ➤ Skipping post-workload maintenance %s(timeout disabled)%s",
-                COLORS.italic,
-                COLORS.reset,
-            )
-            return
-
-        try:
-            conn = get_connection(config=db_config)
-            conn.autocommit = True  # VACUUM cannot run inside a transaction
-            cursor = conn.cursor()
-
-            statement_timeout_ms = int(timeout_seconds * 1000)
-            lock_timeout_ms = max(1000, statement_timeout_ms // 4)
-            cursor.execute("SET statement_timeout = %s", (statement_timeout_ms,))
-            cursor.execute("SET lock_timeout = %s", (lock_timeout_ms,))
-
-            cursor.execute(
-                """
-                SELECT schemaname, relname
-                FROM pg_stat_user_tables
-                WHERE n_mod_since_analyze > 0 OR n_dead_tup > 0
-                ORDER BY n_mod_since_analyze DESC, n_dead_tup DESC
-                """
-            )
-            tables = cursor.fetchall() or []
-
-            if not tables:
-                worker_logger.debug(
-                    " ➤ Skipping post-workload maintenance %s(no modified user tables)%s",
-                    COLORS.italic,
-                    COLORS.reset,
-                )
-                cursor.close()
-                conn.close()
-                return
-
-            worker_logger.debug(
-                "  Running post-workload VACUUM ANALYZE on %d modified tables...",
-                len(tables),
-            )
-
-            start = time.time()
-            for schema_name, table_name in tables:
-                try:
-                    cursor.execute(
-                        sql.SQL("VACUUM ANALYZE {}.{}").format(
-                            sql.Identifier(schema_name),
-                            sql.Identifier(table_name),
-                        )
-                    )
-                except Exception as table_error:
-                    worker_logger.warning(
-                        " ➤ Post-workload maintenance failed for %s.%s: %s",
-                        schema_name,
-                        table_name,
-                        table_error,
-                    )
-
-            elapsed = time.time() - start
-
-            worker_logger.debug(
-                " ➤ Post-workload VACUUM ANALYZE completed in %.2fs", elapsed
-            )
-            cursor.close()
-            conn.close()
-
-        except Exception as e:
-            worker_logger.warning(" ➤ Post-workload VACUUM ANALYZE failed: %s", e)
+        _vacuum_after_dml_impl(
+            self.config.workload_type,
+            self.config.vacuum_analyze_timeout_seconds,
+            db_config,
+            worker_logger=worker_logger,
+            next_eval_will_restore=next_eval_will_restore,
+        )
 
     def _ensure_benchmark_ready(
         self,
@@ -694,44 +618,11 @@ class WorkloadOrchestrator:
         Transient connection errors under co-tenant load would otherwise
         trigger needless ``prepare()`` calls on every iteration.
         """
-        if not self.workload_executor.manages_own_connection:
-            return
-
-        worker_logger = worker_logger or LOGGER
-
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                if self.workload_executor.validate(db_config):
-                    worker_logger.debug(
-                        " ➤ Benchmark validation successful, ready to execute"
-                    )
-                    return
-            except Exception as e:
-                worker_logger.warning(
-                    "Benchmark validation attempt %d/%d raised %s",
-                    attempt,
-                    max_retries,
-                    e,
-                )
-            if attempt < max_retries:
-                worker_logger.debug(
-                    " ➤ Validation failed (attempt %d/%d); retrying in 2s...",
-                    attempt,
-                    max_retries,
-                )
-                time.sleep(2)
-
-        worker_logger.warning(
-            "Benchmark validation failed after %d attempts; running prepare()",
-            max_retries,
+        _ensure_benchmark_ready_impl(
+            self.workload_executor,
+            db_config,
+            worker_logger=worker_logger,
         )
-        self.workload_executor.prepare(db_config)
-
-        if not self.workload_executor.validate(db_config):
-            raise RuntimeError("Benchmark validation still failing after prepare()")
-
-        worker_logger.debug(" ➤ Benchmark state re-prepared successfully")
 
     def evaluate_worker(
         self,
