@@ -543,6 +543,192 @@ class WorkloadOrchestrator:
             logger.debug(" ➤ Last pg_stat_database snapshot error: %s", last_error)
         return None
 
+    def _verify_and_capture_config(
+        self,
+        knob_applicator: KnobApplicator,
+        worker: BaseWorker,
+        recorder: TimingRecorder,
+    ) -> Dict[str, Any]:
+        """Verify applied knobs and capture the true active DB config (B5).
+
+        Reads back the values PostgreSQL actually accepted so downstream
+        consumers (scoring, result writers) see the real quantized settings
+        rather than the requested ones.
+
+        Returns
+        -------
+        Dict[str, Any]
+            The actual DB config read back from ``pg_settings`` (empty when
+            verification produced no db_config).
+        """
+        worker.logger.debug(" Verifying knob configuration...")
+        with recorder.span("knob_verify"):
+            verification = knob_applicator.verify(worker.knob_config)  # type: ignore
+        if verification.failed_params:
+            worker.logger.warning(
+                " ➤ Configuration verification failed for %d parameters: %s",
+                len(verification.failed_params),
+                verification.failed_params,
+            )
+        else:
+            worker.logger.debug(" ➤ All parameters verified.")
+
+        # Save the true applied DB config back to the worker so downstream
+        # consumers (scoring, result writers) see the actual quantized values
+        # PostgreSQL is using.
+        if verification.db_config:
+            worker.knob_config.update(verification.db_config)  # type: ignore
+            worker.logger.debug(
+                " ➤ Updated worker.knob_config with %d actual DB values",
+                len(verification.db_config),
+            )
+            return verification.db_config
+
+        return {}
+
+    def _run_workload(
+        self,
+        worker: BaseWorker,
+        *,
+        connection: Optional[PostgresConnection],
+        effective_seed: Optional[int],
+        recorder: TimingRecorder,
+        pre_measurement_callback: Optional[Any] = None,
+    ) -> PerformanceMetrics:
+        """Build the ExecutionContext and run warmup + measurement (B8/B9).
+
+        Chooses the context shape from the executor's connection model:
+        externally-managed benchmarks (sysbench, tpch) run warmup internally
+        and take a warmup-pass count; the internal executor reuses the caller's
+        connection and fires ``pre_measurement_callback`` between warmup and
+        measurement.
+
+        Barrier waits stay in the caller so the lockstep drain invariant is
+        untouched — this helper only builds the context and executes.
+        """
+        if self.workload_executor.manages_own_connection:
+            ctx = ExecutionContext(
+                db_config=worker.db_config,
+                duration=self.config.measurement_duration,
+                warmup=self.config.warmup_duration,
+                worker_id=worker.worker_id,
+                random_seed=effective_seed,
+                warmup_passes=self.config.warmup_passes,
+            )
+            with recorder.span("workload", executor="benchmark"):
+                return self.workload_executor.execute(ctx)
+
+        ctx = ExecutionContext(
+            db_config=worker.db_config,
+            duration=self.config.measurement_duration,
+            warmup=self.config.warmup_duration,
+            worker_id=worker.worker_id,
+            random_seed=effective_seed,
+            connection=connection,
+            pre_measurement_callback=pre_measurement_callback,
+        )
+        with recorder.span("workload", executor="internal"):
+            return self.workload_executor.execute(ctx)
+
+    def _compute_io_metrics(
+        self,
+        metrics: PerformanceMetrics,
+        *,
+        stats_before: tuple[int, int, int, int, int, int, int],
+        stats_after: tuple[int, int, int, int, int, int, int],
+        worker_logger: logging.Logger,
+    ) -> None:
+        """Populate I/O and row-count metrics from pg_stat_database deltas (B11).
+
+        Derives read MB from block deltas, estimates write MB from row
+        modification counts (no filesystem-level write counters available),
+        and computes the buffer miss rate. All failures are swallowed at debug
+        level so a stats hiccup never fails an otherwise-healthy evaluation.
+        """
+        try:
+            (
+                blks_read_after,
+                blks_hit_after,
+                tup_returned_after,
+                tup_fetched_after,
+                tup_inserted_after,
+                tup_updated_after,
+                tup_deleted_after,
+            ) = stats_after
+
+            (
+                blks_read_before,
+                blks_hit_before,
+                tup_returned_before,
+                tup_fetched_before,
+                tup_inserted_before,
+                tup_updated_before,
+                tup_deleted_before,
+            ) = stats_before
+
+            blocks_read_delta = blks_read_after - blks_read_before
+            blocks_hit_delta = blks_hit_after - blks_hit_before
+            tup_returned_delta = tup_returned_after - tup_returned_before
+            tup_fetched_delta = tup_fetched_after - tup_fetched_before
+
+            # Convert to MB (8KB blocks)
+            io_read_mb = (blocks_read_delta * 8) / 1024.0
+            metrics.io_read_mb = max(0, io_read_mb)
+
+            # Estimate write MB from row modification counts when
+            # filesystem-level write counters aren't directly
+            # available. This is a conservative heuristic: assume
+            # an average row size (bytes) and multiply by the number
+            # of inserted/updated/deleted rows observed.
+            try:
+                tup_inserted_delta = tup_inserted_after - tup_inserted_before
+                tup_updated_delta = tup_updated_after - tup_updated_before
+                tup_deleted_delta = tup_deleted_after - tup_deleted_before
+            except Exception:
+                tup_inserted_delta = tup_updated_delta = tup_deleted_delta = 0
+
+            total_rows_written = max(
+                0,
+                tup_inserted_delta + tup_updated_delta + tup_deleted_delta,
+            )
+            # Conservative average row size in bytes; adjustable later
+            avg_row_bytes = 128
+            io_write_bytes = total_rows_written * avg_row_bytes
+            metrics.io_write_mb = max(0.0, io_write_bytes / (1024.0 * 1024.0))
+
+            # Diagnostic: if we observed no written rows but the workload
+            # appears to have read/fetched rows or the DB changed, emit a
+            # debug message to help trace why writes are zero.
+            if total_rows_written == 0 and (
+                tup_fetched_delta > 0 or blocks_read_delta > 0
+            ):
+                worker_logger.debug(
+                    "IO write estimation produced 0 bytes (inserted=%s updated=%s deleted=%s). "
+                    "Blocks read delta=%s, tup_returned_delta=%s, tup_fetched_delta=%s",
+                    tup_inserted_delta,
+                    tup_updated_delta,
+                    tup_deleted_delta,
+                    blocks_read_delta,
+                    tup_returned_delta,
+                    tup_fetched_delta,
+                )
+
+            # Populate DB counters
+            metrics.rows_returned = max(0, tup_returned_delta)
+            metrics.rows_examined = max(0, tup_fetched_delta)
+
+            # Compute buffer miss rate
+            total_blocks = blocks_read_delta + blocks_hit_delta
+            if total_blocks > 0:
+                metrics.buffer_miss_rate = max(
+                    0.0, min(1.0, blocks_read_delta / total_blocks)
+                )
+            else:
+                metrics.buffer_miss_rate = 0.0
+
+        except Exception as e:
+            worker_logger.debug("Failed to calculate IO stats: %s", e)
+
     def _vacuum_after_dml(
         self,
         db_config: DatabaseConfig,
@@ -887,28 +1073,9 @@ class WorkloadOrchestrator:
 
             # ── B5: Verify configuration ─────────────────────────────
             if apply_config and worker.knob_config:
-                worker.logger.debug(" Verifying knob configuration...")
-                with recorder.span("knob_verify"):
-                    verification = knob_applicator.verify(worker.knob_config)
-                if verification.failed_params:
-                    worker.logger.warning(
-                        " ➤ Configuration verification failed for %d parameters: %s",
-                        len(verification.failed_params),
-                        verification.failed_params,
-                    )
-                else:
-                    worker.logger.debug(" ➤ All parameters verified.")
-
-                # Save the true applied DB config back to the worker so
-                # downstream consumers (scoring, result writers) see the
-                # actual quantized values PostgreSQL is using.
-                if verification.db_config:
-                    actual_db_config = verification.db_config
-                    worker.knob_config.update(actual_db_config)
-                    worker.logger.debug(
-                        " ➤ Updated worker.knob_config with %d actual DB values",
-                        len(actual_db_config),
-                    )
+                actual_db_config = self._verify_and_capture_config(
+                    knob_applicator, worker, recorder
+                )
 
             _barrier("config_verified")
             last_completed_barrier = "config_verified"
@@ -955,30 +1122,22 @@ class WorkloadOrchestrator:
                     _barrier("warmup_done")
                     last_completed_barrier = "warmup_done"
 
-                    ctx = ExecutionContext(
-                        db_config=worker.db_config,
-                        duration=self.config.measurement_duration,
-                        warmup=self.config.warmup_duration,
-                        worker_id=worker.worker_id,
-                        random_seed=effective_seed,
-                        warmup_passes=self.config.warmup_passes,
+                    metrics = self._run_workload(
+                        worker,
+                        connection=connection,
+                        effective_seed=effective_seed,
+                        recorder=recorder,
                     )
-                    with recorder.span("workload", executor="benchmark"):
-                        metrics = self.workload_executor.execute(ctx)
                 else:
                     # Internal workload executor: warmup then measurement.
                     # Warmup is run first, barrier fires via callback, then measurement.
-                    ctx = ExecutionContext(
-                        db_config=worker.db_config,
-                        duration=self.config.measurement_duration,
-                        warmup=self.config.warmup_duration,
-                        worker_id=worker.worker_id,
-                        random_seed=effective_seed,
+                    metrics = self._run_workload(
+                        worker,
                         connection=connection,
+                        effective_seed=effective_seed,
+                        recorder=recorder,
                         pre_measurement_callback=lambda: _barrier("warmup_done"),
                     )
-                    with recorder.span("workload", executor="internal"):
-                        metrics = self.workload_executor.execute(ctx)
                     last_completed_barrier = "warmup_done"
 
                 worker.logger.debug(
@@ -1000,96 +1159,13 @@ class WorkloadOrchestrator:
                 last_completed_barrier = "post_stats_captured"
 
                 # ── B11: Compute I/O delta ───────────────────────────
-                if stats_after:
-                    try:
-                        (
-                            blks_read_after,
-                            blks_hit_after,
-                            tup_returned_after,
-                            tup_fetched_after,
-                            tup_inserted_after,
-                            tup_updated_after,
-                            tup_deleted_after,
-                        ) = stats_after
-
-                        (
-                            blks_read_before,
-                            blks_hit_before,
-                            tup_returned_before,
-                            tup_fetched_before,
-                            tup_inserted_before,
-                            tup_updated_before,
-                            tup_deleted_before,
-                        ) = stats_before  # type: ignore
-
-                        blocks_read_delta = blks_read_after - blks_read_before
-                        blocks_hit_delta = blks_hit_after - blks_hit_before
-                        tup_returned_delta = tup_returned_after - tup_returned_before
-                        tup_fetched_delta = tup_fetched_after - tup_fetched_before
-
-                        # Convert to MB (8KB blocks)
-                        io_read_mb = (blocks_read_delta * 8) / 1024.0
-                        metrics.io_read_mb = max(0, io_read_mb)
-
-                        # Estimate write MB from row modification counts when
-                        # filesystem-level write counters aren't directly
-                        # available. This is a conservative heuristic: assume
-                        # an average row size (bytes) and multiply by the number
-                        # of inserted/updated/deleted rows observed.
-                        try:
-                            tup_inserted_delta = (
-                                tup_inserted_after - tup_inserted_before
-                            )
-                            tup_updated_delta = tup_updated_after - tup_updated_before
-                            tup_deleted_delta = tup_deleted_after - tup_deleted_before
-                        except Exception:
-                            tup_inserted_delta = tup_updated_delta = (
-                                tup_deleted_delta
-                            ) = 0
-
-                        total_rows_written = max(
-                            0,
-                            tup_inserted_delta + tup_updated_delta + tup_deleted_delta,
-                        )
-                        # Conservative average row size in bytes; adjustable later
-                        avg_row_bytes = 128
-                        io_write_bytes = total_rows_written * avg_row_bytes
-                        metrics.io_write_mb = max(
-                            0.0, io_write_bytes / (1024.0 * 1024.0)
-                        )
-
-                        # Diagnostic: if we observed no written rows but the workload
-                        # appears to have read/fetched rows or the DB changed, emit a
-                        # debug message to help trace why writes are zero.
-                        if total_rows_written == 0 and (
-                            tup_fetched_delta > 0 or blocks_read_delta > 0
-                        ):
-                            worker.logger.debug(
-                                "IO write estimation produced 0 bytes (inserted=%s updated=%s deleted=%s). "
-                                "Blocks read delta=%s, tup_returned_delta=%s, tup_fetched_delta=%s",
-                                tup_inserted_delta,
-                                tup_updated_delta,
-                                tup_deleted_delta,
-                                blocks_read_delta,
-                                tup_returned_delta,
-                                tup_fetched_delta,
-                            )
-
-                        # Populate DB counters
-                        metrics.rows_returned = max(0, tup_returned_delta)
-                        metrics.rows_examined = max(0, tup_fetched_delta)
-
-                        # Compute buffer miss rate
-                        total_blocks = blocks_read_delta + blocks_hit_delta
-                        if total_blocks > 0:
-                            metrics.buffer_miss_rate = max(
-                                0.0, min(1.0, blocks_read_delta / total_blocks)
-                            )
-                        else:
-                            metrics.buffer_miss_rate = 0.0
-
-                    except Exception as e:
-                        worker.logger.debug("Failed to calculate IO stats: %s", e)
+                if stats_before and stats_after:
+                    self._compute_io_metrics(
+                        metrics,
+                        stats_before=stats_before,
+                        stats_after=stats_after,
+                        worker_logger=worker.logger,
+                    )
 
                 _barrier("io_computed")
                 last_completed_barrier = "io_computed"
