@@ -59,7 +59,7 @@ more-itertools==11.1.0
 msgpack==1.1.2
 mypy==1.20.2
 mypy_extensions==1.1.0
-nest_asyncio==1.5.9
+nest_asyncio==1.6.0
 nftables==0.1
 numpy==2.5.0
 openai==2.33.0
