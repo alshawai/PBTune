@@ -367,7 +367,7 @@ When reporting bugs, include:
 ## 📧 Contact
 
 - **GitHub Issues**: Primary communication channel
-- **Email**: [Ebrahim ElShawa](mailto:imalwaysforlife@gmail.com) (for sensitive matters)
+- **Email**: [Ibrahim Al-Shawa](mailto:contact.alshaw.ai@gmail.com) (for sensitive matters)
 - **Discussions**: Use GitHub Discussions for open-ended questions
 
 ## 📄 License
