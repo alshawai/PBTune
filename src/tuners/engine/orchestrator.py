@@ -2,8 +2,9 @@
 Workload Orchestrator for Database Tuning
 ==========================================
 
-The WorkloadOrchestrator class orchestrates workload execution and collects performance metrics.
-It serves as the bridge between PBT's Population and the actual PostgreSQL database.
+The WorkloadOrchestrator class orchestrates workload execution and collects
+performance metrics. It serves as the bridge between any tuning strategy
+(PBT, BO, LHS) and the actual PostgreSQL database.
 
 Key Responsibilities:
 - Execute workload benchmarks (SYSBENCH, TPC-H, custom queries)
@@ -14,11 +15,11 @@ Key Responsibilities:
 
 Architecture:
 ------------
-    Population -> WorkloadOrchestrator -> PostgreSQL
-                         ↓
-                     Metrics
-                         ↓
-                 Performance Score
+    TuningStrategy -> WorkloadOrchestrator -> PostgreSQL
+                              ↓
+                          Metrics
+                              ↓
+                      Performance Score
 
 Design Patterns:
 - Strategy Pattern: Different workload executors (SYSBENCH, TPC-H)
@@ -37,7 +38,7 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import connection as PostgresConnection, register_adapter, AsIs
 
-from src.database.connection import get_connection
+from src.database.connection import get_connection, connect_with_retry, safe_disconnect
 from src.config.database import DatabaseConfig
 from src.utils.environments.base import DatabaseEnvironment
 from src.utils.metrics import (
@@ -217,91 +218,29 @@ class WorkloadOrchestrator:
         max_retries: int = 1,
         retry_delay: float = 2.0,
     ) -> PostgresConnection:
+        """Establish connection to PostgreSQL with retry logic.
+
+        Delegates to :func:`src.database.connection.connect_with_retry`.
         """
-        Establish connection to PostgreSQL with retry logic.
-
-        Parameters
-        ----------
-        db_config : Optional[DatabaseConfig]
-            Database configuration. If None, uses self.config.db_config
-        max_retries : int
-            Maximum number of connection attempts (default: 1, no retry)
-        retry_delay : float
-            Delay in seconds between retries (default: 2.0)
-
-        Returns
-        -------
-        PostgresConnection
-            Active PostgreSQL connection
-
-        Raises
-        ------
-        psycopg2.Error
-            If connection fails after all retries
-        """
-        last_error = None
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                connection = get_connection(config=db_config or self.config.db_config)
-                connection.autocommit = False
-                if attempt > 1:
-                    LOGGER.debug(" ➤ Connection established after %d attempts", attempt)
-                return connection
-            except psycopg2.Error as e:
-                last_error = e
-                error_msg = str(e).lower()
-
-                # Check if it's a recoverable error (instance still recovering)
-                if (
-                    "starting up" in error_msg
-                    or "not yet accepting connections" in error_msg
-                    or "consistent recovery state" in error_msg
-                    or (
-                        "connection refused" in error_msg
-                        and "is the server running" in error_msg
-                    )
-                ):
-                    if attempt < max_retries:
-                        LOGGER.warning(
-                            " Database recovering, retry %d/%d in %.1fs...",
-                            attempt,
-                            max_retries,
-                            retry_delay,
-                        )
-                        time.sleep(retry_delay)
-
-        LOGGER.error(
-            " ➤ Failed to connect after %d attempts: %s", max_retries, last_error
+        return connect_with_retry(
+            db_config or self.config.db_config,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
         )
-        raise last_error  # type: ignore
 
     def disconnect(
         self, connection: Optional[PostgresConnection], worker_id: Optional[int] = None
     ) -> None:
-        """
-        Close PostgreSQL connection.
+        """Close PostgreSQL connection safely.
 
-        Parameters
-        ----------
-        connection : Optional[PostgresConnection]
-            Connection to close
-        worker_id : Optional[int]
-            Worker ID for logging context
+        Delegates to :func:`src.database.connection.safe_disconnect`.
         """
-        if connection:
-            worker_logger = (
-                get_logger("BenchmarkWorker", worker_id=worker_id)
-                if worker_id is not None
-                else LOGGER
-            )
-            try:
-                connection.close()
-                worker_logger.debug(
-                    "  %sDisconnected from PostgreSQL%s", COLORS.italic, COLORS.reset
-                )
-            except Exception as e:
-                worker_logger.warning("Error closing connection: %s", e)
+        worker_logger = (
+            get_logger("BenchmarkWorker", worker_id=worker_id)
+            if worker_id is not None
+            else LOGGER
+        )
+        safe_disconnect(connection, worker_id=worker_id, logger=worker_logger)
 
     def apply_configuration(
         self,
