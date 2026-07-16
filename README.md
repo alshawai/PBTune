@@ -1,18 +1,32 @@
-# PBTune
-
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6fef48b3-6733-4400-a875-d95a9ce28611" alt="PBTune Banner" width="100%">
 </p>
 
-[![CI](https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg)](https://github.com/alshawai/PBTune/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) [![GitHub stars](https://img.shields.io/github/stars/alshawai/PBTune)](https://github.com/alshawai/PBTune/stargazers)
-
-> **Novel Application of Evolutionary Optimization for Autonomous Database Configuration**
+<p align="center">
+  <a href="https://github.com/alshawai/PBTune/actions/workflows/ci.yml">
+    <img src="https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://www.python.org/downloads/">
+    <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+">
+  </a>
+  <a href="https://www.postgresql.org/">
+    <img src="https://img.shields.io/badge/postgresql-14+-336791.svg" alt="PostgreSQL 14+">
+  </a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0">
+    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPLv3">
+  </a>
+  <a href="https://github.com/alshawai/PBTune/stargazers">
+    <img src="https://img.shields.io/github/stars/alshawai/PBTune" alt="GitHub stars">
+  </a>
+</p>
 
 This repository contains a research implementation applying **Population-Based Training (PBT)**, originally developed by DeepMind for neural network hyperparameter optimization, to the domain of database configuration tuning. Our work demonstrates that evolutionary optimization strategies can autonomously discover high-performance PostgreSQL configurations without domain expertise.
 
 ## Demo
 
-![PBTune Demo](https://github.com/user-attachments/assets/7054cd5b-8675-44af-ae12-2e158b4677f8)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/7054cd5b-8675-44af-ae12-2e158b4677f8" alt="PBTune Demo" width="100%">
+</p>
 
 ---
 
