@@ -14,7 +14,7 @@ attrs==26.1.0
 autocommand==2.2.2
 awscli==1.44.81
 beautifulsoup4==4.15.0
-botocore==1.42.91
+botocore==1.43.49
 CacheControl==0.14.4
 certifi==2026.6.17
 cffi==2.0.0
