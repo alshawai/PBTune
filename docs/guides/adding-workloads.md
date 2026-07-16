@@ -1,7 +1,5 @@
 # Adding a Custom Workload
 
-> Last reviewed: 2026-06-07
-
 See also: [workload-orchestrator](../architecture/workload-orchestrator.md), [benchmarking](../reference/benchmarking.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [workloads/README](../../workloads/README.md)
 
 This guide walks through authoring a custom JSON or YAML workload template — the kind you'd use to tune PostgreSQL for your own production traffic rather than against a stock Sysbench / TPC-H benchmark.
@@ -124,7 +122,7 @@ Save under `workloads/my_app.json`:
 ### 3. Run the tuner against your workload
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt \
     --workload-file workloads/my_app.json \
     --tier core \
     --config standard \
@@ -179,7 +177,7 @@ export DB_USER=admin
 export DB_PASSWORD=...
 export DB_NAME=myapp
 
-python -m src.tuner.main \
+python -m src.tuners.pbt \
     --workload-file workloads/my_real_queries.json \
     --tier core \
     --config standard

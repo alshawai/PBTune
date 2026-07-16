@@ -1,7 +1,5 @@
 # Evaluation Suite
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Evaluation Reproducibility Runbook](../guides/evaluation-runbook.md), [Feature-Driven Scoring](feature-driven-scoring.md), [Workload Orchestrator](workload-orchestrator.md), [Statistical Analysis](#statistical-analysis)
 
 ## Overview

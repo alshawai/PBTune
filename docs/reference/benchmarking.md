@@ -1,7 +1,5 @@
 # Dual-Evaluation Benchmarking Strategy
 
-> Last reviewed: 2026-03-13
-
 See also: [Documentation Index](../README.md)
 
 The Population-Based Training (PBT) Auto-Tuning framework employs a unique **Dual-Evaluation Benchmarking Strategy** designed to support both rigorous academic peer-review and flexible real-world application tuning.
@@ -45,11 +43,11 @@ To ensure **overhead-free, scientifically rigorous evaluations**, the tuner supp
   - _Modes_: `oltp_read_only`, `oltp_read_write`, `oltp_write_only`
   - _Configuration_: 10 tables × 100,000 rows (scale factor 1), 8 threads per worker
   - _Metrics_: TPS (Transactions Per Second) + p95 Transaction Latency (ms)
-  - _Usage_: `python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_write`
+  - _Usage_: `python -m src.tuners.pbt --benchmark sysbench --sysbench-workload oltp_read_write`
 - **TPC-H (OLAP)**: The gold standard for analytical queries.
   - _Configuration_: 8 tables, 22 standard decision-support queries, configurable scale factor (default SF=1 → ~1GB data, ~6M `lineitem` rows per worker)
   - _Metrics_: Query Throughput (QPS) + p50/p95 Query Latency (ms)
-  - _Usage_: `python -m src.tuner.main --benchmark tpch [--scale-factor 1.0]`
+  - _Usage_: `python -m src.tuners.pbt --benchmark tpch [--scale-factor 1.0]`
   - _Data Generation_: Uses the standard `dbgen` C-binary. On first run, the tuner automatically clones the trusted [`electrum/tpch-dbgen`](https://github.com/electrum/tpch-dbgen) mirror, compiles it, and generates `.tbl` data files. Requires `build-essential` (`sudo apt install build-essential`).
   - _Data Loading_: Uses `psycopg2.copy_expert()` with PostgreSQL `COPY` for fast bulk loading directly from `.tbl` files (no intermediate CSVs).
 
@@ -81,7 +79,7 @@ The `{table}` placeholder is randomly resolved to any of the declared tables at 
 
 Developers can copy logs from `pg_stat_statements`, define them in a custom `.json` file with appropriate probability weights, and instantly run a tuning session tailored to their proprietary application without writing custom C++ testing harnesses.
 
-- _Usage_: `python -m src.tuner.main --workload-file workloads/my_custom_app.json`
+- _Usage_: `python -m src.tuners.pbt --workload-file workloads/my_custom_app.json`
 
 > **Note:** Custom workloads without a `schema` section will trigger a warning and default to 1 table with 100K rows.
 
@@ -139,7 +137,7 @@ The PBT tuner uses standard PostgreSQL tools (`pg_basebackup`) to clone whicheve
 
 4. **Run the tuner:**
    ```bash
-   python -m src.tuner.main --workload-file workloads/my_real_queries.json
+   python -m src.tuners.pbt --workload-file workloads/my_real_queries.json
    ```
 
 **What happens under the hood:**

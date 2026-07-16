@@ -1,7 +1,5 @@
 # Workload Orchestrator
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Performance Evaluation](performance-evaluation.md), [Generation Barriers](generation-barriers.md), [Environment Backends](environment-backends.md), [Configuration Management](configuration-management.md), [Benchmarking](../reference/benchmarking.md)
 
 ## Overview
@@ -74,7 +72,7 @@ This split — *policy* vs. *mechanism* vs. *workload-specific execution* — is
                             └────────────────────────┘
 ```
 
-The orchestrator is constructed once per session by [`src/tuner/main.py`](../../src/tuner/main.py) and passed into the population. Every worker thread shares the same orchestrator instance — its scoring engine is built lazily under a lock so multiple threads don't race during the first call.
+The orchestrator is constructed once per session by [`src/tuners/pbt/tuner.py`](../../src/tuners/pbt/tuner.py) and passed into the population. Every worker thread shares the same orchestrator instance — its scoring engine is built lazily under a lock so multiple threads don't race during the first call.
 
 ---
 
@@ -209,7 +207,7 @@ The orchestrator accepts any object that satisfies a small contract — `prepare
 | **`TPCHExecutor`** | [src/benchmarks/tpch/executor.py](../../src/benchmarks/tpch/executor.py) | TPC-H 22-query power test | Uses `dbgen` for data generation, `psycopg2.copy_expert()` for bulk load, raw psycopg2 for query execution. Scale factor configurable. |
 | **`WorkloadExecutor`** | [src/tuner/benchmark/workload.py](../../src/tuner/benchmark/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
 
-Selection is decided in [`src/tuner/main.py`](../../src/tuner/main.py) based on CLI flags:
+Selection is decided in [`src/tuners/pbt/main.py`](../../src/tuners/pbt/tuner.py) based on CLI flags:
 
 ```text
 --benchmark sysbench    → SysbenchExecutor      (CLI: --sysbench-workload, --sysbench-tables, etc.)

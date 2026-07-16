@@ -1,7 +1,5 @@
 # Configuration Management
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Hardware-Aware Normalization](hardware-aware-normalization.md), [PostgreSQL Connection and Knobs](postgresql-connection-and-knobs.md), [Autotuning Knob Policy](../reference/autotuning-knob-policy.md)
 
 ## Overview
@@ -214,7 +212,7 @@ Implementation: [`src/tuner/config/knob_space.py:_repair_memory_budget`](../../s
 
 `config_to_fractions(config)` and `fractions_to_config(fractions)` are the round-trip used by `--warm-start`. Hardware-relative knobs are serialised as fractions of their resolved bounds; absolute knobs are kept as-is. The resulting JSON survives transport across hardware.
 
-The full warm-start flow lives in [`src/tuner/main.py`](../../src/tuner/main.py) and is described in [HARDWARE_AWARE_NORMALIZATION.md §5](hardware-aware-normalization.md). Notably, since commit `858d482` the warm-start serialiser now writes the **full knob space**, not just the best configuration — this lets the loader gracefully drop knobs that no longer exist in the target tier and LHS-fill new ones.
+The full warm-start flow lives in [`src/tuners/pbt/main.py`](../../src/tuners/pbt/tuner.py) and is described in [HARDWARE_AWARE_NORMALIZATION.md §5](hardware-aware-normalization.md). Notably, since commit `858d482` the warm-start serialiser now writes the **full knob space**, not just the best configuration — this lets the loader gracefully drop knobs that no longer exist in the target tier and LHS-fill new ones.
 
 ---
 

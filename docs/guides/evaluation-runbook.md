@@ -1,7 +1,5 @@
 # Evaluation Reproducibility Runbook
 
-> Last reviewed: 2026-06-15
-
 See also: [Documentation Index](../README.md)
 
 This runbook defines the canonical workflow for reproducing comparative
@@ -185,7 +183,7 @@ For each run, verify the generated comparison JSON includes:
 
 ### Tuning stage (`src/tuner`)
 
-- Tuning CLI exposes `--random-seed` (default: `42`) in `src/tuner/main.py`.
+- Tuning CLI exposes `--random-seed` (default: `42`) in `src/tuners/pbt/cli.py`.
 - Population initialization and perturbation sampling use deterministic seed
   propagation from the global seed.
 

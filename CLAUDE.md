@@ -23,30 +23,30 @@ source .venv/bin/activate
 # conda activate pbt-tuning
 
 # Run basic tuning session (minimal knobs, 2-3 minutes)
-python -m src.tuner.main --tier minimal --config rapid
+python -m src.tuners.pbt --tier minimal --config rapid
 
 # Standard tuning session (core knobs, 15-20 minutes)
-python -m src.tuner.main --tier core --config standard
+python -m src.tuners.pbt --tier core --config standard
 
 # Comprehensive tuning (standard knobs, 1-2 hours)
-python -m src.tuner.main --tier standard --config thorough
+python -m src.tuners.pbt --tier standard --config thorough
 ```
 
 ### Advanced Usage
 
 ```bash
 # Custom configuration
-python -m src.tuner.main --tier core --population 8 --generations 30
+python -m src.tuners.pbt --tier core --population 8 --generations 30
 
 # Custom workload
-python -m src.tuner.main --workload-file workloads/custom_queries.json
+python -m src.tuners.pbt --workload-file workloads/custom_queries.json
 
 # External benchmarks
-python -m src.tuner.main --benchmark sysbench --sysbench-tables 4
-python -m src.tuner.main --benchmark tpch --scale-factor 1.0
+python -m src.tuners.pbt --benchmark sysbench --sysbench-tables 4
+python -m src.tuners.pbt --benchmark tpch --scale-factor 1.0
 
 # Warm-Starting (Transfer Learning across hardware boundaries)
-python -m src.tuner.main --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners.pbt --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 
 ### Evaluation Commands
@@ -190,10 +190,10 @@ tests/                   # Test suite (unit/ — analysis, benchmarks, config, c
 
 ```bash
 # Quick validation with minimal configuration
-python -m src.tuner.main --tier minimal --config rapid --population 2 --generations 5
+python -m src.tuners.pbt --tier minimal --config rapid --population 2 --generations 5
 
 # Check logging output
-python -m src.tuner.main --tier core --config standard --verbose DEBUG
+python -m src.tuners.pbt --tier core --config standard --verbose DEBUG
 ```
 
 ## Performance Considerations
@@ -205,7 +205,7 @@ python -m src.tuner.main --tier core --config standard --verbose DEBUG
 
 ## Key Files to Understand
 
-- `src/tuner/main.py` - Main orchestration and CLI
+- `src/tuners/pbt/` - Main orchestration and CLI
 - `src/tuner/core/population.py` - PBT algorithm implementation
 - `src/tuner/benchmark/orchestrator.py` - WorkloadOrchestrator (apply → run → measure)
 - `src/tuner/config/knob_space.py` - Knob space management
