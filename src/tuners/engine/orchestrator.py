@@ -33,7 +33,6 @@ from typing import Dict, Any, Optional, List
 import logging
 import threading
 import numpy as np
-import psycopg2
 from psycopg2.extensions import connection as PostgresConnection, register_adapter, AsIs
 
 from src.database.connection import connect_with_retry, safe_disconnect
@@ -49,7 +48,6 @@ from src.utils.scoring import create_scoring_engine
 from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.tuners.engine.worker import BaseWorker
 from src.utils.types import TuningMode
-from src.tuners.engine.restart_policy import should_restart
 from src.tuners.engine.barriers import GenerationBarrier
 from src.tuners.engine.reliability_gate import apply_reliability_gate
 from src.tuners.engine.worker_metrics import (
@@ -60,6 +58,10 @@ from src.tuners.engine.worker_metrics import (
 from src.tuners.engine.maintenance import (
     vacuum_after_dml as _vacuum_after_dml_impl,
     ensure_benchmark_ready as _ensure_benchmark_ready_impl,
+)
+from src.tuners.engine.activation import (
+    apply_configuration as _apply_configuration_impl,
+    perform_restart as _perform_restart_impl,
 )
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger, get_color_context
@@ -290,103 +292,18 @@ class WorkloadOrchestrator:
         bool
             True if restart occurred during this application
         """
-        try:
-            if recorder is not None:
-                with recorder.span("apply_only"):
-                    result = knob_applicator.apply_only(worker.knob_config)  # type: ignore
-            else:
-                result = knob_applicator.apply_only(worker.knob_config)  # type: ignore
-
-            restart_required = bool(
-                result.restart_required and len(result.restart_required) > 0
-            )
-
-            if restart_required:
-                restart_required_params = list(result.restart_required)
-                first_three = (
-                    restart_required_params[:3] + ["..."]
-                    if len(restart_required_params) > 3
-                    else restart_required_params
-                )
-
-                worker.logger.info(
-                    " %s➤ Restart required for %d parameter(s): %s%s",
-                    COLORS.bold,
-                    len(restart_required_params),
-                    ", ".join(first_three),
-                    COLORS.reset,
-                )
-
-            # When snapshot restore is due, the restore IS the restart.
-            # Skip activation here; the orchestrator handles it.
-            if restore_due:
-                worker.logger.debug(
-                    " Snapshot restore due — skipping activation (restore IS the restart)"
-                )
-                return False
-
-            do_restart = should_restart(
-                mode=self.config.tuning_mode,
-                restart_required=restart_required,
-                generation=generation,
-                adaptive_restart_interval=self.config.adaptive_restart_interval,
-                force=force_restart,
-            )
-
-            if do_restart:
-                worker.logger.debug(" Restarting PostgreSQL instance...")
-                if recorder is not None:
-                    with recorder.span("activate_restart", strategy="restart"):
-                        return self._perform_restart(connection, worker=worker)
-                return self._perform_restart(connection, worker=worker)
-
-            if restart_required and not do_restart:
-                if self.config.tuning_mode == TuningMode.ADAPTIVE:
-                    interval = self.config.adaptive_restart_interval
-                    next_restart = (
-                        ((generation // interval) + 1) * interval
-                        if generation is not None
-                        else interval
-                    )
-                    worker.logger.info(
-                        " ➤ Deferring restart (will restart at generation %s%d%s)",
-                        COLORS.bold,
-                        next_restart,
-                        COLORS.reset,
-                    )
-                elif self.config.tuning_mode == TuningMode.ONLINE:
-                    worker.logger.info(
-                        " %s➤ ONLINE mode: restart-required knobs written but restart skipped%s",
-                        COLORS.bold,
-                        COLORS.reset,
-                    )
-
-            # Non-restart activation: reload for sighup params
-            if not do_restart and result.applied_count > 0 and not restart_required:
-                # Reload to pick up sighup/user params without restart
-                if recorder is not None:
-                    with recorder.span("activate_reload", strategy="reload"):
-                        activation = knob_applicator.activate(
-                            restart_required=False,
-                            env=self.env,
-                            worker_id=worker.worker_id,
-                        )
-                else:
-                    activation = knob_applicator.activate(
-                        restart_required=False,
-                        env=self.env,
-                        worker_id=worker.worker_id,
-                    )
-                if not activation.success:
-                    worker.logger.warning(
-                        " ➤ Configuration reload failed: %s", activation.message
-                    )
-
-            return False
-
-        except Exception as e:
-            worker.logger.error("Failed to apply configuration: %s", e)
-            raise
+        return _apply_configuration_impl(
+            self.config,
+            self.env,
+            connection,
+            worker,
+            knob_applicator,
+            force_restart=force_restart,
+            generation=generation,
+            restore_due=restore_due,
+            recorder=recorder,
+            restart_fn=lambda conn, wkr: self._perform_restart(conn, worker=wkr),
+        )
 
     def _perform_restart(
         self,
@@ -407,25 +324,7 @@ class WorkloadOrchestrator:
         bool
             True if restart succeeded
         """
-        try:
-            # Close connection before restart
-            try:
-                if connection and not connection.closed:
-                    connection.close()
-            except (psycopg2.Error, AttributeError):
-                pass
-
-            if self.env.restart_instance(worker.worker_id, quiet=True):
-                worker.logger.info(" ➤ Restart successful")
-
-                return True
-            else:
-                worker.logger.error(" ➤ Restart failed")
-                return False
-
-        except Exception as e:
-            worker.logger.error("➤ Restart failed with exception: %s", e)
-            return False
+        return _perform_restart_impl(self.env, connection, worker=worker)
 
     def collect_system_metrics(
         self,
