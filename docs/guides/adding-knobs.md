@@ -1,7 +1,5 @@
 # Adding a New Tunable Knob
 
-> Last reviewed: 2026-06-15
-
 See also: [configuration-management](../architecture/configuration-management.md), [postgresql-connection-and-knobs](../architecture/postgresql-connection-and-knobs.md), [autotuning-knob-policy](../reference/autotuning-knob-policy.md), [knob-importance-analysis](../architecture/knob-importance-analysis.md)
 
 This guide walks through everything required to add a PostgreSQL knob to the tunable search space — from researching its bounds to regenerating the tier CSVs and validating the result.
@@ -148,7 +146,7 @@ grep 'your_knob_name' data/expert_defined_knobs/<tier>_knobs.csv
 ## Step 5 — Smoke-test with a quick PBT run
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt \
     --tier <the-tier-you-promoted-to> \
     --config rapid \
     --population 2 \
@@ -219,7 +217,7 @@ grep '^jit_above_cost' data/expert_defined_knobs/standard_knobs.csv
 **Step 5 — smoke test:**
 
 ```bash
-python -m src.tuner.main --tier standard --config rapid --population 2 --generations 3
+python -m src.tuners.pbt --tier standard --config rapid --population 2 --generations 3
 ```
 
 Inspect the resulting `pbt_results_*.json` for `best_configuration.knobs.jit_above_cost`. Done.

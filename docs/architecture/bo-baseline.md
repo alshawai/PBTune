@@ -1,7 +1,5 @@
 # Bayesian Optimization Baseline
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation index](../README.md), [pbt-core](pbt-core.md), [feature-driven-scoring](feature-driven-scoring.md), [environment-backends](environment-backends.md), [guides/bo-baseline](../guides/bo-baseline.md), [guides/pbt-vs-bo-comparison](../guides/pbt-vs-bo-comparison.md)
 
 ## Overview

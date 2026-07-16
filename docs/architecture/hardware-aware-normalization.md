@@ -1,7 +1,5 @@
 # Hardware-Aware Normalization & Warm-Starting
 
-> Last reviewed: 2026-06-15
-
 See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Environment Backends](environment-backends.md), [Cross-Workload Transfer](../research/cross-workload-transfer.md)
 
 ## 1. Overview
@@ -59,7 +57,7 @@ If `Total > Budget` (80% of node's per-worker RAM limit constraint), the framewo
 You can resume PBT optimizations from any previous state mapping via the CLI:
 
 ```bash
-python -m src.tuner.main --warm-start results/oltp/oltp_read_write/pbt_runs/core/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners.pbtn --warm-start results/oltp/oltp_read_write/pbt_runs/core/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 
 **What Happens:**

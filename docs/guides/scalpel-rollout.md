@@ -1,6 +1,6 @@
 # SCALPEL Rollout Guide
 
-> Last reviewed: 2026-06-22 · See also:
+> See also:
 > [SCALPEL architecture](../architecture/scalpel.md),
 > [SCALPEL diagnostics reference](../reference/scalpel-diagnostics.md),
 > [ADR-005](../architecture/decisions/ADR-005-scalpel-tier-generation.md).
@@ -143,7 +143,7 @@ suffix the tier slug with `@scalpel-v1` so post-SCALPEL artifacts do
 not collide with pre-SCALPEL ones:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt \
   --workload oltp_read_write \
   --tier core \
   --knob-source data_driven

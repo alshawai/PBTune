@@ -1,12 +1,10 @@
-# Population-Based Training for PostgreSQL Config
+# PBTune
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6fef48b3-6733-4400-a875-d95a9ce28611" alt="PBTune Banner" width="100%">
 </p>
 
-> Last reviewed: 2026-06-07
-
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-316192.svg)](https://www.postgresql.org/) [![License: Academic Research](https://img.shields.io/badge/License-Academic%20Research-red.svg)](#license)
+[![CI](https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg)](https://github.com/alshawai/PBTune/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) [![GitHub stars](https://img.shields.io/github/stars/alshawai/PBTune)](https://github.com/alshawai/PBTune/stargazers)
 
 > **Novel Application of Evolutionary Optimization for Autonomous Database Configuration**
 
@@ -299,7 +297,7 @@ make check-all
 Optimize 5 core knobs with minimal population for quick testing:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier minimal \
   --config rapid \
   --generations 10 \
@@ -317,7 +315,7 @@ python -m src.tuner.main \
 Tune 13 core knobs with standard PBT configuration:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier core \
   --config standard \
   --generations 30 \
@@ -329,7 +327,7 @@ python -m src.tuner.main \
 Full knob space (36 parameters) with thorough evaluation:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier standard \
   --config thorough \
   --generations 50 \
@@ -340,7 +338,7 @@ python -m src.tuner.main \
 ### Example 4: Custom Workload
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --tier core \
   --config standard \
   --workload-file workloads/custom_queries.json
@@ -357,7 +355,7 @@ export DB_USER=admin
 export DB_PASSWORD=secret
 export DB_NAME=myapp
 
-python -m src.tuner.main --workload-file workloads/my_real_queries.json
+python -m src.tuners.pbt.main --workload-file workloads/my_real_queries.json
 ```
 
 ### Example 6: Manual Worker Resource Allocation
@@ -365,7 +363,7 @@ python -m src.tuner.main --workload-file workloads/my_real_queries.json
 Override automatic hardware detection to manually allocate RAM and CPU cores for each parallel worker (up to 95% of host capacity):
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners.pbt.main \
   --worker-ram 4G \
   --worker-cpus 2 \
   --parallel-workers 3
@@ -392,7 +390,7 @@ xdg-open "$LOG"
 ### CLI Reference
 
 ```bash
-python -m src.tuner.main --help
+python -m src.tuners.pbt.main --help
 ```
 
 **Key Arguments:**
@@ -418,13 +416,13 @@ Use explicit Sysbench workload mode selection when running OLTP benchmarks:
 
 ```bash
 # Read-only OLTP benchmark
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
+python -m src.tuners.pbt.main --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
 
 # Read-write OLTP benchmark (default)
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
+python -m src.tuners.pbt.main --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
 
 # Write-only OLTP benchmark
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
+python -m src.tuners.pbt.main --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
 ```
 
 Sysbench outputs are partitioned by mode:
@@ -439,7 +437,7 @@ Use feature-driven scoring during tuning for workload-aware metric weighting:
 
 ```bash
 # Use feature-driven scoring during tuning
-python -m src.tuner.main --tier core --config standard --scoring-policy feature_driven_v2
+python -m src.tuners.pbt.main --tier core --config standard --scoring-policy feature_driven_v2
 
 # Re-evaluate a session with a different scoring policy
 python -m src.evaluation \
@@ -487,7 +485,7 @@ Example JSON (`my_workload.json`):
 Run with:
 
 ```bash
-python -m src.tuner.main --workload-file path/to/my_workload.json
+python -m src.tuners.pbt.main --workload-file path/to/my_workload.json
 ```
 
 See the [workloads directory README](workloads/README.md) for full formatting details.
@@ -665,34 +663,11 @@ Be respectful, professional, and constructive. This is academic research—criti
 
 ## License
 
-**Academic Research License (Non-Commercial)**
+PBTune is licensed under the [GNU General Public License v3.0](LICENSE).
 
-Copyright © 2025-2026 Data-Vanta Research Group
+This means you are free to use, modify, and distribute PBTune, provided that any derivative work is also released under GPL v3. All forks must remain open source.
 
-This software is provided for **academic research and educational purposes only**.
-
-### Permitted Use
-
-✅ Academic research and experimentation  
-✅ Educational purposes (teaching, learning)  
-✅ Non-commercial evaluation and testing  
-✅ Citation in academic publications
-
-### Prohibited Use
-
-❌ Commercial use or deployment  
-❌ Production database systems  
-❌ Redistribution without attribution  
-❌ Proprietary derivative works
-
-### Conditions
-
-1. **Attribution Required**: All publications using this software must cite the original work (see [Citation](#citation))
-2. **No Warranty**: Software provided "as-is" without guarantees of correctness or performance
-3. **Modifications**: Derivative works must clearly indicate modifications and retain this license
-4. **Data Privacy**: Users responsible for compliance with data protection regulations
-
-For **commercial licensing inquiries**, contact: [Ebrahim ElShawa](mailto:imalwaysforlife@gmail.com)
+For **commercial licensing inquiries**, contact: [Ibrahim Al-Shawa](mailto:contact.alshaw.ai@gmail.com)
 
 ---
 
@@ -701,63 +676,67 @@ For **commercial licensing inquiries**, contact: [Ebrahim ElShawa](mailto:imalwa
 If you use this work in academic research, please cite:
 
 ```bibtex
-@software{pbt_postgres_tuning_2026,
-  author = {[Your Name / Research Group]},
-  title = {Population-Based Training for PostgreSQL Configuration Tuning},
-  year = {2026},
-  publisher = {GitHub},
-  url = {https://github.com/Data-Vanta/ai-database-optimization},
-  note = {Academic Research Software}
+@software{pbtune2026,
+  title     = {PBTune: Population-Based Training for Automatic Database Parameter Tuning},
+  author    = {Al-Shawa, Ibrahim and Hedia, AbdelRahman and Darwish, Mahmoud and Saber, Walaa and El-Sayed, Emad},
+  year      = {2026},
+  url       = {https://github.com/alshawai/PBTune},
+  license   = {GPL-3.0}
 }
 ```
 
-**Key References:**
+## Paper
 
-```bibtex
-@inproceedings{jaderberg2017population,
-  title={Population based training of neural networks},
-  author={Jaderberg, Max and Dalibard, Valentin and Osindero, Simon and Czarnecki, Wojciech M and Donahue, Jeff and Razavi, Ali and Vinyals, Oriol and Green, Tim and Dunning, Iain and Simonyan, Karen and others},
-  booktitle={arXiv preprint arXiv:1711.09846},
-  year={2017}
-}
+PBTune is described in a paper currently in preparation:
 
-@inproceedings{ottertune2017,
-  title={Automatic database management system tuning through large-scale machine learning},
-  author={Van Aken, Dana and Pavlo, Andrew and Gordon, Geoffrey J and Zhang, Bohan},
-  booktitle={SIGMOD},
-  year={2017}
-}
+> **PBTune: Population-Based Training for Automatic Database Parameter Tuning**
+> Ibrahim Al-Shawa, AbdelRahman Hedia, Mahmoud Darwish, Walaa Saber, Emad El-Sayed
 
-@inproceedings{cdbtune2019,
-  title={An end-to-end automatic cloud database tuning system using deep reinforcement learning},
-  author={Zhang, Ji and Liu, Yu and Zhou, Ke and Li, Guoliang and Xiao, Zhili and Cheng, Bin and Xing, Jiashu and Wang, Yangtao and Cheng, Tianheng and Liu, Li and others},
-  booktitle={SIGMOD},
-  year={2019}
-}
-```
+A preprint will be available soon.
+
+### Related Work
+
+| Tool | Approach | Key Paper |
+|------|----------|----------|
+| PBTune | Evolutionary (PBT) | In preparation |
+| OtterTune | GP + Lasso + NN | [Van Aken et al., SIGMOD 2017](https://doi.org/10.1145/3035918.3064029) |
+| CDBTune | Deep RL (DDPG) | [Zhang et al., SIGMOD 2019](https://doi.org/10.1145/3299869.3300085) |
+| LlamaTune | Sample-Efficient Transfer | [Kanellis et al., VLDB 2022](https://doi.org/10.14778/3551793.3551844) |
+| GPTuner | LLM-Guided BO | [Lao et al., VLDB 2024](https://doi.org/10.14778/3659437.3659449) |
+| pgtune | Static Rules | — |
+
+> **Note:** Direct performance comparisons are omitted — these systems were evaluated on different hardware and workloads.
 
 ---
 
 ## Acknowledgments
 
-This research was inspired by:
+PBTune was built by:
 
-- **DeepMind**: Population-Based Training algorithm
-- **CMU Database Group**: OtterTune and autonomous tuning research
-- **Tsinghua University**: CDBTune and deep RL for databases
-- **PostgreSQL Community**: Open-source database system and documentation
+- [Ibrahim Al-Shawa](https://github.com/alshawai) — Project lead, PBT core, evaluation framework
+- [AbdelRahman Hedia](https://github.com/bodyhedia44) — Environment backends, Docker orchestration
+- [Mahmoud Darwish](https://github.com/mahmoud-darwish) — Environment backends, infrastructure
 
-Special thanks to the academic database systems community for foundational research in autonomous tuning.
+Under the supervision of:
+
+- **Prof. Walaa Saber** — Associate Professor, Electrical Engineering, Port Said University
+- **Prof. Emad El-Sayed** — Assistant Professor, Electrical Engineering, Port Said University
+
+With contributions from:
+
+- [Karim AbdelAziz](https://github.com/karimali03) — Strong integration of BO baseline
+- [Mohammad Ahmad](https://github.com/mohamed20o03) — The first iteration of knob importance analysis
+
+This research was inspired by [DeepMind's Population-Based Training](https://arxiv.org/abs/1711.09846), the [CMU Database Group](https://db.cs.cmu.edu/) (OtterTune), and the [PostgreSQL Community](https://www.postgresql.org/).
 
 ---
 
 ## Contact
 
-**Maintainer**: Data-Vanta Research Group  
-**Repository**: https://github.com/Data-Vanta/ai-database-optimization  
-**Issues**: https://github.com/Data-Vanta/ai-database-optimization/issues
-
-For research collaboration or academic inquiries, please open a GitHub issue or contact the maintainers directly.
+**Maintainer**: [Ibrahim Al-Shawa](https://github.com/alshawai)  
+**Email**: contact.alshaw.ai@gmail.com  
+**Repository**: https://github.com/alshawai/PBTune  
+**Issues**: https://github.com/alshawai/PBTune/issues
 
 ---
 
@@ -766,9 +745,5 @@ For research collaboration or academic inquiries, please open a GitHub issue or 
 **Built with** 🧬 **Evolutionary Optimization** | 🐘 **PostgreSQL** | 🐍 **Python**
 
 _Advancing the state-of-the-art in autonomous database systems_
-
----
-
-Made with Love ❤️ by the Data-Vanta Research Group
 
 </div>

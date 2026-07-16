@@ -1,6 +1,4 @@
-# Contributing to PBT PostgreSQL Tuning
-
-> Last reviewed: 2026-06-15
+# Contributing to PBTune
 
 See also: [Documentation Index](./docs/README.md)
 
@@ -8,7 +6,7 @@ Thank you for your interest in contributing to this academic research project! T
 
 ## 🎓 Project Status
 
-This is an **academic research project** under active development by the Data-Vanta Research Group. The codebase is shared for:
+This is an **academic research project** under active development by the PBTune team. The codebase is shared for:
 
 - **Reproducibility**: Enabling verification of published results
 - **Education**: Teaching evolutionary optimization and database systems
@@ -21,7 +19,7 @@ This is an **academic research project** under active development by the Data-Va
 We appreciate the following types of contributions:
 
 #### 1. Bug Reports
-- **Issues**: Report bugs via [GitHub Issues](https://github.com/Data-Vanta/ai-database-optimization/issues)
+- **Issues**: Report bugs via [GitHub Issues](https://github.com/alshawai/PBTune/issues)
 - **Include**: Reproduction steps, environment details, error messages, expected vs. actual behavior
 - **Label**: Use `bug` label
 
@@ -101,8 +99,8 @@ Failure to provide proper attribution violates the [license](./LICENSE).
 ### Step 1: Fork and Clone
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/ai-database-optimization.git
-cd ai-database-optimization
+git clone https://github.com/YOUR-USERNAME/PBTune.git
+cd PBTune
 ```
 
 ### Step 2: Create a Branch
@@ -144,7 +142,7 @@ make check-all
 **Recommended**: Use project-local Python from `.venv` for all commands.
 
 ```bash
-.venv/bin/python -m src.tuner.main --help
+.venv/bin/python -m src.tuners.pbt --help
 ```
 
 ### Local Validation Command Matrix
@@ -178,17 +176,22 @@ If `make` is unavailable on your platform, run the equivalent commands directly:
 
 ```bash
 git add .
-git commit -m "Fix: Brief description of the change
-
-Detailed explanation if needed. Reference issue #123 if applicable."
+git commit -m "fix(scoring): correct quantile normalization edge case"
 ```
 
-Commit message format:
-- **Fix**: Bug fixes
-- **Docs**: Documentation changes
-- **Bench**: Benchmark results
-- **Refactor**: Code restructuring (no functional change)
-- **Research**: Research extensions
+We use [Conventional Commits](https://www.conventionalcommits.org/):
+
+| Prefix | Use For |
+|--------|--------|
+| `feat` | New features |
+| `fix` | Bug fixes |
+| `docs` | Documentation changes |
+| `refactor` | Code restructuring |
+| `test` | Adding or updating tests |
+| `chore` | Maintenance tasks |
+| `ci` | CI/CD changes |
+
+Use scopes to indicate the affected module: `feat(scoring)`, `fix(pbt)`, `docs(readme)`, etc.
 
 ### Step 6: Push and Create Pull Request
 
@@ -300,7 +303,7 @@ When reporting bugs, include:
 **Description**: Brief summary of the bug
 
 **Steps to Reproduce**:
-1. Run command: `python -m src.tuner.main ...`
+1. Run command: `python -m src.tuners.pbt ...`
 2. Observe behavior: ...
 
 **Expected Behavior**: What should happen
