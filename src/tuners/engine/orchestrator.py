@@ -53,6 +53,7 @@ from src.tuners.engine.worker import BaseWorker
 from src.utils.types import TuningMode
 from src.tuners.engine.restart_policy import should_restart
 from src.tuners.engine.barriers import GenerationBarrier
+from src.tuners.engine.reliability_gate import apply_reliability_gate
 from src.utils.applicator import KnobApplicator, ApplicatorConfig
 from src.utils.logger import get_logger, get_color_context
 from src.utils.timing import TimingRecorder
@@ -1308,40 +1309,18 @@ class WorkloadOrchestrator:
 
         If the evaluation is healthy, ``failure_type`` remains ``None``.
         Only the first matching classification is applied (most severe first).
+
+        Delegates to :func:`apply_reliability_gate`, forwarding the class-level
+        thresholds so subclass/test overrides of the ``_*_THRESHOLD`` attributes
+        continue to take effect.
         """
-        if metrics.failure_type is not None:
-            # Already classified (e.g. EXECUTION_CRASH from the outer handler)
-            return
-
-        if metrics.error_rate >= self._HIGH_ERROR_RATE_THRESHOLD:
-            metrics.failure_type = "HIGH_ERROR_RATE"
-            worker_logger.warning(
-                " ➤ Reliability gate: error_rate=%.2f exceeds threshold %.2f — "
-                "marking as HIGH_ERROR_RATE",
-                metrics.error_rate,
-                self._HIGH_ERROR_RATE_THRESHOLD,
-            )
-            return
-
-        if metrics.throughput <= self._NEAR_ZERO_THROUGHPUT_THRESHOLD:
-            metrics.failure_type = "NEAR_ZERO_THROUGHPUT"
-            worker_logger.warning(
-                " ➤ Reliability gate: throughput=%.4f at or below threshold %.4f — "
-                "marking as NEAR_ZERO_THROUGHPUT",
-                metrics.throughput,
-                self._NEAR_ZERO_THROUGHPUT_THRESHOLD,
-            )
-            return
-
-        if metrics.error_rate >= self._DEGRADED_ERROR_RATE_THRESHOLD:
-            metrics.failure_type = "DEGRADED"
-            worker_logger.warning(
-                " ➤ Reliability gate: error_rate=%.2f exceeds degraded threshold "
-                "%.2f — marking as DEGRADED",
-                metrics.error_rate,
-                self._DEGRADED_ERROR_RATE_THRESHOLD,
-            )
-            return
+        apply_reliability_gate(
+            metrics,
+            worker_logger,
+            high_error_rate_threshold=self._HIGH_ERROR_RATE_THRESHOLD,
+            near_zero_throughput_threshold=self._NEAR_ZERO_THROUGHPUT_THRESHOLD,
+            degraded_error_rate_threshold=self._DEGRADED_ERROR_RATE_THRESHOLD,
+        )
 
     def _refine_workload_features(
         self,
