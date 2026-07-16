@@ -43,4 +43,4 @@ scipy>=1.11.0
 
 # Bayesian Optimization
 ConfigSpace>=1.1.0
-smac>=2.2.0
+smac>=2.4.0
