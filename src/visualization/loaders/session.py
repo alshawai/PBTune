@@ -145,6 +145,7 @@ def load_session(
     # Compute new scores for all metrics using the config
     use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
     if use_raw:
+        assert metric_key is not None  # implied by use_raw
         new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
     elif hasattr(metric_config, "compute_score_value"):
         new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
@@ -187,7 +188,7 @@ def load_session(
                     gen_scores.append(score)
 
         if gen_scores:
-            if use_raw and metric_key.startswith("latency"):
+            if use_raw and metric_key is not None and metric_key.startswith("latency"):
                 best_scores[i] = min(gen_scores)  # lower latency is better
             else:
                 best_scores[i] = max(gen_scores)
@@ -208,7 +209,7 @@ def load_session(
                 exploit_events.append(event_data)
 
     # Enforce monotonically increasing best scores (lower-is-better for latency)
-    if use_raw and metric_key.startswith("latency"):
+    if use_raw and metric_key is not None and metric_key.startswith("latency"):
         running_best = np.minimum.accumulate(best_scores)
     else:
         running_best = np.maximum.accumulate(best_scores)

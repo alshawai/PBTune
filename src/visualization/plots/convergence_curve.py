@@ -210,7 +210,7 @@ def _step_values_at(x_source, y_source, x_grid) -> np.ndarray:
     x_arr = np.asarray(x_source, dtype=float)
     y_arr = np.asarray(y_source, dtype=float)
     grid = np.asarray(x_grid, dtype=float)
-    indices = np.searchsorted(x_arr, grid, side="right") - 1
+    indices = np.asarray(np.searchsorted(x_arr, grid, side="right") - 1)
     values = np.full(len(grid), np.nan)
     valid = indices >= 0
     values[valid] = y_arr[indices[valid]]
@@ -472,7 +472,7 @@ def generate(
             logger.info("Default %s from comparison arm: %.4f", metric_key, default_score)
         if default_score is None:
             # Fallback to first PBT generation value
-            default_score = sessions[0].best_scores[0]
+            default_score = float(sessions[0].best_scores[0])
             logger.warning("Default %s inferred from PBT initial generation", metric_key)
     else:
         # Composite-score mode (existing logic)
@@ -490,13 +490,13 @@ def generate(
                 logger.info("Default score loaded from comparison: %.4f", default_score)
             except Exception:
                 from src.visualization.loaders.comparison import load_multi_arm_comparison
-                comp = load_multi_arm_comparison(comparison_path)
-                if "default" in comp.summaries_by_arm and comp.summaries_by_arm["default"]:
-                    default_score = list(comp.summaries_by_arm["default"].values())[0].mean
+                multi_comp = load_multi_arm_comparison(comparison_path)
+                if "default" in multi_comp.summaries_by_arm and multi_comp.summaries_by_arm["default"]:
+                    default_score = list(multi_comp.summaries_by_arm["default"].values())[0].mean
                     logger.info("Default score loaded from multi-arm comparison: %.4f", default_score)
 
         if default_score is None:
-            default_score = sessions[0].best_scores[0]
+            default_score = float(sessions[0].best_scores[0])
             logger.warning("Default score inferred from PBT initial generation — no comparison file provided")
         
     logger.info("Data loaded: %d PBT seeds, %d BO seeds", pbt_agg.n_seeds, len(bo_traces))
@@ -626,7 +626,7 @@ def generate(
                 color="#4B5563",
             )
 
-        fig.tight_layout(rect=[0, 0.03, 1, 1] if caption_parts else None)
+        fig.tight_layout(rect=(0, 0.03, 1, 1) if caption_parts else None)
         
         fmt_list = [ExportFormat(f) for f in (formats or ["pdf", "png"])]
         export_figure(fig, output_dir, FIG_ID, formats=fmt_list)

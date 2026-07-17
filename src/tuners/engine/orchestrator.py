@@ -374,6 +374,12 @@ class WorkloadOrchestrator:
         Barrier waits stay in the caller so the lockstep drain invariant is
         untouched — this helper only builds the context and executes.
         """
+        if worker.db_config is None:
+            raise ValueError(
+                f"Worker {worker.worker_id} has no db_config; instance must be "
+                "brought up before running a workload"
+            )
+
         if self.workload_executor.manages_own_connection:
             ctx = ExecutionContext(
                 db_config=worker.db_config,

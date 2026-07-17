@@ -647,7 +647,7 @@ class PBTTuner(BaseTuner):
         warm_configs = [base_config]
         factors = self._compute_warm_start_perturbation_factors(num_warm_start - 1)
         warm_rng = np.random.default_rng(seed)
-        for i, (f_min, f_max) in enumerate(factors):
+        for f_min, f_max in factors:
             warm_configs.append(
                 self.full_knob_space.perturb_config(
                     base_config, perturbation_factor=(f_min, f_max), rng=warm_rng

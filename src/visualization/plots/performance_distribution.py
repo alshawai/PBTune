@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 import numpy as np
 from matplotlib.figure import Figure
 import seaborn as sns
@@ -173,7 +174,7 @@ def generate(
         else:
             bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))
         
-    comp_data = None
+    comp_data: Any = None
     if comparison_path is not None:
         try:
             comp_data = load_comparison(comparison_path)
@@ -207,7 +208,7 @@ def generate(
         
         if pt is not None:
             data_x = []
-            data_y = []
+            data_y: list[Any] = []
             palette = {}
             for m in plot_methods:
                 vals = scores_dict[m]
@@ -221,7 +222,7 @@ def generate(
             
             # Plot scalar default if needed
             if "Default" in plot_methods and len(scores_dict["Default"]) == 1:
-                default_val = scores_dict["Default"][0]
+                default_val = float(scores_dict["Default"][0])
                 ax.axhline(y=default_val, color=get_method_style("default")["color"], linestyle=":", alpha=0.8)
                 ax.scatter([plot_methods.index("Default")], [default_val], marker="D", s=100, color=get_method_style("default")["color"], zorder=5)
 
@@ -245,7 +246,7 @@ def generate(
                 
             # Plot scalar default if needed
             if "Default" in plot_methods and len(scores_dict["Default"]) == 1:
-                default_val = scores_dict["Default"][0]
+                default_val = float(scores_dict["Default"][0])
                 ax.axhline(y=default_val, color=get_method_style("default")["color"], linestyle=":", alpha=0.8)
                 ax.scatter([plot_methods.index("Default")], [default_val], marker="D", s=100, color=get_method_style("default")["color"], zorder=5)
 

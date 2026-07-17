@@ -9,6 +9,7 @@ error-bar caps, and a shared top-spanning legend.
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -53,7 +54,7 @@ _DISPLAY_NAMES: dict[str, str] = {
 }
 
 # ── Metrics we plot ─────────────────────────────────────────────────
-_METRIC_SPECS = [
+_METRIC_SPECS: list[dict[str, Any]] = [
     {
         "key": "throughput",
         "label": "Throughput (txn/sec)",
@@ -268,7 +269,7 @@ def generate(
         flat_axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
         add_panel_labels(flat_axes)
 
-        fig.tight_layout(rect=[0, 0, 1, 0.93])
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
 
     fmt_list = [ExportFormat(f) for f in (formats or ["pdf", "png"])]
     export_figure(fig, output_dir, FIG_ID, formats=fmt_list)

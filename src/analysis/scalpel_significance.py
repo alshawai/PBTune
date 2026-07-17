@@ -317,7 +317,7 @@ def boruta_with_group_perm(
         )
 
     base_rng = np.random.default_rng(random_state)
-    hit_counts = np.zeros(len(knobs), dtype=np.int64)
+    hit_counts: np.ndarray = np.zeros(len(knobs), dtype=np.int64)
 
     for _it in range(n_iterations):
         rng = np.random.default_rng(base_rng.integers(0, 2**63 - 1))
