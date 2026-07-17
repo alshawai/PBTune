@@ -107,6 +107,13 @@ def _governor_paths() -> List[Path]:
     ]
 
 
+def _cur_freq_paths() -> List[Path]:
+    return [
+        Path(p)
+        for p in glob.glob(str(_CPU_ROOT / "cpu[0-9]*" / "cpufreq" / "scaling_cur_freq"))
+    ]
+
+
 def _read_text(path: Path) -> Optional[str]:
     try:
         return path.read_text().strip()
@@ -235,10 +242,8 @@ def read_cpu_perf_state() -> CPUPerfState:
             turbo_enabled = boost.strip() == "1"
 
     cur_freqs: List[int] = []
-    for cur_path in glob.glob(
-        str(_CPU_ROOT / "cpu[0-9]*" / "cpufreq" / "scaling_cur_freq")
-    ):
-        val = _read_text(Path(cur_path))
+    for cur_path in _cur_freq_paths():
+        val = _read_text(cur_path)
         if val and val.isdigit():
             cur_freqs.append(int(val))
 

@@ -35,7 +35,13 @@ def _expand_json_paths(paths: list[str], patterns: tuple[str, ...]) -> list[Path
         if path.is_dir():
             matched: list[Path] = []
             for pattern in patterns:
-                matched.extend(path.glob(pattern))
+                try:
+                    matched.extend(path.glob(pattern))
+                except OSError:
+                    # Directory vanished or is inaccessible between is_dir()
+                    # and glob(); treat as no matches (Python 3.11 raises here,
+                    # 3.13 returns empty).
+                    continue
             expanded.extend(sorted(set(matched), key=lambda p: p.name))
         elif path.exists():
             expanded.append(path)

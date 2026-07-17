@@ -49,6 +49,13 @@ class _FakeSysfs:
             if p.endswith("scaling_governor")
         ]
 
+    def cur_freq_paths(self):
+        return [
+            Path(p)
+            for p in self.values
+            if p.endswith("scaling_cur_freq")
+        ]
+
     def read(self, path: Path):
         return self.values.get(str(path))
 
@@ -65,6 +72,7 @@ def fake_sysfs(monkeypatch):
     fs = _FakeSysfs(cpus=range(4), governor="ondemand", no_turbo="0")
     monkeypatch.setattr(cpu_perf.platform, "system", lambda: "Linux")
     monkeypatch.setattr(cpu_perf, "_governor_paths", fs.governor_paths)
+    monkeypatch.setattr(cpu_perf, "_cur_freq_paths", fs.cur_freq_paths)
     monkeypatch.setattr(cpu_perf, "_read_text", fs.read)
     monkeypatch.setattr(cpu_perf, "_write_text", fs.write)
     # Fake _direct_write_all to use our in-memory store.

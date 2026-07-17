@@ -31,7 +31,12 @@ BO_TRACE_GLOBS: Tuple[str, ...] = (
 def _discover(directory: Path, globs: Tuple[str, ...]) -> List[Path]:
     found: List[Path] = []
     for pattern in globs:
-        found.extend(directory.glob(pattern))
+        try:
+            found.extend(directory.glob(pattern))
+        except OSError:
+            # Directory is missing or inaccessible; treat as no traces.
+            # (Python 3.11 raises FileNotFoundError here, 3.13 returns empty.)
+            continue
     # De-dup (``trace_*`` never overlaps the legacy stems, but be defensive)
     # and sort by name for deterministic, timestamp-ordered discovery.
     return sorted(set(found), key=lambda p: p.name)
