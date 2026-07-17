@@ -23,30 +23,30 @@ source .venv/bin/activate
 # conda activate pbt-tuning
 
 # Run basic tuning session (minimal knobs, 2-3 minutes)
-python -m src.tuner.main --tier minimal --config rapid
+python -m src.tuners pbt --tier minimal --config rapid
 
 # Standard tuning session (core knobs, 15-20 minutes)
-python -m src.tuner.main --tier core --config standard
+python -m src.tuners pbt --tier core --config standard
 
 # Comprehensive tuning (standard knobs, 1-2 hours)
-python -m src.tuner.main --tier standard --config thorough
+python -m src.tuners pbt --tier standard --config thorough
 ```
 
 ### Advanced Usage
 
 ```bash
 # Custom configuration
-python -m src.tuner.main --tier core --population 8 --generations 30
+python -m src.tuners pbt --tier core --population 8 --generations 30
 
 # Custom workload
-python -m src.tuner.main --workload-file workloads/custom_queries.json
+python -m src.tuners pbt --workload-file workloads/custom_queries.json
 
 # External benchmarks
-python -m src.tuner.main --benchmark sysbench --sysbench-tables 4
-python -m src.tuner.main --benchmark tpch --scale-factor 1.0
+python -m src.tuners pbt --benchmark sysbench --sysbench-tables 4
+python -m src.tuners pbt --benchmark tpch --scale-factor 1.0
 
 # Warm-Starting (Transfer Learning across hardware boundaries)
-python -m src.tuner.main --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners pbt --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 
 ### Evaluation Commands
@@ -86,14 +86,14 @@ python -m src.scripts.analyze_knob_importance
 
 The system follows a layered architecture:
 
-1. **Population Manager** (`src/tuner/core/population.py`): Orchestrates PBT algorithm
-2. **Worker** (`src/tuner/core/worker.py`): Individual configuration + performance state
-3. **Evolution** (`src/tuner/core/evolution.py`): Exploit-explore algorithms
-4. **Generation Barriers** (`src/tuner/core/barriers.py`): Lockstep B1–B17 synchronisation
-5. **Workload Orchestrator** (`src/tuner/benchmark/orchestrator.py`): Per-worker apply → run → measure pipeline (formerly "Evaluator")
-6. **Restart Policy** (`src/tuner/benchmark/restart_policy.py`): TuningMode-driven restart decisions
+1. **Population Manager** (`src/tuners/pbt/population.py`): Orchestrates PBT algorithm
+2. **Worker** (`src/tuners/engine/worker.py` `BaseWorker` + `src/tuners/pbt/worker.py` `PBTWorker`): Configuration + performance state (generic eval vehicle + PBT evolution mechanics)
+3. **Evolution** (`src/tuners/pbt/evolution.py`): Exploit-explore algorithms
+4. **Generation Barriers** (`src/tuners/engine/barriers.py`): Lockstep B1–B17 synchronisation
+5. **Workload Orchestrator** (`src/tuners/engine/orchestrator.py`): Per-worker apply → run → measure pipeline (formerly "Evaluator")
+6. **Restart Policy** (`src/tuners/engine/restart_policy.py`): TuningMode-driven restart decisions
 7. **Environment Factory** (`src/utils/environments/factory.py`): Docker / bare-metal lifecycle
-8. **Knob Space** (`src/tuner/config/knob_space.py`): Search space definition and LHS sampling
+8. **Knob Space** (`src/knobs/knob_space.py`): Search space definition and LHS sampling
 9. **Composite Scorer** (`src/utils/scoring/`): Feature-driven score = G × Σ(wᵢ × uᵢ)
 10. **Timing Recorder** (`src/utils/timing.py`, `src/utils/session_clock.py`): Monotonic-clock instrumentation (schema v1.1)
 
@@ -110,11 +110,26 @@ The system follows a layered architecture:
 ### Directory Structure
 
 ```text
-src/tuner/
-├── core/                # population, worker, evolution, barriers
-├── config/              # knob_space, knob_loader, tuner_config
-├── benchmark/           # orchestrator (was "evaluator"), restart_policy, workload
-└── main.py              # CLI entry point
+src/tuners/               # Unified tuner framework (BaseTuner + per-strategy subpackages)
+├── base.py               # BaseTuner — Template Method lifecycle (setup → run → teardown)
+├── cli.py                # Shared CLI groups + attach_session_html_log
+├── __main__.py           # Strategy router: `python -m src.tuners <strategy> ...`
+├── engine/               # Strategy-agnostic eval engine
+│   ├── orchestrator.py   # WorkloadOrchestrator (was "evaluator"), apply → run → measure
+│   ├── worker.py         # BaseWorker — generic eval vehicle (config/metrics/identity)
+│   ├── barriers.py       # Lockstep B1–B17 generation barriers
+│   ├── restart_policy.py # TuningMode-driven restart decisions
+│   └── activation, maintenance, feature_refinement, worker_metrics, reliability_gate
+├── pbt/                  # PBT strategy
+│   ├── tuner.py          # PBTTuner(BaseTuner)
+│   ├── population.py     # Population manager
+│   ├── evolution.py      # Exploit-explore algorithms
+│   ├── worker.py         # PBTWorker(BaseWorker) — evolution mechanics
+│   ├── config.py         # PBTConfig + profile constants
+│   ├── cli.py            # `python -m src.tuners.pbt ...`
+│   └── __main__.py
+├── lhs_design/           # LHS-sampling strategy (tuner, cli, __main__)
+└── utils/                # session_assembly, tuner_logging, session_writer, types, profiles, …
 
 src/utils/
 ├── environments/        # base, docker, bare_metal, factory
@@ -124,7 +139,7 @@ src/utils/
 ├── metrics.py           # PerformanceMetrics dataclass
 ├── metric_instrumentation.py
 ├── hardware_info.py     # WorkerResources detection
-├── rescoring.py         # Post-hoc global score recalibration utilities
+├── calibration.py       # Post-hoc global score recalibration utilities (was rescoring.py)
 ├── timing.py            # TimingRecorder + TimingRecord (schema v1.1, monotonic clock)
 ├── session_clock.py     # session_timestamp() — wall-clock for filenames/log lines
 └── types.py
@@ -139,7 +154,7 @@ src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
 
 src/analysis/            # data_loader, importance, hardware_validator, tier_generator, timing_breakdown
 src/database/            # connection, data_loader, management
-src/knobs/               # knob_metadata, retrieval, preprocess_knobs, policy
+src/knobs/               # knob_space, knob_loader, knob_metadata, retrieval, preprocess_knobs, policy
 src/benchmarks/          # executor + sysbench/ + tpch/
 src/scripts/             # setup_database, cleanup_instances, analyze_knobs, analyze_knob_importance,
                          # pbt_vs_bo_comarison (sic), bo_baseline/ subpackage
@@ -159,7 +174,7 @@ results/                 # Optimization results
 ├── olap/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
 └── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
 workloads/               # Workload definitions (oltp.json, olap.json, mixed.json, custom)
-tests/                   # Test suite (unit/ — analysis, benchmarks, config, core, evaluation, knobs, scoring, scripts, utils)
+tests/                   # Test suite (unit/ — analysis, benchmarks, config, evaluation, knobs, scoring, scripts, tuners/{engine,pbt}, utils)
 ```
 
 ## Common Development Tasks
@@ -169,8 +184,8 @@ tests/                   # Test suite (unit/ — analysis, benchmarks, config, c
 1. Add the knob row to the appropriate tier CSV in `data/expert_defined_knobs/` (or generate via `data/data_driven_knobs/` for data-driven tiers)
 2. Ensure the knob is present in `data/knob_metadata.json` (run `python -m src.scripts.analyze_knobs --refresh-raw` if it isn't)
 3. If the knob has tuning constraints, update `data/knob_policy.json` and the policy logic in `src/knobs/policy.py`
-4. Knob retrieval is handled by `src/knobs/retrieval.py`; loading by `src/tuner/config/knob_loader.py`
-5. Update perturbation logic in `src/tuner/core/evolution.py` only if the knob needs special perturbation semantics
+4. Knob retrieval is handled by `src/knobs/retrieval.py`; loading by `src/knobs/knob_loader.py`
+5. Update perturbation logic in `src/tuners/pbt/evolution.py` only if the knob needs special perturbation semantics
 
 ### Creating New Workloads
 
@@ -180,20 +195,20 @@ tests/                   # Test suite (unit/ — analysis, benchmarks, config, c
 
 ### Modifying PBT Algorithm
 
-1. Core algorithm changes in `src/tuner/core/evolution.py`
-2. Population management in `src/tuner/core/population.py`
-3. Configuration in `src/tuner/config/tuner_config.py`
-4. Lockstep barriers (B1–B17) in `src/tuner/core/barriers.py`
-5. Per-worker evaluation flow in `src/tuner/benchmark/orchestrator.py`
+1. Core algorithm changes in `src/tuners/pbt/evolution.py`
+2. Population management in `src/tuners/pbt/population.py`
+3. Configuration in `src/tuners/pbt/config.py`
+4. Lockstep barriers (B1–B17) in `src/tuners/engine/barriers.py`
+5. Per-worker evaluation flow in `src/tuners/engine/orchestrator.py`
 
 ### Testing Changes
 
 ```bash
 # Quick validation with minimal configuration
-python -m src.tuner.main --tier minimal --config rapid --population 2 --generations 5
+python -m src.tuners pbt --tier minimal --config rapid --population 2 --generations 5
 
 # Check logging output
-python -m src.tuner.main --tier core --config standard --verbose DEBUG
+python -m src.tuners pbt --tier core --config standard --verbose DEBUG
 ```
 
 ## Performance Considerations
@@ -205,10 +220,12 @@ python -m src.tuner.main --tier core --config standard --verbose DEBUG
 
 ## Key Files to Understand
 
-- `src/tuner/main.py` - Main orchestration and CLI
-- `src/tuner/core/population.py` - PBT algorithm implementation
-- `src/tuner/benchmark/orchestrator.py` - WorkloadOrchestrator (apply → run → measure)
-- `src/tuner/config/knob_space.py` - Knob space management
+- `src/tuners/pbt/cli.py` - PBT CLI entry point (`python -m src.tuners pbt`)
+- `src/tuners/pbt/tuner.py` - PBTTuner(BaseTuner) — PBT as a strategy
+- `src/tuners/pbt/population.py` - PBT algorithm implementation
+- `src/tuners/base.py` - BaseTuner lifecycle skeleton shared by all strategies
+- `src/tuners/engine/orchestrator.py` - WorkloadOrchestrator (apply → run → measure)
+- `src/knobs/knob_space.py` - Knob space management
 - `src/utils/environments/factory.py` - Environment backend selection and lifecycle
 - `src/utils/scoring/scorer.py` - CompositeScorer (S = G × Σ(wᵢ × uᵢ))
 - `src/utils/timing.py` - Timing instrumentation primitives (schema v1.1)

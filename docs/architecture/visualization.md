@@ -39,7 +39,7 @@ The palette in [colors.py](../../src/visualization/colors.py) is ordered so the 
 
 Renderers that need more series than the palette supports must also set distinct line styles or markers — colour alone is not sufficient for accessibility. The palette helper is `theme.colorblind_palette()`; renderers should call it rather than hard-coding hex values.
 
-### 5. Independent of `src/tuner/`
+### 5. Independent of `src/tuners/`
 
 The visualization package never imports from the tuning engine. The dependency graph runs `tuner` → result JSON → `visualization`, never directly. Two payoffs:
 

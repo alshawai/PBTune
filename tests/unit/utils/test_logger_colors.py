@@ -140,13 +140,13 @@ def test_module_colors_are_deterministic():
     assert all(color.startswith("\033[1m\033[38;2;") for color in primary_ansi_colors)
     assert all(color.startswith("#") for color in primary_html_colors)
 
-    alias_ansi = ColorPalette.get_module_color("src.tuner.main", "ansi")
-    alias_html = ColorPalette.get_module_color("src.tuner.main", "html")
+    alias_ansi = ColorPalette.get_module_color("src.tuners.pbt.tuner", "ansi")
+    alias_html = ColorPalette.get_module_color("src.tuners.pbt.tuner", "html")
     unknown_module_ansi = ColorPalette.get_module_color("custom.module.name", "ansi")
     unknown_module_html = ColorPalette.get_module_color("custom.module.name", "html")
 
-    assert alias_ansi == ColorPalette.get_module_color("src.tuner.main", "ansi")
-    assert alias_html == ColorPalette.get_module_color("src.tuner.main", "html")
+    assert alias_ansi == ColorPalette.get_module_color("src.tuners.pbt.tuner", "ansi")
+    assert alias_html == ColorPalette.get_module_color("src.tuners.pbt.tuner", "html")
     assert unknown_module_ansi == ColorPalette.get_module_color(
         "custom.module.name", "ansi"
     )
@@ -214,7 +214,7 @@ def test_formatter_no_color_output_is_plain_text():
     formatter = _logger_formatters.ColoredFormatter(show_module=True)
     html_formatter = _logger_formatters.HTMLFormatter(show_module=True)
     record = logging.LogRecord(
-        name="src.tuner.main",
+        name="src.tuners.pbt.tuner",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,

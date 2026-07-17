@@ -8,7 +8,7 @@ See also: [Documentation Index](../README.md), [Knob Importance Analysis](../arc
 
 The `src/visualization/` package generates publication-quality figures from PBT session and analysis artifacts. It is a self-contained pipeline that loads JSON results, applies a venue-specific matplotlib theme, and renders figures registered through a central registry.
 
-The package is invoked via the CLI `python -m src.visualization` and is the canonical way to produce the paper figures from a results tree on disk. It is independent of the tuning loop — it never connects to PostgreSQL, never imports from `src/tuner/`, and runs offline against saved JSON.
+The package is invoked via the CLI `python -m src.visualization` and is the canonical way to produce the paper figures from a results tree on disk. It is independent of the tuning loop — it never connects to PostgreSQL, never imports from `src/tuners/`, and runs offline against saved JSON.
 
 ```text
 results/                              src/visualization/

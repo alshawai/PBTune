@@ -21,7 +21,7 @@ pg_ctl --version
 # Check sysbench (OLTP only)
 sysbench --version
 # Check Python deps
-python -c "import src.tuner; print('OK')"
+python -c "import src.tuners; print('OK')"
 ```
 
 ### 2. Choose Experiment Parameters
@@ -42,7 +42,7 @@ workloads.
 
 ### 3. Run Single Experiment
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
     --benchmark sysbench \
     --sysbench-workload oltp_read_write \
     --tier core \
@@ -57,7 +57,7 @@ The five-seed standard campaign uses seeds `42, 123, 456, 789, 1024`.
 
 ```bash
 for SEED in 42 123 456 789 1024; do
-    python -m src.tuner.main \
+    python -m src.tuners pbt \
         --benchmark sysbench \
         --sysbench-workload oltp_read_write \
         --tier core \
@@ -86,7 +86,7 @@ python -m src.evaluation \
 
 ### 6. Warm-Start (Transfer Learning)
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
     --benchmark sysbench \
     --sysbench-workload oltp_read_write \
     --tier standard \

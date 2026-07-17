@@ -2,14 +2,12 @@
 Shared types for the unified tuners package.
 
 This module defines the small, dependency-light value types that the
-``BaseTuner`` lifecycle and its concrete subclasses share. It is deliberately
-decoupled from the legacy ``src/tuner`` (PBT) and ``src/scripts/bo_baseline``
-(BO) packages: those packages are NOT modified by the tuners extraction. The
-types here are *copies* (by intent and shape) of the conventions used in those
-packages, lifted into a single place so a third strategy (LHS-design sampling)
-can reuse them without importing from either incumbent.
+``BaseTuner`` lifecycle and its concrete subclasses share. PBT has been
+migrated onto this framework (the legacy ``src/tuner`` package is removed);
+BO (``src/scripts/bo_baseline``) is not yet migrated and still has its own
+copies of these conventions.
 
-See ``docs/architecture/adr/ADR-006-unified-tuners-package.md`` for the
+See ``docs/architecture/decisions/ADR-006-unified-tuners-package.md`` for the
 rationale behind the copy-not-refactor boundary.
 """
 
@@ -35,7 +33,7 @@ class TuningStrategy(str, Enum):
     Members
     -------
     PBT
-        Population-Based Training (``src/tuner``).
+        Population-Based Training (``src/tuners/pbt``).
     BO
         Bayesian Optimization baseline (``src/scripts/bo_baseline``).
     LHS

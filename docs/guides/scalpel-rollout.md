@@ -143,7 +143,7 @@ suffix the tier slug with `@scalpel-v1` so post-SCALPEL artifacts do
 not collide with pre-SCALPEL ones:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
   --workload oltp_read_write \
   --tier core \
   --knob-source data_driven
@@ -152,7 +152,7 @@ python -m src.tuner.main \
 
 Expert-source paths are unchanged. When SCALPEL leaves an
 intermediate tier empty (e.g., `core` confirmed nothing),
-[`knob_loader`](../../src/tuner/config/knob_loader.py) walks DOWN
+[`knob_loader`](../../src/knobs/knob_loader.py) walks DOWN
 the canonical order to the next broader tier whose CSV exists with
 at least one knob, logging a warning. The tuner does not crash on
 empty tiers any more.

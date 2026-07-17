@@ -21,8 +21,8 @@ description: >
 ## High-Level Data Flow
 
 ```
-CLI args (main.py)
-    → TunerConfig
+CLI args (src.tuners pbt → pbt/cli.py)
+    → PBTConfig + TunerLifecycleConfig
     → KnobSpace (tiered CSV → KnobDefinitions)
     → Population (N Workers, LHS-initialized)
     → FOR each generation:
@@ -39,20 +39,23 @@ CLI args (main.py)
 
 ## Package Map
 
-### `src/tuner/` — PBT Tuning Engine (entry point: `python -m src.tuner.main`)
+### `src/tuners/` — Unified Tuning Framework (entry point: `python -m src.tuners pbt`)
 | File | Responsibility |
 |------|---------------|
-| `main.py` | CLI arg parsing, orchestration, session output |
-| `core/population.py` | PBT loop: init → evaluate → evolve → converge |
-| `core/worker.py` | Worker state (config, score, history, readiness) |
-| `core/evolution.py` | Truncation selection, perturbation, convergence detection |
-| `core/barriers.py` | B1..B17 lockstep generation barriers |
-| `benchmark/orchestrator.py` | `WorkloadOrchestrator` — benchmark dispatch, metric collection, scoring integration |
-| `benchmark/workload.py` | JSON/YAML workload template execution |
-| `benchmark/restart_policy.py` | Restart policy with `TuningMode` {ONLINE, OFFLINE, ADAPTIVE} |
-| `config/knob_space.py` | Search space definition, LHS sampling, perturbation |
-| `config/knob_loader.py` | Tiered knob CSV loading (minimal/core/standard/extensive) |
-| `config/tuner_config.py` | CLI-derived configuration dataclass |
+| `base.py` | `BaseTuner` — invariant lifecycle (Template Method): setup, generation loop, teardown, result assembly |
+| `cli.py` | Strategy-agnostic CLI flag groups + shared HTML-log attach |
+| `__main__.py` | Positional-token router (`python -m src.tuners <strategy> ...`) |
+| `pbt/tuner.py` | `PBTTuner(BaseTuner)` — PBT strategy hooks (propose/step/collect_best/payload) |
+| `pbt/cli.py` | PBT CLI + config build (entry: `python -m src.tuners.pbt`) |
+| `pbt/population.py` | PBT loop: init → evaluate → evolve → converge |
+| `pbt/evolution.py` | Truncation selection, perturbation, convergence detection |
+| `pbt/worker.py` | `PBTWorker(BaseWorker)` — evolution mechanics + score/lineage state |
+| `pbt/config.py` | `PBTConfig` + the 4 profile constants (`*_CONFIG`) |
+| `engine/orchestrator.py` | `WorkloadOrchestrator` — benchmark dispatch, metric collection, scoring integration |
+| `engine/worker.py` | `BaseWorker` — generic eval vehicle (config, score_breakdown, identity) |
+| `engine/barriers.py` | B1..B17 lockstep generation barriers |
+| `engine/restart_policy.py` | Restart policy with `TuningMode` {ONLINE, OFFLINE, ADAPTIVE} |
+| `lhs_design/tuner.py` | `LHSDesignTuner(BaseTuner)` — Latin-hypercube importance-design strategy |
 
 ### `src/utils/scoring/` — Feature-Driven Scoring (v2)
 | File | Responsibility |
@@ -70,7 +73,7 @@ CLI args (main.py)
 | File | Responsibility |
 |------|---------------|
 | `metrics.py` | `PerformanceMetrics` dataclass — canonical metric record |
-| `rescoring.py` | Post-hoc global score recalibration utilities |
+| `calibration.py` | Post-hoc global score recalibration utilities |
 | `applicator.py` | `KnobApplicator` — applies configs via ALTER SYSTEM |
 | `hardware_info.py` | System resource detection (CPU, RAM, disk) |
 | `metric_instrumentation.py` | Extended metric collection (buffer stats, scan efficiency) |
@@ -132,9 +135,9 @@ CLI args (main.py)
 | Type | Location | Purpose |
 |------|----------|---------|
 | `PerformanceMetrics` | `src/utils/metrics.py` | Raw metric record from evaluation |
-| `Worker` | `src/tuner/core/worker.py` | Config + score + history |
-| `KnobDefinition` | `src/tuner/config/knob_space.py` | Knob metadata (type, bounds, context) |
-| `TunerConfig` | `src/tuner/config/tuner_config.py` | Session configuration |
+| `Worker` | `src/tuners/engine/worker.py` | Config + score + history |
+| `KnobDefinition` | `src/knobs/knob_space.py` | Knob metadata (type, bounds, context) |
+| `TunerConfig` | `src/tuners/pbt/config.py` | Session configuration |
 | `ScoringPolicySpec` | `src/utils/scoring/policies.py` | Policy definition |
 | `ComparisonConfig` | `src/evaluation/types.py` | Evaluation session config |
 | `TimingRecorder`, `TimingRecord` | `src/utils/timing.py` | Timing instrumentation primitives |
@@ -153,7 +156,7 @@ make fix-and-check  # auto-fix then re-run check-all
 ## CLI Entry Points (the five user-facing commands)
 
 ```bash
-python -m src.tuner.main                # PBT tuning
+python -m src.tuners pbt                # PBT tuning
 python -m src.evaluation                # Post-hoc default-vs-tuned comparison
 python -m src.scripts.bo_baseline       # SMAC3 BO baseline
 python -m src.scripts.pbt_vs_bo_comarison  # Cross-method comparison (filename typo is intentional)

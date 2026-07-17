@@ -6,12 +6,12 @@ See also: [Documentation Index](../README.md), [Performance Evaluation](performa
 
 ## Overview
 
-The `WorkloadOrchestrator` is the per-worker evaluation engine. Given a `Worker`, it applies the worker's configuration to PostgreSQL, executes the configured benchmark, captures metrics, and returns a `(PerformanceMetrics, ScoreBreakdown)` pair. It replaces the previous `Evaluator` class — every reference to `src/tuner/evaluator/evaluator.py` in older docs/code is obsolete.
+The `WorkloadOrchestrator` is the per-worker evaluation engine. Given a `Worker`, it applies the worker's configuration to PostgreSQL, executes the configured benchmark, captures metrics, and returns a `(PerformanceMetrics, ScoreBreakdown)` pair. It replaces the previous `Evaluator` class — every reference to the old evaluator module in older docs/code is obsolete; the component now lives at `src/tuners/engine/orchestrator.py`.
 
-The orchestrator package lives at [src/tuner/benchmark/](../../src/tuner/benchmark/) and consists of three focused modules:
+The orchestrator package lives at [src/tuners/engine/](../../src/tuners/engine/) and consists of three focused modules:
 
-- **[orchestrator.py](../../src/tuner/benchmark/orchestrator.py)** — `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`. Drives the B1–B17 lockstep flow.
-- **[restart_policy.py](../../src/tuner/benchmark/restart_policy.py)** — Pure decision function `should_restart()`. The CDBTune-inspired adaptive batching lives here.
+- **[orchestrator.py](../../src/tuners/engine/orchestrator.py)** — `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`. Drives the B1–B17 lockstep flow.
+- **[restart_policy.py](../../src/tuners/engine/restart_policy.py)** — Pure decision function `should_restart()`. The CDBTune-inspired adaptive batching lives here.
 - **[workload.py](../../src/benchmarks/workload.py)** — `WorkloadExecutor` for SQL-template workloads + `WorkloadFileLoader` for JSON/YAML workload files.
 
 This split — *policy* vs. *mechanism* vs. *workload-specific execution* — is what lets the orchestrator stay benchmark-agnostic while the same plumbing handles Sysbench, TPC-H, and arbitrary user workloads.
@@ -74,7 +74,7 @@ This split — *policy* vs. *mechanism* vs. *workload-specific execution* — is
                             └────────────────────────┘
 ```
 
-The orchestrator is constructed once per session by [`src/tuner/main.py`](../../src/tuner/main.py) and passed into the population. Every worker thread shares the same orchestrator instance — its scoring engine is built lazily under a lock so multiple threads don't race during the first call.
+The orchestrator is constructed once per session by [`src/tuners/pbt/cli.py`](../../src/tuners/pbt/cli.py) and passed into the population. Every worker thread shares the same orchestrator instance — its scoring engine is built lazily under a lock so multiple threads don't race during the first call.
 
 ---
 
@@ -162,7 +162,7 @@ Two non-obvious details:
 
 ## Restart policy and tuning modes
 
-**Location**: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
+**Location**: [src/tuners/engine/restart_policy.py](../../src/tuners/engine/restart_policy.py)
 
 ```python
 def should_restart(
@@ -209,7 +209,7 @@ The orchestrator accepts any object that satisfies a small contract — `prepare
 | **`TPCHExecutor`** | [src/benchmarks/tpch/executor.py](../../src/benchmarks/tpch/executor.py) | TPC-H 22-query power test | Uses `dbgen` for data generation, `psycopg2.copy_expert()` for bulk load, raw psycopg2 for query execution. Scale factor configurable. |
 | **`WorkloadExecutor`** | [src/benchmarks/workload.py](../../src/benchmarks/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
 
-Selection is decided in [`src/tuner/main.py`](../../src/tuner/main.py) based on CLI flags:
+Selection is decided in [`src/tuners/pbt/cli.py`](../../src/tuners/pbt/cli.py) based on CLI flags:
 
 ```text
 --benchmark sysbench    → SysbenchExecutor      (CLI: --sysbench-workload, --sysbench-tables, etc.)
@@ -326,8 +326,8 @@ The retry loop knows about PostgreSQL-specific recovery messages (`"starting up"
 
 ### File locations
 
-- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
-- `should_restart`: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
+- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuners/engine/orchestrator.py](../../src/tuners/engine/orchestrator.py)
+- `should_restart`: [src/tuners/engine/restart_policy.py](../../src/tuners/engine/restart_policy.py)
 - `WorkloadExecutor`, `WorkloadFileLoader`: [src/benchmarks/workload.py](../../src/benchmarks/workload.py)
 - `TuningMode`: [src/utils/types.py](../../src/utils/types.py)
-- Tests: [tests/unit/core/test_restart_policy.py](../../tests/unit/core/test_restart_policy.py), [tests/unit/core/test_evaluator_fault_injection.py](../../tests/unit/core/test_evaluator_fault_injection.py), [tests/unit/core/test_evaluator_memory_normalization.py](../../tests/unit/core/test_evaluator_memory_normalization.py)
+- Tests: [tests/unit/tuners/engine/test_restart_policy.py](../../tests/unit/tuners/engine/test_restart_policy.py), [tests/unit/tuners/engine/test_evaluator_fault_injection.py](../../tests/unit/tuners/engine/test_evaluator_fault_injection.py), [tests/unit/tuners/engine/test_evaluator_memory_normalization.py](../../tests/unit/tuners/engine/test_evaluator_memory_normalization.py)

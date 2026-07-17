@@ -52,7 +52,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
 
     Args:
         path: Path to a `pbt_results_{timestamp}.json` file produced by
-            `src/tuner/main.py`.
+            `src/tuners/pbt/tuner.py`.
 
     Returns:
         TuningSessionData populated with all fields required to run an

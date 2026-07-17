@@ -36,7 +36,7 @@ KnobApplicator.apply_configuration(config, postmaster_dict, sighup_dict):
 
 ## Restart Minimization Strategy
 
-The restart policy module (`src/tuner/benchmark/restart_policy.py`) handles:
+The restart policy module (`src/tuners/engine/restart_policy.py`) handles:
 - Tracking which postmaster knobs have changed since last restart
 - Batching restarts to minimize service interruptions
 - Detecting when restart is actually needed (only if postmaster values differ)

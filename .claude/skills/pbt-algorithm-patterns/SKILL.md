@@ -1,6 +1,6 @@
 ---
 name: pbt-algorithm-patterns
-description: Population-Based Training algorithm implementation patterns, evolutionary optimization conventions, and PBT-specific coding standards for the database tuning research project. Use this skill whenever working on PBT core logic, evolution, worker management, population management, scoring, normalization, convergence detection, exploit-explore mechanics, or any code in src/tuner/core/.
+description: Population-Based Training algorithm implementation patterns, evolutionary optimization conventions, and PBT-specific coding standards for the database tuning research project. Use this skill whenever working on PBT core logic, evolution, worker management, population management, scoring, normalization, convergence detection, exploit-explore mechanics, or any code in src/tuners/pbt/.
 ---
 
 # PBT Algorithm Patterns
@@ -104,11 +104,11 @@ with a diversity-preserving resampling strategy:
 
 | Component | File | Key Class/Function |
 |-----------|------|-------------------|
-| Orchestrator | `src/tuner/main.py` | `PBTTuner` |
-| Population | `src/tuner/core/population.py` | `Population`, `PopulationConfig`, `GenerationResult` |
-| Evolution | `src/tuner/core/evolution.py` | `truncation_selection()`, `execute_exploit_explore()`, `get_best_worker()`, `check_convergence()` |
-| Generation barriers | `src/tuner/core/barriers.py` | B1..B17 lockstep barriers |
-| Worker | `src/tuner/core/worker.py` | `Worker` |
+| Orchestrator | `src/tuners/pbt/tuner.py` | `PBTTuner` |
+| Population | `src/tuners/pbt/population.py` | `Population`, `PopulationConfig`, `GenerationResult` |
+| Evolution | `src/tuners/pbt/evolution.py` | `truncation_selection()`, `execute_exploit_explore()`, `get_best_worker()`, `check_convergence()` |
+| Generation barriers | `src/tuners/engine/barriers.py` | B1..B17 lockstep barriers |
+| Worker | `src/tuners/pbt/worker.py` | `Worker` |
 | Scoring | `src/utils/scoring/scorer.py`, `src/utils/metrics.py` | `CompositeScorer`, `PerformanceMetrics`, `WorkloadType` |
 
 ## Design Decisions (Deviations from Original PBT Paper)

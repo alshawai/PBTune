@@ -1,6 +1,6 @@
 ---
 name: postgresql-knob-tuning
-description: PostgreSQL configuration parameter (knob) tuning patterns, including parameter contexts (postmaster/sighup/user), knob space management, hardware-aware fractional normalization, safe bounds enforcement, and the knob tier system. Use this skill whenever working on knob configuration, parameter application, knob metadata, hardware-aware normalization, transfer learning via warm-start, or any code in src/tuner/config/, src/utils/applicator.py, or src/knobs/.
+description: PostgreSQL configuration parameter (knob) tuning patterns, including parameter contexts (postmaster/sighup/user), knob space management, hardware-aware fractional normalization, safe bounds enforcement, and the knob tier system. Use this skill whenever working on knob configuration, parameter application, knob metadata, hardware-aware normalization, transfer learning via warm-start, or any code in src/knobs/, or src/utils/applicator.py.
 ---
 
 # PostgreSQL Knob Tuning Patterns
@@ -71,7 +71,7 @@ To regenerate tier CSVs after metadata changes: `python -m src.knobs`
 
 ## Warm-Start (Transfer Learning Level 1)
 ```bash
-python -m src.tuner.main --warm-start results/olap/pbt_runs/{tier}/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners pbt --warm-start results/olap/pbt_runs/{tier}/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 - Loads `best_config.json` from previous run
 - Seeds 1-2 workers with loaded config (fractional representation)
@@ -82,8 +82,8 @@ python -m src.tuner.main --warm-start results/olap/pbt_runs/{tier}/best_configs/
 
 | Component | File |
 |-----------|------|
-| Knob space + LHS | `src/tuner/config/knob_space.py` |
-| Knob CSV loading | `src/tuner/config/knob_loader.py` |
+| Knob space + LHS | `src/knobs/knob_space.py` |
+| Knob CSV loading | `src/knobs/knob_loader.py` |
 | Knob application | `src/utils/applicator.py` |
 | Knob metadata | `src/knobs/knob_metadata.py` |
 | Knob preprocessing | `src/knobs/preprocess_knobs.py` |

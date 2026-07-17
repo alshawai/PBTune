@@ -3,7 +3,7 @@ RestartCostModel — archived from src/utils/restart_manager.py
 
 This class modelled the amortised cost of PostgreSQL restarts
 during tuning. It has been superseded by the explicit RestartPolicy
-module (src/tuner/evaluator/restart_policy.py) which uses pure
+module (src/tuners/engine/restart_policy.py) which uses pure
 TuningMode-based decisions instead of penalty-factor scoring.
 """
 

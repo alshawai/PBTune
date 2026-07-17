@@ -17,9 +17,10 @@ PBT-specific:
   (:meth:`evaluate_worker`),
 * the PBT ``strategy_params`` / warm-start / scoring session sections.
 
-The legacy monolith ``src/tuner/main.py`` is intentionally left in place and
-still owns the ``python -m src.tuner.main`` CLI until step 2e swaps it for a
-shim (ADR-006).
+The PBT CLI is ``python -m src.tuners pbt ...`` (routed door) or
+``python -m src.tuners.pbt ...`` (direct door), wired in
+:mod:`src.tuners.pbt.cli`. The legacy ``src/tuner/`` package has been removed
+(see the 2026-07-17 addendum to ADR-006).
 """
 
 from __future__ import annotations
