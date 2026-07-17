@@ -16,20 +16,26 @@ from typing import Any, Optional
 import pandas as pd
 
 from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
-from src.tuners.utils.calibration import rescore_metrics_globally
-from src.tuner.config.knob_loader import get_knob_space
-from src.tuner.config.knob_space import HARDWARE_RELATIVE_SPECS
+from src.utils.calibration import rescore_metrics_globally
+from src.knobs.knob_loader import get_knob_space
+from src.knobs.knob_space import HARDWARE_RELATIVE_SPECS
 from src.utils.hardware_info import WorkerResources
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("Loader")
 
-# Session-file discovery patterns. PBT writes ``pbt_results_*.json``; the
-# LHS-design tuner writes ``lhs_results_*.json`` with a PBT-shaped
-# ``generation_history`` (see ``LHSDesignTuner._build_generation_history``), so
-# both are natively loadable here. Any new strategy that emits a PBT-shaped
-# ``generation_history`` should add its prefix to this tuple.
-RESULT_FILE_GLOBS = ("pbt_results_*.json", "lhs_results_*.json")
+# Session-file discovery patterns. The unified tuners write a strategy-agnostic
+# ``trace_*.json`` (the strategy is encoded in the ``sessions/<workload>/
+# <strategy>/`` path, not the filename). The legacy per-strategy stems
+# (``pbt_results_*.json`` / ``lhs_results_*.json`` / ``bo_results_*.json``) are
+# still globbed so pre-rename traces on disk keep loading. All emit a PBT-shaped
+# ``generation_history`` and are natively loadable here.
+RESULT_FILE_GLOBS = (
+    "trace_*.json",
+    "pbt_results_*.json",
+    "lhs_results_*.json",
+    "bo_results_*.json",
+)
 
 
 def find_result_files(directory):
@@ -266,20 +272,21 @@ def _infer_tuning_strategy(
     """Resolve the tuning_strategy label for a session file.
 
     Prefers the explicit ``tuning_session.tuning_strategy`` field. Falls back
-    to a path heuristic for legacy sessions written before the field existed:
-    ``/pbt_runs/`` -> ``"pbt"``, ``/bo_runs/`` -> ``"bo"``, ``/lhs_runs/`` ->
-    ``"lhs"``. Returns ``"unknown"`` when neither path nor field resolves.
+    to a path heuristic for legacy and current session paths:
+    ``/pbt/`` or ``/pbt_runs/`` -> ``"pbt"``, ``/bo/`` or ``/bo_runs/`` ->
+    ``"bo"``, ``/lhs/`` or ``/lhs_runs/`` -> ``"lhs"``.
+    Returns ``"unknown"`` when neither path nor field resolves.
     """
     explicit = session_meta.get("tuning_strategy")
     if explicit:
         return str(explicit)
     path_str = str(file_path)
-    if "/pbt_runs/" in path_str:
-        return "pbt"
-    if "/bo_runs/" in path_str:
-        return "bo"
-    if "/lhs_runs/" in path_str:
-        return "lhs"
+    for segment, label in [
+        ("/pbt/", "pbt"), ("/bo/", "bo"), ("/lhs/", "lhs"),
+        ("/pbt_runs/", "pbt"), ("/bo_runs/", "bo"), ("/lhs_runs/", "lhs"),
+    ]:
+        if segment in path_str:
+            return label
     return "unknown"
 
 
@@ -312,13 +319,19 @@ def _build_session_metadata(
         if key not in {"workload_type", "benchmark_name", "tuning_strategy"}:
             metadata[key] = value
 
-    # Also grab scoring overrides from the root data object if present
+    # Also grab scoring overrides. The unified schema (2a′+) namespaces these
+    # under ``tuning_session.scoring``; promote them flat (nested-first) so the
+    # downstream global-rescoring reads see a uniform metadata dict regardless
+    # of session shape. Older/BO-flat sessions fall back to the root object.
+    scoring_block = session_meta.get("scoring") or {}
     for scoring_key in [
         "scoring_policy",
         "scoring_policy_version",
         "metric_reference_version",
     ]:
-        if scoring_key not in metadata and scoring_key in data:
+        if scoring_key in scoring_block:
+            metadata[scoring_key] = scoring_block[scoring_key]
+        elif scoring_key not in metadata and scoring_key in data:
             metadata[scoring_key] = data[scoring_key]
 
     return metadata

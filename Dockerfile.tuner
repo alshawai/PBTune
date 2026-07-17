@@ -28,4 +28,4 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Default command (can be overridden)
-CMD ["python", "-m", "src.tuner.main", "--tier", "minimal", "--config", "rapid"]
+CMD ["python", "-m", "src.tuners", "pbt", "--tier", "minimal", "--config", "rapid"]

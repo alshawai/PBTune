@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from src.benchmarks.sysbench.executor import SysbenchExecutor
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.tuner.benchmark.workload import (
+from src.benchmarks.workload import (
     WorkloadFileLoader, extract_workload_template_metadata
 )
 from src.utils.metrics import WorkloadType
@@ -77,7 +77,7 @@ def build_workload_bundle(
         table_size = benchmark_config.sysbench_table_size
         script = benchmark_config.sysbench_workload
 
-        executor = SysbenchExecutor(
+        executor: Any = SysbenchExecutor(
             tables=tables, table_size=table_size, script=script
         )
         threads = int(getattr(executor, "threads", 8))

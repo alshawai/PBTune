@@ -1,21 +1,35 @@
 """
-Runtime knob-compatibility pruning shared across tuning strategies.
+Knob-compatibility filtering shared across tuning strategies.
 
-Both PBT and BO query a live instance's ``pg_settings`` to discover which
-configured knobs the running PostgreSQL build actually supports, then drop any
-that are absent to avoid apply/verify failures. This module lifts that logic
-into reusable, side-effect-free helpers (copy-not-refactor): the caller owns
-the ``KnobSpace`` mutation so this stays testable without a database.
+Two filtering decisions narrow a tuner's knob space, and this module owns both
+so a strategy never has to reach past it:
+
+* **Runtime pruning** (:func:`query_runtime_supported_knobs` +
+  :func:`compute_unsupported_knobs`) — query a live instance's ``pg_settings``
+  to discover which configured knobs the running PostgreSQL build actually
+  supports, and drop any that are absent to avoid apply/verify failures.
+* **Tuning-mode narrowing** (:func:`apply_tuning_mode_filter`) — in ONLINE mode
+  the loop never restarts instances, so restart-required knobs must be filtered
+  out. The *mechanism* (constructing the filtered view) stays on
+  :class:`~src.knobs.knob_space.KnobSpace`; this module owns the tuner-facing
+  *decision* of when to apply it, beside the runtime prune.
+
+The helpers are side-effect-free (the caller owns the ``KnobSpace`` mutation),
+so they stay testable without a database.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Set, Tuple
+from typing import TYPE_CHECKING, Any, Iterable, Set, Tuple
 
 import psycopg2
 
 from src.database.connection import get_connection
 from src.utils.logger import get_logger
+from src.utils.types import TuningMode
+
+if TYPE_CHECKING:
+    from src.knobs.knob_space import KnobSpace
 
 LOGGER = get_logger("TunerKnobFilter")
 
@@ -90,3 +104,25 @@ def log_pruning_summary(
         suffix,
         remaining,
     )
+
+
+def apply_tuning_mode_filter(
+    knob_space: "KnobSpace",
+    tuning_mode: TuningMode,
+) -> "KnobSpace":
+    """Narrow ``knob_space`` to the knobs a tuning mode may safely tune.
+
+    In :attr:`~src.utils.types.TuningMode.ONLINE` the loop never restarts an
+    instance, so restart-required knobs are dropped via
+    :meth:`~src.knobs.knob_space.KnobSpace.create_online_view` (which logs the
+    filtered count and preserves ``worker_resources``). Every other mode may
+    write restart-required knobs, so the space is returned unchanged.
+
+    This owns the tuner-facing *when* of ONLINE filtering; the *how* (building
+    the filtered view) stays on ``KnobSpace``. Co-locating it with the runtime
+    prune means a strategy makes both knob-filtering decisions through this one
+    module.
+    """
+    if tuning_mode == TuningMode.ONLINE:
+        return knob_space.create_online_view()
+    return knob_space

@@ -47,15 +47,15 @@ from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_l
 from src.utils.metrics import PerformanceMetrics, create_metric_config
 from src.utils.scoring import create_scoring_engine
 from src.config.data_root import resolve_data_root
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.benchmarks.sysbench.executor import (
     SysbenchExecutor,
     DEFAULT_SYSBENCH_WORKLOAD,
     validate_sysbench_workload,
 )
 from src.benchmarks.tpch.executor import TPCHExecutor
-from src.benchmarks.executor import BenchmarkExecutor
-from src.tuner.config import get_knob_space
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
+from src.knobs import get_knob_space
 from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
 from src.evaluation.loader import load_tuning_session
@@ -88,7 +88,7 @@ class ComparisonRunner:
 
         runner = ComparisonRunner(ComparisonConfig(
             tuning_session_path=Path(
-                "results/olap/pbt_runs/extensive/tuning_sessions/"
+                "results/sessions/olap/pbt/extensive/traces/"
                 "pbt_results_20260326_2115.json"
             ),
             repetitions=5,
@@ -1067,17 +1067,19 @@ class ComparisonRunner:
 
             bench_started = time.monotonic()
             if benchmark_name == "tpch":
-                metrics = executor.execute(
+                ctx = ExecutionContext(
                     db_config=active_config,
+                    duration=0.0,
                     warmup_passes=int(self.config.tpch_warmup_passes or 1),
                 )
             else:
-                metrics = executor.execute(
+                ctx = ExecutionContext(
                     db_config=active_config,
                     duration=int(self.config.sysbench_duration or 60),
                     warmup=int(self.config.sysbench_warmup_seconds or 30),
                     random_seed=pair_seed,
                 )
+            metrics = executor.execute(ctx)
             bench_elapsed = time.monotonic() - bench_started
             LOGGER.debug(
                 "  Benchmark execution completed in %.1fs (setup=%.1fs)",
@@ -1153,11 +1155,6 @@ class ComparisonRunner:
         if self.config.output_dir:
             return self.config.output_dir
 
-        # Auto-detect workload from session or path
-        workload = session_data.workload_type.lower()
-        if workload not in ("oltp", "olap", "mixed"):
-            workload = "mixed"
-
         tier = self._resolve_tier_slug_from_session(
             session_data, self.config.tuning_session_path
         )
@@ -1167,14 +1164,22 @@ class ComparisonRunner:
             data_root / "results" if self.config.colocate_output else Path("results")
         )
 
-        if (self.config.benchmark or session_data.benchmark) == "sysbench":
-            sysbench_workload = str(
+        # Derive granular workload key (same convention as tuner CLI)
+        benchmark = self.config.benchmark or session_data.benchmark
+        if benchmark == "sysbench":
+            workload = str(
                 self.config.sysbench_workload
                 or session_data.sysbench_workload
                 or DEFAULT_SYSBENCH_WORKLOAD
             )
-            return base_dir / workload / sysbench_workload / "comparisons" / tier
-        return base_dir / workload / "comparisons" / tier
+        elif benchmark == "tpch":
+            workload = "olap"
+        else:
+            workload = session_data.workload_type.lower()
+            if workload not in ("oltp", "olap", "mixed"):
+                workload = "mixed"
+
+        return base_dir / "comparisons" / workload / tier
 
     def _resolve_log_output_path(
         self, output_dir: Path, timestamp: str | None = None
@@ -1204,16 +1209,16 @@ class ComparisonRunner:
             return metadata_tier
 
         parts = session_path.parts
-        try:
-            pbt_runs_idx = parts.index("pbt_runs")
-        except ValueError:
-            return "unknown"
-
-        if pbt_runs_idx + 1 >= len(parts):
-            return "unknown"
-
-        path_tier = _sanitize_tier_name(parts[pbt_runs_idx + 1])
-        return path_tier or "unknown"
+        for anchor in ("pbt", "bo", "lhs", "pbt_runs", "bo_runs", "lhs_runs"):
+            try:
+                idx = parts.index(anchor)
+                if idx + 1 < len(parts):
+                    path_tier = _sanitize_tier_name(parts[idx + 1])
+                    if path_tier:
+                        return path_tier
+            except ValueError:
+                continue
+        return "unknown"
 
     def _print_summary(self, result: ComparisonResult) -> None:
         """Print a formatted comparison summary table to stdout."""

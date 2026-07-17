@@ -36,6 +36,7 @@ from src.config.data_root import resolve_data_root
 from src.tuners.utils.output_paths import resolve_tuner_output_root
 from src.tuners.utils.profiles import PROFILES
 from src.tuners.utils.types import TunerLifecycleConfig, TuningStrategy
+from src.utils.logger import add_html_file_logging
 from src.utils.types import (
     TuningMode,
     clone_benchmark_config,
@@ -102,6 +103,26 @@ def _add_tuning_group(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=42,
         help="Random seed for reproducible sampling (default: 42)",
+    )
+    group.add_argument(
+        "--no-sync",
+        dest="synchronize_workers",
+        action="store_false",
+        default=True,
+        help=(
+            "Disable lockstep barrier synchronization between workers. By "
+            "default, workers wait at each sub-step so they advance in lockstep "
+            "for fair resource sharing. Applies to every parallel/co-tenant "
+            "strategy, not just PBT."
+        ),
+    )
+    group.add_argument(
+        "--disable-early-stopping",
+        action="store_true",
+        help=(
+            "Disable the no-improvement early-stop gate (low-variance "
+            "convergence and the round budget still apply)."
+        ),
     )
 
 
@@ -184,6 +205,16 @@ def _add_instance_group(parser: argparse.ArgumentParser) -> None:
         "--no-docker",
         action="store_true",
         help="Run on bare-metal PostgreSQL instead of Docker",
+    )
+    group.add_argument(
+        "--docker-image",
+        type=str,
+        default=None,
+        help=(
+            "Docker image override for PostgreSQL workers (e.g. postgres:18). "
+            "If omitted, auto-resolved from the host server version. Ignored "
+            "with --no-docker."
+        ),
     )
     group.add_argument(
         "--force-recreate-instances",
@@ -445,7 +476,10 @@ def build_lifecycle_config(
         num_parallel_workers=num_parallel_workers,
         cleanup_instances=args.cleanup_instances,
         use_docker=not args.no_docker,
+        docker_image=getattr(args, "docker_image", None),
         random_seed=args.random_seed,
+        synchronize_workers=getattr(args, "synchronize_workers", True),
+        disable_early_stopping=getattr(args, "disable_early_stopping", False),
         tuning_mode=tuning_mode,
         force_recreate_instances=args.force_recreate_instances,
         force_recreate_baseline=args.force_recreate_baseline,
@@ -469,35 +503,79 @@ def resolve_output_root(
     *,
     strategy: TuningStrategy,
     sysbench_workload: str,
+    ablation_variable: str | None = None,
+    ablation_value: str | None = None,
 ) -> Path:
     """Resolve the strategy/tier-scoped results directory from shared args.
 
-    Mirrors PBT's ``--colocate-output`` behavior: when set, results are rooted
-    at ``{data_root}/results`` so a session's outputs travel with its data;
-    otherwise the ``--output-dir`` value (default ``results``) is used. The knob
-    tier/source are read off ``args`` (they live in the shared Tuning
-    Configuration group).
+    Derives a single ``workload`` key from the benchmark / workload flags,
+    then delegates to :func:`resolve_tuner_output_root`.  When
+    ``--colocate-output`` is set, results are rooted at
+    ``{data_root}/results`` so a session's outputs travel with its data;
+    otherwise the ``--output-dir`` value (default ``results``) is used.
 
-    ``sysbench_workload`` is passed explicitly (rather than read off ``args``)
-    so callers can forward the *resolved* benchmark-config value, which already
-    has the default applied when the flag was omitted.
+    ``sysbench_workload`` is passed explicitly (rather than read off
+    ``args``) so callers can forward the *resolved* benchmark-config value,
+    which already has the default applied when the flag was omitted.
     """
     base_output_dir = (
         resolve_data_dir(args) / "results"
         if args.colocate_output
         else Path(args.output_dir)
     )
+
+    if args.benchmark == "sysbench":
+        workload = sysbench_workload
+    elif args.benchmark == "tpch":
+        workload = "olap"
+    else:
+        workload = args.workload
+
     return resolve_tuner_output_root(
         base_output_dir,
         strategy=strategy,
-        workload_type=("olap" if args.benchmark == "tpch" else args.workload),
-        benchmark=args.benchmark,
-        sysbench_workload=sysbench_workload,
+        workload=workload,
         knob_tier=args.tier,
         knob_source=args.knob_source,
+        ablation_variable=ablation_variable,
+        ablation_value=ablation_value,
     )
 
 
 def resolve_data_dir(args: argparse.Namespace) -> Path:
     """Resolve the data root from ``--data-dir`` or the environment default."""
     return Path(args.data_dir) if args.data_dir else resolve_data_root()
+
+
+def attach_session_html_log(
+    output_root: Path,
+    *,
+    timestamp: str,
+) -> Path:
+    """Attach an HTML log handler under the run's ``logs/`` subdirectory.
+
+    Every strategy writes its session trace to ``{output_root}/traces/`` and
+    its best config to ``{output_root}/best_configs/``; this places the matching
+    HTML run-log at ``{output_root}/logs/session_{ts}.html`` so all three
+    session artifacts share one root and one strategy-agnostic convention
+    (``trace_*.json`` / ``best_*.json`` / ``session_*.html``). The stem is
+    fixed — the strategy is already encoded in the ``sessions/<workload>/
+    <strategy>/`` path — replacing the incumbent flat, per-strategy
+    ``{output_root}/{stem}_{ts}.html`` that PBT and LHS both wrote.
+
+    Parameters
+    ----------
+    output_root
+        The strategy/tier-scoped results root (from :func:`resolve_output_root`).
+    timestamp
+        Session id used in the filename.
+
+    Returns
+    -------
+    Path
+        The normalized HTML log path actually written to.
+    """
+    log_dir = Path(output_root) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"session_{timestamp}.html"
+    return add_html_file_logging(output_file=log_path, show_module=True)

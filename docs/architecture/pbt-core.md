@@ -79,7 +79,7 @@ This document explains the three core classes that implement Population-Based Tr
 
 ## Worker
 
-**Location**: [src/tuner/core/worker.py](../../src/tuner/core/worker.py)
+**Location**: [src/tuners/pbt/worker.py](../../src/tuners/pbt/worker.py) (`PBTWorker`, subclass of `BaseWorker` in [src/tuners/engine/worker.py](../../src/tuners/engine/worker.py))
 
 A `Worker` represents a single member of the population. It encapsulates:
 
@@ -135,9 +135,9 @@ The clone path is implemented per environment backend — see [`bare_metal.py`](
 
 ## Evolution
 
-**Location**: [src/tuner/core/evolution.py](../../src/tuner/core/evolution.py)
+**Location**: [src/tuners/pbt/evolution.py](../../src/tuners/pbt/evolution.py)
 
-A module of stateless functions implementing the algorithmic core of PBT. Keeping these as functions (not methods on `Population`) makes them independently testable — see [tests/unit/core/](../../tests/unit/core/).
+A module of stateless functions implementing the algorithmic core of PBT. Keeping these as functions (not methods on `Population`) makes them independently testable — see [tests/unit/tuners/pbt/](../../tests/unit/tuners/pbt/).
 
 ### Public functions
 
@@ -183,9 +183,9 @@ The main entry point called once per generation by `Population.train_generation(
 
 ## Population
 
-**Location**: [src/tuner/core/population.py](../../src/tuner/core/population.py)
+**Location**: [src/tuners/pbt/population.py](../../src/tuners/pbt/population.py)
 
-The orchestrator. Holds the worker pool, the evaluator, the environment factory, the barriers, and the policy/normalisation state.
+The orchestrator. Holds the worker pool, the WorkloadOrchestrator, the environment factory, the barriers, and the policy/normalisation state.
 
 ### `PopulationConfig`
 
@@ -252,7 +252,7 @@ class GenerationResult:
 
 ## Lockstep generation flow
 
-Every generation goes through a strict lockstep sequence enforced by the [`GenerationBarrier`](../../src/tuner/core/barriers.py). Each worker thread waits at every barrier point until **all** workers have arrived — guaranteeing measurement-window overlap.
+Every generation goes through a strict lockstep sequence enforced by the [`GenerationBarrier`](../../src/tuners/engine/barriers.py). Each worker thread waits at every barrier point until **all** workers have arrived — guaranteeing measurement-window overlap.
 
 ```text
 Generation N
@@ -406,8 +406,8 @@ Max generations is a hard ceiling. Early-stopping patience saves time on plateau
 
 ### File locations
 
-- `Worker`: [src/tuner/core/worker.py](../../src/tuner/core/worker.py)
-- `Population`, `PopulationConfig`, `GenerationResult`: [src/tuner/core/population.py](../../src/tuner/core/population.py)
-- Evolution algorithms: [src/tuner/core/evolution.py](../../src/tuner/core/evolution.py)
-- Generation barriers: [src/tuner/core/barriers.py](../../src/tuner/core/barriers.py)
-- Tests: [tests/unit/core/](../../tests/unit/core/)
+- `Worker`: [src/tuners/pbt/worker.py](../../src/tuners/pbt/worker.py) (`PBTWorker`, subclass of `BaseWorker` in [src/tuners/engine/worker.py](../../src/tuners/engine/worker.py))
+- `Population`, `PopulationConfig`, `GenerationResult`: [src/tuners/pbt/population.py](../../src/tuners/pbt/population.py)
+- Evolution algorithms: [src/tuners/pbt/evolution.py](../../src/tuners/pbt/evolution.py)
+- Generation barriers: [src/tuners/engine/barriers.py](../../src/tuners/engine/barriers.py)
+- Tests: [tests/unit/tuners/pbt/](../../tests/unit/tuners/pbt/)

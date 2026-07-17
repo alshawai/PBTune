@@ -5,8 +5,8 @@ PBT treats the run *profile* (``rapid`` / ``standard`` / ``thorough`` /
 ``research``) as the base that supplies defaults at every level — execution
 scalars (population, generations, worker count) *and* a matched
 :class:`~src.utils.types.BenchmarkConfig` — which individual CLI flags then
-override (see ``src/tuner/config/tuner_config.py`` and the two-layer resolution
-in ``src/tuner/main.py``). The unified CLI reproduces that profile→override
+override (see ``src/tuners/pbt/config.py`` and the two-layer resolution
+in ``src/tuners/pbt/cli.py``). The unified CLI reproduces that profile→override
 model in a strategy-agnostic way.
 
 A :class:`TunerProfile` captures only the cross-cutting layers every strategy
@@ -67,7 +67,7 @@ class TunerProfile:
 
 
 # Worker counts mirror the matched PBT profiles in
-# ``src/tuner/config/tuner_config.py`` (RAPID=2, STANDARD=4, THOROUGH=8,
+# ``src/tuners/pbt/config.py`` (RAPID=2, STANDARD=4, THOROUGH=8,
 # RESEARCH=12). The benchmark configs are reused verbatim from src/utils/types.
 PROFILES: dict[str, TunerProfile] = {
     "rapid": TunerProfile("rapid", 2, RAPID_BENCHMARK_CONFIG, 10),

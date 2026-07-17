@@ -9,6 +9,7 @@ from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
     TuningStrategy,
+    WorkerEvalResult,
 )
 from src.utils.hardware_info import WorkerResources
 
@@ -30,7 +31,7 @@ class _FakeTuner(BaseTuner):
         self.steps_run = 0
 
     @property
-    def max_generations(self) -> int:
+    def max_rounds(self) -> int:
         return 10
 
     @property
@@ -128,9 +129,9 @@ class TestBaseTunerLifecycle:
         tuner.run()
 
         session_file = (
-            tmp_path / "tuning_sessions" / "lhs_results_20260619_1200.json"
+            tmp_path / "traces" / "trace_20260619_1200.json"
         )
-        best_file = tmp_path / "best_configs" / "best_config_20260619_1200.json"
+        best_file = tmp_path / "best_configs" / "best_20260619_1200.json"
         assert session_file.exists()
         assert best_file.exists()
 
@@ -178,8 +179,10 @@ class TestBaseTunerLogging:
         assert "Tuner initialization" in messages
         assert "Setting up tuning environment" in messages
         assert "Starting Optimization" in messages
-        assert "optimization loop" in messages
-        assert "optimization complete" in messages
+        assert "Optimization Loop" in messages
+        # Final summary is emitted via the shared log_final_summary(), whose
+        # title carries the uppercased strategy label ("LHS COMPLETE").
+        assert "LHS COMPLETE" in messages
         # System-info block emitted by log_system_info().
         assert "System Information:" in messages
 
@@ -192,7 +195,7 @@ class TestBaseTunerLogging:
         messages = "\n".join(rec.getMessage() for rec in caplog.records)
         # lifecycle.strategy is LHS -> headers carry the uppercased label.
         assert "LHS Tuner initialization" in messages
-        assert "LHS optimization loop" in messages
+        assert "LHS Optimization Loop" in messages
 
     def test_key_info_surfaces_carry_ansi_styling(
         self, lifecycle, tmp_path, caplog
@@ -229,3 +232,154 @@ class TestBaseTunerLogging:
         print_startup_banner()
         out = capsys.readouterr().out
         assert "Population-Based Training" in out
+
+
+class _FakeTiming:
+    """Stand-in for a TimingRecorder's per-eval dict output."""
+
+    def __init__(self, records):
+        self._records = records
+
+    def to_dict(self, include_summary=True):
+        return {"records": self._records}
+
+
+class _MetricsWithDict:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def to_dict(self):
+        return dict(self._payload)
+
+
+class TestBuildGenerationRecord:
+    """The shared uniform per-round record builder (was LHS-local projection)."""
+
+    def _tuner(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        # Give the wall-clock delta a stable origin without running the loop.
+        tuner.tuning_start_time = 0.0
+        tuner.start_time = 0.0
+        return tuner
+
+    def test_uniform_shared_fields_always_present(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path)
+        record = tuner._build_generation_record(
+            generation=3,
+            best_score_this_round=1.5,
+            converged=False,
+            worker_results=[
+                WorkerEvalResult(
+                    worker_id=0,
+                    knob_config={"work_mem": 4},
+                    score=1.5,
+                    metrics=_MetricsWithDict({"throughput": 42.0}),
+                )
+            ],
+            generation_elapsed_seconds=2.0,
+            restart_count=1,
+        )
+        # Shared axes present regardless of strategy.
+        for key in (
+            "generation",
+            "best_score",
+            "converged",
+            "restart_count",
+            "timestamp",
+            "wall_clock_seconds",
+            "generation_elapsed_seconds",
+            "timing",
+            "worker_scores",
+            "worker_configs",
+        ):
+            assert key in record
+        assert record["generation"] == 3
+        assert record["restart_count"] == 1
+        # Population-only stats omitted when not supplied.
+        assert "mean_score" not in record
+        assert "num_exploited" not in record
+
+    def test_worker_scores_carry_breakdown_and_timing(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path)
+        timing = _FakeTiming([{"component": "apply", "seconds": 0.4}])
+        breakdown = _MetricsWithDict({"final_score": 1.5, "components": {}})
+        record = tuner._build_generation_record(
+            generation=0,
+            best_score_this_round=1.5,
+            converged=False,
+            worker_results=[
+                WorkerEvalResult(
+                    worker_id=2,
+                    knob_config={"work_mem": 8},
+                    score=1.5,
+                    metrics=_MetricsWithDict({"throughput": 10.0}),
+                    score_breakdown=breakdown,
+                    timing=timing,
+                )
+            ],
+            generation_elapsed_seconds=1.0,
+        )
+        ws = record["worker_scores"][0]
+        # The two fields LHS used to capture then discard are now serialized.
+        assert ws["score_breakdown"] == {"final_score": 1.5, "components": {}}
+        assert ws["timing"] == {"records": [{"component": "apply", "seconds": 0.4}]}
+        assert record["worker_configs"][0] == {
+            "worker_id": 2,
+            "config": {"work_mem": 8},
+        }
+
+    def test_population_stats_and_extra_merged(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path)
+        record = tuner._build_generation_record(
+            generation=1,
+            best_score_this_round=2.0,
+            converged=True,
+            worker_results=[],
+            generation_elapsed_seconds=0.5,
+            mean_score=1.2,
+            std_score=0.3,
+            num_exploited=2,
+            extra={"evaluated": [0, 1]},
+        )
+        assert record["mean_score"] == 1.2
+        assert record["std_score"] == 0.3
+        assert record["num_exploited"] == 2
+        assert record["evaluated"] == [0, 1]
+
+    def test_failed_worker_yields_null_score(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path)
+        record = tuner._build_generation_record(
+            generation=0,
+            best_score_this_round=0.0,
+            converged=False,
+            worker_results=[
+                WorkerEvalResult(worker_id=0, knob_config={"k": 1}, score=None)
+            ],
+            generation_elapsed_seconds=0.1,
+        )
+        ws = record["worker_scores"][0]
+        assert ws["score"] is None
+        assert ws["metrics"] is None
+        assert ws["score_breakdown"] is None
+        # The config is still recorded even for a failed evaluation.
+        assert record["worker_configs"][0]["config"] == {"k": 1}
+
+
+class TestAggregateSessionTiming:
+    def test_merges_gen_and_worker_timing_records(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        tuner.generation_history = [
+            {
+                "timing": {"records": [{"component": "restore", "seconds": 1.0}]},
+                "worker_scores": [
+                    {"timing": {"records": [{"component": "apply", "seconds": 0.5}]}},
+                    {"timing": {"records": [{"component": "apply", "seconds": 0.7}]}},
+                ],
+            }
+        ]
+        agg = tuner._aggregate_session_timing()
+        assert "restore" in agg
+        assert "apply" in agg
+        # Two apply records aggregated.
+        assert agg["apply"]["n"] == 2
+

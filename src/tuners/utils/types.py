@@ -2,14 +2,12 @@
 Shared types for the unified tuners package.
 
 This module defines the small, dependency-light value types that the
-``BaseTuner`` lifecycle and its concrete subclasses share. It is deliberately
-decoupled from the legacy ``src/tuner`` (PBT) and ``src/scripts/bo_baseline``
-(BO) packages: those packages are NOT modified by the tuners extraction. The
-types here are *copies* (by intent and shape) of the conventions used in those
-packages, lifted into a single place so a third strategy (LHS-design sampling)
-can reuse them without importing from either incumbent.
+``BaseTuner`` lifecycle and its concrete subclasses share. PBT has been
+migrated onto this framework (the legacy ``src/tuner`` package is removed);
+BO (``src/scripts/bo_baseline``) is not yet migrated and still has its own
+copies of these conventions.
 
-See ``docs/architecture/adr/ADR-006-unified-tuners-package.md`` for the
+See ``docs/architecture/decisions/ADR-006-unified-tuners-package.md`` for the
 rationale behind the copy-not-refactor boundary.
 """
 
@@ -35,7 +33,7 @@ class TuningStrategy(str, Enum):
     Members
     -------
     PBT
-        Population-Based Training (``src/tuner``).
+        Population-Based Training (``src/tuners/pbt``).
     BO
         Bayesian Optimization baseline (``src/scripts/bo_baseline``).
     LHS
@@ -111,6 +109,47 @@ class GenerationOutcome:
 
 
 @dataclass
+class WorkerEvalResult:
+    """One worker's evaluation outcome for a single round.
+
+    The strategy-agnostic unit the shared
+    :meth:`~src.tuners.base.BaseTuner._build_generation_record` consumes to emit
+    a uniform ``worker_scores`` / ``worker_configs`` pair. Every tuner — PBT,
+    LHS, BO — reduces its per-worker evaluation to this shape so the serialized
+    per-observation record is identical regardless of optimizer.
+
+    Attributes
+    ----------
+    worker_id
+        Zero-based worker index *within the round* (the loader joins configs to
+        scores on this id).
+    knob_config
+        The decoded knob→value map that was evaluated (``config.keys()`` must
+        match the tunable-knob set the analysis loader expects).
+    score
+        Composite score, or ``None`` for a failed evaluation.
+    metrics
+        Raw performance metrics, or ``None`` on failure. Typed loosely
+        (``Any``) to avoid a hard import of ``PerformanceMetrics`` here; must
+        expose ``to_dict()``.
+    score_breakdown
+        The scorer's breakdown for this worker, or ``None``. When absent but
+        ``metrics`` is present, the record builder recomputes it so a breakdown
+        is never silently dropped.
+    timing
+        Per-worker timing recorder for this evaluation (``last_eval_timing``),
+        or ``None``. Must expose ``to_dict(include_summary=...)``.
+    """
+
+    worker_id: int
+    knob_config: Dict[str, Any]
+    score: Optional[float] = None
+    metrics: Optional[Any] = None
+    score_breakdown: Optional[Any] = None
+    timing: Optional[Any] = None
+
+
+@dataclass
 class TunerLifecycleConfig:
     """Strategy-agnostic knobs governing the ``BaseTuner.run`` driver.
 
@@ -133,6 +172,12 @@ class TunerLifecycleConfig:
         Whether to remove instance data after the run.
     use_docker
         Whether to use the Docker environment backend.
+    docker_image
+        Explicit Docker image override for PostgreSQL workers (e.g.
+        ``postgres:18``). When ``None`` the environment factory auto-resolves an
+        image from the host server version. Cross-cutting: every Docker-backed
+        strategy (PBT/LHS/BO) honors the same override; ignored when
+        ``use_docker`` is False.
     random_seed
         Seed for reproducible sampling.
     tuning_mode
@@ -164,6 +209,16 @@ class TunerLifecycleConfig:
     scoring_policy, scoring_policy_version, metric_reference_version
         Scoring provenance overrides forwarded to global recalibration so the
         serialized session records exactly which scoring contract produced it.
+    synchronize_workers
+        Whether workers advance in lockstep through the generation barriers so
+        every measurement window experiences identical contention. Cross-cutting
+        (``--no-sync`` disables it): every parallel/co-tenant strategy — PBT, LHS,
+        and batched/co-tenant BO — honors the same barrier toggle.
+    disable_early_stopping
+        Disable the no-improvement early-stop gate. Cross-cutting: PBT stops when
+        the population stops improving, BO after N stale iterations; either can be
+        forced to run its full budget. Low-variance convergence and the round
+        budget still apply.
     """
 
     strategy: TuningStrategy
@@ -172,7 +227,10 @@ class TunerLifecycleConfig:
     num_parallel_workers: int = 1
     cleanup_instances: bool = False
     use_docker: bool = True
+    docker_image: Optional[str] = None
     random_seed: Optional[int] = 42
+    synchronize_workers: bool = True
+    disable_early_stopping: bool = False
 
     # Restart policy.
     tuning_mode: TuningMode = TuningMode.OFFLINE

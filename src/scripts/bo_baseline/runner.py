@@ -16,9 +16,10 @@ from smac.scenario import Scenario
 from smac.runhistory.dataclasses import TrialInfo, TrialValue
 from smac.runhistory.enumerations import StatusType
 
-from src.tuner.config import get_knob_space
-from src.tuner.core.worker import Worker
-from src.tuner.benchmark.orchestrator import (
+from src.knobs import get_knob_space
+from src.tuners.engine.worker import BaseWorker
+from src.tuners.utils.metrics_table import build_worker_metric_row
+from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
 )
@@ -383,7 +384,7 @@ class BOBaselineRunner:
     def _evaluate_with_cotenancy(
         self,
         config,
-        worker: Worker,
+        worker: BaseWorker,
         orchestrator: WorkloadOrchestrator,
         previous_engine_config,
         seed=None,
@@ -421,7 +422,7 @@ class BOBaselineRunner:
         self,
         facade,
         orchestrator: WorkloadOrchestrator,
-        worker: Worker,
+        worker: BaseWorker,
         iteration_log: list,
         pilot_size: int,
         sobol_configs: list,
@@ -457,7 +458,7 @@ class BOBaselineRunner:
             SMAC facade in ask-tell mode (created with empty initial design)
         orchestrator : WorkloadOrchestrator
             Workload orchestrator
-        worker : Worker
+        worker : BaseWorker
             Worker instance (single — strictly sequential)
         iteration_log : list
             Mutable iteration log shared with the caller
@@ -608,11 +609,9 @@ class BOBaselineRunner:
 
             # ── Per-iteration metrics table (Bootstrap) ───────────────────────
             if metrics is not None:
-                metrics_with_score = metrics.to_dict()
-                metrics_with_score["score"] = iteration_score
                 log_worker_metrics_table(
                     self.logger,
-                    [metrics_with_score],
+                    [build_worker_metric_row(metrics, iteration_score)],
                     worker_labels=[f"Bootstrap-{pilot_idx + 1}"],
                     title=f"\n🔷 Bootstrap {pilot_idx + 1}/{pilot_size} Metrics 🔷",
                 )
@@ -1011,11 +1010,9 @@ class BOBaselineRunner:
 
             # ── Per-iteration metrics table (BO) ──────────────────────────────
             if metrics is not None:
-                metrics_with_score = metrics.to_dict()
-                metrics_with_score["score"] = iteration_score
                 log_worker_metrics_table(
                     self.logger,
-                    [metrics_with_score],
+                    [build_worker_metric_row(metrics, iteration_score)],
                     worker_labels=[f"Iter-{iteration_count + 1}"],
                     title=f"\n🔷 BO Iteration {iteration_count + 1}/{self.config.n_iterations} Metrics 🔷",
                 )
@@ -1259,7 +1256,8 @@ class BOBaselineRunner:
         )
         log_dir = bo_root / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir / f"bo_baseline_{timestamp}.html"
+        # Strategy-agnostic stem, matching the unified tuners' logs/session_*.html.
+        return log_dir / f"session_{timestamp}.html"
 
     def run(self) -> Dict[str, Any]:
         """
@@ -1349,7 +1347,7 @@ class BOBaselineRunner:
             self.logger.debug("Orchestrator configuration: %s", orchestrator_config)
 
             # Single (foreground) worker
-            worker = Worker(worker_id=0, knob_space=self.knob_space)
+            worker = BaseWorker(worker_id=0, knob_space=self.knob_space)
             worker.db_config = self.env.get_db_config(0)
 
             # Co-tenant load controller: drives the background load instances

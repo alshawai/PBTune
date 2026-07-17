@@ -34,25 +34,34 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.config.database import get_db_config
-from src.tuner.benchmark.orchestrator import (
+from src.tuners.engine.orchestrator import (
     WorkloadOrchestrator,
     WorkloadOrchestratorConfig,
 )
-from src.tuner.config import get_knob_space
-from src.tuners.utils.calibration import (
-    RecalibrationResult,
-    maybe_recalibrate_scores,
-)
+from src.knobs import get_knob_space
 from src.tuners.utils.executors import build_workload_bundle
 from src.tuners.utils.knob_filter import (
+    apply_tuning_mode_filter,
     compute_unsupported_knobs,
     log_pruning_summary,
     query_runtime_supported_knobs,
 )
 from src.tuners.utils.resources import resolve_worker_resources
+from src.tuners.utils.session_assembly import (
+    aggregate_session_timing,
+    build_generation_record,
+    safe_breakdown,
+)
+from src.tuners.utils.tuner_logging import (
+    format_design_points,
+    log_optimization_header,
+    log_round_end,
+    log_round_start,
+    log_worker_metrics,
+)
 from src.tuners.utils.session_writer import (
     build_session_header,
     worker_resources_to_dict,
@@ -64,12 +73,14 @@ from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
     TuningStrategy,
+    WorkerEvalResult,
 )
 from src.utils.environments import EnvironmentFactory
-from src.utils.hardware_info import WorkerResources, get_system_info, log_system_info
+from src.utils.hardware_info import WorkerResources, get_system_info
 from src.utils.logger import (
     get_color_context,
     get_logger,
+    log_final_summary,
     log_section_header,
     print_startup_banner,
 )
@@ -80,9 +91,9 @@ from src.utils.metrics import (
 )
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
-from src.utils.types import TuningMode, build_session_environment
+from src.utils.types import build_session_environment
 
-LOGGER = get_logger("BaseTuner")
+LOGGER = get_logger("Tuner")
 COLORS = get_color_context()
 
 
@@ -139,9 +150,16 @@ class BaseTuner(ABC):
 
         self._best_score_so_far: float = 0.0
 
-        # Populated by run() after the loop: the outcome of the optional
-        # global post-hoc recalibration pass (unapplied by default).
-        self.recalibration: RecalibrationResult = RecalibrationResult(applied=False)
+        # Human-facing reason the loop halted, set by ``should_stop`` for
+        # strategies that report one (see ``emits_stop_status``). Rendered as
+        # the generation-summary ``Status`` line; ``None`` until a stop fires.
+        self.stop_reason: Optional[str] = None
+
+        # Count of generations (a.k.a. rounds / batches / iterations) whose
+        # step() actually ran. Tracked centrally by run() — it is the one
+        # depth axis every strategy shares — and serialized as
+        # ``tuning_session.num_rounds``.
+        self._rounds_completed: int = 0
 
     @abstractmethod
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
@@ -181,45 +199,87 @@ class BaseTuner(ABC):
         (generation history, score breakdown, provenance, ...).
         """
 
-    def collect_metric_history(self) -> List[PerformanceMetrics]:
+    def total_evaluations(self) -> int:
+        """Number of configurations actually benchmarked across the run.
+
+        This is the fair cross-strategy *budget* axis (PBT evaluates
+        population×generations, BO one config per iteration, LHS one per design
+        point), serialized as ``tuning_session.total_evaluations``. Distinct
+        from ``num_rounds`` (the count of ``step()`` calls). The base default
+        returns 0; every concrete strategy overrides it.
         """
-        Return every measured :class:`PerformanceMetrics` across the run.
+        return 0
 
-        The shared ``run()`` feeds this flat history to the global post-hoc
-        recalibration pass (:func:`maybe_recalibrate_scores`) so the serialized
-        session can be rescored against one calibrated normalization range
-        before the per-config scores are frozen into the payload.
+    def converged(self) -> bool:
+        """Whether the strategy reached its planned terminal state.
 
-        The base default returns an empty list, which makes recalibration a
-        no-op (below the observation floor) — a strategy that wants the
-        pre-rescored session overrides this to surface its observations. The
-        ordering of the returned list is the strategy's contract with its own
-        :meth:`apply_recalibration`: ``recalibration.scores[i]`` /
-        ``recalibration.breakdowns[i]`` correspond to ``history[i]``.
+        Serialized as the shared ``tuning_session.converged`` flag. Each
+        strategy defines convergence in its own terms (PBT: early-stop on no
+        improvement; LHS: the full design was swept). The base default is
+        ``False`` so a strategy that never converges needs no override.
         """
-        return []
+        return False
 
-    def apply_recalibration(self, result: RecalibrationResult) -> None:
+    @property
+    def emits_stop_status(self) -> bool:
+        """Whether this strategy has a meaningful stopping-criterion concept.
+
+        Optimization tuners (PBT, BO) halt on a *criterion* — max rounds, an
+        early-stop patience budget, or population convergence — and the
+        per-round summary reports that as a ``Status`` line (``running`` while
+        the loop continues, ``stopped - <reason>`` on the terminal round). A
+        pure design sweep (LHS) has no such notion: it evaluates a fixed sample
+        to completion, so it returns ``False`` and the ``Status`` row is
+        omitted entirely. Override to ``True`` in optimization strategies.
         """
-        Fold a successful recalibration back into the strategy's state.
+        return False
 
-        Called by ``run()`` after the loop when
-        :func:`maybe_recalibrate_scores` returns an applied result, *before*
-        results are assembled and serialized. The positional alignment between
-        ``result.scores`` / ``result.breakdowns`` and the list returned by
-        :meth:`collect_metric_history` is guaranteed by the shared pass, so an
-        override can rewrite per-config scores, ``best_configuration``, and
-        ``generation_history`` to reflect the globally calibrated rubric.
+    def build_optimizer(self) -> None:
+        """
+        Construct and wire the strategy's persistent optimizer core.
 
-        The base default is a no-op: strategies that do not surface a metric
-        history (or do not want pre-rescoring) inherit local scores unchanged.
+        Called once at the end of :meth:`setup`, *after*
+        :meth:`propose_initial_configs` has drawn the initial configs and the
+        shared bring-up has left live instances, snapshots, and the
+        orchestrator in place. This is the seam where a strategy that carries
+        optimizer state across generations builds it: PBT wires its
+        :class:`Population` (binding workers to the live instances and the
+        baseline snapshot) from ``self.initial_configs``; BO constructs its
+        surrogate here.
+
+        The base default is a no-op — LHS-design evaluates a fixed sample with
+        no persistent optimizer to build, so it does not override.
         """
         return None
 
     @property
-    def max_generations(self) -> int:
-        """Upper bound on generations. Override for finite-budget strategies."""
+    def max_rounds(self) -> int:
+        """Upper bound on generation rounds (the ``run()`` loop budget).
+
+        Named to parallel the serialized ``tuning_session.num_rounds`` (the
+        count of rounds that *actually ran*, which is lower when early-stopping
+        fires): ``max_rounds`` is the planned ceiling, ``num_rounds`` the
+        realized count. Override for finite-budget strategies.
+        """
         return 1
+
+    @property
+    def round_label(self) -> str:
+        """Human-facing noun for one iteration of the ``run()`` loop.
+
+        The loop is strategy-neutral (``num_rounds`` is the serialized count),
+        but each strategy has its own natural vocabulary for one pass, and the
+        *display* logs should speak it. The default is the generic ``"Round"``;
+        concrete strategies override: PBT → ``"Generation"`` (an EA breeds a new
+        generation each pass), LHS → ``"Batch"`` (one parallel slice of a fixed
+        design), BO → ``"Iteration"`` (one sequential propose-evaluate step).
+
+        This governs only user-facing log strings ("GENERATION 3", "Generation
+        3 Summary"); the on-disk ``generation_history`` / ``generation`` JSON
+        keys are the fixed analysis-loader schema and are intentionally *not*
+        renamed.
+        """
+        return "Round"
 
     @property
     def num_instances(self) -> int:
@@ -259,19 +319,25 @@ class BaseTuner(ABC):
         Strategy-specific ``(label, value)`` rows for the startup summary.
 
         Rendered in ``run()``'s initialization block (bold label, cyan value),
-        matching PBT's banner. The base returns the generic generation budget;
+        matching PBT's banner. The base returns the generic round budget;
         concrete tuners override to name their own budget line (PBT:
         "Population Size", BO: "Iterations", LHS: "Design Size").
         """
-        return [("Max Generations:", str(self.max_generations))]
+        return [("Max Rounds:", str(self.max_rounds))]
 
     def session_filename(self) -> str:
-        """Filename for the session JSON (``{strategy}_results_{ts}.json``)."""
-        return f"{self.strategy.value}_results_{self.timestamp}.json"
+        """Filename for the session trace JSON (``trace_{ts}.json``).
+
+        Strategy-agnostic by design: the strategy is already encoded in the
+        ``sessions/<workload>/<strategy>/`` path, so the filename does not
+        restate it. Every reader can glob ``traces/trace_*.json`` uniformly
+        across PBT, BO, and LHS.
+        """
+        return f"trace_{self.timestamp}.json"
 
     def best_config_filename(self) -> str:
-        """Filename for the best-config JSON."""
-        return f"best_config_{self.timestamp}.json"
+        """Filename for the best-config JSON (``best_{ts}.json``)."""
+        return f"best_{self.timestamp}.json"
 
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -286,14 +352,28 @@ class BaseTuner(ABC):
         """
         Build the shared tuning environment and seed the initial design.
 
-        Resolves the workload type, builds the knob space and per-worker
-        resources, constructs the workload executor + metric config, creates
-        the environment + orchestrator, brings up ``self.num_instances``
-        instances, prunes runtime-unsupported knobs, and finally draws the
-        strategy's initial configurations via ``propose_initial_configs()``.
+        Delegates to named sub-methods so each phase is independently
+        readable, testable, and overridable by concrete tuners.
         """
+        self._load_knob_space()
+        self._resolve_resources()
+        self._build_workload_and_metrics()
+        self._create_environment()
+        self._bring_up_instances()
+        self._seed_initial_configs()
+
+    def _load_knob_space(self) -> None:
+        """Resolve workload type and build the full + filtered knob spaces."""
         resolved_workload_type = self._resolve_granular_workload_type()
 
+        LOGGER.info(
+            "Loading knob space: %s%s%s (source: %s, workload: %s)",
+            COLORS.cyan,
+            self.lifecycle.knob_tier.capitalize(),
+            COLORS.reset,
+            self.lifecycle.knob_source,
+            resolved_workload_type,
+        )
         self.knob_space = get_knob_space(
             self.lifecycle.knob_tier,
             knob_source=self.lifecycle.knob_source,
@@ -301,6 +381,14 @@ class BaseTuner(ABC):
         )
         self.full_knob_space = self.knob_space
 
+    def _resolve_resources(self) -> None:
+        """Detect hardware and resolve knob ranges against worker resources."""
+        LOGGER.info(
+            "Detecting hardware resources for %s%d%s parallel workers...",
+            COLORS.bold,
+            self.lifecycle.num_parallel_workers,
+            COLORS.reset,
+        )
         self.worker_resources = resolve_worker_resources(
             num_workers=self.lifecycle.num_parallel_workers,
             data_path=self.data_root,
@@ -312,17 +400,22 @@ class BaseTuner(ABC):
             worker_disk_write_iops=self.lifecycle.worker_disk_write_iops,
             probe_disk=self.lifecycle.probe_disk,
         )
+        LOGGER.info(
+            "Resolving hardware-relative knob ranges based on detected worker "
+            "resources..."
+        )
         self.full_knob_space.resolve_hardware_ranges(self.worker_resources)
         self.knob_space.worker_resources = self.worker_resources
 
-        # ONLINE knob-view derivation. We keep ``full_knob_space`` as the 
-        # complete space (fraction encoding, SCALPEL) and narrow ``knob_space``
+        # ONLINE knob-view: keep full_knob_space complete, narrow knob_space
         # to the restart-free view the loop refines.
-        if self.lifecycle.tuning_mode == TuningMode.ONLINE:
-            self.knob_space = self.full_knob_space.create_online_view()
+        self.knob_space = apply_tuning_mode_filter(
+            self.full_knob_space, self.lifecycle.tuning_mode
+        )
 
-        db_config = get_db_config()
-
+    def _build_workload_and_metrics(self) -> None:
+        """Build workload bundle and metric config from scoring overrides."""
+        assert self.worker_resources is not None
         bundle = build_workload_bundle(
             benchmark=self.benchmark,
             benchmark_config=self.benchmark_config,
@@ -335,21 +428,40 @@ class BaseTuner(ABC):
         self.workload_features = bundle.workload_features
         self.snapshot_identifier = bundle.snapshot_identifier
         self.enable_snapshots = self.lifecycle.enable_snapshots and bundle.enable_snapshots
-        workload_executor = bundle.executor
+        self._workload_executor = bundle.executor
 
+        scoring_overrides: Dict[str, Any] = {
+            "workload_features": dict(self.workload_features),
+        }
+        if self.lifecycle.scoring_policy is not None:
+            scoring_overrides["scoring_policy"] = self.lifecycle.scoring_policy
+        if self.lifecycle.scoring_policy_version is not None:
+            scoring_overrides["scoring_policy_version"] = (
+                self.lifecycle.scoring_policy_version
+            )
+        if self.lifecycle.metric_reference_version is not None:
+            scoring_overrides["metric_reference_version"] = (
+                self.lifecycle.metric_reference_version
+            )
         self.metric_config = create_metric_config(
             self._workload_type.value,
-            workload_features=dict(self.workload_features),
+            **scoring_overrides,
         )
 
+    def _create_environment(self) -> None:
+        """Create environment backend and workload orchestrator."""
+        assert self.worker_resources is not None
+        db_config = get_db_config()
+
         self.env = EnvironmentFactory.create(
-            schema_provider=workload_executor,
+            schema_provider=self._workload_executor,
             use_docker=self.lifecycle.use_docker,
             base_dir=self.data_root,
             base_port=5440,
             db_config=db_config,
             worker_resources=self.worker_resources,
             run_id=self.snapshot_identifier,
+            image_name=self.lifecycle.docker_image,
             force_recreate_baseline=self.lifecycle.force_recreate_baseline,
         )
 
@@ -367,39 +479,78 @@ class BaseTuner(ABC):
             worker_memory_budget_bytes=self.worker_resources.ram_bytes,
         )
         self.orchestrator = WorkloadOrchestrator(
-            orchestrator_config, workload_executor, self.env
+            orchestrator_config, self._workload_executor, self.env
         )
 
+    def _bring_up_instances(self) -> None:
+        """Start PostgreSQL instances, verify, and prune unsupported knobs."""
+        LOGGER.info("Collecting system hardware and software information...")
         self.system_info = get_system_info(data_path=self.data_root)
 
+        LOGGER.info("")
+        log_section_header(
+            LOGGER,
+            "Setting Up PostgreSQL Instances",
+            top_separator=False,
+        )
+        LOGGER.info(
+            "Creating %d PostgreSQL instances (force_recreate=%s)",
+            self.num_instances,
+            self.lifecycle.force_recreate_instances,
+        )
         with self.bootstrap_timing.span("setup_instances"):
             self._instances = self.env.setup_instances(
                 num_workers=self.num_instances,
                 force_recreate=self.lifecycle.force_recreate_instances,
                 num_parallel_workers=self.num_instances,
             )
+        LOGGER.info("Verifying instance accessibility and configurations...")
         with self.bootstrap_timing.span("verify_instances"):
             self.env.verify_instances()
+        LOGGER.info("Pruning unsupported knobs based on runtime version...")
         with self.bootstrap_timing.span("prune_knobs"):
             self._prune_unsupported_runtime_knobs()
+        LOGGER.info(
+            "%s%sPostgreSQL instances are ready.%s",
+            COLORS.bold,
+            COLORS.green,
+            COLORS.reset,
+        )
 
+    def _seed_initial_configs(self) -> None:
+        """Build session environment, propose initial configs, build optimizer."""
         self.session_environment = build_session_environment(
             env=self.env,
             num_parallel_workers=self.lifecycle.num_parallel_workers,
-            population_size=self.population_size,
+            population_size=self.seeded_config_count,
             system_info=self.system_info,
             use_docker=self.lifecycle.use_docker,
         )
 
+        LOGGER.info("")
+        LOGGER.info(
+            "Seeding initial configurations for %s tuning session...",
+            self.strategy.upper()
+        )
         self.initial_configs = self.propose_initial_configs()
 
+        self.build_optimizer()
+
+        LOGGER.info(
+            "%s%s%s Tuner Initialization Complete!%s",
+            COLORS.bold, COLORS.green, self.strategy.upper(), COLORS.reset
+        )
+
     @property
-    def population_size(self) -> int:
+    def seeded_config_count(self) -> int:
         """
         Number of configurations seeded for ``session_environment``.
 
         Defaults to the count of initial configs drawn (parallel-workers if
-        not yet drawn). Override when the design size is known up front.
+        not yet drawn). Override when the design size is known up front. This
+        is the in-code analogue of PBT's "population size"; it is serialized
+        under ``strategy_params`` by strategies that carry the notion, never as
+        a shared header field.
         """
         return len(self.initial_configs) or self.lifecycle.num_parallel_workers
 
@@ -448,13 +599,48 @@ class BaseTuner(ABC):
         self, metrics: Optional[PerformanceMetrics]
     ) -> Optional[ScoreBreakdown]:
         """Compute a score breakdown, tolerating scorer failures."""
-        if metrics is None or self.orchestrator is None:
-            return None
-        try:
-            return self.orchestrator.scorer.compute_breakdown(metrics)
-        except (RuntimeError, ValueError, AttributeError) as exc:
-            LOGGER.debug("Failed to compute score breakdown: %s", exc)
-            return None
+        scorer = self.orchestrator.scorer if self.orchestrator is not None else None
+        return safe_breakdown(metrics, scorer)
+
+    def _build_generation_record(
+        self,
+        *,
+        generation: int,
+        best_score_this_round: float,
+        converged: bool,
+        worker_results: Sequence[WorkerEvalResult],
+        generation_elapsed_seconds: float,
+        restart_count: int = 0,
+        generation_timing: Optional[Any] = None,
+        mean_score: Optional[float] = None,
+        std_score: Optional[float] = None,
+        num_exploited: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Assemble one uniform ``generation_history`` entry for any strategy."""
+        scorer = (
+            self.orchestrator.scorer if self.orchestrator is not None else None
+        )
+        return build_generation_record(
+            generation=generation,
+            best_score_this_round=best_score_this_round,
+            converged=converged,
+            worker_results=worker_results,
+            generation_elapsed_seconds=generation_elapsed_seconds,
+            tuning_start_time=self.tuning_start_time,
+            start_time=self.start_time,
+            scorer=scorer,
+            restart_count=restart_count,
+            generation_timing=generation_timing,
+            mean_score=mean_score,
+            std_score=std_score,
+            num_exploited=num_exploited,
+            extra=extra,
+        )
+
+    def _aggregate_session_timing(self) -> Dict[str, Any]:
+        """Aggregate per-component timing across every (round, worker) tuple."""
+        return aggregate_session_timing(self.generation_history)
 
     def teardown(self) -> None:
         """Stop instances and optionally clean up data. Always called."""
@@ -477,51 +663,50 @@ class BaseTuner(ABC):
             strategy_label,
             COLORS.reset,
         )
-        LOGGER.info(
-            "Knob Tier:       %s%s (%s source)%s",
-            COLORS.cyan,
-            self.lifecycle.knob_tier,
-            self.lifecycle.knob_source,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Parallel Workers:%s%d%s",
-            COLORS.cyan,
-            self.lifecycle.num_parallel_workers,
-            COLORS.reset,
-        )
 
         self.start_time = time.time()
         try:
+            LOGGER.info("")
             log_section_header(
                 LOGGER,
-                "%sSetting up tuning environment%s",
-                COLORS.bold,
-                COLORS.reset,
+                "Setting up tuning environment",
+                top_separator=False,
             )
             with self.bootstrap_timing.span("setup"):
                 self.setup()
+
+            bootstrap_seconds = time.time() - self.start_time
+            LOGGER.info(
+                "Bootstrap completed in %s%s%.1fs%s (excluded from tuning "
+                "wall-clock)",
+                COLORS.cyan,
+                COLORS.bold,
+                bootstrap_seconds,
+                COLORS.reset,
+            )
 
             self._log_optimization_header(strategy_label)
 
             self.tuning_start_time = time.time()
             log_section_header(
                 LOGGER,
-                "%sStarting %s optimization loop%s",
+                "%sStarting %s Optimization Loop%s",
                 COLORS.bold,
                 strategy_label,
                 COLORS.reset,
             )
-            for generation in range(self.max_generations):
+            for generation in range(self.max_rounds):
+                self._log_round_start(generation)
+                prev_best = self._safe_best_score()
                 outcome = self.step(generation)
+                self._rounds_completed += 1
 
-                if self.should_stop(outcome):
-                    LOGGER.info(
-                        "%sStopping criterion met after generation %d%s",
-                        COLORS.teal,
-                        generation,
-                        COLORS.reset,
-                    )
+                # Decide the stop *before* logging the round summary so the
+                # summary's Status line can report which criterion fired on the
+                # terminal round (should_stop sets self.stop_reason).
+                stop = self.should_stop(outcome)
+                self._log_round_end(outcome, prev_best, stopped=stop)
+                if stop:
                     break
         except KeyboardInterrupt:
             LOGGER.warning(
@@ -544,8 +729,6 @@ class BaseTuner(ABC):
         tuning_time = time.time() - (self.tuning_start_time or self.start_time)
         bootstrap_seconds = total_time - tuning_time
 
-        self._recalibrate_scores()
-
         results = self._assemble_results(
             total_time=total_time,
             tuning_time=tuning_time,
@@ -563,22 +746,7 @@ class BaseTuner(ABC):
             output_dir=self.output_root,
             filename=self.best_config_filename(),
         )
-        log_section_header(
-            LOGGER,
-            "%s%s optimization complete%s",
-            COLORS.bold,
-            strategy_label,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Best Score:      %s%.4f%s",
-            COLORS.green,
-            float(best_score) if best_score else 0.0,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Total Time:      %s%.1fs%s", COLORS.cyan, total_time, COLORS.reset
-        )
+        log_final_summary(LOGGER, results)
         LOGGER.info(
             "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
         )
@@ -586,88 +754,70 @@ class BaseTuner(ABC):
 
     def _log_optimization_header(self, strategy_label: str) -> None:
         """Emit the PBT-grade system-info + configuration summary block."""
-        log_section_header(
-            LOGGER,
-            "%s%s PostgreSQL Tuner - Starting Optimization%s",
-            COLORS.bold,
-            strategy_label,
-            COLORS.reset,
-        )
-        log_system_info(LOGGER, self.system_info)
-        LOGGER.info(
-            "Knob Tier:       %s%s (%d knobs)%s",
-            COLORS.cyan,
-            self.lifecycle.knob_tier,
-            len(self.knob_space) if self.knob_space is not None else 0,
-            COLORS.reset,
-        )
-        for label, value in self.config_summary_lines():
-            LOGGER.info("%-16s %s%s%s", label, COLORS.cyan, value, COLORS.reset)
-        LOGGER.info(
-            "Workload Type:   %s%s%s",
-            COLORS.cyan,
-            self.workload_type_value,
-            COLORS.reset,
-        )
-        LOGGER.info(
-            "Output Dir:      %s%s%s", COLORS.cyan, self.output_root, COLORS.reset
+        log_optimization_header(
+            strategy_label=strategy_label,
+            system_info=self.system_info,
+            knob_tier=self.lifecycle.knob_tier,
+            knob_count=len(self.knob_space) if self.knob_space is not None else 0,
+            config_summary_lines=self.config_summary_lines(),
+            workload_type_value=self.workload_type_value,
+            output_root=self.output_root,
         )
 
-    def _recalibrate_scores(self) -> None:
-        """
-        Run the optional global post-hoc recalibration pass after the loop.
+    def _safe_best_score(self) -> float:
+        """Best score so far, tolerating a not-yet-populated optimizer."""
+        try:
+            return float(self.collect_best()[1] or 0.0)
+        except (RuntimeError, ValueError, AttributeError, IndexError):
+            return float(self._best_score_so_far)
 
-        Collects the strategy's flat metric history and, when there are enough
-        observations, recomputes every score against one globally calibrated
-        normalization range. A successful pass is stored on
-        ``self.recalibration`` and handed to :meth:`apply_recalibration` so the
-        strategy can fold the rescored values + breakdowns back into its state
-        *before* :meth:`_assemble_results` freezes the session payload.
-
-        Threads the live scoring provenance (policy, version, metric reference,
-        and the session's static workload-feature prior) through so the
-        rescored rubric matches the one the loop scored against. Below the
-        observation floor the result is unapplied and local scores stand.
-        """
-        history = self.collect_metric_history()
-        if not history:
-            return
-
-        metric_config = self.metric_config
-        result = maybe_recalibrate_scores(
-            history,
-            benchmark=self.benchmark,
-            workload=self._workload_type.value,
-            scoring_policy=getattr(metric_config, "scoring_policy", None),
-            scoring_policy_version=getattr(
-                metric_config, "scoring_policy_version", None
-            ),
-            metric_reference_version=getattr(
-                metric_config, "metric_reference_version", None
-            ),
-            workload_features=dict(self.workload_features) or None,
+    def _log_round_start(self, generation: int) -> None:
+        """Emit the per-round section header and the live scoring-weight table."""
+        scorer = (
+            self.orchestrator.scorer
+            if self.orchestrator is not None and hasattr(self.orchestrator, "scorer")
+            else None
         )
-        self.recalibration = result
-
-        if not result.applied:
-            LOGGER.info(
-                "%sGlobal recalibration skipped (%d observations < floor); "
-                "keeping local scores%s",
-                COLORS.orange,
-                len(history),
-                COLORS.reset,
-            )
-            return
-
-        LOGGER.info(
-            "%sGlobal recalibration applied across %d observations "
-            "(ranges_calibrated=%s)%s",
-            COLORS.teal,
-            len(history),
-            result.metadata.get("ranges_calibrated"),
-            COLORS.reset,
+        log_round_start(
+            generation,
+            round_label=self.round_label,
+            scorer=scorer,
         )
-        self.apply_recalibration(result)
+
+    def _log_round_end(
+        self,
+        outcome: GenerationOutcome,
+        prev_best: float,
+        *,
+        stopped: bool = False,
+    ) -> None:
+        """Announce a new best and log the generation summary."""
+        log_round_end(
+            outcome_index=outcome.index,
+            outcome_best_score=outcome.best_score_this_generation,
+            outcome_payload=outcome.payload,
+            prev_best=prev_best,
+            current_best=self._safe_best_score(),
+            elapsed_seconds=time.time() - (self.tuning_start_time or self.start_time),
+            emits_stop_status=self.emits_stop_status,
+            stopped=stopped,
+            stop_reason=self.stop_reason,
+            round_label=self.round_label,
+        )
+
+    @staticmethod
+    def _format_design_points(evaluated: Optional[Sequence[int]]) -> Optional[str]:
+        """Render a list of evaluated design indices as a compact range string."""
+        return format_design_points(evaluated)
+
+    def log_worker_metrics_table(
+        self,
+        worker_results: Sequence[WorkerEvalResult],
+        *,
+        title: Optional[str] = None,
+    ) -> None:
+        """Render the end-of-round per-worker performance table."""
+        log_worker_metrics(worker_results, title=title)
 
     def _assemble_results(
         self,
@@ -691,6 +841,10 @@ class BaseTuner(ABC):
         )
         header.update(
             {
+                "num_rounds": self._rounds_completed,
+                "total_evaluations": self.total_evaluations(),
+                "tuning_mode": self.lifecycle.tuning_mode.value,
+                "converged": self.converged(),
                 "total_time_seconds": total_time,
                 "tuning_time_seconds": tuning_time,
                 "bootstrap_seconds": bootstrap_seconds,
@@ -716,6 +870,7 @@ class BaseTuner(ABC):
             ),
             "generation_history": self.generation_history,
             "bootstrap_breakdown": self.bootstrap_timing.to_dict(),
+            "timing_summary": self._aggregate_session_timing(),
         }
 
         # Merge strategy-specific sections last so subclasses can override or

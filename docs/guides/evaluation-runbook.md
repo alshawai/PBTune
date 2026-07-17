@@ -181,7 +181,7 @@ For each run, verify the generated comparison JSON includes:
 
 ## Random Seed Handling and Deterministic Limits
 
-### Tuning stage (`src/tuner`)
+### Tuning stage (`src/tuners`)
 
 - Tuning CLI exposes `--random-seed` (default: `42`) in `src/tuners/pbt/cli.py`.
 - Population initialization and perturbation sampling use deterministic seed

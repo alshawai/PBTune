@@ -1,8 +1,7 @@
 import logging
-from typing import Optional
 from pathlib import Path
+from typing import Any
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 import seaborn as sns
 from scipy.stats import mannwhitneyu
@@ -13,9 +12,9 @@ from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
-    load_sessions, load_session, load_bo_trace, load_comparison, SessionTrace, BOTrace, ComparisonData
+    load_sessions, load_session, load_bo_trace, load_comparison,
+    discover_session_traces, discover_bo_traces,
 )
-from src.visualization.utils import auto_grid
 from src.visualization.plots.convergence_curve import (
     _build_shared_metric_config,
     _rescore_comparison_arm,
@@ -134,11 +133,15 @@ def generate(
     logger.info("Generating %s figure", FIG_ID)
 
     if not pbt_paths and data_dir:
-        d = Path(data_dir) / "oltp" / "oltp_read_write"
+        d = Path(data_dir) / "sessions" / "oltp_read_write"
         if d.exists():
-            pbt_paths = [str(d / "pbt_runs" / "extensive" / "tuning_sessions")]
-            bo_paths = [str(d / "bo_runs" / "extensive" / "baseline_sessions")]
-            comps = sorted((d / "comparisons" / "extensive").glob("multi_arm_comparison_*.json"))
+            pbt_paths = [str(d / "pbt" / "extensive" / "traces")]
+            bo_paths = [str(d / "bo" / "extensive" / "traces")]
+            comps = sorted(
+                (Path(data_dir) / "comparisons" / "oltp_read_write" / "extensive").glob(
+                    "multi_arm_comparison_*.json"
+                )
+            )
             if comps and not comparison_path:
                 comparison_path = str(comps[-1])
 
@@ -153,9 +156,7 @@ def generate(
     for path in pbt_paths:
         path_obj = Path(path)
         if path_obj.is_dir() and shared_metric_config is not None:
-            for session_path in sorted(
-                path_obj.glob("pbt_results_*.json"), key=lambda p: p.name
-            ):
+            for session_path in discover_session_traces(path_obj):
                 sessions.append(
                     load_session(session_path, metric_config=shared_metric_config, metric_key=metric_key)
                 )
@@ -163,17 +164,17 @@ def generate(
             sessions.extend(load_sessions(path, metric_key=metric_key))
         else:
             sessions.append(load_session(path, metric_config=shared_metric_config, metric_key=metric_key))
-            
+
     bo_traces = []
     for path in bo_paths:
         path_obj = Path(path)
         if path_obj.is_dir():
-            for trace_path in sorted(path_obj.glob("bo_results_*.json"), key=lambda p: p.name):
+            for trace_path in discover_bo_traces(path_obj):
                 bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config, metric_key=metric_key))
         else:
             bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))
         
-    comp_data = None
+    comp_data: Any = None
     if comparison_path is not None:
         try:
             comp_data = load_comparison(comparison_path)
@@ -207,7 +208,7 @@ def generate(
         
         if pt is not None:
             data_x = []
-            data_y = []
+            data_y: list[Any] = []
             palette = {}
             for m in plot_methods:
                 vals = scores_dict[m]
@@ -221,7 +222,7 @@ def generate(
             
             # Plot scalar default if needed
             if "Default" in plot_methods and len(scores_dict["Default"]) == 1:
-                default_val = scores_dict["Default"][0]
+                default_val = float(scores_dict["Default"][0])
                 ax.axhline(y=default_val, color=get_method_style("default")["color"], linestyle=":", alpha=0.8)
                 ax.scatter([plot_methods.index("Default")], [default_val], marker="D", s=100, color=get_method_style("default")["color"], zorder=5)
 
@@ -245,7 +246,7 @@ def generate(
                 
             # Plot scalar default if needed
             if "Default" in plot_methods and len(scores_dict["Default"]) == 1:
-                default_val = scores_dict["Default"][0]
+                default_val = float(scores_dict["Default"][0])
                 ax.axhline(y=default_val, color=get_method_style("default")["color"], linestyle=":", alpha=0.8)
                 ax.scatter([plot_methods.index("Default")], [default_val], marker="D", s=100, color=get_method_style("default")["color"], zorder=5)
 

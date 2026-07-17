@@ -13,7 +13,7 @@ from dateutil import parser as dateutil_parser
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 from src.visualization.loaders.session import RAW_METRIC_KEYS, _extract_raw_value
 
@@ -149,17 +149,26 @@ def load_bo_trace(
         # Either use provided metric config or compute a new one
         if metric_config is None:
             tuning_session = data.get("tuning_session", {})
+            scoring = tuning_session.get("scoring") or {}
             workload = tuning_session.get("workload_type", "oltp")
             benchmark = tuning_session.get("benchmark_name")
-            scoring_policy = data.get(
-                "scoring_policy", tuning_session.get("scoring_policy")
+            scoring_policy = scoring.get(
+                "scoring_policy",
+                data.get("scoring_policy", tuning_session.get("scoring_policy")),
             )
-            policy_version = data.get(
-                "scoring_policy_version", tuning_session.get("scoring_policy_version")
+            policy_version = scoring.get(
+                "scoring_policy_version",
+                data.get(
+                    "scoring_policy_version",
+                    tuning_session.get("scoring_policy_version"),
+                ),
             )
-            metric_ref = data.get(
+            metric_ref = scoring.get(
                 "metric_reference_version",
-                tuning_session.get("metric_reference_version"),
+                data.get(
+                    "metric_reference_version",
+                    tuning_session.get("metric_reference_version"),
+                ),
             )
 
             metric_config, _, _ = rescore_metrics_globally(
@@ -173,6 +182,7 @@ def load_bo_trace(
 
         use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
         if use_raw:
+            assert metric_key is not None  # implied by use_raw
             new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
         elif hasattr(metric_config, "compute_score_value"):
             new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
@@ -209,7 +219,7 @@ def load_bo_trace(
     # Convert raw scores into a running best array
     # Lower is better for latency metrics; higher is better otherwise
     use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
-    if use_raw and metric_key.startswith("latency"):
+    if use_raw and metric_key is not None and metric_key.startswith("latency"):
         best_scores = np.minimum.accumulate(scores)
     else:
         best_scores = np.maximum.accumulate(scores)

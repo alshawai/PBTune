@@ -1,6 +1,6 @@
 # SCALPEL Rollout Guide
 
-> See also:
+> Last reviewed: 2026-06-22 · See also:
 > [SCALPEL architecture](../architecture/scalpel.md),
 > [SCALPEL diagnostics reference](../reference/scalpel-diagnostics.md),
 > [ADR-005](../architecture/decisions/ADR-005-scalpel-tier-generation.md).
@@ -33,7 +33,7 @@ operator playbook.
 SCALPEL attributes importance best over a **space-filling design** where every
 knob varies independently of performance feedback. A PBT trace works, but its
 trajectory variance is narrow — the optimizer collapses the per-knob spread it
-needs. The [`LHSDesignTuner`](../../src/tuners/lhs_design.py) produces a clean
+needs. The [`LHSDesignTuner`](../../src/tuners/lhs_design/tuner.py) produces a clean
 substrate instead: a fixed Latin Hypercube design swept once, with no
 evolution.
 
@@ -143,7 +143,7 @@ suffix the tier slug with `@scalpel-v1` so post-SCALPEL artifacts do
 not collide with pre-SCALPEL ones:
 
 ```bash
-python -m src.tuners.pbt \
+python -m src.tuners pbt \
   --workload oltp_read_write \
   --tier core \
   --knob-source data_driven
@@ -152,7 +152,7 @@ python -m src.tuners.pbt \
 
 Expert-source paths are unchanged. When SCALPEL leaves an
 intermediate tier empty (e.g., `core` confirmed nothing),
-[`knob_loader`](../../src/tuner/config/knob_loader.py) walks DOWN
+[`knob_loader`](../../src/knobs/knob_loader.py) walks DOWN
 the canonical order to the next broader tier whose CSV exists with
 at least one knob, logging a warning. The tuner does not crash on
 empty tiers any more.

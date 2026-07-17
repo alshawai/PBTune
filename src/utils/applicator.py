@@ -393,6 +393,7 @@ class KnobApplicator:
             return False, f"{name} requires restart (postmaster context)"
 
         if param_info.vartype == "bool":
+            _bool_types: tuple[type, ...]
             try:
                 import numpy as np
                 _bool_types = (bool, int, str, np.bool_)

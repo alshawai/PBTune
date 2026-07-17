@@ -114,7 +114,7 @@ Trade-offs:
   knobs land in `tentative` or `rejected` on a noisy workload. SCALPEL
   treats this as a degenerate-result signal and emits empty
   `core`/`standard` tiers; downstream
-  [`knob_loader`](../../src/tuner/config/knob_loader.py) walks down to
+  [`knob_loader`](../../src/knobs/knob_loader.py) walks down to
   the next broader tier with a warning rather than crashing the tuner.
 - Output paths under `results/<workload>/pbt_runs/<tier>/` for
   `--knob-source data_driven` runs are now suffixed with

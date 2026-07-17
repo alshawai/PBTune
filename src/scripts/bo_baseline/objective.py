@@ -4,10 +4,10 @@ import time
 from typing import Dict, Optional, Tuple, TYPE_CHECKING
 from ConfigSpace import Configuration
 
-from src.tuner.config.knob_space import KnobSpace
-from src.tuner.core.worker import Worker
-from src.tuner.core.barriers import GenerationBarrier
-from src.tuner.benchmark.orchestrator import WorkloadOrchestrator
+from src.knobs.knob_space import KnobSpace
+from src.tuners.engine.worker import BaseWorker
+from src.tuners.engine.barriers import GenerationBarrier
+from src.tuners.engine.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 def evaluate_config(
     config: Configuration,
-    worker: Worker,
+    worker: BaseWorker,
     orchestrator: WorkloadOrchestrator,
     knob_space: KnobSpace,
     previous_config: Optional[Dict],
@@ -55,7 +55,7 @@ def evaluate_config(
     ----------
     config : Configuration
         ConfigSpace configuration to evaluate
-    worker : Worker
+    worker : BaseWorker
         Worker instance bound to a specific PostgreSQL instance
     orchestrator : WorkloadOrchestrator
         Orchestrator for computing performance metrics

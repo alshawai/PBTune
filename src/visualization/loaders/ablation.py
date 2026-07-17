@@ -8,9 +8,10 @@ from typing import Any
 
 from src.utils.logger import get_logger
 from src.utils.metrics import MetricConfig, PerformanceMetrics
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError
 from src.visualization.loaders.session import SessionTrace, load_sessions
+from src.visualization.loaders.discovery import discover_session_traces
 
 LOGGER = get_logger("AblationLoader")
 
@@ -35,7 +36,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
 
     Args:
         ablation_dir: Path to the root ablation directory
-            (e.g., `results/oltp/pbt_runs/minimal/ablations/population_size/`)
+            (e.g., `results/sessions/oltp_read_write/pbt/minimal/ablations/population_size/`)
 
     Returns:
         AblationGroup containing grouped traces and the shared metric config.
@@ -59,10 +60,10 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     raw_groups: dict[str, list[SessionTrace]] = {}
 
     for val_dir in value_dirs:
-        # PBT sessions are saved in `tuning_sessions/` under the ablation value dir
-        tuning_dir = val_dir / "tuning_sessions"
+        # PBT sessions are saved in `traces/` under the ablation value dir
+        tuning_dir = val_dir / "traces"
         if not tuning_dir.exists():
-            LOGGER.warning("No tuning_sessions/ directory found in %s", val_dir)
+            LOGGER.warning("No traces/ directory found in %s", val_dir)
             continue
 
         val_name = val_dir.name
@@ -98,11 +99,11 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     shared_metadata: dict[str, Any] = {}
 
     for val_dir in value_dirs:
-        tuning_dir = val_dir / "tuning_sessions"
+        tuning_dir = val_dir / "traces"
         if not tuning_dir.exists():
             continue
 
-        json_files = sorted(tuning_dir.glob("pbt_results_*.json"))
+        json_files = discover_session_traces(tuning_dir)
         for f in json_files:
             try:
                 with open(f, "r", encoding="utf-8") as file_obj:
@@ -110,21 +111,35 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
 
                 if not shared_metadata:
                     tuning_session = data.get("tuning_session", {})
+                    scoring = tuning_session.get("scoring") or {}
                     shared_metadata = {
                         "workload": tuning_session.get("workload_type", "oltp"),
                         "benchmark": tuning_session.get("benchmark_name"),
-                        "scoring_policy": data.get(
-                            "scoring_policy", tuning_session.get("scoring_policy")
+                        "scoring_policy": scoring.get(
+                            "scoring_policy",
+                            data.get(
+                                "scoring_policy",
+                                tuning_session.get("scoring_policy"),
+                            ),
                         ),
-                        "scoring_policy_version": data.get(
+                        "scoring_policy_version": scoring.get(
                             "scoring_policy_version",
-                            tuning_session.get("scoring_policy_version"),
+                            data.get(
+                                "scoring_policy_version",
+                                tuning_session.get("scoring_policy_version"),
+                            ),
                         ),
-                        "metric_reference_version": data.get(
+                        "metric_reference_version": scoring.get(
                             "metric_reference_version",
-                            tuning_session.get("metric_reference_version"),
+                            data.get(
+                                "metric_reference_version",
+                                tuning_session.get("metric_reference_version"),
+                            ),
                         ),
-                        "workload_features": data.get("workload_features"),
+                        "workload_features": scoring.get(
+                            "workload_features",
+                            data.get("workload_features"),
+                        ),
                     }
 
                 history = data.get("generation_history", [])
@@ -156,14 +171,14 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
 
     final_groups: dict[str, list[SessionTrace]] = {}
     for val_dir in value_dirs:
-        tuning_dir = val_dir / "tuning_sessions"
+        tuning_dir = val_dir / "traces"
         if not tuning_dir.exists():
             continue
 
         val_name = val_dir.name
         final_groups[val_name] = []
 
-        for f in sorted(tuning_dir.glob("pbt_results_*.json")):
+        for f in discover_session_traces(tuning_dir):
             try:
                 trace = load_session(f, metric_config=super_config)
                 final_groups[val_name].append(trace)
@@ -196,7 +211,16 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
     for _, traces in final_groups.items():
         for trace in traces:
             session_meta = trace.metadata.get("tuning_session", {})
-            current_config = {k: session_meta.get(k) for k in invariant_keys}
+            # Strategy-specific hyperparameters (population_size, exploit_quantile,
+            # ready_interval, ...) move under ``tuning_session.strategy_params`` in
+            # the unified schema (2a′+); shared identity keys stay flat. Read each
+            # invariant from the flat header first, then strategy_params, so both
+            # incumbent-flat and unified-nested PBT sessions validate.
+            strategy_params = session_meta.get("strategy_params") or {}
+            current_config = {
+                k: session_meta.get(k, strategy_params.get(k))
+                for k in invariant_keys
+            }
 
             if base_config is None:
                 base_config = current_config

@@ -18,9 +18,10 @@ Fixtures and mock objects are used to simulate various hardware environments and
 Unit tests for hardware normalization logic in KnobSpace.
 """
 
+import numpy as np
 import pytest
 
-from src.tuner.config.knob_space import (
+from src.knobs.knob_space import (
     KnobSpace,
     KnobDefinition,
     KnobType,
@@ -388,19 +389,19 @@ def test_memory_budget_repair_ratios(mock_knob_space):
 
 def test_worker_clone_memory_budget_repair(mock_knob_space):
     """Test Worker clone_from enforces bounds AND budget repair."""
-    from src.tuner.core.worker import Worker
+    from src.tuners.pbt.worker import PBTWorker
 
     wr = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="ssd")
     mock_knob_space.resolve_hardware_ranges(wr)
 
-    worker1 = Worker(worker_id=0, knob_space=mock_knob_space)
+    worker1 = PBTWorker(worker_id=0, knob_space=mock_knob_space)
     worker1.knob_config = {
         "shared_buffers": 400000,
         "work_mem": 20480,
         "maintenance_work_mem": 2000000,
     }
 
-    worker2 = Worker(worker_id=1, knob_space=mock_knob_space)
+    worker2 = PBTWorker(worker_id=1, knob_space=mock_knob_space)
     worker2.clone_from(worker1, current_generation=1)
 
     # clone_from copies the configuration as-is; repair is applied during perturb()
@@ -418,7 +419,7 @@ def test_perturbation_bound_exceed_repairs(mock_knob_space):
         "max_connections": mock_knob_space.knobs["max_connections"].max_value,
     }
 
-    perturbed = mock_knob_space.perturb_config(config, (2.0, 2.0))
+    perturbed = mock_knob_space.perturb_config(config, (2.0, 2.0), rng=np.random.default_rng(0))
 
     assert (
         perturbed["shared_buffers"] <= mock_knob_space.knobs["shared_buffers"].max_value
