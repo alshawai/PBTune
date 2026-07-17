@@ -266,36 +266,7 @@ class WorkloadOrchestrator:
         restore_due: bool = False,
         recorder: Optional[TimingRecorder] = None,
     ) -> bool:
-        """
-        Apply knob configuration and optionally restart via policy.
-
-        This method writes knobs via apply_only (ALTER SYSTEM only), then
-        decides activation strategy (reload/restart/none) via RestartPolicy.
-        When ``restore_due`` is True, activation is skipped because the
-        caller will perform a snapshot restore that serves as the restart.
-
-        Parameters
-        ----------
-        connection : PostgresConnection
-            Active connection to worker's instance
-        worker : BaseWorker
-            Worker instance for which to apply configuration
-        knob_applicator : KnobApplicator
-            Applicator for this worker's instance
-        force_restart : bool
-            Force immediate restart regardless of mode/interval
-        generation : Optional[int]
-            Current generation number
-        restore_due : bool
-            When True, skip activation — snapshot restore will serve as
-            the restart. The caller is responsible for calling
-            env.restore_snapshot() after this method returns.
-
-        Returns
-        -------
-        bool
-            True if restart occurred during this application
-        """
+        """Apply knob configuration and optionally restart; see :func:`apply_configuration`."""
         return _apply_configuration_impl(
             self.config,
             self.env,
@@ -314,42 +285,14 @@ class WorkloadOrchestrator:
         connection: PostgresConnection,
         worker: BaseWorker,
     ) -> bool:
-        """Restart PostgreSQL via the injected environment.
-
-        Parameters
-        ----------
-        connection : PostgresConnection
-            Connection to close before restart
-        worker : BaseWorker
-            Worker instance for which to perform restart
-
-        Returns
-        -------
-        bool
-            True if restart succeeded
-        """
+        """Restart PostgreSQL via the injected environment; see :func:`perform_restart`."""
         return _perform_restart_impl(self.env, connection, worker=worker)
 
     def collect_system_metrics(
         self,
         worker_id: Optional[int] = None,
     ) -> Dict[str, float]:
-        """Collect system-level metrics by delegating to the environment.
-
-        Memory utilization and cache hit ratio are collected via the
-        DatabaseEnvironment abstraction, eliminating the need for
-        process-scanning via psutil.
-
-        Parameters
-        ----------
-        worker_id : Optional[int]
-            Worker ID for environment delegation
-
-        Returns
-        -------
-        Dict[str, float]
-            System metrics including memory and cache hit ratio
-        """
+        """Collect system-level metrics via the environment; see :func:`collect_system_metrics`."""
         return _collect_system_metrics(self.env, worker_id)
 
     def _fetch_pg_stat_database_snapshot(
@@ -463,13 +406,7 @@ class WorkloadOrchestrator:
         stats_after: tuple[int, int, int, int, int, int, int],
         worker_logger: logging.Logger,
     ) -> None:
-        """Populate I/O and row-count metrics from pg_stat_database deltas (B11).
-
-        Derives read MB from block deltas, estimates write MB from row
-        modification counts (no filesystem-level write counters available),
-        and computes the buffer miss rate. All failures are swallowed at debug
-        level so a stats hiccup never fails an otherwise-healthy evaluation.
-        """
+        """Populate I/O and row-count metrics from pg_stat_database deltas (B11); see :func:`compute_io_metrics`."""
         _compute_io_metrics_impl(
             metrics,
             stats_before=stats_before,
@@ -483,23 +420,7 @@ class WorkloadOrchestrator:
         worker_logger: Optional[logging.Logger] = None,
         next_eval_will_restore: bool = False,
     ) -> None:
-        """
-        Run bounded post-workload maintenance after DML-heavy workloads.
-
-        Full-database VACUUM ANALYZE is too expensive for short sysbench-style
-        generations and frequently times out while scanning toast/system tables.
-        Instead, analyze only user tables that were actually modified.
-
-        When ``next_eval_will_restore`` is True, the caller has guaranteed the
-        next evaluation begins with a baseline snapshot restore (PGDATA copied
-        over from the post-prepare baseline, which already contains a clean
-        VACUUM ANALYZE). Any per-eval VACUUM we run now is:
-          1. Too late to influence the just-collected metrics — those are
-             captured at B12 before this method is reached.
-          2. About to be discarded by the next restore.
-        Skipping eliminates 20–60s of dead wall-clock per generation on
-        sysbench RW/WO with high table/row counts.
-        """
+        """Run bounded post-workload maintenance after DML-heavy workloads; see :func:`vacuum_after_dml`."""
         _vacuum_after_dml_impl(
             self.config.workload_type,
             self.config.vacuum_analyze_timeout_seconds,
@@ -513,14 +434,7 @@ class WorkloadOrchestrator:
         db_config: DatabaseConfig,
         worker_logger: Optional[logging.Logger] = None,
     ) -> None:
-        """Validate benchmark state before execution and repair it if needed.
-
-        Retries validation up to 3 times with a short delay before falling
-        back to ``prepare()``, which recreates the full benchmark schema
-        (~4.5 GB for large sysbench configs) and generates significant WAL.
-        Transient connection errors under co-tenant load would otherwise
-        trigger needless ``prepare()`` calls on every iteration.
-        """
+        """Validate benchmark state and repair it if needed; see :func:`ensure_benchmark_ready`."""
         _ensure_benchmark_ready_impl(
             self.workload_executor,
             db_config,
@@ -959,18 +873,7 @@ class WorkloadOrchestrator:
         )
 
     def refine_workload_features_from_generation(self, workers: List[Any]) -> bool:
-        """Refine workload features using aggregated metrics from all workers in a generation.
-
-        This generation-level refinement aggregates metrics from all workers before
-        refining features once, ensuring that all workers in a generation use the same
-        features and thus the same weights. This prevents race conditions that occur
-        when feature refinement is performed per-worker during parallel evaluation.
-
-        Parameters
-        ----------
-        workers : List[BaseWorker]
-            List of all workers in the current generation
-        """
+        """Refine workload features from a generation's aggregated metrics; see :meth:`WorkloadFeatureRefiner.refine_from_generation`."""
         return self._feature_refiner.refine_from_generation(workers)
 
     def maybe_update_feature_weights(
