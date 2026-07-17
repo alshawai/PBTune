@@ -1247,62 +1247,124 @@ def log_worker_metrics_table(
 def log_generation_summary(
     logger: logging.Logger,
     elapsed: float,
-    restart_count: int,
+    restart_count: Optional[int] = None,
+    *,
     generation: int,
     best_score: float,
-    mean_score: float,
-    std_score: float,
-    exploited: int,
-    converged: bool,
+    mean_score: Optional[float] = None,
+    std_score: Optional[float] = None,
+    exploited: Optional[int] = None,
+    design_points: Optional[str] = None,
+    status: Optional[str] = None,
+    converged: Optional[bool] = None,
+    round_label: str = "Generation",
 ) -> None:
     """
-    Log a formatted generation summary.
+    Log a formatted generation/round summary (strategy-neutral).
+
+    Every row past ``Best Score`` is optional and renders only when the caller
+    supplies it, so the summary stays meaningful for every strategy:
+
+    - ``mean_score`` / ``std_score`` / ``exploited`` — population statistics; a
+      population strategy (PBT) passes all three, a stateless sweep (LHS) or a
+      single-config iterator (BO) passes ``None`` and those rows are skipped.
+    - ``restart_count`` — cumulative instance-restart count; ``None`` omits the
+      row for strategies with no restart concept (a pure design sweep).
+    - ``design_points`` — the design range this round covered (LHS), e.g.
+      ``"6-7"``; omitted when ``None``.
+    - ``status`` — the run's stopping status for optimization tuners (PBT/BO),
+      e.g. ``"running"`` or ``"stopped - max generations reached"``. A pure
+      random tuner (LHS) has no stopping criterion and passes ``None`` so the
+      row is skipped. ``converged`` is the legacy boolean fallback (renders the
+      old ``Converged: YES/NO`` line) kept for the incumbent PBT ``main.py``.
 
     Parameters
     ----------
-    logger : logging.Logger
-        Logger instance
-    generation_result : GenerationResult
-        Result of the generation to summarize
+    logger
+        Logger instance.
+    elapsed
+        Seconds elapsed in the tuning loop so far.
+    restart_count
+        Cumulative instance-restart count, or ``None`` to omit the row.
+    generation
+        Zero-based round index.
+    best_score
+        Best score observed this round.
+    round_label
+        Strategy-appropriate noun for one loop pass (PBT "Generation", LHS
+        "Batch", BO "Iteration"). Defaults to "Generation" for backward
+        compatibility with the legacy PBT caller.
     """
     log_section_header(
         logger,
-        "%sGeneration %s Summary:%s",
+        "%s%s %s Summary:%s",
         COLORS.bold,
+        round_label,
         generation,
         COLORS.reset,
         top_separator=False,
     )
     logger.info("  Best Score:  %s%.3f%%%s", COLORS.cyan, best_score, COLORS.reset)
-    logger.info("  Mean Score:  %s%.3f%%%s", COLORS.cyan, mean_score, COLORS.reset)
-    logger.info("  Std Dev:     %s%.4f%s", COLORS.cyan, std_score, COLORS.reset)
-    logger.info("  Exploited:   %s%s%s workers", COLORS.cyan, exploited, COLORS.reset)
-    logger.info("  Restarts:    %s%s%s total", COLORS.cyan, restart_count, COLORS.reset)
-    logger.info("  Elapsed:     %s%.1f%s", COLORS.cyan, elapsed, COLORS.reset)
-    logger.info(
-        "  Converged:   %s%s%s",
-        COLORS.orange,
-        "YES" if converged else "NO",
-        COLORS.reset,
-    )
-    logger.info("%s==========================%s", COLORS.bold, COLORS.reset)
+    if mean_score is not None:
+        logger.info("  Mean Score:  %s%.3f%%%s", COLORS.cyan, mean_score, COLORS.reset)
+    if std_score is not None:
+        logger.info("  Std Dev:     %s%.4f%s", COLORS.cyan, std_score, COLORS.reset)
+    if exploited is not None:
+        logger.info(
+            "  Exploited:   %s%s%s workers", COLORS.cyan, exploited, COLORS.reset
+        )
+    if restart_count is not None:
+        logger.info(
+            "  Restarts:    %s%s%s total", COLORS.cyan, restart_count, COLORS.reset
+        )
+    logger.info("  Elapsed:     %s%.1fs%s", COLORS.cyan, elapsed, COLORS.reset)
+    if design_points is not None:
+        logger.info(
+            "  Design Pts:  %s%s%s", COLORS.cyan, design_points, COLORS.reset
+        )
+    if status is not None:
+        status_color = COLORS.orange if status.startswith("stopped") else COLORS.teal
+        logger.info("  Status:      %s%s%s", status_color, status, COLORS.reset)
+    elif converged is not None:
+        logger.info(
+            "  Converged:   %s%s%s",
+            COLORS.orange,
+            "YES" if converged else "NO",
+            COLORS.reset,
+        )
+    logger.info("%s================================%s", COLORS.bold, COLORS.reset)
 
 
 def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
-    """Print final summary of tuning session"""
-    log_section_header(logger, "%sPBT TUNING COMPLETE%s", COLORS.bold, COLORS.reset)
+    """Print final summary of a tuning session (strategy-neutral).
+
+    Reads the round count from the shared ``num_rounds`` header field, falling
+    back to the legacy ``total_generations`` so both new (BaseTuner) and legacy
+    (PBT ``main.py``) session dicts render. The title names the strategy from
+    ``tuning_session.tuning_strategy`` rather than hard-coding "PBT".
+    """
     session = results.get("tuning_session")
     best = results.get("best_configuration")
+
+    strategy_label = "TUNING"
+    if isinstance(session, dict):
+        strategy_label = str(
+            session.get("tuning_strategy", "tuning")
+        ).upper()
+    log_section_header(
+        logger, "%s%s COMPLETE%s", COLORS.bold, strategy_label, COLORS.reset
+    )
 
     if not isinstance(session, dict) or not isinstance(best, dict):
         logger.info("Final results: %s", results)
         return
 
     logger.info("%sSession Summary:%s", COLORS.green, COLORS.reset)
+    rounds_value = session.get("num_rounds", session.get("total_generations", 0))
     logger.info(
-        "  Total Generations:  %s%d%s",
+        "  Total Rounds:       %s%d%s",
         COLORS.cyan,
-        session["total_generations"],
+        int(rounds_value if rounds_value is not None else 0),
         COLORS.reset,
     )
     logger.info(

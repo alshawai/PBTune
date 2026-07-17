@@ -17,7 +17,6 @@ from typing import Iterable, cast
 
 import numpy as np
 from matplotlib.axes import Axes
-from matplotlib.figure import Figure
 
 from src.utils.logger import get_logger
 from src.visualization import export_figure, register_figure
@@ -65,7 +64,7 @@ def _resolve_results_path(target: Path) -> Path:
 def _draw_tier_summary(ax: Axes, diag: TierDiagnostics) -> None:
     """Top-level tier counts + nuisance-dropped count + DBA prior."""
     counts = {"minimal": 0, "core": 0, "standard": 0}
-    for knob, tier in diag.tier_assignments.items():
+    for _knob, tier in diag.tier_assignments.items():
         if tier in counts:
             counts[tier] += 1
 
@@ -259,7 +258,7 @@ def _draw_dba_violations(ax: Axes, diag: TierDiagnostics) -> None:
 def generate_tier_diagnostics(
     data_dir: Path,
     output_dir: Path,
-    formats: Iterable[ExportFormat] = ("pdf", "png"),
+    formats: Iterable[ExportFormat] | None = None,
     theme: PBTuneTheme | None = None,
 ) -> None:
     """Render the SCALPEL tier-diagnostics figure for a workload.
@@ -271,31 +270,30 @@ def generate_tier_diagnostics(
     diag = load_tier_diagnostics(results_path)
 
     theme = theme or PBTuneTheme()
-    fig: Figure
-    axes_arr: np.ndarray
-    fig, axes_arr = theme.create_grid(  # type: ignore[assignment]
-        nrows=2,
-        ncols=2,
-        size_hint="double",
-    )
-    axes = cast("list[Axes]", list(axes_arr.ravel()))
-    fig.suptitle(
-        f"SCALPEL diagnostics — {diag.workload_label} ({diag.algorithm})",
-        fontsize=11,
-    )
+    with theme.apply():
+        fig, axes_arr = theme.subplots(
+            nrows=2,
+            ncols=2,
+            size_hint="double",
+        )
+        axes = cast("list[Axes]", list(axes_arr.ravel()))
+        fig.suptitle(
+            f"SCALPEL diagnostics — {diag.workload_label} ({diag.algorithm})",
+            fontsize=11,
+        )
 
-    _draw_tier_summary(axes[0], diag)
-    _draw_boruta_hits(axes[1], diag)
-    _draw_lorenz_curve(axes[2], diag)
-    _draw_stability_strip(axes[3], diag)
+        _draw_tier_summary(axes[0], diag)
+        _draw_boruta_hits(axes[1], diag)
+        _draw_lorenz_curve(axes[2], diag)
+        _draw_stability_strip(axes[3], diag)
 
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
 
     export_figure(
         fig,
         output_dir=output_dir,
         fig_id="tier_diagnostics",
-        formats=formats,
+        formats=list(formats) if formats is not None else None,
         metadata={
             "algorithm": diag.algorithm,
             "scalpel_version": diag.scalpel_version,

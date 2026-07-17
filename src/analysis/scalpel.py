@@ -26,10 +26,13 @@ from __future__ import annotations
 import argparse
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.analysis.tier_generator import TierResult
 
 from src.analysis.scalpel_significance import (
     _fit_outer_rf,

@@ -1,10 +1,8 @@
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from src.visualization.theme import PBTuneTheme
@@ -12,7 +10,9 @@ from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.registry import register_figure
-from src.visualization.loaders import load_sessions, load_session, load_bo_trace
+from src.visualization.loaders import (
+    load_sessions, load_session, load_bo_trace, discover_bo_traces,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -34,11 +34,15 @@ def generate(
     logger.info("Generating %s figure", FIG_ID)
 
     if not pbt_paths and data_dir:
-        d = Path(data_dir) / "oltp" / "oltp_read_write"
+        d = Path(data_dir) / "sessions" / "oltp_read_write"
         if d.exists():
-            pbt_paths = [str(d / "pbt_runs" / "extensive" / "tuning_sessions")]
-            bo_paths = [str(d / "bo_runs" / "extensive" / "baseline_sessions")]
-            comps = sorted((d / "comparisons" / "extensive").glob("multi_arm_comparison_*.json"))
+            pbt_paths = [str(d / "pbt" / "extensive" / "traces")]
+            bo_paths = [str(d / "bo" / "extensive" / "traces")]
+            comps = sorted(
+                (Path(data_dir) / "comparisons" / "oltp_read_write" / "extensive").glob(
+                    "multi_arm_comparison_*.json"
+                )
+            )
             if comps and not comparison_path:
                 comparison_path = str(comps[-1])
 
@@ -57,7 +61,7 @@ def generate(
     for path in bo_paths:
         path_obj = Path(path)
         if path_obj.is_dir():
-            for trace_path in sorted(path_obj.glob("bo_results_*.json"), key=lambda p: p.name):
+            for trace_path in discover_bo_traces(path_obj):
                 bo_traces.append(load_bo_trace(trace_path))
         else:
             bo_traces.append(load_bo_trace(path))

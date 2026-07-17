@@ -63,4 +63,4 @@ Trade-offs:
 
 The barrier is opt-in: the orchestrator only calls `barriers.wait(...)` when a `GenerationBarrier` instance is passed in. Callers that want sequential evaluation pass a barrier object with `enabled=False`, which is a structural no-op. Existing tests that mock the orchestrator's body are unaffected.
 
-The session JSON now records, per generation, the wall-clock duration of each barrier and whether the barrier was broken — this is what enabled the analysis showing measurement-window overlap is achieved in practice. See [generation-barriers](../generation-barriers.md) and [tests/unit/core/test_barriers.py](../../../tests/unit/core/test_barriers.py).
+The session JSON now records, per generation, the wall-clock duration of each barrier and whether the barrier was broken — this is what enabled the analysis showing measurement-window overlap is achieved in practice. See [generation-barriers](../generation-barriers.md) and [tests/unit/tuners/engine/test_barriers.py](../../../tests/unit/tuners/engine/test_barriers.py).

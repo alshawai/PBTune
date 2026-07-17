@@ -6,7 +6,7 @@ description: >
   reliability gating, drift detection, and saturation expansion. Use this skill whenever working on
   score computation, metric normalization, metric weighting, scoring policies, workload features,
   calibration, rescoring, normalization drift, saturation detection, or any code in src/utils/scoring/,
-  src/utils/metrics.py, or src/utils/rescoring.py. Also use when debugging score values, investigating
+  src/utils/metrics.py, or src/utils/calibration.py. Also use when debugging score values, investigating
   why a worker scored unexpectedly, or modifying the scoring contract.
 ---
 
@@ -112,7 +112,7 @@ Extractors: `extract_sysbench_features()`, `extract_tpch_features()`, `extract_t
 | Contracts | `src/utils/scoring/contracts.py` |
 | Constants | `src/utils/scoring/constants.py` |
 | Legacy metrics | `src/utils/metrics.py` |
-| Post-hoc rescoring | `src/utils/rescoring.py` |
+| Post-hoc recalibration | `src/utils/calibration.py` |
 
 ## Common Pitfalls
 

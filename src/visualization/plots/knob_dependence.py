@@ -11,32 +11,31 @@ from matplotlib.figure import Figure
 from src.visualization import export_figure, register_figure
 from src.visualization.exceptions import DataLoadError
 from src.visualization.loaders import ImportanceData, load_importance_from_dir
+from src.visualization.loaders import discover_session_traces
 from src.visualization.theme import PBTuneTheme
 from src.visualization.types import ExportFormat, FigureSpec
 from src.visualization.utils import auto_grid
 
 DEFAULT_IMPORTANCE_DIRS = (
-    Path("oltp") / "pbt_runs" / "extensive" / "tuning_sessions",
-    Path("olap") / "pbt_runs" / "extensive" / "tuning_sessions",
+    Path("sessions") / "oltp_read_write" / "pbt" / "extensive" / "traces",
+    Path("sessions") / "olap" / "pbt" / "extensive" / "traces",
 )
 
 
 def _resolve_importance_dir(data_dir: Path) -> Path:
     """Resolve the directory that contains PBT tuning sessions for importance."""
     if data_dir.is_dir():
-        json_files = list(data_dir.glob("pbt_results_*.json"))
-        if json_files:
+        if discover_session_traces(data_dir):
             return data_dir
 
     for candidate in DEFAULT_IMPORTANCE_DIRS:
         candidate_path = data_dir / candidate
         if candidate_path.is_dir():
-            json_files = list(candidate_path.glob("pbt_results_*.json"))
-            if json_files:
+            if discover_session_traces(candidate_path):
                 return candidate_path
 
     raise DataLoadError(
-        "No tuning session data found. Expected pbt_results_*.json under "
+        "No tuning session data found. Expected trace_*.json under "
         f"{data_dir / DEFAULT_IMPORTANCE_DIRS[0]} (or the OLAP equivalent)."
     )
 

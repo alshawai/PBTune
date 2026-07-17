@@ -12,8 +12,9 @@ import numpy as np
 from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
-from src.tuners.utils.calibration import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
+from src.visualization.loaders.discovery import discover_session_traces
 
 LOGGER = get_logger("SessionLoader")
 
@@ -104,14 +105,25 @@ def load_session(
                     )
 
     tuning_session = data.get("tuning_session", {})
+    scoring = tuning_session.get("scoring") or {}
     workload = tuning_session.get("workload_type", "oltp")
     benchmark = tuning_session.get("benchmark_name")
-    scoring_policy = data.get("scoring_policy", tuning_session.get("scoring_policy"))
-    scoring_policy_version = data.get(
-        "scoring_policy_version", tuning_session.get("scoring_policy_version")
+    scoring_policy = scoring.get(
+        "scoring_policy",
+        data.get("scoring_policy", tuning_session.get("scoring_policy")),
     )
-    metric_ref = data.get(
-        "metric_reference_version", tuning_session.get("metric_reference_version")
+    scoring_policy_version = scoring.get(
+        "scoring_policy_version",
+        data.get(
+            "scoring_policy_version", tuning_session.get("scoring_policy_version")
+        ),
+    )
+    metric_ref = scoring.get(
+        "metric_reference_version",
+        data.get(
+            "metric_reference_version",
+            tuning_session.get("metric_reference_version"),
+        ),
     )
 
     # 2. Rescore Globally
@@ -133,6 +145,7 @@ def load_session(
     # Compute new scores for all metrics using the config
     use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
     if use_raw:
+        assert metric_key is not None  # implied by use_raw
         new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
     elif hasattr(metric_config, "compute_score_value"):
         new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
@@ -175,7 +188,7 @@ def load_session(
                     gen_scores.append(score)
 
         if gen_scores:
-            if use_raw and metric_key.startswith("latency"):
+            if use_raw and metric_key is not None and metric_key.startswith("latency"):
                 best_scores[i] = min(gen_scores)  # lower latency is better
             else:
                 best_scores[i] = max(gen_scores)
@@ -196,7 +209,7 @@ def load_session(
                 exploit_events.append(event_data)
 
     # Enforce monotonically increasing best scores (lower-is-better for latency)
-    if use_raw and metric_key.startswith("latency"):
+    if use_raw and metric_key is not None and metric_key.startswith("latency"):
         running_best = np.minimum.accumulate(best_scores)
     else:
         running_best = np.maximum.accumulate(best_scores)
@@ -248,7 +261,7 @@ def load_sessions(
     if not dir_path.exists() or not dir_path.is_dir():
         raise DataLoadError(f"Directory not found: {directory}")
 
-    json_files = sorted(dir_path.glob("pbt_results_*.json"), key=lambda p: p.name)
+    json_files = discover_session_traces(dir_path)
     if not json_files:
         LOGGER.warning("No PBT result files found in %s", directory)
         return []
@@ -265,16 +278,25 @@ def load_sessions(
             if not shared_metadata:
                 # Grab metadata from first file to guide rescoring policy
                 ts = data.get("tuning_session", {})
+                ts_scoring = ts.get("scoring") or {}
                 shared_metadata["workload"] = ts.get("workload_type", "oltp")
                 shared_metadata["benchmark"] = ts.get("benchmark_name")
-                shared_metadata["scoring_policy"] = data.get(
-                    "scoring_policy", ts.get("scoring_policy")
+                shared_metadata["scoring_policy"] = ts_scoring.get(
+                    "scoring_policy",
+                    data.get("scoring_policy", ts.get("scoring_policy")),
                 )
-                shared_metadata["policy_version"] = data.get(
-                    "scoring_policy_version", ts.get("scoring_policy_version")
+                shared_metadata["policy_version"] = ts_scoring.get(
+                    "scoring_policy_version",
+                    data.get(
+                        "scoring_policy_version", ts.get("scoring_policy_version")
+                    ),
                 )
-                shared_metadata["metric_ref"] = data.get(
-                    "metric_reference_version", ts.get("metric_reference_version")
+                shared_metadata["metric_ref"] = ts_scoring.get(
+                    "metric_reference_version",
+                    data.get(
+                        "metric_reference_version",
+                        ts.get("metric_reference_version"),
+                    ),
                 )
 
             for gen in data.get("generation_history", []):

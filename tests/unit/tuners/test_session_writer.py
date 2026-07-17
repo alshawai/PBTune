@@ -6,6 +6,7 @@ import numpy as np
 
 from src.tuners.utils.session_writer import (
     TIMING_SCHEMA_VERSION,
+    build_scoring_block,
     build_session_header,
     convert_numpy_types,
     worker_resources_to_dict,
@@ -68,6 +69,35 @@ class TestBuildSessionHeader:
         assert header["design_size"] == 32
 
 
+class TestBuildScoringBlock:
+    def test_maps_metadata_and_breakdown(self):
+        block = build_scoring_block(
+            {
+                "scoring_policy": "adaptive_v2",
+                "scoring_policy_version": "2.1",
+                "metric_reference_version": "v3",
+                "workload_features": {"read_ratio": 0.8},
+                "normalization_metadata": {"tps": [0, 100]},
+            },
+            {"final_score": 0.9},
+        )
+        assert block["scoring_policy"] == "adaptive_v2"
+        assert block["scoring_policy_version"] == "2.1"
+        assert block["metric_reference_version"] == "v3"
+        assert block["workload_features"] == {"read_ratio": 0.8}
+        assert block["normalization_metadata"] == {"tps": [0, 100]}
+        assert block["score_breakdown"] == {"final_score": 0.9}
+
+    def test_defaults_when_metadata_sparse(self):
+        block = build_scoring_block({})
+        assert block["scoring_policy"] == "fixed_v1"
+        assert block["scoring_policy_version"] == "1.0"
+        assert block["metric_reference_version"] == "v1"
+        assert block["workload_features"] == {}
+        assert block["normalization_metadata"] == {}
+        assert block["score_breakdown"] == {}
+
+
 class TestWorkerResourcesToDict:
     def test_fields(self):
         res = WorkerResources(
@@ -92,7 +122,7 @@ class TestWriteHelpers:
             results, output_dir=tmp_path, filename="lhs_results_t.json"
         )
         assert out.exists()
-        assert out.parent.name == "tuning_sessions"
+        assert out.parent.name == "traces"
         loaded = json.loads(out.read_text())
         assert loaded["tuning_session"]["x"] == 3
 

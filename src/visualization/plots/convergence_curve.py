@@ -1,13 +1,11 @@
 import logging
 import json
-from typing import Optional
 from pathlib import Path
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from src.utils.metrics import PerformanceMetrics
-from src.utils.rescoring import rescore_metrics_globally
+from src.utils.calibration import rescore_metrics_globally
 from src.visualization.theme import PBTuneTheme
 from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure
@@ -15,11 +13,13 @@ from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.exceptions import DataLoadError
 from src.visualization.registry import register_figure
 from src.visualization.loaders import (
-    load_sessions, load_session, load_bo_trace, aggregate_seeds, SessionTrace, BOTrace, MultiSeedAggregate, load_comparison, ComparisonData, RAW_METRIC_KEYS
+    load_sessions, load_session, load_bo_trace, aggregate_seeds, load_comparison,
+    discover_session_traces, discover_bo_traces,
+    SESSION_TRACE_GLOBS, BO_TRACE_GLOBS,
 )
 from src.visualization.loaders.session import _extract_raw_value
 from src.visualization.utils import (
-    add_panel_labels, add_baseline_line, auto_grid, set_integer_ticks
+    add_panel_labels, auto_grid, set_integer_ticks
 )
 
 logger = logging.getLogger(__name__)
@@ -28,12 +28,21 @@ FIG_ID = "convergence_curve"
 _DIVERGENCE_ANNOTATION_THRESHOLD = 2.0
 
 
-def _expand_json_paths(paths: list[str], pattern: str) -> list[Path]:
+def _expand_json_paths(paths: list[str], patterns: tuple[str, ...]) -> list[Path]:
     expanded: list[Path] = []
     for raw_path in paths:
         path = Path(raw_path)
         if path.is_dir():
-            expanded.extend(sorted(path.glob(pattern), key=lambda p: p.name))
+            matched: list[Path] = []
+            for pattern in patterns:
+                try:
+                    matched.extend(path.glob(pattern))
+                except OSError:
+                    # Directory vanished or is inaccessible between is_dir()
+                    # and glob(); treat as no matches (Python 3.11 raises here,
+                    # 3.13 returns empty).
+                    continue
+            expanded.extend(sorted(set(matched), key=lambda p: p.name))
         elif path.exists():
             expanded.append(path)
     return expanded
@@ -68,19 +77,29 @@ def _collect_worker_metrics(paths: list[Path]) -> tuple[list[PerformanceMetrics]
 
         if not metadata:
             tuning_session = data.get("tuning_session", {})
+            scoring = tuning_session.get("scoring") or {}
             metadata = {
                 "workload": tuning_session.get("workload_type", "oltp"),
                 "benchmark": tuning_session.get("benchmark_name"),
-                "scoring_policy": data.get(
-                    "scoring_policy", tuning_session.get("scoring_policy")
+                "scoring_policy": scoring.get(
+                    "scoring_policy",
+                    data.get(
+                        "scoring_policy", tuning_session.get("scoring_policy")
+                    ),
                 ),
-                "scoring_policy_version": data.get(
+                "scoring_policy_version": scoring.get(
                     "scoring_policy_version",
-                    tuning_session.get("scoring_policy_version"),
+                    data.get(
+                        "scoring_policy_version",
+                        tuning_session.get("scoring_policy_version"),
+                    ),
                 ),
-                "metric_reference_version": data.get(
+                "metric_reference_version": scoring.get(
                     "metric_reference_version",
-                    tuning_session.get("metric_reference_version"),
+                    data.get(
+                        "metric_reference_version",
+                        tuning_session.get("metric_reference_version"),
+                    ),
                 ),
             }
 
@@ -142,8 +161,8 @@ def _build_shared_metric_config(
     bo_paths: list[str],
     comparison_path: str | None = None,
 ):
-    all_paths = _expand_json_paths(pbt_paths, "pbt_results_*.json")
-    all_paths.extend(_expand_json_paths(bo_paths, "bo_results_*.json"))
+    all_paths = _expand_json_paths(pbt_paths, SESSION_TRACE_GLOBS)
+    all_paths.extend(_expand_json_paths(bo_paths, BO_TRACE_GLOBS))
 
     metrics, metadata = _collect_worker_metrics(all_paths)
     comparison_arm_metrics, comparison_metadata = _collect_comparison_arm_metrics(
@@ -197,7 +216,7 @@ def _step_values_at(x_source, y_source, x_grid) -> np.ndarray:
     x_arr = np.asarray(x_source, dtype=float)
     y_arr = np.asarray(y_source, dtype=float)
     grid = np.asarray(x_grid, dtype=float)
-    indices = np.searchsorted(x_arr, grid, side="right") - 1
+    indices = np.asarray(np.searchsorted(x_arr, grid, side="right") - 1)
     values = np.full(len(grid), np.nan)
     valid = indices >= 0
     values[valid] = y_arr[indices[valid]]
@@ -387,11 +406,15 @@ def generate(
     logger.info("Generating %s figure (metric_key=%s)", FIG_ID, metric_key or "score")
 
     if not pbt_paths and data_dir:
-        d = Path(data_dir) / "oltp" / "oltp_read_write"
+        d = Path(data_dir) / "sessions" / "oltp_read_write"
         if d.exists():
-            pbt_paths = [str(d / "pbt_runs" / "extensive" / "tuning_sessions")]
-            bo_paths = [str(d / "bo_runs" / "extensive" / "baseline_sessions")]
-            comps = sorted((d / "comparisons" / "extensive").glob("multi_arm_comparison_*.json"))
+            pbt_paths = [str(d / "pbt" / "extensive" / "traces")]
+            bo_paths = [str(d / "bo" / "extensive" / "traces")]
+            comps = sorted(
+                (Path(data_dir) / "comparisons" / "oltp_read_write" / "extensive").glob(
+                    "multi_arm_comparison_*.json"
+                )
+            )
             if comps and not comparison_path:
                 comparison_path = str(comps[-1])
 
@@ -406,9 +429,7 @@ def generate(
     for path in pbt_paths:
         path_obj = Path(path)
         if path_obj.is_dir() and shared_metric_config is not None:
-            for session_path in sorted(
-                path_obj.glob("pbt_results_*.json"), key=lambda p: p.name
-            ):
+            for session_path in discover_session_traces(path_obj):
                 sessions.append(
                     load_session(session_path, metric_config=shared_metric_config, metric_key=metric_key)
                 )
@@ -426,7 +447,7 @@ def generate(
     for path in bo_paths:
         path_obj = Path(path)
         if path_obj.is_dir():
-            for trace_path in sorted(path_obj.glob("bo_results_*.json"), key=lambda p: p.name):
+            for trace_path in discover_bo_traces(path_obj):
                 bo_traces.append(load_bo_trace(trace_path, metric_config=shared_metric_config, metric_key=metric_key))
         else:
             bo_traces.append(load_bo_trace(path, metric_config=shared_metric_config, metric_key=metric_key))
@@ -457,7 +478,7 @@ def generate(
             logger.info("Default %s from comparison arm: %.4f", metric_key, default_score)
         if default_score is None:
             # Fallback to first PBT generation value
-            default_score = sessions[0].best_scores[0]
+            default_score = float(sessions[0].best_scores[0])
             logger.warning("Default %s inferred from PBT initial generation", metric_key)
     else:
         # Composite-score mode (existing logic)
@@ -475,13 +496,13 @@ def generate(
                 logger.info("Default score loaded from comparison: %.4f", default_score)
             except Exception:
                 from src.visualization.loaders.comparison import load_multi_arm_comparison
-                comp = load_multi_arm_comparison(comparison_path)
-                if "default" in comp.summaries_by_arm and comp.summaries_by_arm["default"]:
-                    default_score = list(comp.summaries_by_arm["default"].values())[0].mean
+                multi_comp = load_multi_arm_comparison(comparison_path)
+                if "default" in multi_comp.summaries_by_arm and multi_comp.summaries_by_arm["default"]:
+                    default_score = list(multi_comp.summaries_by_arm["default"].values())[0].mean
                     logger.info("Default score loaded from multi-arm comparison: %.4f", default_score)
 
         if default_score is None:
-            default_score = sessions[0].best_scores[0]
+            default_score = float(sessions[0].best_scores[0])
             logger.warning("Default score inferred from PBT initial generation — no comparison file provided")
         
     logger.info("Data loaded: %d PBT seeds, %d BO seeds", pbt_agg.n_seeds, len(bo_traces))
@@ -611,7 +632,7 @@ def generate(
                 color="#4B5563",
             )
 
-        fig.tight_layout(rect=[0, 0.03, 1, 1] if caption_parts else None)
+        fig.tight_layout(rect=(0, 0.03, 1, 1) if caption_parts else None)
         
         fmt_list = [ExportFormat(f) for f in (formats or ["pdf", "png"])]
         export_figure(fig, output_dir, FIG_ID, formats=fmt_list)

@@ -54,7 +54,7 @@ def test_partition_boruta_hits_confirmed_sets_are_monotone_nested():
         result = partition_boruta_hits(hit_counts, knobs, n_iterations=100, fdr_q=q)
         confirmed_sets.append(set(result.confirmed))
 
-    for low, high in zip(confirmed_sets[:-1], confirmed_sets[1:]):
+    for low, high in zip(confirmed_sets[:-1], confirmed_sets[1:], strict=True):
         assert low <= high, f"monotonicity broken: {low - high}"
 
 

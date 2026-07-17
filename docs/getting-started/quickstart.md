@@ -1,5 +1,7 @@
 # Quickstart
 
+> Last reviewed: 2026-06-07
+
 See also: [setup](setup.md), [overview](../architecture/overview.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md)
 
 This guide walks you through your first PBT tuning session and explains what's happening at each step. Targeted at someone who has just run `setup.md` successfully and wants to confirm the system works.
@@ -21,7 +23,7 @@ Verify:
 
 ```bash
 source .venv/bin/activate
-python -m src.tuners.pbt --help     # should print the CLI help
+python -m src.tuners pbt --help     # should print the CLI help
 docker info >/dev/null && echo OK   # should print "OK"
 ```
 
@@ -30,7 +32,7 @@ If `docker info` fails, the run will automatically fall back to bare-metal Postg
 ## Step 1 — Launch the smallest possible PBT run
 
 ```bash
-python -m src.tuners.pbt \
+python -m src.tuners pbt \
     --tier minimal \
     --config rapid \
     --population 2 \

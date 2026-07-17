@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from pathlib import Path
 from matplotlib.figure import Figure
 
 from src.visualization.plots.pareto_frontier import generate, FIG_ID

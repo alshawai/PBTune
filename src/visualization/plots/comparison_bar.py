@@ -9,14 +9,14 @@ error-bar caps, and a shared top-spanning legend.
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from src.visualization.theme import PBTuneTheme
-from src.visualization.colors import get_method_style, METHOD_COLORS, METHOD_HATCHES
+from src.visualization.colors import get_method_style
 from src.visualization.export import export_figure
 from src.visualization.types import FigureSpec, ExportFormat
 from src.visualization.registry import register_figure
@@ -54,7 +54,7 @@ _DISPLAY_NAMES: dict[str, str] = {
 }
 
 # ── Metrics we plot ─────────────────────────────────────────────────
-_METRIC_SPECS = [
+_METRIC_SPECS: list[dict[str, Any]] = [
     {
         "key": "throughput",
         "label": "Throughput (txn/sec)",
@@ -155,7 +155,7 @@ def generate(
     if comparison_paths is None and data_dir is not None:
         comparison_paths = {}
         for workload_dir, label in [("oltp_read_write", "rw"), ("oltp_read_only", "ro"), ("oltp_write_only", "wo")]:
-            d = Path(data_dir) / "oltp" / workload_dir / "comparisons" / "extensive"
+            d = Path(data_dir) / "comparisons" / workload_dir / "extensive"
             if d.exists():
                 comps = sorted(d.glob("multi_arm_comparison_*.json"))
                 if comps:
@@ -203,7 +203,6 @@ def generate(
 
         n_methods = len(methods)
         bar_width = 0.8 / max(n_methods, 1)
-        x_base = np.arange(1)  # one group per subplot
 
         for row_idx, workload in enumerate(workloads):
             wl_data = data[workload]
@@ -225,7 +224,7 @@ def generate(
                     display = _DISPLAY_NAMES.get(method, method)
 
                     x_pos = m_idx * bar_width
-                    bar = ax.bar(
+                    ax.bar(
                         x_pos,
                         mean_val,
                         width=bar_width * 0.9,
@@ -270,7 +269,7 @@ def generate(
         flat_axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
         add_panel_labels(flat_axes)
 
-        fig.tight_layout(rect=[0, 0, 1, 0.93])
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
 
     fmt_list = [ExportFormat(f) for f in (formats or ["pdf", "png"])]
     export_figure(fig, output_dir, FIG_ID, formats=fmt_list)

@@ -1,6 +1,6 @@
 """Tests for ConfigSpace constraints and logic."""
 
-from src.tuner.config import get_knob_space
+from src.knobs import get_knob_space
 from src.scripts.bo_baseline.search_space import build_configspace
 
 

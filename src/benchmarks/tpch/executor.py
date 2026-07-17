@@ -10,7 +10,7 @@ from src.config.database import DatabaseConfig
 from src.database.connection import get_connection
 from src.utils.logger import get_logger, get_color_context, log_section_header
 from src.utils.metrics import PerformanceMetrics
-from src.benchmarks.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.benchmarks.tpch import QUERIES_DIR, SCHEMA_SQL, INDEXES_SQL
 from src.benchmarks.tpch.setup_dbgen import find_or_build_dbgen, generate_data
 
@@ -263,12 +263,13 @@ class TPCHExecutor(BenchmarkExecutor):
             LOGGER.debug("TPC-H validation failed: %s", e)
             return False
 
-    def execute(
-        self, db_config: DatabaseConfig, worker_id: Optional[int] = None, **kwargs
-    ) -> PerformanceMetrics:
+    def execute(self, ctx: ExecutionContext) -> PerformanceMetrics:
         """Execute TPC-H benchmark and return performance metrics."""
+        db_config = ctx.db_config
+        worker_id = ctx.worker_id
+        warmup_passes = ctx.warmup_passes
+
         logger = get_logger("TPCHExecutor", worker_id=worker_id)
-        warmup_passes = kwargs.get("warmup_passes", 0)
 
         logger.info(
             " %sStarting TPC-H execution (SF=%.2f, warmup_passes=%d)...%s",

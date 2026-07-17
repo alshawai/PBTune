@@ -52,7 +52,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
 
     Args:
         path: Path to a `pbt_results_{timestamp}.json` file produced by
-            `src/tuner/main.py`.
+            `src/tuners/pbt/tuner.py`.
 
     Returns:
         TuningSessionData populated with all fields required to run an
@@ -69,7 +69,7 @@ def load_tuning_session(path: Path) -> TuningSessionData:
     if not path.exists():
         raise TuningSessionLoadError(
             f"Tuning session file not found: {path}\n"
-            "    Expected path: results/{{workload}}/pbt_runs/{{tier}}/tuning_sessions/"
+            "    Expected path: results/sessions/{{workload}}/pbt/{{tier}}/traces/"
             "pbt_results_{{timestamp}}.json"
         )
 
@@ -282,12 +282,12 @@ def _infer_tuning_strategy(ts_meta: dict[str, Any], path: Path) -> str:
     if explicit:
         return str(explicit)
     path_str = str(path)
-    if "/pbt_runs/" in path_str:
-        return "pbt"
-    if "/bo_runs/" in path_str:
-        return "bo"
-    if "/lhs_runs/" in path_str:
-        return "lhs"
+    for segment, label in [
+        ("/pbt/", "pbt"), ("/bo/", "bo"), ("/lhs/", "lhs"),
+        ("/pbt_runs/", "pbt"), ("/bo_runs/", "bo"), ("/lhs_runs/", "lhs"),
+    ]:
+        if segment in path_str:
+            return label
     return "unknown"
 
 
@@ -379,15 +379,27 @@ def _extract_scoring_metadata(
 ) -> dict[str, Any]:
     """Extract persisted scoring metadata with strict schema checks."""
 
-    scoring_policy_raw = ts_meta.get("scoring_policy", raw_root.get("scoring_policy"))
+    # Unified schema (2a′+) namespaces scoring provenance under
+    # ``tuning_session.scoring``. Read it first, then fall back to the legacy
+    # flat keys (which BO's writer and older sessions still emit), then the
+    # raw document root — so every session shape parses uniformly.
+    scoring = ts_meta.get("scoring") or {}
+
+    scoring_policy_raw = scoring.get(
+        "scoring_policy",
+        ts_meta.get("scoring_policy", raw_root.get("scoring_policy")),
+    )
     scoring_policy = (
         str(scoring_policy_raw).strip()
         if scoring_policy_raw is not None and str(scoring_policy_raw).strip()
         else DEFAULT_SCORING_POLICY
     )
 
-    scoring_policy_version_raw = ts_meta.get(
-        "scoring_policy_version", raw_root.get("scoring_policy_version")
+    scoring_policy_version_raw = scoring.get(
+        "scoring_policy_version",
+        ts_meta.get(
+            "scoring_policy_version", raw_root.get("scoring_policy_version")
+        ),
     )
     scoring_policy_version = (
         str(scoring_policy_version_raw).strip()
@@ -396,8 +408,11 @@ def _extract_scoring_metadata(
         else DEFAULT_SCORING_POLICY_VERSION
     )
 
-    metric_reference_version_raw = ts_meta.get(
-        "metric_reference_version", raw_root.get("metric_reference_version")
+    metric_reference_version_raw = scoring.get(
+        "metric_reference_version",
+        ts_meta.get(
+            "metric_reference_version", raw_root.get("metric_reference_version")
+        ),
     )
     metric_reference_version = (
         str(metric_reference_version_raw).strip()
@@ -408,20 +423,29 @@ def _extract_scoring_metadata(
 
     workload_features = _expect_object_or_empty(
         field_name="workload_features",
-        value=raw_root.get("workload_features", ts_meta.get("workload_features")),
+        value=scoring.get(
+            "workload_features",
+            raw_root.get("workload_features", ts_meta.get("workload_features")),
+        ),
         path=path,
     )
     normalization_metadata = _expect_object_or_empty(
         field_name="normalization_metadata",
-        value=raw_root.get(
+        value=scoring.get(
             "normalization_metadata",
-            ts_meta.get("normalization_metadata"),
+            raw_root.get(
+                "normalization_metadata",
+                ts_meta.get("normalization_metadata"),
+            ),
         ),
         path=path,
     )
     score_breakdown = _expect_object_or_empty(
         field_name="score_breakdown",
-        value=raw_root.get("score_breakdown", ts_meta.get("score_breakdown")),
+        value=scoring.get(
+            "score_breakdown",
+            raw_root.get("score_breakdown", ts_meta.get("score_breakdown")),
+        ),
         path=path,
     )
 

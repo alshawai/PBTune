@@ -1,5 +1,7 @@
 # Architecture Overview
 
+> Last reviewed: 2026-06-07
+
 See also: [Documentation index](../README.md)
 
 This document is the **first thing to read** when onboarding to the codebase. It ties together every per-component architecture doc with a single high-level system map, then points you at the right deep dive for whatever you're touching.
@@ -25,7 +27,7 @@ The design priorities, in order:
 
 ```text
                  ┌──────────────────────────────────────────────┐
-                 │   CLI: python -m src.tuners.pbt              │
+                 │   CLI: python -m src.tuners pbt              │
                  │   --tier core --config standard --workload   │
                  └──────────────────┬───────────────────────────┘
                                     │
@@ -79,10 +81,11 @@ The arrow from tuning to the three downstream consumers is one-directional: the 
 
 | Package | Role | Read first |
 | --- | --- | --- |
-| [`src/tuner/`](../../src/tuner/) | PBT engine (entry: `python -m src.tuners.pbt.main`) | [pbt-core](pbt-core.md) |
-| [`src/tuner/core/`](../../src/tuner/core/) | Population, Worker, Evolution, GenerationBarrier | [pbt-core](pbt-core.md), [generation-barriers](generation-barriers.md) |
-| [`src/tuner/benchmark/`](../../src/tuner/benchmark/) | WorkloadOrchestrator, restart policy, workload templates | [workload-orchestrator](workload-orchestrator.md) |
-| [`src/tuner/config/`](../../src/tuner/config/) | KnobSpace, tier loading, TunerConfig | [configuration-management](configuration-management.md) |
+| [`src/tuners/`](../../src/tuners/) | PBT engine (entry: `python -m src.tuners pbt`) — spans `base`, `engine`, `pbt` | [pbt-core](pbt-core.md) |
+| [`src/tuners/pbt/`](../../src/tuners/pbt/) | Population, PBTWorker, Evolution, PBTTuner, TunerConfig | [pbt-core](pbt-core.md), [generation-barriers](generation-barriers.md) |
+| [`src/tuners/engine/`](../../src/tuners/engine/) | BaseWorker, GenerationBarrier, WorkloadOrchestrator, restart policy | [generation-barriers](generation-barriers.md), [workload-orchestrator](workload-orchestrator.md) |
+| [`src/knobs/`](../../src/knobs/) | KnobSpace, tier loading | [configuration-management](configuration-management.md) |
+| [`src/benchmarks/`](../../src/benchmarks/) | Workload templates, benchmark executors | [workload-orchestrator](workload-orchestrator.md) |
 | [`src/utils/scoring/`](../../src/utils/scoring/) | Feature-driven scoring v2 | [feature-driven-scoring](feature-driven-scoring.md) |
 | [`src/utils/environments/`](../../src/utils/environments/) | Docker / bare-metal PostgreSQL backends | [environment-backends](environment-backends.md) |
 | [`src/utils/applicator.py`](../../src/utils/applicator.py) | KnobApplicator (apply + verify) | [configuration-management §KnobApplicator](configuration-management.md#knobapplicator) |
@@ -123,10 +126,10 @@ Per-benchmark hardcoded weights conflate workload shape with benchmark name — 
 | [`PerformanceMetrics`](../../src/utils/metrics.py) | `src/utils/metrics.py` | Raw measurements: latency p50/p95/p99, throughput, variance, memory, scan efficiency, error rate, failure type. |
 | [`ScoreBreakdown`](../../src/utils/scoring/contracts.py) | `src/utils/scoring/contracts.py` | Final score + per-metric utilities + resolved weights + reliability gate + policy version. |
 | [`WorkloadFeatures`](../../src/utils/scoring/contracts.py) | `src/utils/scoring/contracts.py` | Workload shape vector consumed by `FeatureDrivenWeightModel`. |
-| [`Worker`](../../src/tuner/core/worker.py) | `src/tuner/core/worker.py` | Configuration + score + lineage + step count + environment handle. |
-| [`KnobDefinition`](../../src/tuner/config/knob_space.py) | `src/tuner/config/knob_space.py` | Bounds + scale + type + restart context + hardware-relative flag. |
+| [`Worker`](../../src/tuners/pbt/worker.py) | `src/tuners/pbt/worker.py` | Configuration + score + lineage + step count + environment handle (PBTWorker subclasses BaseWorker in `src/tuners/engine/worker.py`). |
+| [`KnobDefinition`](../../src/knobs/knob_space.py) | `src/knobs/knob_space.py` | Bounds + scale + type + restart context + hardware-relative flag. |
 | [`WorkerResources`](../../src/utils/hardware_info.py) | `src/utils/hardware_info.py` | Per-worker CPU / RAM / disk slice. |
-| [`TunerConfig`](../../src/tuner/config/tuner_config.py) | `src/tuner/config/tuner_config.py` | Session-level configuration derived from CLI args. |
+| [`TunerConfig`](../../src/tuners/pbt/config.py) | `src/tuners/pbt/config.py` | Session-level configuration derived from CLI args. |
 | [`ComparisonConfig`](../../src/evaluation/types.py) | `src/evaluation/types.py` | Post-hoc evaluation session config. |
 
 Every persisted artefact (session JSON, BO baseline JSON, comparison JSON) is built from these types. The schema is documented in [reference/session-json-schema](../reference/session-json-schema.md).

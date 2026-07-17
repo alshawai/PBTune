@@ -1,5 +1,7 @@
 # Adding a Custom Workload
 
+> Last reviewed: 2026-06-07
+
 See also: [workload-orchestrator](../architecture/workload-orchestrator.md), [benchmarking](../reference/benchmarking.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [workloads/README](../../workloads/README.md)
 
 This guide walks through authoring a custom JSON or YAML workload template — the kind you'd use to tune PostgreSQL for your own production traffic rather than against a stock Sysbench / TPC-H benchmark.
@@ -17,7 +19,7 @@ For the architecture of how the workload is actually executed, see [workload-orc
 | **Tune PostgreSQL for your own application's queries** | **Custom JSON/YAML workload** (this guide) |
 | Mix custom and built-in queries | A custom workload — there is no first-class blending mechanism with sysbench/tpch |
 
-The custom workload runs through the [`WorkloadExecutor`](../../src/tuner/benchmark/workload.py), which is pure Python over psycopg2. It's slower than the C-binary sysbench/tpch executors because of GIL and round-trip overhead, but for moderately-complex queries the database execution time dominates the Python overhead and the measurement is still meaningful.
+The custom workload runs through the [`WorkloadExecutor`](../../src/benchmarks/workload.py), which is pure Python over psycopg2. It's slower than the C-binary sysbench/tpch executors because of GIL and round-trip overhead, but for moderately-complex queries the database execution time dominates the Python overhead and the measurement is still meaningful.
 
 ---
 
@@ -122,7 +124,7 @@ Save under `workloads/my_app.json`:
 ### 3. Run the tuner against your workload
 
 ```bash
-python -m src.tuners.pbt \
+python -m src.tuners pbt \
     --workload-file workloads/my_app.json \
     --tier core \
     --config standard \
@@ -177,7 +179,7 @@ export DB_USER=admin
 export DB_PASSWORD=...
 export DB_NAME=myapp
 
-python -m src.tuners.pbt \
+python -m src.tuners pbt \
     --workload-file workloads/my_real_queries.json \
     --tier core \
     --config standard
@@ -206,7 +208,7 @@ Before committing to a long PBT run:
 ```bash
 # Smoke-test the workload file parses
 python -c "
-from src.tuner.benchmark.workload import WorkloadFileLoader
+from src.benchmarks.workload import WorkloadFileLoader
 exe = WorkloadFileLoader.load_from_file('workloads/my_app.json')
 print(f'queries: {len(exe.queries)}')
 print(f'weights: {exe.weights}')
@@ -216,7 +218,7 @@ print(f'tables: {exe.num_tables}, size: {exe.table_size}')
 # Confirm the feature extractor parses the SQL templates correctly
 python -c "
 from src.utils.scoring.workload_features import WorkloadFeatureExtractor
-from src.tuner.benchmark.workload import extract_workload_template_metadata
+from src.benchmarks.workload import extract_workload_template_metadata
 meta = extract_workload_template_metadata('workloads/my_app.json')
 features = WorkloadFeatureExtractor.from_template_metadata(meta).extract()
 print(features)

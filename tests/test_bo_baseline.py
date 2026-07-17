@@ -4,12 +4,12 @@ import pytest
 import json
 import argparse
 
-from src.tuner.config import get_knob_space
+from src.knobs import get_knob_space
 from src.scripts.bo_baseline.search_space import build_configspace, configspace_to_knobs
 from src.scripts.bo_baseline.config import BOConfig
 from src.scripts.bo_baseline.objective import evaluate_config
 from src.scripts.bo_baseline.result_writer import write_bo_results
-from src.tuner.core.worker import Worker
+from src.tuners.engine.worker import BaseWorker
 from src.utils.hardware_info import WorkerResources, detect_worker_resources
 from src.utils.types import BenchmarkConfig, TuningMode
 from src.utils.metrics import PerformanceMetrics
@@ -85,7 +85,8 @@ class TestPBTSessionParity:
         config = BOConfig.from_args(args)
         benchmark_config = config.benchmark_config
 
-        assert config.n_iterations == 320
+        # pop_size(4) × actual_generations(10) = 40 equal-evaluation budget
+        assert config.n_iterations == 40
         assert config.random_seed == 123
         assert config.knob_tier == "minimal"
         assert config.max_workers == 1
@@ -205,7 +206,8 @@ class TestPBTSessionParity:
 
         config = BOConfig.from_args(args)
 
-        assert config.n_iterations == 320
+        # pop_size(4) × actual_generations(10) = 40 (no parallel_workers needed)
+        assert config.n_iterations == 40
         assert config.max_workers == 1
 
     def test_bo_config_falls_back_when_pbt_session_invalid(self, tmp_path):
@@ -369,7 +371,7 @@ class TestObjectiveEvaluation:
 
         configspace = build_configspace(knob_space, seed=42)
         config = configspace.sample_configuration()
-        worker = Worker(worker_id=0, knob_space=knob_space)
+        worker = BaseWorker(worker_id=0, knob_space=knob_space)
 
         expected_metrics = PerformanceMetrics(throughput=120.0, latency_p95=18.0)
 
@@ -393,7 +395,9 @@ class TestObjectiveEvaluation:
                 self.received_worker = None
                 self.config = DummyConfig()
 
-            def evaluate_worker(self, worker, apply_config=True, random_seed=None, restore_due=False):
+            def evaluate_worker(self, worker, apply_config=True, random_seed=None,
+                               restore_due=False, next_eval_will_restore=False,
+                               barriers=None):
                 self.received_worker = worker
                 self.received_restore_due = restore_due
                 worker.score_breakdown = ScoreBreakdown(final_score=87.5)
@@ -526,7 +530,7 @@ class TestResultFormat:
         assert results["tuning_session"]["resource_equalization"] is False
 
         # Find the written file
-        result_files = list(tmp_path.glob("**/bo_results_*.json"))
+        result_files = list(tmp_path.glob("**/trace_*.json"))
         assert len(result_files) == 1
 
         # Load and verify with loader
@@ -649,7 +653,7 @@ class TestResultFormat:
         assert se["use_docker"] is True
         assert se["per_worker_resources"][0]["cpuset_cpus"] == "0,1,2,3"
 
-        result_files = list(tmp_path.glob("**/bo_results_*.json"))
+        result_files = list(tmp_path.glob("**/trace_*.json"))
         assert len(result_files) == 1
         written = json.loads(result_files[0].read_text(encoding="utf-8"))
         assert written["tuning_session"]["timing_schema_version"] == "1.1"

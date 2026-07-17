@@ -1,6 +1,6 @@
 # ADR-006: Unified `src/tuners` Package and `BaseTuner` Lifecycle
 
-- Status: Accepted
+- Status: Accepted — copy-not-refactor invariant later superseded (see 2026-07-17 addendum)
 - Date: 2026-06-19
 - Relates to:
   [`src/tuner`](../../src/tuner) (PBT),
@@ -67,7 +67,9 @@ Introduce a new top-level package, [`src/tuners`](../../src/tuners), that holds:
     helpers.
   - `calibration.py` — the global score-recalibration utilities (relocated
     here from the now-deleted `src/utils/rescoring.py`; see the 2026-06-22
-    addendum). [`src/tuners/utils/calibration.py`](../../src/tuners/utils/calibration.py).
+    addendum). *(Later moved again to
+    [`src/utils/calibration.py`](../../src/utils/calibration.py) during the
+    2026-07 migration — see the 2026-07-17 addendum.)*
   - `session_writer.py` — `convert_numpy_types`, `build_session_header`, and
     the session/best-config write helpers.
 
@@ -136,7 +138,7 @@ field and fall back to a path heuristic (`/pbt_runs/`, `/bo_runs/`,
 
 ## Addendum (2026-06-19): `LHSDesignTuner` — the first concrete strategy
 
-[`src/tuners/lhs_design.py`](../../src/tuners/lhs_design.py) is the first
+[`src/tuners/lhs_design/tuner.py`](../../src/tuners/lhs_design/tuner.py) is the first
 concrete `BaseTuner`. It evaluates a **fixed** Latin Hypercube Sampling design
 over the knob space — no evolution, no exploit/explore, no perturbation:
 
@@ -232,6 +234,45 @@ strategies.
 ### Rescoring relocation
 
 The global score-recalibration utilities moved from the now-deleted
-`src/utils/rescoring.py` into
-[`src/tuners/utils/calibration.py`](../../src/tuners/utils/calibration.py), with
-all consumers repointed. PBT and BO remain unmodified.
+`src/utils/rescoring.py` into `src/tuners/utils/calibration.py`, with
+all consumers repointed. PBT and BO remain unmodified. *(During the 2026-07
+migration the post-hoc recalibration pathway was removed from the tuner
+lifecycle entirely and this leaf relocated once more to
+[`src/utils/calibration.py`](../../src/utils/calibration.py) — see the
+2026-07-17 addendum.)*
+
+## Addendum (2026-07-17): copy-not-refactor invariant superseded — PBT migrated, `src/tuner/` deleted
+
+The original decision above deliberately extracted the shared lifecycle **by
+copy**, leaving `src/tuner/` (PBT) and `src/scripts/bo_baseline/` (BO)
+unmodified so the paper's headline strategies carried no migration risk. Once
+`LHSDesignTuner` and the shared surface proved stable, that invariant was
+retired on purpose: PBT was migrated onto `BaseTuner` and the legacy package
+was removed. This addendum records the reversal; the historical body above is
+left intact as the original decision.
+
+**What changed:**
+
+- **PBT is now a `BaseTuner` strategy.** `PBTTuner(BaseTuner)` lives at
+  [`src/tuners/pbt/tuner.py`](../../src/tuners/pbt/tuner.py). The PBT-specific
+  core relocated under [`src/tuners/pbt/`](../../src/tuners/pbt) —
+  `population.py`, `evolution.py`, `config.py` (was `tuner_config.py`), and
+  `worker.py` (`PBTWorker`).
+- **`Worker` was split.** The generic evaluation vehicle `BaseWorker` lives at
+  [`src/tuners/engine/worker.py`](../../src/tuners/engine/worker.py); PBT
+  evolution mechanics (`is_ready`/`clone_from`/`perturb`) moved onto
+  `PBTWorker(BaseWorker)` in `src/tuners/pbt/worker.py`.
+- **The engine layer is shared.** `orchestrator.py`, `barriers.py`,
+  `restart_policy.py`, and `worker.py` sit under
+  [`src/tuners/engine/`](../../src/tuners/engine), with the former
+  `evaluate_worker` monolith decomposed into `activation.py`, `maintenance.py`,
+  `feature_refinement.py`, `worker_metrics.py`, and `reliability_gate.py`.
+- **Foundation modules moved out of the PBT tree** (Phase 1): `knob_space.py`
+  and `knob_loader.py` → [`src/knobs/`](../../src/knobs); `workload.py` →
+  [`src/benchmarks/`](../../src/benchmarks).
+- **The legacy `src/tuner/` package is deleted.** Its entry point is gone;
+  invoke PBT via the unified router `python -m src.tuners pbt ...` (or the
+  direct door `python -m src.tuners.pbt ...`). References to
+  `python -m src.tuner.main` are dead.
+- **BO** has not yet migrated — it remains at `src/scripts/bo_baseline/` and is
+  the next arc, adopting the same `BaseTuner` + subpackage + CLI-router pattern.
