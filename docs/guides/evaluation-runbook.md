@@ -1,7 +1,5 @@
 # Evaluation Reproducibility Runbook
 
-> Last reviewed: 2026-06-15
-
 See also: [Documentation Index](../README.md)
 
 This runbook defines the canonical workflow for reproducing comparative

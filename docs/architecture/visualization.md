@@ -1,7 +1,5 @@
 # Visualization Framework
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation index](../README.md), [knob-importance-analysis](knob-importance-analysis.md), [evaluation-suite](evaluation-suite.md), [guides/visualization](../guides/visualization.md)
 
 ## Overview

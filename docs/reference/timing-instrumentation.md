@@ -1,6 +1,5 @@
 # Timing Instrumentation — Contributor Guide
 
-> Last reviewed: 2026-06-15
 > Schema version this guide describes: **v1.1**
 > See also: [session JSON schema (timing section)](session-json-schema.md#timing-instrumentation-v11), [timing instrumentation plan](../research/timing-instrumentation-plan.md)
 
@@ -25,7 +24,7 @@ There are three recorders, one per layer of the hierarchy. Add your bracket to t
 | `population.generation_timing` | `Population` | Whole-generation work not attributable to a single worker. | New PBT-step phases (evolve, replication, etc.). |
 | Per-worker recorder | Local in `WorkloadOrchestrator.evaluate_worker` | Per-worker apply → activate → workload → score. | New worker-side phases (e.g. cache warming). |
 
-The per-worker recorder is returned out of `evaluate_worker` as part of the 5-tuple and attached to the worker as `worker.last_eval_timing` (see [`src/tuners/pbt/cli.py`](../../src/tuners/pbt/cli.py) around the `eval_timing` capture in `_evaluate_worker_wrapper`), which is the path it takes into the JSON.
+The per-worker recorder is returned out of `evaluate_worker` as part of the 5-tuple and attached to the worker as `worker.last_eval_timing` (see [`src/tuners/pbt/tuner.py`](../../src/tuners/pbt/tuner.py) around the `eval_timing` capture in `PBTTuner.evaluate_worker`), which is the path it takes into the JSON.
 
 ## Adding a new bracket
 

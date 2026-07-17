@@ -1,0 +1,84 @@
+site_name: PBTune
+site_url: https://alshawai.github.io/PBTune/
+site_description: Evolutionary auto-tuning for PostgreSQL using Population-Based Training
+site_author: Ibrahim Al-Shawa
+repo_url: https://github.com/alshawai/PBTune
+repo_name: alshawai/PBTune
+
+theme:
+  name: material
+  favicon: assets/logo-dark-circle.svg
+  logo: assets/logo-dark-circle.svg
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Setup: getting-started/setup.md
+      - Quick Start: getting-started/quickstart.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - PBT Core: architecture/pbt-core.md
+      - BO Baseline: architecture/bo-baseline.md
+      - Feature-Driven Scoring: architecture/feature-driven-scoring.md
+      - Hardware-Aware Normalization: architecture/hardware-aware-normalization.md
+      - Generation Barriers: architecture/generation-barriers.md
+      - Configuration Management: architecture/configuration-management.md
+      - Environment Backends: architecture/environment-backends.md
+      - Evaluation Suite: architecture/evaluation-suite.md
+      - Workload Orchestrator: architecture/workload-orchestrator.md
+      - PostgreSQL Connection & Knobs: architecture/postgresql-connection-and-knobs.md
+      - Visualization Framework: architecture/visualization.md
+      - Knob Importance Analysis: architecture/knob-importance-analysis.md
+      - SCALPEL: architecture/scalpel.md
+      - Performance Evaluation: architecture/performance-evaluation.md
+  - Guides:
+      - Adding Knobs: guides/adding-knobs.md
+      - Adding Workloads: guides/adding-workloads.md
+      - BO Baseline: guides/bo-baseline.md
+      - Evaluation Runbook: guides/evaluation-runbook.md
+      - SCALPEL Rollout: guides/scalpel-rollout.md
+      - Visualization: guides/visualization.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Benchmarking: reference/benchmarking.md
+      - Metrics Validation: reference/metrics-validation.md
+      - Session JSON Schema: reference/session-json-schema.md
+      - Timing Instrumentation: reference/timing-instrumentation.md
+      - SCALPEL Diagnostics: reference/scalpel-diagnostics.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/alshawai/PBTune

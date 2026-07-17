@@ -1,7 +1,5 @@
 # PostgreSQL Connection and Knob Retrieval
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Autotuning Knob Policy](../reference/autotuning-knob-policy.md), [Knob Importance Analysis](knob-importance-analysis.md)
 
 ## Overview

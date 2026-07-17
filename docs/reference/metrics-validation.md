@@ -1,7 +1,5 @@
 # Validation of Multi-Objective Metrics in ML-Driven Database Tuning
 
-> Last reviewed: 2026-03-13
-
 See also: [Documentation Index](../README.md)
 
 ## 1. Abstract

@@ -1,7 +1,5 @@
 # Session JSON Schema
 
-> Last reviewed: 2026-06-15
-
 See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [pbt-core](../architecture/pbt-core.md), [bo-baseline guide](../guides/bo-baseline.md), [timing instrumentation contributor guide](timing-instrumentation.md)
 
 Every tuning run, evaluation comparison, and analysis pass emits or consumes one of three JSON shapes:
@@ -54,10 +52,10 @@ The components currently emitted by the orchestrator, population, and tuner boot
 
 | Component | Layer | Semantics | Source |
 | --- | --- | --- | --- |
-| `setup_instances` | bootstrap | Bring PostgreSQL workers up (containers, datadirs, schema load). | `src/tuners/pbt/tuner.py` — `PBTTuner.run` bootstrap block |
-| `verify_instances` | bootstrap | Probe each worker for liveness, version, capability. | `src/tuners/pbt/tuner.py` — `PBTTuner.run` bootstrap block |
-| `prune_knobs` | bootstrap | Drop knobs unsupported by the resolved PG server version. | `src/tuners/pbt/tuner.py` — `_prune_unsupported_runtime_knobs` |
-| `setup_snapshots` | bootstrap | Create per-worker baseline snapshots for fast restart. | `src/tuners/pbt/tuner.py` — `PBTTuner.run` bootstrap block |
+| `setup_instances` | bootstrap | Bring PostgreSQL workers up (containers, datadirs, schema load). | `src/tuners/base.py` — `BaseTuner._bring_up_instances` |
+| `verify_instances` | bootstrap | Probe each worker for liveness, version, capability. | `src/tuners/base.py` — `BaseTuner._bring_up_instances` |
+| `prune_knobs` | bootstrap | Drop knobs unsupported by the resolved PG server version. | `src/tuners/base.py` — `BaseTuner._prune_unsupported_runtime_knobs` |
+| `setup_snapshots` | bootstrap | Create per-worker baseline snapshots for fast restart. | `src/tuners/pbt/tuner.py` — `PBTTuner` bootstrap block |
 | `apply_only` | worker | `ALTER SYSTEM` writes only — no reload, no restart. Sets `restart_required`. | `src/utils/applicator.py` — `KnobApplicator.apply_only`, invoked from `WorkloadOrchestrator.apply_configuration` |
 | `activate_reload` | worker | `pg_reload_conf()` for SIGHUP / user / superuser-context knobs. Metadata: `strategy="reload"`. | `src/utils/applicator.py` — `KnobApplicator.activate` |
 | `activate_restart` | worker | `restart_instance()` for postmaster-context knobs. Metadata: `strategy="restart"`. | `src/utils/applicator.py` — `KnobApplicator.activate` |
