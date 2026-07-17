@@ -124,7 +124,7 @@ Save under `workloads/my_app.json`:
 ### 3. Run the tuner against your workload
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
     --workload-file workloads/my_app.json \
     --tier core \
     --config standard \
@@ -179,7 +179,7 @@ export DB_USER=admin
 export DB_PASSWORD=...
 export DB_NAME=myapp
 
-python -m src.tuner.main \
+python -m src.tuners pbt \
     --workload-file workloads/my_real_queries.json \
     --tier core \
     --config standard

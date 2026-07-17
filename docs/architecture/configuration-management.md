@@ -8,7 +8,7 @@ See also: [Documentation Index](../README.md), [Hardware-Aware Normalization](ha
 
 The configuration management layer is responsible for **defining what may be tuned** and **applying tuned values to a live PostgreSQL** safely. Two components do this:
 
-1. **[`KnobSpace`](../../src/tuner/config/knob_space.py)** — the search space. Loaded from per-tier CSVs (or from a data-driven manifest), exposes per-knob bounds, scale, default, restart context, and **hardware-relative fractional encoding**. Owns sampling, perturbation, dependency repair, and warm-start translation.
+1. **[`KnobSpace`](../../src/knobs/knob_space.py)** — the search space. Loaded from per-tier CSVs (or from a data-driven manifest), exposes per-knob bounds, scale, default, restart context, and **hardware-relative fractional encoding**. Owns sampling, perturbation, dependency repair, and warm-start translation.
 2. **[`KnobApplicator`](../../src/utils/applicator.py)** — the runtime applier. Validates against `pg_settings`, writes via `ALTER SYSTEM` (persistent) or `SET` (session), respects parameter contexts (`postmaster` / `sighup` / `user`), and exposes a `verify()` read-back that returns the **actually quantised** values PostgreSQL is running with.
 
 These two layers are independent. `KnobSpace` is the contract PBT and the BO baseline both consume; `KnobApplicator` is what the orchestrator calls per evaluation.
@@ -76,7 +76,7 @@ These two layers are independent. `KnobSpace` is the contract PBT and the BO bas
 
 ## KnobSpace
 
-**Location**: [src/tuner/config/knob_space.py](../../src/tuner/config/knob_space.py)
+**Location**: [src/knobs/knob_space.py](../../src/knobs/knob_space.py)
 
 A `KnobSpace` is a typed collection of `KnobDefinition` records. It is the single source of truth for *which* knobs are tunable in this session and *with what bounds*.
 
@@ -123,13 +123,13 @@ class KnobDefinition:
 | `config_to_fractions(config)`, `fractions_to_config(fractions)` | Warm-start serialisation. |
 | `create_online_view()` | A `KnobSpace` filtered to runtime-modifiable knobs only (for `ONLINE` tuning mode). |
 
-The full file lives at [src/tuner/config/knob_space.py](../../src/tuner/config/knob_space.py) — every method has a Google-style docstring.
+The full file lives at [src/knobs/knob_space.py](../../src/knobs/knob_space.py) — every method has a Google-style docstring.
 
 ---
 
 ## Knob tiers and data sources
 
-**Location**: [src/tuner/config/knob_loader.py](../../src/tuner/config/knob_loader.py)
+**Location**: [src/knobs/knob_loader.py](../../src/knobs/knob_loader.py)
 
 There are four canonical tiers: `minimal`, `core`, `standard`, `extensive`. Each tier corresponds to a CSV under `data/`. Two layouts are supported:
 
@@ -151,7 +151,7 @@ data/
 
 `get_knob_space(tier, workload=None, source="expert")` picks the right CSV. When `source="data_driven"` and `workload` is set, the loader prefers `data/data_driven_knobs/{workload}/{tier}_knobs.csv` — these are the tier CSVs produced by [`src/analysis/tier_generator.py`](../../src/analysis/tier_generator.py) from fANOVA+TreeSHAP importance (see [KNOB_IMPORTANCE_ANALYSIS.md](knob-importance-analysis.md)).
 
-CSV format constants live in [`knob_loader.py`](../../src/tuner/config/knob_loader.py):
+CSV format constants live in [`knob_loader.py`](../../src/knobs/knob_loader.py):
 
 ```python
 EXPERT_KNOBS_DIR = "data/expert_defined_knobs"
@@ -206,7 +206,7 @@ total_bytes = shared_buffers
 
 If `total_bytes` exceeds the worker's RAM budget, every memory knob is **scaled down by the same multiplier** `budget / total`. This preserves the ratios the perturbation chose while bringing total memory back under the budget. Without this, the explore step could easily produce configurations that fail to start (`shared_buffers` alone larger than container RAM).
 
-Implementation: [`src/tuner/config/knob_space.py:_repair_memory_budget`](../../src/tuner/config/knob_space.py).
+Implementation: [`src/knobs/knob_space.py:_repair_memory_budget`](../../src/knobs/knob_space.py).
 
 ---
 
@@ -214,7 +214,7 @@ Implementation: [`src/tuner/config/knob_space.py:_repair_memory_budget`](../../s
 
 `config_to_fractions(config)` and `fractions_to_config(fractions)` are the round-trip used by `--warm-start`. Hardware-relative knobs are serialised as fractions of their resolved bounds; absolute knobs are kept as-is. The resulting JSON survives transport across hardware.
 
-The full warm-start flow lives in [`src/tuner/main.py`](../../src/tuner/main.py) and is described in [HARDWARE_AWARE_NORMALIZATION.md §5](hardware-aware-normalization.md). Notably, since commit `858d482` the warm-start serialiser now writes the **full knob space**, not just the best configuration — this lets the loader gracefully drop knobs that no longer exist in the target tier and LHS-fill new ones.
+The full warm-start flow lives in [`src/tuners/pbt/cli.py`](../../src/tuners/pbt/cli.py) and is described in [HARDWARE_AWARE_NORMALIZATION.md §5](hardware-aware-normalization.md). Notably, since commit `858d482` the warm-start serialiser now writes the **full knob space**, not just the best configuration — this lets the loader gracefully drop knobs that no longer exist in the target tier and LHS-fill new ones.
 
 ---
 
@@ -342,8 +342,8 @@ The caller decides whether the quantised values replace the suggested values. PB
 
 ### File locations
 
-- `KnobSpace`, `KnobDefinition`, `KnobType`, `KnobScale`: [src/tuner/config/knob_space.py](../../src/tuner/config/knob_space.py)
-- Tier CSV loader: [src/tuner/config/knob_loader.py](../../src/tuner/config/knob_loader.py)
+- `KnobSpace`, `KnobDefinition`, `KnobType`, `KnobScale`: [src/knobs/knob_space.py](../../src/knobs/knob_space.py)
+- Tier CSV loader: [src/knobs/knob_loader.py](../../src/knobs/knob_loader.py)
 - `KnobApplicator`, `ApplicatorConfig`, `ApplicationResult`, `VerificationResult`: [src/utils/applicator.py](../../src/utils/applicator.py)
 - Knob metadata overlay: [src/knobs/knob_metadata.py](../../src/knobs/knob_metadata.py)
 - Knob policy filter: [src/knobs/policy.py](../../src/knobs/policy.py)

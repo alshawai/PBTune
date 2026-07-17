@@ -17,7 +17,7 @@ Run full PBT pipeline with **5 random seeds**: `[42, 123, 456, 789, 1024]`
 
 ```bash
 # Each seed gets a separate run
-python -m src.tuner.main \
+python -m src.tuners pbt \
     --workload oltp --tier core \
     --population 8 --generations 20 \
     --random-seed 42 \

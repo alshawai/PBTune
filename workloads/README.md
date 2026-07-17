@@ -107,19 +107,19 @@ You can also use a simple list of SQL queries (equal weights):
 
 ```bash
 # Use a built-in template workload
-python -m src.tuner.main --tier minimal --workload oltp
+python -m src.tuners pbt --tier minimal --workload oltp
 
 # Use custom workload file
-python -m src.tuner.main --tier core --workload-file workloads/my_workload.json
+python -m src.tuners pbt --tier core --workload-file workloads/my_workload.json
 
 # YAML format (requires pyyaml)
-python -m src.tuner.main --tier minimal --workload-file workloads/my_workload.yaml
+python -m src.tuners pbt --tier minimal --workload-file workloads/my_workload.yaml
 ```
 
 ### With Python API
 
 ```python
-from src.tuner.main import PBTTuner
+from src.tuners.pbt.tuner import PBTTuner
 from src.utils.metrics import WorkloadType
 
 tuner = PBTTuner(
@@ -207,7 +207,7 @@ LIMIT 20;
 ### Step 3: Run Tuning
 
 ```bash
-python -m src.tuner.main --tier core --workload-file workloads/my_workload.json
+python -m src.tuners pbt --tier core --workload-file workloads/my_workload.json
 ```
 
 ## Best Practices
@@ -252,4 +252,4 @@ pip install pyyaml
 - Check for typos in SQL statements
 - Verify database connection
 
-> Check `src/tuner/benchmark/orchestrator.py` for implementation details and [`../docs/reference/benchmarking.md`](../docs/reference/benchmarking.md) for the full architecture overview.
+> Check `src/tuners/engine/orchestrator.py` for implementation details and [`../docs/reference/benchmarking.md`](../docs/reference/benchmarking.md) for the full architecture overview.

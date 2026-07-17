@@ -22,11 +22,11 @@ Before answering questions or looking at code, you MUST understand the high-leve
 Based on the user's initial prompt, identify which subsystems you'll be touching and load the corresponding skills. You can load multiple skills if the task spans multiple areas.
 
 ### The Tuning Engine
-If the task involves the PBT algorithm, exploit/explore logic, worker management, convergence, or the `src/tuner/core/` package:
+If the task involves the PBT algorithm, exploit/explore logic, worker management, convergence, or the `src/tuners/pbt/` package:
 - **Action:** Read the `pbt-algorithm-patterns` skill.
 
 ### Configuration & Parameter Space
-If the task involves adding new PostgreSQL knobs, parameter bounds, hardware-aware fractional representation, or code in `src/tuner/config/` and `src/knobs/`:
+If the task involves adding new PostgreSQL knobs, parameter bounds, hardware-aware fractional representation, or code in `src/knobs/`:
 - **Action:** Read the `postgresql-knob-tuning` skill.
 
 ### The Scoring Pipeline (v2)

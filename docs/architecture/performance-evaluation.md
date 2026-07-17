@@ -10,9 +10,9 @@ The performance evaluation system is PBT's **fitness function**: it converts a c
 
 1. **[`PerformanceMetrics`](../../src/utils/metrics.py)** — typed record of raw measurements collected from a single evaluation window (latency, throughput, variance, memory, scan efficiency, error rate, …).
 2. **Scoring-v2 pipeline** — `WorkloadFeatures` → `QuantileUtilityNormalizer` → `FeatureDrivenWeightModel` → `CompositeScorer` → `ScoreBreakdown`. The math and policies are documented in [FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md).
-3. **[`WorkloadOrchestrator`](../../src/tuner/benchmark/orchestrator.py)** — the runtime that applies a configuration, drives a benchmark executor, captures metrics, and emits a `ScoreBreakdown`. It is the component PBT's [`Population`](../../src/tuner/core/population.py) calls during each generation.
+3. **[`WorkloadOrchestrator`](../../src/tuners/engine/orchestrator.py)** — the runtime that applies a configuration, drives a benchmark executor, captures metrics, and emits a `ScoreBreakdown`. It is the component PBT's [`Population`](../../src/tuners/pbt/population.py) calls during each generation.
 
-The previous evaluator at `src/tuner/evaluator/evaluator.py` has been retired; all evaluation logic now lives under [src/tuner/benchmark/](../../src/tuner/benchmark/) and the scoring layer under [src/utils/scoring/](../../src/utils/scoring/).
+The previous evaluator module has been retired; all evaluation logic now lives under [src/tuners/engine/](../../src/tuners/engine/) and the scoring layer under [src/utils/scoring/](../../src/utils/scoring/).
 
 ---
 
@@ -173,7 +173,7 @@ For the math, the floor-constrained softmax over feature-conditioned logits, and
 
 ## WorkloadOrchestrator
 
-**Location**: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
+**Location**: [src/tuners/engine/orchestrator.py](../../src/tuners/engine/orchestrator.py)
 
 `WorkloadOrchestrator` replaces the older `Evaluator`. Its responsibility is to take a single worker's knob configuration and return a `(PerformanceMetrics, ScoreBreakdown)` pair.
 
@@ -198,7 +198,7 @@ class WorkloadOrchestratorConfig:
 
 Notable fields beyond the obvious timing knobs:
 
-- **`tuning_mode`** — `ONLINE` (default) applies via `pg_reload_conf()` and restarts only when needed; `OFFLINE` restarts unconditionally to mirror an academic batch tuner; `ADAPTIVE` applies the CDBTune-inspired batched-restart policy from [`src/tuner/benchmark/restart_policy.py`](../../src/tuner/benchmark/restart_policy.py).
+- **`tuning_mode`** — `ONLINE` (default) applies via `pg_reload_conf()` and restarts only when needed; `OFFLINE` restarts unconditionally to mirror an academic batch tuner; `ADAPTIVE` applies the CDBTune-inspired batched-restart policy from [`src/tuners/engine/restart_policy.py`](../../src/tuners/engine/restart_policy.py).
 - **`adaptive_restart_interval`** — generation interval at which `ADAPTIVE` mode forces a restart even if no `postmaster`-context knob changed.
 - **`worker_memory_budget_bytes`** — the per-worker RAM slice used to normalise PostgreSQL's RSS into `memory_utilization`. Set from `WorkerResources` when running multiple workers on one host; falls back to total host RAM when unset.
 - **`vacuum_analyze_timeout_seconds`** — bounds the post-measurement `VACUUM ANALYZE` so a stuck maintenance pass cannot stall a whole generation.
@@ -315,9 +315,9 @@ A configuration that fails should not be ranked by accident on its non-failing d
 ### File locations
 
 - `PerformanceMetrics`, `MetricConfig`, `WorkloadType`: [src/utils/metrics.py](../../src/utils/metrics.py)
-- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuner/benchmark/orchestrator.py](../../src/tuner/benchmark/orchestrator.py)
+- `WorkloadOrchestrator`, `WorkloadOrchestratorConfig`: [src/tuners/engine/orchestrator.py](../../src/tuners/engine/orchestrator.py)
 - `WorkloadExecutor`, `WorkloadFileLoader`: [src/benchmarks/workload.py](../../src/benchmarks/workload.py)
-- `should_restart`: [src/tuner/benchmark/restart_policy.py](../../src/tuner/benchmark/restart_policy.py)
+- `should_restart`: [src/tuners/engine/restart_policy.py](../../src/tuners/engine/restart_policy.py)
 - `CompositeScorer`, `ScoreBreakdown`: [src/utils/scoring/scorer.py](../../src/utils/scoring/scorer.py), [src/utils/scoring/contracts.py](../../src/utils/scoring/contracts.py)
 - Metric instrumentation: [src/utils/metric_instrumentation.py](../../src/utils/metric_instrumentation.py)
-- Tests: [tests/unit/core/](../../tests/unit/core/), [tests/unit/scoring/](../../tests/unit/scoring/), [tests/unit/utils/test_metric_instrumentation.py](../../tests/unit/utils/test_metric_instrumentation.py)
+- Tests: [tests/unit/tuners/engine/](../../tests/unit/tuners/engine/), [tests/unit/scoring/](../../tests/unit/scoring/), [tests/unit/utils/test_metric_instrumentation.py](../../tests/unit/utils/test_metric_instrumentation.py)

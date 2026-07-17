@@ -106,7 +106,7 @@ in `scalpel_diagnostics.json`.
 few knobs). The downstream
 [`preprocess_knobs`](../../src/knobs/preprocess_knobs.py) skips writing
 CSVs for empty tiers, and
-[`knob_loader`](../../src/tuner/config/knob_loader.py) walks down to
+[`knob_loader`](../../src/knobs/knob_loader.py) walks down to
 the next broader tier with a warning.
 
 **Non-cumulative on disk.** A knob that lands in `minimal` does NOT

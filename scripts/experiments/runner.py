@@ -19,7 +19,7 @@ from src.tuners.pbt.config import (
 )
 
 # Per-experiment parallel-worker resolution must mirror what the PBT CLI
-# (``src.tuner.main``) will actually use as ``num_parallel_workers`` -- that is
+# (``src.tuners.pbt``) will actually use as ``num_parallel_workers`` -- that is
 # the denominator ``detect_worker_resources`` divides host capacity by. The CLI
 # uses ``--parallel-workers`` when supplied, else the selected config profile's
 # default. We reproduce that mapping here from the canonical profile configs so
@@ -115,7 +115,7 @@ class ExperimentRunner:
     def _effective_parallel_workers(self, exp: Experiment) -> int:
         """Resolve the parallel-worker count the PBT run will actually use.
 
-        Mirrors ``src.tuner.main``: an explicit ``parallel_workers`` on the
+        Mirrors ``src.tuners.pbt``: an explicit ``parallel_workers`` on the
         experiment wins; otherwise the config profile's default applies. This
         is the denominator host capacity is divided by, so it must match the
         real run or per-worker budgets are wrong.
@@ -166,7 +166,7 @@ class ExperimentRunner:
         ``RESULTS_DIR``) where this experiment's PBT, BO, and eval
         outputs land.
 
-        Matches the on-disk convention used by ``src.tuner.main``,
+        Matches the on-disk convention used by ``src.tuners.pbt``,
         ``src.scripts.bo_baseline``, and ``src.evaluation``:
 
         - ``benchmark="sysbench"`` → ``oltp/<sysbench_workload>``
@@ -767,7 +767,7 @@ class ExperimentRunner:
     def _build_pbt_cmd(self, exp: Experiment, seed: int) -> list[str]:
         worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
-            "python", "-m", "src.tuner.main",
+            "python", "-m", "src.tuners", "pbt",
             "--config", exp.config_profile,
             "--tier", exp.knob_tier,
             "--knob-source", exp.knob_source,

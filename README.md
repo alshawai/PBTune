@@ -116,8 +116,8 @@ See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for detai
           │                  │                  │
           ▼                  ▼                  ▼
     ┌────────────┐    ┌────────────┐    ┌────────────┐
-    │ Population │    │ Evaluator  │    │ Instance   │
-    │  Manager   │───→│   System   │───→│  Manager   │
+    │ Population │    │  Workload  │    │ Instance   │
+    │  Manager   │───→│Orchestrator│───→│  Manager   │
     └────────────┘    └────────────┘    └────────────┘
             │                 │               │
             │                 │               │
@@ -143,13 +143,13 @@ See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for detai
 
 | Component                 | Purpose                                                                  | Location                                                                     |
 | ------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| **Population**            | Manages worker pool, orchestrates PBT algorithm                          | [`src/tuner/core/population.py`](src/tuner/core/population.py)               |
-| **Worker**                | Individual configuration + performance state                             | [`src/tuner/core/worker.py`](src/tuner/core/worker.py)                       |
-| **Evolution**             | Exploit-explore algorithms (selection, perturbation)                     | [`src/tuner/core/evolution.py`](src/tuner/core/evolution.py)                 |
-| **Generation Barriers**   | Lockstep B1–B17 synchronisation for measurement fairness                 | [`src/tuner/core/barriers.py`](src/tuner/core/barriers.py)                   |
-| **Workload Orchestrator** | Per-worker evaluation: apply config, run benchmark, collect metrics      | [`src/tuner/benchmark/orchestrator.py`](src/tuner/benchmark/orchestrator.py) |
+| **Population**            | Manages worker pool, orchestrates PBT algorithm                          | [`src/tuners/pbt/population.py`](src/tuners/pbt/population.py)               |
+| **Worker**                | Individual configuration + performance state                             | [`src/tuners/pbt/worker.py`](src/tuners/pbt/worker.py)                       |
+| **Evolution**             | Exploit-explore algorithms (selection, perturbation)                     | [`src/tuners/pbt/evolution.py`](src/tuners/pbt/evolution.py)                 |
+| **Generation Barriers**   | Lockstep B1–B17 synchronisation for measurement fairness                 | [`src/tuners/engine/barriers.py`](src/tuners/engine/barriers.py)             |
+| **Workload Orchestrator** | Per-worker evaluation: apply config, run benchmark, collect metrics      | [`src/tuners/engine/orchestrator.py`](src/tuners/engine/orchestrator.py)     |
 | **Environment Backends**  | Multi-instance PostgreSQL (Docker / bare-metal), CPU subsets, snapshots  | [`src/utils/environments/`](src/utils/environments/)                         |
-| **Knob Space**            | Search space definition, sampling, perturbation, hardware-aware ranges   | [`src/tuner/config/knob_space.py`](src/tuner/config/knob_space.py)           |
+| **Knob Space**            | Search space definition, sampling, perturbation, hardware-aware ranges   | [`src/knobs/knob_space.py`](src/knobs/knob_space.py)                         |
 | **Scoring (v2)**          | Feature-driven composite score with reliability gate                     | [`src/utils/scoring/`](src/utils/scoring/)                                   |
 
 See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for component interaction details.
@@ -161,11 +161,11 @@ See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for compo
 ```text
 .
 ├── src/                          # Source code
-│   ├── tuner/                    # PBT tuning engine
-│   │   ├── core/                 # population, worker, evolution, barriers
-│   │   ├── config/               # KnobSpace + tier loading
-│   │   ├── benchmark/            # WorkloadOrchestrator + restart policy + workload loader
-│   │   └── main.py               # CLI entry point
+│   ├── tuners/                   # Tuning engines (PBT + shared base/engine)
+│   │   ├── base.py               # BaseTuner (shared session/CLI scaffolding)
+│   │   ├── engine/               # WorkloadOrchestrator + restart policy + barriers + base worker
+│   │   ├── pbt/                  # PBT: population, worker, evolution, config, tuner, cli
+│   │   └── __main__.py           # Routed CLI entry point (python -m src.tuners pbt)
 │   ├── utils/                    # Shared utilities
 │   │   ├── environments/         # Docker / bare-metal PostgreSQL backends
 │   │   ├── scoring/              # Feature-driven scoring v2
@@ -174,7 +174,7 @@ See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for compo
 │   │   ├── metrics.py            # PerformanceMetrics
 │   │   ├── metric_instrumentation.py
 │   │   ├── hardware_info.py      # WorkerResources detection
-│   │   ├── rescoring.py          # Post-hoc global score recalibration
+│   │   ├── calibration.py       # Post-hoc global score recalibration (was rescoring.py)
 │   │   └── types.py
 │   ├── benchmarks/               # External benchmark executors (sysbench, tpch)
 │   ├── database/                 # psycopg2 / SQLAlchemy connections + lifecycle
@@ -299,7 +299,7 @@ make check-all
 Optimize 5 core knobs with minimal population for quick testing:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
   --tier minimal \
   --config rapid \
   --generations 10 \
@@ -317,7 +317,7 @@ python -m src.tuner.main \
 Tune 13 core knobs with standard PBT configuration:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
   --tier core \
   --config standard \
   --generations 30 \
@@ -329,7 +329,7 @@ python -m src.tuner.main \
 Full knob space (36 parameters) with thorough evaluation:
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
   --tier standard \
   --config thorough \
   --generations 50 \
@@ -340,7 +340,7 @@ python -m src.tuner.main \
 ### Example 4: Custom Workload
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
   --tier core \
   --config standard \
   --workload-file workloads/custom_queries.json
@@ -357,7 +357,7 @@ export DB_USER=admin
 export DB_PASSWORD=secret
 export DB_NAME=myapp
 
-python -m src.tuner.main --workload-file workloads/my_real_queries.json
+python -m src.tuners pbt --workload-file workloads/my_real_queries.json
 ```
 
 ### Example 6: Manual Worker Resource Allocation
@@ -365,7 +365,7 @@ python -m src.tuner.main --workload-file workloads/my_real_queries.json
 Override automatic hardware detection to manually allocate RAM and CPU cores for each parallel worker (up to 95% of host capacity):
 
 ```bash
-python -m src.tuner.main \
+python -m src.tuners pbt \
   --worker-ram 4G \
   --worker-cpus 2 \
   --parallel-workers 3
@@ -392,7 +392,7 @@ xdg-open "$LOG"
 ### CLI Reference
 
 ```bash
-python -m src.tuner.main --help
+python -m src.tuners pbt --help
 ```
 
 **Key Arguments:**
@@ -418,13 +418,13 @@ Use explicit Sysbench workload mode selection when running OLTP benchmarks:
 
 ```bash
 # Read-only OLTP benchmark
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
+python -m src.tuners pbt --benchmark sysbench --sysbench-workload oltp_read_only --tier core --config standard
 
 # Read-write OLTP benchmark (default)
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
+python -m src.tuners pbt --benchmark sysbench --sysbench-workload oltp_read_write --tier core --config standard
 
 # Write-only OLTP benchmark
-python -m src.tuner.main --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
+python -m src.tuners pbt --benchmark sysbench --sysbench-workload oltp_write_only --tier core --config standard
 ```
 
 Sysbench outputs are partitioned by mode:
@@ -439,7 +439,7 @@ Use feature-driven scoring during tuning for workload-aware metric weighting:
 
 ```bash
 # Use feature-driven scoring during tuning
-python -m src.tuner.main --tier core --config standard --scoring-policy feature_driven_v2
+python -m src.tuners pbt --tier core --config standard --scoring-policy feature_driven_v2
 
 # Re-evaluate a session with a different scoring policy
 python -m src.evaluation \
@@ -487,7 +487,7 @@ Example JSON (`my_workload.json`):
 Run with:
 
 ```bash
-python -m src.tuner.main --workload-file path/to/my_workload.json
+python -m src.tuners pbt --workload-file path/to/my_workload.json
 ```
 
 See the [workloads directory README](workloads/README.md) for full formatting details.

@@ -144,7 +144,7 @@ make check-all
 **Recommended**: Use project-local Python from `.venv` for all commands.
 
 ```bash
-.venv/bin/python -m src.tuner.main --help
+.venv/bin/python -m src.tuners pbt --help
 ```
 
 ### Local Validation Command Matrix
@@ -300,7 +300,7 @@ When reporting bugs, include:
 **Description**: Brief summary of the bug
 
 **Steps to Reproduce**:
-1. Run command: `python -m src.tuner.main ...`
+1. Run command: `python -m src.tuners pbt ...`
 2. Observe behavior: ...
 
 **Expected Behavior**: What should happen

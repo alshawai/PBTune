@@ -78,7 +78,7 @@ SET statement_timeout = '{timeout_ms}'
 
 ## WorkloadOrchestrator Pipeline
 
-The `WorkloadOrchestrator` class (`src/tuner/benchmark/orchestrator.py`) orchestrates
+The `WorkloadOrchestrator` class (`src/tuners/engine/orchestrator.py`) orchestrates
 the full evaluation of a single worker:
 
 ```

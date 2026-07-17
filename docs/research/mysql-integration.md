@@ -7,6 +7,8 @@ See also: [Documentation Index](../README.md)
 > **Purpose:** Complete reference for integrating MySQL as a second supported DBMS.  
 > **Date created:** March 2026  
 > **Status:** Future work — deferred from current scope. This document captures ALL required changes, research, and implementation steps so that the work can be picked up at any time with full context.
+>
+> ⚠️ **Stale layout warning (added 2026-07-17):** This guide was written in March 2026 against the pre-refactor codebase, before the tuners unification (ADR-006). Its File-by-File Change Map and phase sections still reference the old `src/tuner/` package — including modules that no longer exist as separate files (e.g. `src/tuner/utils/instance_manager.py`, `snapshot_manager.py`, `restart_manager.py`, `postgres_instance.py`, `src/tuner/evaluator/evaluator.py`). The current layout is: PBT strategy under `src/tuners/pbt/`, the shared eval engine (orchestrator, barriers, restart_policy, worker) under `src/tuners/engine/`, environment/instance lifecycle under `src/utils/environments/`, knob code under `src/knobs/`, and workload code under `src/benchmarks/`. Before picking up this work, re-derive every target path against the current tree; the architecture is unchanged in intent but the file boundaries have moved.
 
 ---
 
@@ -364,8 +366,8 @@ def create_adapter(dbms: str, **kwargs) -> DatabaseAdapter:
     | `src/database/management.py` | `pg_database`, `pg_terminate_backend()` | Wrapped by adapter; consumer code calls `adapter.create_database()` etc. |
     | `src/benchmarks/sysbench/executor.py` | `--db-driver=pgsql`, `VACUUM ANALYZE` | Accept `DatabaseAdapter`, call `adapter.vacuum_equivalent()`, build flags from adapter |
     | `src/benchmarks/tpch/executor.py` | `psycopg2.copy_expert()`, `VACUUM ANALYZE` | Accept `DatabaseAdapter`, call `adapter.bulk_load()`, `adapter.vacuum_equivalent()` |
-    | `src/tuner/main.py` | `PostgresInstanceManager`, hardcoded port `5440` | Accept DBMS config, use `adapter_factory.create_adapter()` |
-    | `src/tuner/core/population.py` | References `PostgresInstanceManager` | Use generic `InstanceManager` (rename or interface) |
+    | `src/tuners/pbt/tuner.py` | `PostgresInstanceManager`, hardcoded port `5440` | Accept DBMS config, use `adapter_factory.create_adapter()` |
+    | `src/tuners/pbt/population.py` | References `PostgresInstanceManager` | Use generic `InstanceManager` (rename or interface) |
 
 5. **Rename PostgreSQL-branded classes** to generic names (or keep PG-branded as the adapter implementation):
     - `PostgresInstanceManager` → keep internally, but consumers use adapter
@@ -679,7 +681,7 @@ Create `src/knobs/mysql_preprocess_knobs.py` or extend `preprocess_knobs.py` to 
 
 ### 6.6 MySQL Knob Loader Updates
 
-`src/tuner/config/knob_loader.py` changes:
+`src/knobs/knob_loader.py` changes:
 
 **Current type mapping (PG `vartype` values):**
 ```python
@@ -1369,7 +1371,7 @@ parser.add_argument(
 )
 ```
 
-### 12.2 Orchestrator Changes (`src/tuner/main.py`)
+### 12.2 Orchestrator Changes (`src/tuners/pbt/tuner.py`)
 
 **Current** (L203-210):
 ```python
@@ -1595,9 +1597,9 @@ tests/integration/test_cross_dbms.py
 | 15 | `src/tuner/evaluator/evaluator.py` | Use adapter for stats, VACUUM, cache hit, process detection | R1, R7 |
 | 16 | `src/benchmarks/sysbench/executor.py` | Get driver flags from adapter; use `adapter.vacuum_equivalent()` | R1, R6 |
 | 17 | `src/benchmarks/tpch/executor.py` | Use `adapter.bulk_load()`, `adapter.vacuum_equivalent()`; DBMS-specific query dir | R1, R6 |
-| 18 | `src/tuner/config/knob_loader.py` | DBMS-aware CSV path; MySQL type mapping | R3 |
-| 19 | `src/tuner/core/population.py` | Use generic interface instead of `PostgresInstanceManager` | R1 |
-| 20 | `src/tuner/main.py` | Accept `--dbms`, use adapter factory, DBMS-aware paths | R9 |
+| 18 | `src/knobs/knob_loader.py` | DBMS-aware CSV path; MySQL type mapping | R3 |
+| 19 | `src/tuners/pbt/population.py` | Use generic interface instead of `PostgresInstanceManager` | R1 |
+| 20 | `src/tuners/pbt/cli.py` | Accept `--dbms`, use adapter factory, DBMS-aware paths | R9 |
 | 21 | `src/scripts/setup_database.py` | Use adapter for DDL | R9 |
 | 22 | `src/scripts/cleanup_instances.py` | Use adapter | R9 |
 | 23 | `src/scripts/analyze_knob_importance.py` | Use adapter for retrieval | R9 |

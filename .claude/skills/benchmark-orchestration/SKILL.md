@@ -5,7 +5,7 @@ description: >
   management, snapshot management, the full WorkloadOrchestrator pipeline, and performance
   measurement workflows. Use this skill when working on benchmark executors, evaluation
   pipeline, instance management, snapshot restoration, configuration application, restart
-  policy, system metrics collection, or any code in src/benchmarks/, src/tuner/benchmark/,
+  policy, system metrics collection, or any code in src/benchmarks/, src/tuners/engine/,
   src/utils/applicator.py, or src/utils/environments/.
 ---
 
@@ -34,7 +34,7 @@ evaluate_worker(worker)
     └── Return (PerformanceMetrics, score)
 ```
 
-All of this is orchestrated by `WorkloadOrchestrator` in `src/tuner/benchmark/orchestrator.py`.
+All of this is orchestrated by `WorkloadOrchestrator` in `src/tuners/engine/orchestrator.py`.
 Per-worker timing is recorded via a `TimingRecorder` local to `evaluate_worker` and attached
 as `worker.last_eval_timing`.
 
@@ -95,7 +95,7 @@ The `KnobApplicator` (`src/utils/applicator.py`) handles:
 
 ## Restart Policy
 
-`src/tuner/benchmark/restart_policy.py` exposes the restart policy with three tuning modes:
+`src/tuners/engine/restart_policy.py` exposes the restart policy with three tuning modes:
 
 | `TuningMode` | Behavior |
 |--------------|----------|

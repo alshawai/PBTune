@@ -6,7 +6,7 @@ See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driv
 
 Every tuning run, evaluation comparison, and analysis pass emits or consumes one of three JSON shapes:
 
-- **PBT session** — produced by `python -m src.tuner.main`
+- **PBT session** — produced by `python -m src.tuners pbt`
 - **BO session** — produced by `python -m src.scripts.bo_baseline`
 - **Comparison report** — produced by `python -m src.evaluation`
 
@@ -54,18 +54,18 @@ The components currently emitted by the orchestrator, population, and tuner boot
 
 | Component | Layer | Semantics | Source |
 | --- | --- | --- | --- |
-| `setup_instances` | bootstrap | Bring PostgreSQL workers up (containers, datadirs, schema load). | `src/tuner/main.py` — `PBTTuner.run` bootstrap block |
-| `verify_instances` | bootstrap | Probe each worker for liveness, version, capability. | `src/tuner/main.py` — `PBTTuner.run` bootstrap block |
-| `prune_knobs` | bootstrap | Drop knobs unsupported by the resolved PG server version. | `src/tuner/main.py` — `_prune_unsupported_runtime_knobs` |
-| `setup_snapshots` | bootstrap | Create per-worker baseline snapshots for fast restart. | `src/tuner/main.py` — `PBTTuner.run` bootstrap block |
+| `setup_instances` | bootstrap | Bring PostgreSQL workers up (containers, datadirs, schema load). | `src/tuners/pbt/tuner.py` — `PBTTuner.run` bootstrap block |
+| `verify_instances` | bootstrap | Probe each worker for liveness, version, capability. | `src/tuners/pbt/tuner.py` — `PBTTuner.run` bootstrap block |
+| `prune_knobs` | bootstrap | Drop knobs unsupported by the resolved PG server version. | `src/tuners/pbt/tuner.py` — `_prune_unsupported_runtime_knobs` |
+| `setup_snapshots` | bootstrap | Create per-worker baseline snapshots for fast restart. | `src/tuners/pbt/tuner.py` — `PBTTuner.run` bootstrap block |
 | `apply_only` | worker | `ALTER SYSTEM` writes only — no reload, no restart. Sets `restart_required`. | `src/utils/applicator.py` — `KnobApplicator.apply_only`, invoked from `WorkloadOrchestrator.apply_configuration` |
 | `activate_reload` | worker | `pg_reload_conf()` for SIGHUP / user / superuser-context knobs. Metadata: `strategy="reload"`. | `src/utils/applicator.py` — `KnobApplicator.activate` |
 | `activate_restart` | worker | `restart_instance()` for postmaster-context knobs. Metadata: `strategy="restart"`. | `src/utils/applicator.py` — `KnobApplicator.activate` |
-| `snapshot_restore` | worker | `env.restore_snapshot(worker_id)` when `restore_due=True`. Replaces `activate_*` on restore-interval generations (the restore IS the restart). | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
-| `knob_verify` | worker | Read-back via `KnobApplicator.verify()` — confirms PostgreSQL accepted and quantised the values. | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
-| `workload` | worker | Full workload execution (warmup + measurement). Metadata: `executor="internal"` or `executor="benchmark"` (sysbench / tpch). | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
-| `score` | worker | `engine.compute_breakdown()` over the captured metrics. | `src/tuner/benchmark/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
-| `evolve` | generation | `execute_exploit_explore` + `env.clone_instances` — the PBT step itself. | `src/tuner/core/population.py` — `Population.train_generation` |
+| `snapshot_restore` | worker | `env.restore_snapshot(worker_id)` when `restore_due=True`. Replaces `activate_*` on restore-interval generations (the restore IS the restart). | `src/tuners/engine/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `knob_verify` | worker | Read-back via `KnobApplicator.verify()` — confirms PostgreSQL accepted and quantised the values. | `src/tuners/engine/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `workload` | worker | Full workload execution (warmup + measurement). Metadata: `executor="internal"` or `executor="benchmark"` (sysbench / tpch). | `src/tuners/engine/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `score` | worker | `engine.compute_breakdown()` over the captured metrics. | `src/tuners/engine/orchestrator.py` — `WorkloadOrchestrator.evaluate_worker` |
+| `evolve` | generation | `execute_exploit_explore` + `env.clone_instances` — the PBT step itself. | `src/tuners/pbt/population.py` — `Population.train_generation` |
 
 Component names are snake_case and stable: they are the dimension key in the cost-decomposition table, so renaming one silently breaks reproducibility of older sessions through the analysis script.
 

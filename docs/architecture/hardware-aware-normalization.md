@@ -59,7 +59,7 @@ If `Total > Budget` (80% of node's per-worker RAM limit constraint), the framewo
 You can resume PBT optimizations from any previous state mapping via the CLI:
 
 ```bash
-python -m src.tuner.main --warm-start results/oltp/oltp_read_write/pbt_runs/core/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners pbt --warm-start results/oltp/oltp_read_write/pbt_runs/core/best_configs/best_config_YYYYMMDD_HHMM.json
 ```
 
 **What Happens:**
