@@ -12,7 +12,7 @@ PBTune applies [Population-Based Training (PBT)](https://arxiv.org/abs/1711.0984
 git clone https://github.com/alshawai/PBTune
 cd PBTune
 ./scripts/bootstrap.sh
-python -m src.tuners.pbt.main --tier minimal --config rapid
+python -m src.tuners pbt --tier minimal --config rapid
 ```
 
 ## Documentation Structure
