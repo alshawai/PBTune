@@ -1,11 +1,17 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   quality-gates:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Checkout
@@ -14,11 +20,16 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
@@ -32,4 +43,4 @@ jobs:
         run: make typecheck PYTHON=python
 
       - name: Unit tests
-        run: make test PYTHON=python
+        run: make test PYTHON=python PYTEST_ARGS="--cov=src --cov-report=xml"

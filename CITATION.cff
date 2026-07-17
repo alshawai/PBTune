@@ -1,27 +1,34 @@
-# Citation File Format (CFF) for Academic Software
-# This file enables automatic citation generation on GitHub and Zenodo
-# See: https://citation-file-format.github.io/
-
 cff-version: 1.2.0
-title: Population-Based Training for PostgreSQL Configuration Tuning
+title: "PBTune: Population-Based Training for Automatic Database Parameter Tuning"
 message: >-
   If you use this software in your research, please cite it using the
   metadata from this file.
 type: software
 authors:
-  - family-names: Data-Vanta
-    given-names: Research Group
-    affiliation: Independent Research
-    email: imalwaysforlife@gmail.com
-repository-code: 'https://github.com/Data-Vanta/ai-database-optimization'
-url: 'https://github.com/Data-Vanta/ai-database-optimization'
+  - family-names: Al-Shawa
+    given-names: Ibrahim
+    affiliation: Port Said University
+    orcid: ""
+  - family-names: Hedia
+    given-names: AbdelRahman
+    affiliation: Port Said University
+  - family-names: Darwish
+    given-names: Mahmoud
+    affiliation: Port Said University
+  - family-names: Saber
+    given-names: Walaa
+    affiliation: Port Said University
+  - family-names: El-Sayed
+    given-names: Emad
+    affiliation: Port Said University
+repository-code: "https://github.com/alshawai/PBTune"
+url: "https://github.com/alshawai/PBTune"
 abstract: >-
-  A novel application of Population-Based Training (PBT), originally developed
-  by DeepMind for neural network hyperparameter optimization, to the domain of
-  database configuration tuning. This system demonstrates that evolutionary
-  optimization strategies can autonomously discover high-performance PostgreSQL
-  configurations without domain expertise, achieving significant improvements
-  in throughput and latency across diverse workload types.
+  PBTune applies Population-Based Training (PBT), originally developed
+  by DeepMind for neural network hyperparameter optimization, to
+  database configuration tuning. It demonstrates that evolutionary
+  optimization strategies can autonomously discover high-performance
+  PostgreSQL configurations without domain expertise.
 keywords:
   - database tuning
   - population-based training
@@ -30,10 +37,9 @@ keywords:
   - hyperparameter optimization
   - autonomous systems
   - machine learning for systems
-license: Other
-license-url: 'https://github.com/Data-Vanta/ai-database-optimization/blob/main/LICENSE'
+license: GPL-3.0
 version: 1.0.0
-date-released: '2025-12-07'
+date-released: "2026-07-16"
 references:
   - type: article
     title: Population Based Training of Neural Networks
@@ -46,21 +52,9 @@ references:
         given-names: Simon
       - family-names: Czarnecki
         given-names: Wojciech M
-      - family-names: Donahue
-        given-names: Jeff
-      - family-names: Razavi
-        given-names: Ali
-      - family-names: Vinyals
-        given-names: Oriol
-      - family-names: Green
-        given-names: Tim
-      - family-names: Dunning
-        given-names: Iain
-      - family-names: Simonyan
-        given-names: Karen
     year: 2017
     journal: arXiv preprint
-    arxiv: 1711.09846
+    arxiv: "1711.09846"
   - type: conference-paper
     title: Automatic Database Management System Tuning Through Large-Scale Machine Learning
     authors:
@@ -75,7 +69,7 @@ references:
     year: 2017
     conference:
       name: ACM SIGMOD International Conference on Management of Data
-    doi: 10.1145/3035918.3064029
+    doi: "10.1145/3035918.3064029"
   - type: conference-paper
     title: An End-to-End Automatic Cloud Database Tuning System Using Deep Reinforcement Learning
     authors:
@@ -87,19 +81,7 @@ references:
         given-names: Ke
       - family-names: Li
         given-names: Guoliang
-      - family-names: Xiao
-        given-names: Zhili
-      - family-names: Cheng
-        given-names: Bin
-      - family-names: Xing
-        given-names: Jiashu
-      - family-names: Wang
-        given-names: Yangtao
-      - family-names: Cheng
-        given-names: Tianheng
-      - family-names: Liu
-        given-names: Li
     year: 2019
     conference:
       name: ACM SIGMOD International Conference on Management of Data
-    doi: 10.1145/3299869.3300085
+    doi: "10.1145/3299869.3300085"

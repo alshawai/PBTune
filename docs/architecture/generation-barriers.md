@@ -1,7 +1,5 @@
 # Generation Barriers — Lockstep Worker Synchronization
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [PBT Core Components](pbt-core.md), [Workload Orchestrator](workload-orchestrator.md), [Performance Evaluation](performance-evaluation.md), [ADR-003](decisions/ADR-003-lockstep-generation-barriers.md)
 
 ## Why barriers exist

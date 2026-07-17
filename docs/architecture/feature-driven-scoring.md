@@ -1,7 +1,5 @@
 # Feature-Driven Scoring
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Performance Evaluation](performance-evaluation.md), [Metrics Validation](../reference/metrics-validation.md), [Workload Orchestrator](workload-orchestrator.md)
 
 ## Overview

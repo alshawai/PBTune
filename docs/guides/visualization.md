@@ -1,7 +1,5 @@
 # Visualization
 
-> Last reviewed: 2026-06-07
-
 See also: [Documentation Index](../README.md), [Knob Importance Analysis](../architecture/knob-importance-analysis.md), [PBT vs BO Comparison](pbt-vs-bo-comparison.md)
 
 ## Overview

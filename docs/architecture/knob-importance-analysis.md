@@ -7,7 +7,7 @@ stable, hardware-aware tuning tiers. The approach combines fANOVA variance
 attribution with TreeSHAP explanations and uses Jenks Natural Breaks to
 translate continuous importance into discrete tiers.
 
-> Last reviewed: 2026-06-07. See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Visualization](../guides/visualization.md).
+> See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Visualization](../guides/visualization.md).
 
 ## Data Flow
 

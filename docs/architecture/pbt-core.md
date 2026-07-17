@@ -1,7 +1,5 @@
 # PBT Core Components
 
-> Last reviewed: 2026-06-15
-
 See also: [Documentation Index](../README.md), [Generation Barriers](generation-barriers.md), [Performance Evaluation](performance-evaluation.md), [Workload Orchestrator](workload-orchestrator.md)
 
 ## Overview
