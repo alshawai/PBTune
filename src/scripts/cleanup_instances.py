@@ -13,7 +13,7 @@ from pathlib import Path
 
 from src.config.data_root import resolve_data_root
 from src.config.database import DatabaseConfig
-from src.benchmarks.executor import BenchmarkExecutor
+from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.utils.environments import EnvironmentFactory, InstanceConfig
 from src.utils.metrics import PerformanceMetrics
 
@@ -33,14 +33,9 @@ class _NoopBenchmarkExecutor(BenchmarkExecutor):
         """No-op validate method."""
         return True
 
-    def execute(
-        self,
-        db_config: DatabaseConfig,
-        worker_id: int | None = None,
-        **kwargs: object,
-    ) -> PerformanceMetrics:
+    def execute(self, ctx: ExecutionContext) -> PerformanceMetrics:
         """No-op execute method."""
-        del db_config, worker_id, kwargs
+        del ctx
         return PerformanceMetrics()
 
 

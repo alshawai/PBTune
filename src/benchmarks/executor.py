@@ -11,7 +11,7 @@ Every executor implements ``prepare → validate → execute`` against a single
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional, TYPE_CHECKING
 
 from psycopg2 import sql

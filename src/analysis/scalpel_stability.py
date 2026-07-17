@@ -576,6 +576,7 @@ def group_clustered_stability(
 
     use_parallel = n_jobs > 1 and hp is not None and len(subsamples) > 1
     counts: dict[str, dict[str, int]] = {}
+    assignment: Optional[Mapping[str, str]]
     successful = 0
 
     if use_parallel:

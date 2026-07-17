@@ -182,6 +182,7 @@ def load_bo_trace(
 
         use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
         if use_raw:
+            assert metric_key is not None  # implied by use_raw
             new_scores = [_extract_raw_value(m, metric_key) for m in all_metrics]
         elif hasattr(metric_config, "compute_score_value"):
             new_scores = [metric_config.compute_score_value(m) for m in all_metrics]
@@ -218,7 +219,7 @@ def load_bo_trace(
     # Convert raw scores into a running best array
     # Lower is better for latency metrics; higher is better otherwise
     use_raw = metric_key is not None and metric_key in RAW_METRIC_KEYS
-    if use_raw and metric_key.startswith("latency"):
+    if use_raw and metric_key is not None and metric_key.startswith("latency"):
         best_scores = np.minimum.accumulate(scores)
     else:
         best_scores = np.maximum.accumulate(scores)
