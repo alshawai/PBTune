@@ -119,7 +119,7 @@ uvicorn==0.51.0
 uvloop==0.22.1
 VapourSynth==77
 watchfiles==1.1.1
-wcwidth==0.8.1
+wcwidth==0.8.2
 webencodings==0.5.1
 websockets==16.0
 wheel==0.47.0
