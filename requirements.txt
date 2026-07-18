@@ -10,7 +10,7 @@ numpy==2.4.2
 psutil==7.2.2
 
 # Environment variables
-python-dotenv==1.2.1
+python-dotenv==1.2.2
 
 # Machine Learning (if needed)
 scikit-learn==1.8.0
