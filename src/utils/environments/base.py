@@ -31,12 +31,18 @@ COLORS = get_color_context()
 
 @dataclass
 class InstanceConfig:
-    """Configuration for a single PostgreSQL instance."""
+    """Configuration for a single PostgreSQL instance.
+
+    ``host`` defaults to loopback so local (single-device) backends are
+    unchanged. The distributed :class:`RemoteEnvironment` sets it to the
+    owning device's address so workers bind to the right host.
+    """
 
     worker_id: int
     port: int
     data_dir: Path
     running: bool = False
+    host: str = "127.0.0.1"
 
 
 class DatabaseEnvironment(ABC):
