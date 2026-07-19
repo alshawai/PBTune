@@ -125,6 +125,51 @@ def _add_tuning_group(parser: argparse.ArgumentParser) -> None:
         ),
     )
 
+    dist = parser.add_argument_group("Distributed Tuning (multi-device)")
+    dist.add_argument(
+        "--distributed",
+        action="store_true",
+        help=(
+            "Run in DISTRIBUTED mode: one worker per dedicated device (see "
+            "--inventory). Requires an identical device fleet. Local mode is "
+            "unaffected when this flag is absent."
+        ),
+    )
+    dist.add_argument(
+        "--inventory",
+        type=str,
+        default=None,
+        help=(
+            "Path to the devices.yaml fleet inventory (required with "
+            "--distributed). See configs/distributed/devices.example.yaml."
+        ),
+    )
+    dist.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help=(
+            "Skip SSH bootstrap; assume device agents are already running "
+            "(distributed mode only)."
+        ),
+    )
+    dist.add_argument(
+        "--no-remote-deps",
+        action="store_true",
+        help="During bootstrap, skip 'pip install -r requirements.txt' on devices.",
+    )
+    dist.add_argument(
+        "--eval-timeout",
+        type=float,
+        default=1800.0,
+        help="Per-worker remote evaluation RPC timeout in seconds (default: 1800).",
+    )
+    dist.add_argument(
+        "--agent-timeout",
+        type=float,
+        default=60.0,
+        help="Per-agent control RPC timeout in seconds (default: 60).",
+    )
+
 
 def _add_workload_group(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("Workload Settings")
@@ -495,6 +540,12 @@ def build_lifecycle_config(
         scoring_policy=args.scoring_policy,
         scoring_policy_version=args.scoring_policy_version,
         metric_reference_version=args.metric_reference_version,
+        distributed=getattr(args, "distributed", False),
+        inventory=getattr(args, "inventory", None),
+        bootstrap=not getattr(args, "no_bootstrap", False),
+        remote_install_deps=not getattr(args, "no_remote_deps", False),
+        eval_timeout=getattr(args, "eval_timeout", 1800.0),
+        agent_timeout=getattr(args, "agent_timeout", 60.0),
     )
 
 

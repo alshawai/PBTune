@@ -365,8 +365,11 @@ class Population:
             instance = instances[worker.worker_id]
             worker.port = instance.port
 
+            # Host defaults to loopback for local backends; the distributed
+            # RemoteEnvironment stamps each InstanceConfig with its device's
+            # address so the worker binds to the correct host.
             worker.db_config = DatabaseConfig(
-                host="127.0.0.1",
+                host=getattr(instance, "host", "127.0.0.1"),
                 port=instance.port,
                 dbname=dbname,
                 user=user,

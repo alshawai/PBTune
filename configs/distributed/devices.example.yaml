@@ -1,0 +1,30 @@
+# Example device fleet inventory for DISTRIBUTED tuning mode.
+#
+# In distributed mode each population worker runs on its own dedicated device
+# (one PostgreSQL instance per device) so measurements are free of co-tenant
+# contention — fairness is structural. Devices are bound to workers by list
+# order: the first device is worker 0, the second is worker 1, and so on.
+#
+# The fleet must have at least as many devices as --population.
+# For a fair comparison the devices should be IDENTICAL hardware.
+#
+# Usage (once the distributed CLI lands in Phase 5):
+#   python -m src.tuner.main --distributed --inventory configs/distributed/devices.example.yaml \
+#       --tier core --config standard --population 4
+
+# Fleet-wide defaults. Any device entry may override any of these.
+fleet:
+  agent_port: 8770          # HTTP port each device agent listens on
+  ssh_user: pbt             # SSH user used by the Phase 3 bootstrap
+  ssh_key: ~/.ssh/id_rsa    # SSH private key (path is ~ / $VAR expanded)
+  data_dir: /var/lib/pbt    # remote base dir for the PG instance's data
+  python: python3           # remote interpreter used to launch the agent
+
+devices:
+  - host: 10.0.0.11         # -> worker 0
+  - host: 10.0.0.12         # -> worker 1
+    agent_port: 8771        # per-device override
+  - host: 10.0.0.13         # -> worker 2
+    ssh_user: ubuntu
+  - host: 10.0.0.14         # -> worker 3
+    label: rack-a-node-4    # optional friendly name for logs/reports

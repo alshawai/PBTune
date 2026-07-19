@@ -254,6 +254,16 @@ class TunerLifecycleConfig:
     scoring_policy_version: Optional[str] = None
     metric_reference_version: Optional[str] = None
 
+    # Distributed multi-device mode (see src/tuners/distributed/). When
+    # ``distributed`` is set, each worker runs on its own device via an HTTP
+    # agent; ``inventory`` points at the devices.yaml fleet description.
+    distributed: bool = False
+    inventory: Optional[str] = None
+    bootstrap: bool = True
+    remote_install_deps: bool = True
+    eval_timeout: float = 1800.0
+    agent_timeout: float = 60.0
+
     def __post_init__(self) -> None:
         self.strategy = TuningStrategy.from_value(self.strategy)
         if isinstance(self.tuning_mode, str):
