@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib.figure import Figure
 
+from src.tuners.utils.session_schema import get_history
 from src.utils.metrics import PerformanceMetrics
 from src.utils.calibration import rescore_metrics_globally
 from src.visualization.theme import PBTuneTheme
@@ -103,7 +104,7 @@ def _collect_worker_metrics(paths: list[Path]) -> tuple[list[PerformanceMetrics]
                 ),
             }
 
-        history = data.get("generation_history", data.get("evaluation_history", []))
+        history = get_history(data)
         for step in history:
             direct_metric = _metric_from_dict(step.get("metrics"))
             if direct_metric is not None:

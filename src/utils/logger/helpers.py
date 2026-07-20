@@ -1426,17 +1426,6 @@ def log_final_summary(logger: logging.Logger, results: dict[str, Any]):
             COLORS.reset,
         )
 
-    memory_utilization = metrics.get("memory_utilization")
-    if memory_utilization is None:
-        logger.info("  Memory Utilization: %s%s%s", COLORS.orange, "n/a", COLORS.reset)
-    else:
-        logger.info(
-            "  Memory Utilization: %s%.1f%%%s",
-            COLORS.cyan,
-            memory_utilization * 100.0,
-            COLORS.reset,
-        )
-
     logger.info("%sBest Knob Configurations:%s", COLORS.green, COLORS.reset)
     for knob_name, value in sorted(best["knobs"].items()):
         logger.info(

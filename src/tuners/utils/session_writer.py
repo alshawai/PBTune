@@ -140,6 +140,86 @@ def build_scoring_block(
     }
 
 
+def build_benchmark_block(
+    benchmark_config: Any,
+    benchmark_name: str,
+) -> Dict[str, Any]:
+    """Build the unified ``tuning_session.benchmark`` sub-block.
+
+    Both PBT and BO previously scattered ``sysbench_*`` / ``tpch_*`` /
+    duration keys flat across the header (with slightly different names per
+    strategy). This folds the benchmark identity and runtime parameters into
+    one namespaced block emitted by every tuner, so a loader has a single
+    place to read benchmark provenance. Downstream loaders read
+    ``tuning_session.benchmark`` first and fall back to the legacy flat keys.
+
+    ``benchmark_config`` is a :class:`~src.utils.types.BenchmarkConfig`;
+    ``benchmark_name`` is the driver name (``"sysbench"`` / ``"tpch"``).
+    """
+    return {
+        "name": benchmark_name,
+        "workload": getattr(benchmark_config, "workload_type", None),
+        "sysbench_tables": getattr(benchmark_config, "sysbench_tables", None),
+        "sysbench_table_size": getattr(
+            benchmark_config, "sysbench_table_size", None
+        ),
+        "sysbench_workload": getattr(benchmark_config, "sysbench_workload", None),
+        "warmup_seconds": getattr(benchmark_config, "warmup_duration", None),
+        "measurement_seconds": getattr(
+            benchmark_config, "evaluation_duration", None
+        ),
+        "warmup_passes": getattr(benchmark_config, "warmup_passes", None),
+        "scale_factor": getattr(benchmark_config, "scale_factor", None),
+    }
+
+
+def build_environment_block(
+    system_info: Optional[Dict[str, Any]],
+    session_environment: Optional[Any],
+) -> Dict[str, Any]:
+    """Build the unified ``tuning_session.environment`` sub-block.
+
+    ``system_info`` (raw hardware snapshot) and ``session_environment`` (the
+    composed :class:`~src.utils.types.SessionEnvironment`) overlap heavily
+    (cpu / ram / os / pg). This merges them into one block: the raw
+    ``system_info`` is the single source of hardware truth, and only the
+    genuinely *session-level* ``session_environment`` fields (pg server
+    version, docker, topology, pinning) overlay it. The flat hardware
+    duplicates that ``SessionEnvironment.to_dict`` also carries (``cpu_model``,
+    ``cpu_cores_physical``, ``ram_bytes_total``, ``os_*``, ``pg_client_version``,
+    …) are dropped — they restate ``system_info``. ``per_worker_resources`` is
+    likewise dropped as redundant with the top-level ``worker_resources``
+    section. Downstream loaders read ``tuning_session.environment`` first,
+    falling back to the legacy top-level ``system_info`` / ``session_environment``
+    keys.
+    """
+    # Session-level fields kept from the SessionEnvironment overlay. Everything
+    # else it emits duplicates the raw hardware snapshot in ``system_info``.
+    _SESSION_LEVEL_KEYS = (
+        "data_disk_type",
+        "kernel_version",
+        "pg_server_version",
+        "docker_version",
+        "use_docker",
+        "num_parallel_workers",
+        "population_size",
+        "cpu_pinning_scheme",
+    )
+    merged: Dict[str, Any] = {}
+    if system_info:
+        merged["system_info"] = system_info
+    if session_environment is not None:
+        env_dict = (
+            session_environment.to_dict()
+            if hasattr(session_environment, "to_dict")
+            else dict(session_environment)
+        )
+        for key in _SESSION_LEVEL_KEYS:
+            if key in env_dict:
+                merged[key] = env_dict[key]
+    return merged
+
+
 def write_session_json(
     results: Dict[str, Any],
     *,
