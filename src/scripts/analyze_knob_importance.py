@@ -454,9 +454,9 @@ def _group_files_by_hardware(
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
+            session_meta = data.get("tuning_session", {})
             # Opportunistically extract the true workload from the first file
             if idx == 0:
-                session_meta = data.get("tuning_session", {})
                 first_workload = session_meta.get("workload_type", "unknown")
                 # Promote to sysbench granular workload if available
                 if session_meta.get(
@@ -464,7 +464,11 @@ def _group_files_by_hardware(
                 ) == "sysbench" and session_meta.get("sysbench_workload"):
                     first_workload = session_meta.get("sysbench_workload")
 
-            wr = data.get("worker_resources", {})
+            # Unified schema nests worker_resources under tuning_session;
+            # older traces carry it at the top level.
+            wr = session_meta.get("worker_resources") or data.get(
+                "worker_resources", {}
+            )
             if not wr:
                 # Default empty resources if missing to avoid dropping files entirely
                 wr = {"cpu_cores": 1, "ram_bytes": 1024**3, "disk_type": "unknown"}

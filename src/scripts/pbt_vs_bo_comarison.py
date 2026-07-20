@@ -23,6 +23,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
+from src.tuners.utils.session_schema import get_history
 from src.utils.metrics import PerformanceMetrics
 from src.utils.calibration import rescore_metrics_globally
 
@@ -176,7 +177,7 @@ class TuningRun:
         }
         self.best_config_metrics = PerformanceMetrics(**valid_keys)
 
-        history = data.get("generation_history", [])
+        history = get_history(data)
         evals_so_far = 0
         start_time = None
 
