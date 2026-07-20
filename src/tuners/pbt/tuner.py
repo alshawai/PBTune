@@ -56,6 +56,21 @@ LOGGER = get_logger("PBTune")
 COLORS = get_color_context()
 
 
+def _evolve_seconds(generation_timing: Optional[Any]) -> float:
+    """Total seconds spent in the ``evolve`` span for one generation.
+
+    PBT's only non-evaluation overhead is the exploit/explore step, recorded
+    under the ``evolve`` component of the population's per-generation timing
+    recorder. Returns ``0.0`` when timing is unavailable or the span is absent.
+    """
+    if generation_timing is None:
+        return 0.0
+    try:
+        return float(generation_timing.aggregate().get("evolve", {}).get("total", 0.0))
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
 class PBTTuner(BaseTuner):
     """Population-Based Training as a :class:`BaseTuner` strategy.
 
@@ -317,18 +332,20 @@ class PBTTuner(BaseTuner):
             for w in self.population.workers
         ]
 
+        gen_timing = getattr(self.population, "generation_timing", None)
         self.generation_history.append(
             self._build_generation_record(
                 generation=generation,
                 best_score_this_round=result.best_score,
-                converged=result.converged,
                 worker_results=worker_results,
                 generation_elapsed_seconds=gen_elapsed,
                 restart_count=self.restart_count,
-                generation_timing=getattr(self.population, "generation_timing", None),
+                generation_timing=gen_timing,
                 mean_score=result.mean_score,
                 std_score=result.std_score,
                 num_exploited=result.num_exploited,
+                overhead_seconds=_evolve_seconds(gen_timing),
+                extra={"exploitations": result.exploitations},
             )
         )
 
@@ -366,6 +383,20 @@ class PBTTuner(BaseTuner):
         if self.population is None or not self.population.history:
             return False
         return bool(self.population.history[-1].converged)
+
+    def strategy_overhead_seconds(self) -> float:
+        """Total PBT machinery time: the ``evolve`` (exploit/explore) phase.
+
+        Summed from each generation record's flat ``pbt_overhead_seconds``
+        field so the top-level ``tuning_session.strategy_overhead_seconds``
+        reflects PBT's real non-evaluation cost instead of ``0.0``.
+        """
+        return float(
+            sum(
+                rec.get("pbt_overhead_seconds", 0.0) or 0.0
+                for rec in self.generation_history
+            )
+        )
 
     def evaluate_worker(
         self,
@@ -545,8 +576,6 @@ class PBTTuner(BaseTuner):
 
         payload: Dict[str, Any] = {
             "tuning_session": {
-                "tpch_scale_factor": self.benchmark_config.scale_factor,
-                "sysbench_workload": self.benchmark_config.sysbench_workload,
                 "scoring": build_scoring_block(
                     scoring_metadata,
                     convert_numpy_types(best_breakdown.to_dict())
@@ -556,10 +585,7 @@ class PBTTuner(BaseTuner):
                 "strategy_params": strategy_params,
             },
             "warm_start": self.warm_start_provenance,
-            "system_info": self.system_info,
         }
-        if self.session_environment is not None:
-            payload["session_environment"] = self.session_environment.to_dict()
         return payload
 
     def _compute_warm_start_perturbation_factors(
