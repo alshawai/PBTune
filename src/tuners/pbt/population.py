@@ -27,7 +27,7 @@ Design:
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Tuple
 from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -119,6 +119,10 @@ class GenerationResult:
     best_worker_id: int
     best_config: Dict[str, Any]
     converged: bool
+    # Which poor worker adopted which elite this generation, by worker_id.
+    # Each entry: {"elite_worker_id": elite, "poor_worker_id": poor}.
+    # Empty when no exploit occurred (e.g. warmup or a converged population).
+    exploitations: List[Dict[str, int]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert GenerationResult to a dictionary for logging or serialization."""
@@ -131,6 +135,7 @@ class GenerationResult:
             "best_worker_id": self.best_worker_id,
             "best_config": self.best_config,
             "converged": self.converged,
+            "exploitations": self.exploitations,
         }
 
 
@@ -1073,6 +1078,15 @@ class Population:
                     self.env.clone_instances(source_id, target_ids)
 
         result.num_exploited = len(pairs_exploited)
+        # Record the exploit graph (poor worker -> adopted elite) by worker_id
+        # so the session trace states who cloned whom this generation.
+        result.exploitations = [
+            {
+                "elite_worker_id": self.workers[elite_idx].worker_id,
+                "poor_worker_id": self.workers[poor_idx].worker_id,
+            }
+            for poor_idx, elite_idx in pairs_exploited
+        ]
         self.current_generation += 1
 
         return result
