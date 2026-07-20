@@ -297,9 +297,9 @@ def test_assemble_round_trips_timing_through_json(tuner_with_history):
     assert "bootstrap_breakdown" in written
     assert "timing_summary" in written
     # Per-generation timing preserved.
-    assert written["generation_history"][0]["timing"]["records"][0]["component"] == "evolve"
+    assert written["history"][0]["timing"]["records"][0]["component"] == "evolve"
     # Per-worker timing preserved including metadata for activate_*.
-    w0_records = written["generation_history"][0]["worker_scores"][0]["timing"]["records"]
+    w0_records = written["history"][0]["worker_scores"][0]["timing"]["records"]
     activate_rec = next(r for r in w0_records if r["component"] == "activate_reload")
     assert activate_rec["metadata"]["strategy"] == "reload"
 
@@ -310,20 +310,29 @@ def test_assemble_round_trips_timing_through_json(tuner_with_history):
 def test_assemble_emits_session_environment(tuner_with_history):
     results = _assemble(tuner_with_history)
 
-    assert "session_environment" in results
-    se = results["session_environment"]
-    assert se["cpu_model"] == "Test CPU"
-    assert se["pg_server_version"] == "18.0"
-    assert se["docker_version"] == "25.0.3"
-    assert se["use_docker"] is True
-    assert se["num_parallel_workers"] == 2
-    assert se["population_size"] == 4
-    assert se["cpu_pinning_scheme"] == "cpuset"
-    assert se["per_worker_resources"][0]["cpuset_cpus"] == "0,1"
+    # Unified schema: system_info + session_environment merge into one
+    # tuning_session.environment block; the legacy top-level keys are gone.
+    assert "session_environment" not in results
+    assert "system_info" not in results
+    env = results["tuning_session"]["environment"]
+    # Session-level fields live at the environment top level.
+    assert env["pg_server_version"] == "18.0"
+    assert env["docker_version"] == "25.0.3"
+    assert env["use_docker"] is True
+    assert env["num_parallel_workers"] == 2
+    assert env["population_size"] == 4
+    assert env["cpu_pinning_scheme"] == "cpuset"
+    # per_worker_resources dropped (redundant with top-level worker_resources).
+    assert "per_worker_resources" not in env
+    # Raw hardware snapshot lives ONLY under system_info now (flat duplicates
+    # like a top-level env["cpu_model"] were removed as redundant).
+    assert env["system_info"]["cpu_model"] == "Test CPU"
+    assert "cpu_model" not in env
+    assert "ram_bytes_total" not in env
+    assert "os_system" not in env
 
-    # Backwards-compat: existing flat blocks still populated.
-    assert results["worker_resources"]["ram_bytes"] == 8 * 1024**3
-    assert results["system_info"]["cpu_model"] == "Test CPU"
+    # worker_resources now nested under tuning_session (was top-level sibling).
+    assert results["tuning_session"]["worker_resources"]["ram_bytes"] == 8 * 1024**3
 
 
 def test_assemble_strategy_params_and_scoring_block(tuner_with_history):
