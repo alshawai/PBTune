@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 from src.config.database import DatabaseConfig
 from src.knobs import get_knob_space
 from src.tuners.engine.barriers import GenerationBarrier
-from src.scripts.bo_baseline.cotenant import CoTenantLoadController
+from src.tuners.bo.cotenant import CoTenantLoadController
 
 
 def _make_controller(degree: int) -> CoTenantLoadController:

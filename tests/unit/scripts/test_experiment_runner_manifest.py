@@ -245,12 +245,18 @@ def test_smoke_commands_use_minimal_budget(runner_factory):
     exp = smoke["smoke_sysbench_rw"]
 
     pbt = runner._build_pbt_cmd(exp, seed=42)
+    # Routes through the unified tuners entry point, not a legacy module.
+    assert pbt[:4] == ["python", "-m", "src.tuners", "pbt"]
     assert pbt[pbt.index("--config") + 1] == "rapid"
     assert pbt[pbt.index("--tier") + 1] == "minimal"
     assert pbt[pbt.index("--generations") + 1] == "1"
     assert pbt[pbt.index("--population") + 1] == "2"
 
     bo = runner._build_bo_cmd(exp, pbt_session=None, seed=42)
+    # BO must route through `src.tuners bo`; the legacy `src.scripts.bo_baseline`
+    # package was removed in the unify-tuners refactor.
+    assert bo[:4] == ["python", "-m", "src.tuners", "bo"]
+    assert "src.scripts.bo_baseline" not in bo
     assert bo[bo.index("--config") + 1] == "rapid"
     assert bo[bo.index("--tier") + 1] == "minimal"
 

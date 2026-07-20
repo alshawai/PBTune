@@ -9,7 +9,8 @@ never trained against.
 
 Fix #3: PBT's cold-start LHS init must include the PostgreSQL default
 config as worker 0 — matching BO's pilot, which prepends the default
-to its Sobol seed at bo_baseline/runner.py:1306-1310. Without this,
+to its Sobol seed in src/tuners/bo/tuner.py (default_config_seed span).
+Without this,
 BO has a free known-reasonable anchor while PBT's LHS gives no such
 guarantee.
 """
@@ -95,10 +96,10 @@ def test_pbt_lhs_init_prepends_default_config() -> None:
     to the LHS samples, matching BO's pilot-seed convention.
 
     Regression: previously main.py called sample_diverse_configs(num=N)
-    only, with no default-config anchor. BO's pilot (bo_baseline/
-    runner.py:1306-1310) prepends the live PostgreSQL default to its
-    Sobol pilot, giving it a known-reasonable starting observation
-    PBT didn't have.
+    only, with no default-config anchor. BO's pilot
+    (src/tuners/bo/tuner.py, default_config_seed span) prepends the live
+    PostgreSQL default to its Sobol pilot, giving it a known-reasonable
+    starting observation PBT didn't have.
     """
     source = TUNER_MAIN_PATH.read_text()
     tree = ast.parse(source)

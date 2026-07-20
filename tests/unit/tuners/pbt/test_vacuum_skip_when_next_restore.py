@@ -29,8 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR_PATH = PROJECT_ROOT / "src" / "tuners" / "engine" / "orchestrator.py"
 POPULATION_PATH = PROJECT_ROOT / "src" / "tuners" / "pbt" / "population.py"
 PBT_TUNER_PATH = PROJECT_ROOT / "src" / "tuners" / "pbt" / "tuner.py"
-BO_RUNNER_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "runner.py"
-BO_OBJECTIVE_PATH = PROJECT_ROOT / "src" / "scripts" / "bo_baseline" / "objective.py"
+BO_RUNNER_PATH = PROJECT_ROOT / "src" / "tuners" / "bo" / "tuner.py"
+BO_OBJECTIVE_PATH = PROJECT_ROOT / "src" / "tuners" / "bo" / "objective.py"
 
 
 # ── Orchestrator contract ───────────────────────────────────────────
