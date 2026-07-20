@@ -40,24 +40,42 @@ def build_generation_record(
     *,
     generation: int,
     best_score_this_round: float,
-    converged: bool,
     worker_results: Sequence[WorkerEvalResult],
     generation_elapsed_seconds: float,
     tuning_start_time: float,
     start_time: float,
+    round_index_key: str = "iteration",
+    elapsed_key: str = "iteration_elapsed_seconds",
+    overhead_key: str = "strategy_overhead_seconds",
+    overhead_seconds: Optional[float] = None,
     scorer: Any = None,
     restart_count: int = 0,
     generation_timing: Optional[Any] = None,
     mean_score: Optional[float] = None,
     std_score: Optional[float] = None,
     num_exploited: Optional[int] = None,
+    strategy_params: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Assemble one uniform ``generation_history`` entry for any strategy.
+    """Assemble one uniform ``history`` entry for any strategy.
 
     This is the single seam every tuner feeds so that per-round records are
     structurally identical across PBT, LHS, and BO — the concrete realization
-    of "all tuners' session JSONs follow the same fields".
+    of "all tuners' session JSONs follow the same fields". Strategy-specific
+    per-record data (PBT's ``num_exploited``) is emitted flat on the record so
+    it reads directly, with no nested wrapper.
+
+    The per-round index is keyed by ``round_index_key`` so each strategy speaks
+    its own vocabulary (PBT ``generation``, LHS ``batch``, BO ``iteration``);
+    ``session_schema.get_iteration_index`` reads all three. The per-round
+    elapsed span is keyed by ``elapsed_key`` for the same reason (PBT
+    ``generation_elapsed_seconds``, BO/LHS variants). The strategy's
+    non-evaluation overhead is emitted flat under ``overhead_key`` (e.g.
+    ``pbt_overhead_seconds``). There is no record-level ``timing`` block: any
+    ``generation_timing`` records (PBT's ``evolve`` span) are folded into the
+    first worker's ``timing.records`` — after that worker's own components — so
+    they still feed ``timing_summary`` while keeping timing under
+    ``worker_scores``.
     """
     worker_scores: List[Dict[str, Any]] = []
     worker_configs: List[Dict[str, Any]] = []
@@ -95,28 +113,52 @@ def build_generation_record(
             }
         )
 
+    # Fold the round-level timing (PBT's ``evolve`` span) into the first
+    # worker's timing records, after that worker's own components, so it still
+    # reaches ``timing_summary`` without a redundant record-level ``timing``.
+    if generation_timing is not None and worker_scores:
+        gen_records = generation_timing.to_dict(include_summary=False).get(
+            "records", []
+        )
+        if gen_records:
+            first = worker_scores[0]
+            if first.get("timing") is None:
+                first["timing"] = {"records": []}
+            first["timing"].setdefault("records", []).extend(gen_records)
+
     record: Dict[str, Any] = {
-        "generation": generation,
+        round_index_key: generation,
         "best_score": float(best_score_this_round),
-        "converged": bool(converged),
-        "restart_count": int(restart_count),
-        "timestamp": datetime.now().isoformat(),
-        "wall_clock_seconds": time.time() - (tuning_start_time or start_time),
-        "generation_elapsed_seconds": float(generation_elapsed_seconds),
-        "timing": (
-            generation_timing.to_dict(include_summary=False)
-            if generation_timing is not None
-            else None
-        ),
-        "worker_scores": worker_scores,
-        "worker_configs": worker_configs,
     }
+    # Aggregate stats sit right after best_score (omitted for sequential
+    # strategies like BO where a per-round mean/std is not meaningful).
     if mean_score is not None:
         record["mean_score"] = float(mean_score)
     if std_score is not None:
         record["std_score"] = float(std_score)
+    record.update(
+        {
+            "restart_count": int(restart_count),
+            "timestamp": datetime.now().isoformat(),
+            "wall_clock_seconds": time.time() - (tuning_start_time or start_time),
+            elapsed_key: float(generation_elapsed_seconds),
+        }
+    )
+    if overhead_seconds is not None:
+        record[overhead_key] = float(overhead_seconds)
+
+    # Strategy-specific per-record fields are emitted flat (e.g. PBT's
+    # ``num_exploited``), matching the flat overhead/elapsed keys — there is no
+    # nested per-record ``strategy_params`` block. ``strategy_params`` passed
+    # here is merged flat for any extra scalar fields a strategy wants.
+    for key, value in (strategy_params or {}).items():
+        record[key] = value
     if num_exploited is not None:
         record["num_exploited"] = int(num_exploited)
+
+    record["worker_scores"] = worker_scores
+    record["worker_configs"] = worker_configs
+
     if extra:
         record.update(extra)
     return record
