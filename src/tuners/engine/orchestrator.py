@@ -44,7 +44,7 @@ from src.utils.metrics import (
     MetricConfig,
 )
 from src.utils.metric_instrumentation import MetricInstrumentationEngine
-from src.utils.scoring import create_scoring_engine
+from src.utils.scoring import CompositeScorer, create_scoring_engine
 from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.tuners.engine.worker import BaseWorker
 from src.utils.types import TuningMode
@@ -187,7 +187,7 @@ class WorkloadOrchestrator:
         self.config = config
         self.workload_executor = workload_executor
         self.env = env
-        self._scoring_engine = None
+        self._scoring_engine: Optional[CompositeScorer] = None
         self._scoring_engine_lock = threading.Lock()
         self._feature_refiner = WorkloadFeatureRefiner(
             config.metric_config,
@@ -218,8 +218,15 @@ class WorkloadOrchestrator:
         have been recalibrated (e.g. after a pilot phase).
         """
         with self._scoring_engine_lock:
-            self._scoring_engine = None
-        self._get_scoring_engine()
+            previous = self._scoring_engine
+            new_engine = create_scoring_engine(self.config.metric_config)
+            # Carry the weight-logging cursor across the rebuild: a
+            # recalibration-driven reload does not change the weight vector, so
+            # the fresh engine must not emit a spurious "weights updated" table
+            # with full-weight deltas on the next round.
+            if previous is not None and hasattr(new_engine, "adopt_logging_state"):
+                new_engine.adopt_logging_state(previous)
+            self._scoring_engine = new_engine
         LOGGER.info("Rebuilt scoring engine with calibrated normalizer")
 
     @property
