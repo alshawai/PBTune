@@ -266,9 +266,9 @@ class LHSDesignTuner(BaseTuner):
             self._build_generation_record(
                 generation=generation,
                 best_score_this_round=best_this_batch,
-                converged=(end >= len(self.design)),
                 worker_results=worker_results,
                 generation_elapsed_seconds=time.time() - gen_start,
+                overhead_seconds=0.0,
                 extra={"evaluated": evaluated_indices},
             )
         )
@@ -406,8 +406,6 @@ class LHSDesignTuner(BaseTuner):
         scoring_metadata = self.metric_config.get_scoring_metadata()
         payload: Dict[str, Any] = {
             "tuning_session": {
-                "tpch_scale_factor": self.benchmark_config.scale_factor,
-                "sysbench_workload": self.benchmark_config.sysbench_workload,
                 "scoring": build_scoring_block(
                     scoring_metadata,
                     self._best_breakdown.to_dict()
@@ -419,8 +417,5 @@ class LHSDesignTuner(BaseTuner):
                 },
             },
             "design_records": self.design_records,
-            "system_info": self.system_info,
         }
-        if self.session_environment is not None:
-            payload["session_environment"] = self.session_environment.to_dict()
         return payload

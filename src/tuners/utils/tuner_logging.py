@@ -37,7 +37,7 @@ def log_optimization_header(
     """Emit the system-info + configuration summary block before the loop."""
     log_section_header(
         LOGGER,
-        "%s%s PostgreSQL Tuner - Starting Optimization%s",
+        "%s%s Database Tuner - Starting Optimization%s",
         COLORS.bold,
         strategy_label,
         COLORS.reset,
@@ -161,8 +161,16 @@ def log_worker_metrics(
     worker_results: Sequence[WorkerEvalResult],
     *,
     title: Optional[str] = None,
+    best_worker_metric: Optional[Dict[str, Any]] = None,
+    best_worker_label: str = "Best Worker",
 ) -> None:
-    """Render the end-of-round per-worker performance table."""
+    """Render the end-of-round per-worker performance table.
+
+    When ``best_worker_metric`` is supplied (the running incumbent's
+    :func:`build_worker_metric_row`), it is rendered as a trailing green
+    column so BO and LHS match PBT's end-of-generation table (which always
+    shows the historical best alongside the current round).
+    """
     payloads = [
         build_worker_metric_row(r.metrics, r.score)
         for r in worker_results
@@ -179,6 +187,8 @@ def log_worker_metrics(
         LOGGER,
         payloads,
         worker_labels=labels,
+        best_worker_metric=best_worker_metric,
+        best_worker_label=best_worker_label,
         title=title
         or f"\n{COLORS.bold}🔷 Round Worker Metrics 🔷{COLORS.reset}",
     )

@@ -49,6 +49,7 @@ from src.tuners.utils.knob_filter import (
     log_pruning_summary,
     query_runtime_supported_knobs,
 )
+from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.resources import resolve_worker_resources
 from src.tuners.utils.session_assembly import (
     aggregate_session_timing,
@@ -63,6 +64,8 @@ from src.tuners.utils.tuner_logging import (
     log_worker_metrics,
 )
 from src.tuners.utils.session_writer import (
+    build_benchmark_block,
+    build_environment_block,
     build_session_header,
     worker_resources_to_dict,
     write_best_config_json,
@@ -219,6 +222,18 @@ class BaseTuner(ABC):
         ``False`` so a strategy that never converges needs no override.
         """
         return False
+
+    def strategy_overhead_seconds(self) -> float:
+        """Wall-time the strategy spent on its own machinery, not evaluation.
+
+        Serialized as the agnostic ``tuning_session.strategy_overhead_seconds``
+        so every strategy reports its non-evaluation cost in one place: BO's
+        ask/tell/relabel/calibration time, PBT's exploit/explore phase time,
+        etc. The base default is ``0.0`` (LHS has no such overhead — all its
+        time is shared instance management), so a strategy without overhead
+        needs no override.
+        """
+        return 0.0
 
     @property
     def emits_stop_status(self) -> bool:
@@ -607,7 +622,6 @@ class BaseTuner(ABC):
         *,
         generation: int,
         best_score_this_round: float,
-        converged: bool,
         worker_results: Sequence[WorkerEvalResult],
         generation_elapsed_seconds: float,
         restart_count: int = 0,
@@ -615,26 +629,38 @@ class BaseTuner(ABC):
         mean_score: Optional[float] = None,
         std_score: Optional[float] = None,
         num_exploited: Optional[int] = None,
+        overhead_seconds: Optional[float] = None,
+        strategy_params: Optional[Dict[str, Any]] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Assemble one uniform ``generation_history`` entry for any strategy."""
+        """Assemble one uniform ``history`` entry for any strategy.
+
+        The per-round index key and the flat overhead key both speak this
+        strategy's vocabulary: ``round_label`` (``Generation`` / ``Batch`` /
+        ``Iteration``) drives the index key (lower-cased) and the
+        ``<strategy>_overhead_seconds`` name.
+        """
         scorer = (
             self.orchestrator.scorer if self.orchestrator is not None else None
         )
         return build_generation_record(
             generation=generation,
             best_score_this_round=best_score_this_round,
-            converged=converged,
             worker_results=worker_results,
             generation_elapsed_seconds=generation_elapsed_seconds,
             tuning_start_time=self.tuning_start_time,
             start_time=self.start_time,
+            round_index_key=self.round_label.lower(),
+            elapsed_key=f"{self.round_label.lower()}_elapsed_seconds",
+            overhead_key=f"{self.strategy.value}_overhead_seconds",
+            overhead_seconds=overhead_seconds,
             scorer=scorer,
             restart_count=restart_count,
             generation_timing=generation_timing,
             mean_score=mean_score,
             std_score=std_score,
             num_exploited=num_exploited,
+            strategy_params=strategy_params,
             extra=extra,
         )
 
@@ -816,8 +842,33 @@ class BaseTuner(ABC):
         *,
         title: Optional[str] = None,
     ) -> None:
-        """Render the end-of-round per-worker performance table."""
-        log_worker_metrics(worker_results, title=title)
+        """Render the end-of-round per-worker performance table.
+
+        The running incumbent (from :meth:`collect_best`) is rendered as a
+        trailing "Best Worker" column so every strategy's table matches PBT's.
+        """
+        log_worker_metrics(
+            worker_results,
+            title=title,
+            best_worker_metric=self._best_worker_metric_row(),
+        )
+
+    def _best_worker_metric_row(self) -> Optional[Dict[str, Any]]:
+        """Build the incumbent's metric row for the table's Best Worker column.
+
+        Sourced from :meth:`collect_best` so the best row reflects the same
+        (config, score, metrics) the session ultimately reports. Returns
+        ``None`` when no successful evaluation has been recorded yet (early
+        rounds, or a run where every eval crashed), in which case the table
+        simply omits the column.
+        """
+        try:
+            _, best_score, best_metrics = self.collect_best()
+        except (RuntimeError, ValueError, AttributeError, IndexError):
+            return None
+        if best_metrics is None:
+            return None
+        return build_worker_metric_row(best_metrics, best_score)
 
     def _assemble_results(
         self,
@@ -849,8 +900,42 @@ class BaseTuner(ABC):
                 "tuning_time_seconds": tuning_time,
                 "bootstrap_seconds": bootstrap_seconds,
                 "num_parallel_workers": self.lifecycle.num_parallel_workers,
+                "strategy_overhead_seconds": self.strategy_overhead_seconds(),
             }
         )
+
+        worker_resources_block = (
+            worker_resources_to_dict(self.worker_resources)
+            if self.worker_resources is not None
+            else {}
+        )
+
+        # Merge strategy-specific sections. The payload's ``tuning_session``
+        # sub-block carries ``strategy_params`` and ``scoring``; pop them so we
+        # can splice them into a deterministic key order rather than letting the
+        # merge append them after ``environment``.
+        payload = self.build_session_payload()
+        payload_session = payload.pop("tuning_session", None)
+        if not isinstance(payload_session, dict):
+            payload_session = {}
+        strategy_params_block = payload_session.pop("strategy_params", None)
+        scoring_block = payload_session.pop("scoring", None)
+
+        # Ordered tail of ``tuning_session``: strategy_overhead_seconds (above),
+        # then strategy_params, benchmark, environment, worker_resources,
+        # scoring. Any leftover payload session keys follow scoring.
+        if strategy_params_block is not None:
+            header["strategy_params"] = strategy_params_block
+        header["benchmark"] = build_benchmark_block(
+            self.benchmark_config, self.benchmark_name
+        )
+        header["environment"] = build_environment_block(
+            self.system_info, self.session_environment
+        )
+        header["worker_resources"] = worker_resources_block
+        if scoring_block is not None:
+            header["scoring"] = scoring_block
+        header.update(payload_session)
 
         results: Dict[str, Any] = {
             "tuning_session": header,
@@ -863,22 +948,13 @@ class BaseTuner(ABC):
                     else {}
                 ),
             },
-            "worker_resources": (
-                worker_resources_to_dict(self.worker_resources)
-                if self.worker_resources is not None
-                else {}
-            ),
-            "generation_history": self.generation_history,
+            "history": self.generation_history,
             "bootstrap_breakdown": self.bootstrap_timing.to_dict(),
             "timing_summary": self._aggregate_session_timing(),
         }
 
-        # Merge strategy-specific sections last so subclasses can override or
-        # extend the shared envelope (e.g. add score_breakdown, warm_start).
-        payload = self.build_session_payload()
+        # Remaining top-level payload keys (warm_start, convergence, cotenancy,
+        # design_records, …) merge after the shared envelope.
         for key, value in payload.items():
-            if key == "tuning_session" and isinstance(value, dict):
-                results["tuning_session"].update(value)
-            else:
-                results[key] = value
+            results[key] = value
         return results

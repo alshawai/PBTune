@@ -197,6 +197,24 @@ class CompositeScorer:
     def schedule_log_next_generation(self) -> None:
         self._log_weights_next_generation = True
 
+    def adopt_logging_state(self, other: "CompositeScorer") -> None:
+        """Inherit weight-logging state from a prior scorer instance.
+
+        When the orchestrator rebuilds the scoring engine (e.g. after
+        normalization ranges expand), the replacement would otherwise start
+        with a clean logging slate — ``_last_logged_weights=None`` and
+        ``_log_weights_next_generation=True`` — and emit a spurious "Metric
+        Weights updated" table on the next round where every delta equals the
+        full weight. A rebuild driven by range recalibration does not change the
+        weight *vector* (weights depend on features + policy, not on
+        normalization ranges), so the replacement carries the predecessor's
+        logging cursor forward to keep deltas honest and suppress phantom
+        tables.
+        """
+        self._last_logged_weights = other._last_logged_weights
+        self._logged_initial_weights = other._logged_initial_weights
+        self._log_weights_next_generation = other._log_weights_next_generation
+
     def log_generation_weights(self, *, generation: int) -> None:
         """Log weight snapshot table at generation 0 or after updates."""
         if generation != 0 and not self._log_weights_next_generation:

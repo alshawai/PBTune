@@ -14,6 +14,7 @@ from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
 from src.utils.calibration import rescore_metrics_globally
+from src.tuners.utils.session_schema import get_history, has_history
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 from src.visualization.loaders.session import RAW_METRIC_KEYS, _extract_raw_value
 
@@ -114,13 +115,13 @@ def load_bo_trace(
     except json.JSONDecodeError as e:
         raise DataLoadError(f"Failed to parse JSON in {path}: {e}") from e
 
-    # BO JSON saves iterations in evaluation_history (old) or generation_history (standardized)
-    if "evaluation_history" in data:
-        history = data["evaluation_history"]
-    elif "generation_history" in data:
-        history = data["generation_history"]
-    else:
-        raise InvalidSchemaError(f"Missing 'evaluation_history' or 'generation_history' in {path}")
+    # BO JSON saves iterations under ``history`` (standardized) or the legacy
+    # ``generation_history`` / ``evaluation_history`` keys.
+    if not has_history(data):
+        raise InvalidSchemaError(
+            f"Missing 'history' (or legacy 'evaluation_history') in {path}"
+        )
+    history = get_history(data)
     n_evals = len(history)
 
     evaluations = np.arange(1, n_evals + 1)

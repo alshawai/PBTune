@@ -27,6 +27,7 @@ import argparse
 import sys
 from typing import Callable, Dict, List, Optional
 
+from src.tuners.bo.cli import main as bo_main
 from src.tuners.lhs_design.cli import main as lhs_main
 from src.tuners.pbt.cli import main as pbt_main
 
@@ -34,6 +35,7 @@ from src.tuners.pbt.cli import main as pbt_main
 # so both the short token and the module-ish name work.
 STRATEGY_MAINS: Dict[str, Callable[[Optional[List[str]]], int]] = {
     "pbt": pbt_main,
+    "bo": bo_main,
     "lhs": lhs_main,
     "lhs_design": lhs_main,
 }

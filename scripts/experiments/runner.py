@@ -167,7 +167,7 @@ class ExperimentRunner:
         outputs land.
 
         Matches the on-disk convention used by ``src.tuners.pbt``,
-        ``src.scripts.bo_baseline``, and ``src.evaluation``:
+        ``src.tuners.bo``, and ``src.evaluation``:
 
         - ``benchmark="sysbench"`` → ``oltp/<sysbench_workload>``
         - ``benchmark="tpch"``     → ``olap``
@@ -835,7 +835,7 @@ class ExperimentRunner:
         # are kept for the standalone-BO path where no session is supplied.
         worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
-            "python", "-m", "src.scripts.bo_baseline",
+            "python", "-m", "src.tuners", "bo",
             "--config", exp.config_profile,
             "--tier", exp.knob_tier,
             "--knob-source", exp.knob_source,

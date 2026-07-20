@@ -11,7 +11,7 @@ from src.tuners.engine.orchestrator import WorkloadOrchestrator
 from src.utils.metrics import PerformanceMetrics
 from src.utils.scoring.contracts import ScoreBreakdown
 from src.utils.timing import TimingRecorder
-from src.scripts.bo_baseline.search_space import configspace_to_knobs, get_config_drift
+from src.tuners.bo.search_space import configspace_to_knobs, get_config_drift
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("Objective")
