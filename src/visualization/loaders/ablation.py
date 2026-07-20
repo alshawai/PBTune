@@ -8,6 +8,7 @@ from typing import Any
 
 from src.utils.logger import get_logger
 from src.utils.metrics import MetricConfig, PerformanceMetrics
+from src.tuners.utils.session_schema import get_history
 from src.utils.calibration import rescore_metrics_globally
 from src.visualization.exceptions import DataLoadError
 from src.visualization.loaders.session import SessionTrace, load_sessions
@@ -23,6 +24,32 @@ class AblationGroup:
     variable_name: str
     groups: dict[str, list[SessionTrace]]  # value -> list of traces
     metric_config: MetricConfig  # The super-global normalizer
+
+
+# Flat invariant keys that moved under ``tuning_session.benchmark`` in the
+# unified schema, mapped to their benchmark-block names (some renamed).
+_BENCHMARK_KEY_ALIASES = {
+    "sysbench_duration_seconds": "measurement_seconds",
+    "tpch_scale_factor": "scale_factor",
+    "sysbench_tables": "sysbench_tables",
+    "sysbench_table_size": "sysbench_table_size",
+    "sysbench_workload": "sysbench_workload",
+}
+
+
+def _resolve_invariant_value(
+    key: str,
+    session_meta: dict,
+    benchmark_block: dict,
+    strategy_params: dict,
+) -> Any:
+    """Resolve an ablation invariant: flat header, then benchmark block, then params."""
+    if key in session_meta:
+        return session_meta[key]
+    alias = _BENCHMARK_KEY_ALIASES.get(key)
+    if alias is not None and benchmark_block.get(alias) is not None:
+        return benchmark_block[alias]
+    return strategy_params.get(key)
 
 
 def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
@@ -142,7 +169,7 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
                         ),
                     }
 
-                history = data.get("generation_history", [])
+                history = get_history(data)
                 for gen in history:
                     for ws in gen.get("worker_scores", []):
                         m = ws.get("metrics")
@@ -217,8 +244,14 @@ def load_ablation_study(ablation_dir: Path | str) -> AblationGroup:
             # invariant from the flat header first, then strategy_params, so both
             # incumbent-flat and unified-nested PBT sessions validate.
             strategy_params = session_meta.get("strategy_params") or {}
+            # Benchmark runtime params fold under ``tuning_session.benchmark`` in
+            # the unified schema, some under renamed keys. Map each flat invariant
+            # to its benchmark-block name so nested-new and legacy-flat agree.
+            benchmark_block = session_meta.get("benchmark") or {}
             current_config = {
-                k: session_meta.get(k, strategy_params.get(k))
+                k: _resolve_invariant_value(
+                    k, session_meta, benchmark_block, strategy_params
+                )
                 for k in invariant_keys
             }
 

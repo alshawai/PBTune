@@ -13,6 +13,11 @@ from src.utils.logger import get_logger
 from src.utils.metrics import PerformanceMetrics, MetricConfig
 from src.utils.scoring import create_scoring_engine
 from src.utils.calibration import rescore_metrics_globally
+from src.tuners.utils.session_schema import (
+    get_history,
+    get_iteration_elapsed,
+    has_history,
+)
 from src.visualization.exceptions import DataLoadError, InvalidSchemaError
 from src.visualization.loaders.discovery import discover_session_traces
 
@@ -73,11 +78,11 @@ def load_session(
     except json.JSONDecodeError as e:
         raise DataLoadError(f"Failed to parse JSON in {path}: {e}") from e
 
-    # Need at least generation_history
-    if "generation_history" not in data:
-        raise InvalidSchemaError(f"Missing 'generation_history' in {path}")
+    # Need at least the per-round history (new ``history`` or legacy key).
+    if not has_history(data):
+        raise InvalidSchemaError(f"Missing 'history' in {path}")
 
-    history = data["generation_history"]
+    history = get_history(data)
     n_gens = len(history)
 
     # 1. Gather all raw metrics for rescoring
@@ -196,7 +201,7 @@ def load_session(
             std_scores[i] = np.std(gen_scores)
 
         wall_clock_seconds[i] = gen.get("wall_clock_seconds", 0.0)
-        generation_elapsed_seconds[i] = gen.get("generation_elapsed_seconds", 0.0)
+        generation_elapsed_seconds[i] = get_iteration_elapsed(gen)
 
         for wc in gen.get("worker_configs", []):
             worker_configs[i].append(wc)
@@ -299,7 +304,7 @@ def load_sessions(
                     ),
                 )
 
-            for gen in data.get("generation_history", []):
+            for gen in get_history(data):
                 for ws in gen.get("worker_scores", []):
                     metrics_dict = ws.get("metrics")
                     if metrics_dict:
