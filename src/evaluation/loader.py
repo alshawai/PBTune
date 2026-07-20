@@ -33,7 +33,9 @@ from src.utils.scoring.contracts import score_breakdown_from_dict
 LOGGER = get_logger("Loader")
 
 # Fields that MUST be present in the results JSON
-_REQUIRED_TOP_LEVEL = {"best_configuration", "worker_resources", "tuning_session"}
+# ``worker_resources`` is resolved from tuning_session (new) or root (legacy)
+# separately, so it is not required at the top level.
+_REQUIRED_TOP_LEVEL = {"best_configuration", "tuning_session"}
 _REQUIRED_BEST_CONFIG = {"knobs", "score"}
 _REQUIRED_WORKER_RES = {"ram_bytes", "cpu_cores", "disk_type"}
 
@@ -103,7 +105,18 @@ def load_tuning_session(path: Path) -> TuningSessionData:
             "best_configuration.knobs must be a non-empty dict"
         )
 
-    wr_raw = data["worker_resources"]
+    # Unified schema nests worker_resources under tuning_session; older traces
+    # carry it at the top level. Read the nested location first, then fall back.
+    ts_for_wr = data.get("tuning_session")
+    wr_raw = None
+    if isinstance(ts_for_wr, dict):
+        wr_raw = ts_for_wr.get("worker_resources")
+    if not wr_raw:
+        wr_raw = data.get("worker_resources")
+    if not wr_raw:
+        raise TuningSessionLoadError(
+            "worker_resources missing from both tuning_session and root"
+        )
     _assert_fields(wr_raw, _REQUIRED_WORKER_RES, context="worker_resources")
     LOGGER.debug("  ➤ Required fields are present.")
 
@@ -142,9 +155,13 @@ def load_tuning_session(path: Path) -> TuningSessionData:
         ) from exc
     LOGGER.debug("  ➤ Benchmark and workload type inferred successfully.")
 
+    raw_bench = ts_meta.get("benchmark")
+    bench_block: dict[str, Any] = raw_bench if isinstance(raw_bench, dict) else {}
     sysbench_workload: Optional[str] = None
     if benchmark == "sysbench":
-        raw_mode = ts_meta.get("sysbench_workload", DEFAULT_SYSBENCH_WORKLOAD)
+        raw_mode = bench_block.get("sysbench_workload") or ts_meta.get(
+            "sysbench_workload", DEFAULT_SYSBENCH_WORKLOAD
+        )
         try:
             sysbench_workload = validate_sysbench_workload(str(raw_mode))
         except ValueError:
@@ -157,7 +174,13 @@ def load_tuning_session(path: Path) -> TuningSessionData:
             sysbench_workload = DEFAULT_SYSBENCH_WORKLOAD
 
     LOGGER.debug("  Processing system info and tuning config...")
-    system_info: dict[str, Any] = data.get("system_info", {})
+    # New schema nests the raw snapshot under tuning_session.environment.system_info;
+    # fall back to the legacy top-level system_info block for older traces.
+    raw_env = ts_meta.get("environment")
+    env_block: dict[str, Any] = raw_env if isinstance(raw_env, dict) else {}
+    system_info: dict[str, Any] = (
+        env_block.get("system_info") or data.get("system_info", {})
+    )
     if not system_info:
         LOGGER.warning(
             "  ➤ system_info missing from %s — hardware provenance will be incomplete",
@@ -302,8 +325,33 @@ def _normalize_tuning_config(ts_meta: dict[str, Any]) -> dict[str, Any]:
     config: dict[str, Any] = {
         k: v
         for k, v in ts_meta.items()
-        if k not in {"benchmark_name", "workload_type", "timestamp", "tuning_strategy"}
+        if k
+        not in {
+            "benchmark_name",
+            "workload_type",
+            "timestamp",
+            "tuning_strategy",
+            "benchmark",
+            "environment",
+        }
     }
+
+    # New schema folds benchmark runtime params under tuning_session.benchmark.
+    # Lift them into the flat config namespace (legacy flat keys, if present,
+    # take precedence so older traces keep their exact values).
+    bench_block = ts_meta.get("benchmark")
+    if isinstance(bench_block, dict):
+        for flat_key, block_key in (
+            ("scale_factor", "scale_factor"),
+            ("evaluation_duration", "measurement_seconds"),
+            ("warmup_duration", "warmup_seconds"),
+            ("warmup_passes", "warmup_passes"),
+            ("sysbench_tables", "sysbench_tables"),
+            ("sysbench_table_size", "sysbench_table_size"),
+            ("sysbench_workload", "sysbench_workload"),
+        ):
+            if config.get(flat_key) is None and bench_block.get(block_key) is not None:
+                config[flat_key] = bench_block[block_key]
 
     def _as_int(value: Any) -> Optional[int]:
         """Convert value to int, returning None if conversion fails."""

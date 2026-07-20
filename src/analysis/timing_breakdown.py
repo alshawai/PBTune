@@ -50,6 +50,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from src.tuners.utils.session_schema import get_history
 from src.utils.logger import setup_logging, get_logger
 
 LOGGER = get_logger("TimingBreakdown")
@@ -129,8 +130,8 @@ def extract_per_session_timings(session: dict) -> dict[str, list[float]]:
     """
     out: dict[str, list[float]] = {}
 
-    # Per-worker timings inside generation_history[i].worker_scores[j].timing
-    for gen in session.get("generation_history") or []:
+    # Per-worker timings inside history[i].worker_scores[j].timing
+    for gen in get_history(session):
         for worker in (gen.get("worker_scores") or gen.get("workers") or []):
             for rec in _iter_records(worker.get("timing")):
                 out.setdefault(str(rec["component"]), []).append(float(rec["seconds"]))
