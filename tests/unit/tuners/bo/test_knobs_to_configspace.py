@@ -1,7 +1,7 @@
 """Tests for reverse mapping of knobs to ConfigSpace Configuration."""
 
 from src.knobs import get_knob_space
-from src.scripts.bo_baseline.search_space import (
+from src.tuners.bo.search_space import (
     build_configspace,
     configspace_to_knobs,
     knobs_to_configspace,

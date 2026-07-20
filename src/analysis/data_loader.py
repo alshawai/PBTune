@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from src.tuners.utils.session_schema import get_history, get_iteration_index
 from src.utils.metrics import MetricConfig, PerformanceMetrics, create_metric_config
 from src.utils.calibration import rescore_metrics_globally
 from src.knobs.knob_loader import get_knob_space
@@ -297,22 +298,33 @@ def _build_session_metadata(
     default_workload_type: str,
 ) -> dict[str, Any]:
     """Build normalized metadata payload for one tuning session file."""
+    # New schema nests the raw snapshot under tuning_session.environment
+    # .system_info; fall back to the legacy top-level system_info for older traces.
+    raw_env = session_meta.get("environment")
+    env_block: dict[str, Any] = raw_env if isinstance(raw_env, dict) else {}
+    # New schema nests benchmark runtime params under tuning_session.benchmark.
+    raw_bench = session_meta.get("benchmark")
+    bench_block: dict[str, Any] = raw_bench if isinstance(raw_bench, dict) else {}
     metadata = {
         "file_name": file_path.name,
         "workload_type": session_meta.get("workload_type", default_workload_type),
         "benchmark_name": session_meta.get("benchmark_name", "unknown"),
         "tuning_strategy": _infer_tuning_strategy(session_meta, file_path),
-        "system_info": data.get("system_info", {}),
-        "worker_resources": data.get("worker_resources", {}),
+        "system_info": env_block.get("system_info") or data.get("system_info", {}),
+        # Unified schema nests worker_resources under tuning_session; older
+        # traces carry it at the top level. Prefer nested, fall back to root.
+        "worker_resources": session_meta.get("worker_resources")
+        or data.get("worker_resources", {}),
     }
     # Promote to granular sysbench workload when available.
     # The tuner writes the coarse WorkloadType enum ("oltp") as workload_type,
     # but the granular sysbench mode (e.g. "oltp_read_write") is stored separately
-    # under "sysbench_workload" in the tuning_session metadata.
-    if metadata["benchmark_name"] == "sysbench" and session_meta.get(
+    # under "sysbench_workload" (new schema: under tuning_session.benchmark).
+    granular_workload = bench_block.get("sysbench_workload") or session_meta.get(
         "sysbench_workload"
-    ):
-        metadata["workload_type"] = session_meta["sysbench_workload"]
+    )
+    if metadata["benchmark_name"] == "sysbench" and granular_workload:
+        metadata["workload_type"] = granular_workload
 
     # Preserve all additional session_meta fields (e.g., sysbench_workload, scale_factor)
     for key, value in session_meta.items():
@@ -422,10 +434,10 @@ def load_pbt_results(
         )
         session_id_int = len(metadata_list) - 1
 
-        for gen_position, gen in enumerate(data.get("generation_history", [])):
+        for gen_position, gen in enumerate(get_history(data)):
             worker_configs = gen.get("worker_configs", [])
             worker_scores = gen.get("worker_scores", [])
-            generation_id = int(gen.get("generation_index", gen_position))
+            generation_id = int(get_iteration_index(gen, gen_position))
 
             # Actual JSON format (written by main.py):
             #   worker_configs: [{worker_id, config}]

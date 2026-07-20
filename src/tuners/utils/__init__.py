@@ -2,9 +2,9 @@
 Shared utilities for the unified tuners package.
 
 These helpers hold the common lifecycle plumbing shared by every strategy
-(PBT and LHS-design today, BO next). PBT has been migrated onto this framework
-and the legacy ``src/tuner`` package removed; BO (``src/scripts/bo_baseline``)
-is not yet migrated. See ADR-006 and its 2026-07-17 addendum.
+(PBT, LHS-design, and BO). All three have been migrated onto this framework and
+the legacy ``src/tuner`` and ``src/scripts/bo_baseline`` packages removed. See
+ADR-006 and its 2026-07-17 addendum.
 """
 
 from src.tuners.utils.exceptions import (
