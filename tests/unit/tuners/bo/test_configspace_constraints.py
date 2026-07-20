@@ -1,7 +1,7 @@
 """Tests for ConfigSpace constraints and logic."""
 
 from src.knobs import get_knob_space
-from src.scripts.bo_baseline.search_space import build_configspace
+from src.tuners.bo.search_space import build_configspace
 
 
 def test_wal_minimal_deactivates_archive_mode():
