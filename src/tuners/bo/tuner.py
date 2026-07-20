@@ -331,6 +331,7 @@ class BOTuner(BaseTuner):
     def build_optimizer(self) -> None:
         """Construct the SMAC facade, foreground worker, and co-tenant loader."""
         assert self.configspace is not None
+        assert self.orchestrator is not None
 
         LOGGER.info("")
         log_section_header(
@@ -835,6 +836,7 @@ class BOTuner(BaseTuner):
         facade = self.facade
         orchestrator = self.orchestrator
         worker = self.worker
+        assert worker is not None and orchestrator is not None
         pilot_idx = generation
         pilot_size = self.actual_pilot_size
         sobol_config = self.sobol_configs[pilot_idx]
@@ -978,6 +980,7 @@ class BOTuner(BaseTuner):
         facade = self.facade
         orchestrator = self.orchestrator
         worker = self.worker
+        assert worker is not None and orchestrator is not None
         eval_history = self._eval_history
         pilot_size = self.actual_pilot_size
 
@@ -1095,6 +1098,7 @@ class BOTuner(BaseTuner):
         facade = self.facade
         orchestrator = self.orchestrator
         worker = self.worker
+        assert worker is not None and orchestrator is not None
         iteration_count = generation
 
         if iteration_count % 5 == 0:
