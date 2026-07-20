@@ -37,7 +37,7 @@ def log_optimization_header(
     """Emit the system-info + configuration summary block before the loop."""
     log_section_header(
         LOGGER,
-        "%s%s PostgreSQL Tuner - Starting Optimization%s",
+        "%s%s Database Tuner - Starting Optimization%s",
         COLORS.bold,
         strategy_label,
         COLORS.reset,
