@@ -146,8 +146,10 @@ class TestBaseTunerLifecycle:
     def test_worker_resources_serialized(self, lifecycle, tmp_path):
         tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
         results = tuner.run()
-        assert results["worker_resources"]["ram_bytes"] == 2048
-        assert results["worker_resources"]["cpu_cores"] == 2
+        # worker_resources now lives inside the tuning_session block.
+        wr = results["tuning_session"]["worker_resources"]
+        assert wr["ram_bytes"] == 2048
+        assert wr["cpu_cores"] == 2
 
     def test_teardown_runs_even_if_step_raises(self, lifecycle, tmp_path):
         class _Boom(_FakeTuner):
@@ -267,7 +269,6 @@ class TestBuildGenerationRecord:
         record = tuner._build_generation_record(
             generation=3,
             best_score_this_round=1.5,
-            converged=False,
             worker_results=[
                 WorkerEvalResult(
                     worker_id=0,
@@ -279,25 +280,28 @@ class TestBuildGenerationRecord:
             generation_elapsed_seconds=2.0,
             restart_count=1,
         )
-        # Shared axes present regardless of strategy.
+        # Shared axes present regardless of strategy. The round-index key speaks
+        # the strategy's vocabulary (_FakeTuner uses the generic "Round" label).
         for key in (
-            "generation",
+            "round",
             "best_score",
-            "converged",
             "restart_count",
             "timestamp",
             "wall_clock_seconds",
-            "generation_elapsed_seconds",
-            "timing",
+            "round_elapsed_seconds",
             "worker_scores",
             "worker_configs",
         ):
             assert key in record
-        assert record["generation"] == 3
+        assert record["round"] == 3
         assert record["restart_count"] == 1
+        # Per-record ``converged`` is dropped (top-level tuning_session.converged
+        # is authoritative); no record-level ``timing`` block anymore.
+        assert "converged" not in record
+        assert "timing" not in record
         # Population-only stats omitted when not supplied.
         assert "mean_score" not in record
-        assert "num_exploited" not in record
+        assert "strategy_params" not in record
 
     def test_worker_scores_carry_breakdown_and_timing(self, lifecycle, tmp_path):
         tuner = self._tuner(lifecycle, tmp_path)
@@ -306,7 +310,6 @@ class TestBuildGenerationRecord:
         record = tuner._build_generation_record(
             generation=0,
             best_score_this_round=1.5,
-            converged=False,
             worker_results=[
                 WorkerEvalResult(
                     worker_id=2,
@@ -333,7 +336,6 @@ class TestBuildGenerationRecord:
         record = tuner._build_generation_record(
             generation=1,
             best_score_this_round=2.0,
-            converged=True,
             worker_results=[],
             generation_elapsed_seconds=0.5,
             mean_score=1.2,
@@ -343,7 +345,9 @@ class TestBuildGenerationRecord:
         )
         assert record["mean_score"] == 1.2
         assert record["std_score"] == 0.3
+        # PBT-specific per-record data is emitted flat on the record.
         assert record["num_exploited"] == 2
+        assert "strategy_params" not in record
         assert record["evaluated"] == [0, 1]
 
     def test_failed_worker_yields_null_score(self, lifecycle, tmp_path):
@@ -351,7 +355,6 @@ class TestBuildGenerationRecord:
         record = tuner._build_generation_record(
             generation=0,
             best_score_this_round=0.0,
-            converged=False,
             worker_results=[
                 WorkerEvalResult(worker_id=0, knob_config={"k": 1}, score=None)
             ],
