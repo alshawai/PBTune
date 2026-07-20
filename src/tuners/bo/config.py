@@ -85,7 +85,7 @@ class BOConfig:
     # is forced to the session's ``num_parallel_workers`` (the matched,
     # mandatory degree) unless ``no_cotenant`` is set. An explicit
     # ``--cotenancy-degree`` only applies when no session pins it.
-    # See src/scripts/bo_baseline/cotenant.py.
+    # See src/tuners/bo/cotenant.py.
     cotenancy_degree: int = 1
     no_cotenant: bool = False
 
@@ -143,6 +143,14 @@ class BOConfig:
         # run identically.
         strategy_params = session.get("strategy_params") or {}
         scoring = session.get("scoring") or {}
+        # Unified schema folds benchmark runtime params under
+        # ``tuning_session.benchmark``; read that first, fall back to the
+        # legacy flat ``sysbench_*``/``tpch_*`` keys below.
+        benchmark_block = (
+            session.get("benchmark")
+            if isinstance(session.get("benchmark"), dict)
+            else {}
+        )
 
         self.pbt_session_path = path
         self.knob_tier = str(session.get("knob_tier", self.knob_tier))
@@ -155,39 +163,46 @@ class BOConfig:
             session.get("tuning_mode", self.benchmark_config.tuning_mode)
         )
 
+        def _bench(new_key: str, flat_key: str) -> Any:
+            """New nested benchmark block first, then legacy flat key, then None."""
+            if new_key in benchmark_block and benchmark_block[new_key] is not None:
+                return benchmark_block[new_key]
+            return session.get(flat_key)
+
         evaluation_duration = (
-            float(session["sysbench_duration_seconds"])
-            if "sysbench_duration_seconds" in session
+            float(v)
+            if (v := _bench("measurement_seconds", "sysbench_duration_seconds"))
+            is not None
             else self.benchmark_config.evaluation_duration
         )
         warmup_duration = (
-            float(session["sysbench_warmup_seconds"])
-            if "sysbench_warmup_seconds" in session
+            float(v)
+            if (v := _bench("warmup_seconds", "sysbench_warmup_seconds")) is not None
             else self.benchmark_config.warmup_duration
         )
         sysbench_tables = (
-            int(session["sysbench_tables"])
-            if "sysbench_tables" in session
+            int(v)
+            if (v := _bench("sysbench_tables", "sysbench_tables")) is not None
             else self.benchmark_config.sysbench_tables
         )
         sysbench_table_size = (
-            int(session["sysbench_table_size"])
-            if "sysbench_table_size" in session
+            int(v)
+            if (v := _bench("sysbench_table_size", "sysbench_table_size")) is not None
             else self.benchmark_config.sysbench_table_size
         )
         sysbench_workload = (
-            str(session["sysbench_workload"])
-            if "sysbench_workload" in session
+            str(v)
+            if (v := _bench("sysbench_workload", "sysbench_workload")) is not None
             else self.benchmark_config.sysbench_workload
         )
         scale_factor = (
-            float(session["tpch_scale_factor"])
-            if "tpch_scale_factor" in session
+            float(v)
+            if (v := _bench("scale_factor", "tpch_scale_factor")) is not None
             else self.benchmark_config.scale_factor
         )
         warmup_passes = (
-            int(session["tpch_warmup_passes"])
-            if "tpch_warmup_passes" in session
+            int(v)
+            if (v := _bench("warmup_passes", "tpch_warmup_passes")) is not None
             else self.benchmark_config.warmup_passes
         )
 
@@ -212,11 +227,15 @@ class BOConfig:
                 or 0
             )
 
-            generation_history = payload.get("generation_history")
+            # Unified schema renames ``generation_history`` → ``history``;
+            # read the new key first, fall back to the legacy one.
+            generation_history = payload.get("history") or payload.get(
+                "generation_history"
+            )
             if isinstance(generation_history, list) and generation_history:
                 actual_generations = len(generation_history)
             else:
-                # Legacy session without generation_history; fall back to the
+                # Legacy session without history; fall back to the
                 # configured target. Will overshoot when PBT early-stopped,
                 # but that is preferable to silently swapping in the preset.
                 # ``total_generations`` → ``num_rounds`` in the unified schema.
