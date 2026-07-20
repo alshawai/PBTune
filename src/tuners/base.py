@@ -49,6 +49,7 @@ from src.tuners.utils.knob_filter import (
     log_pruning_summary,
     query_runtime_supported_knobs,
 )
+from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.resources import resolve_worker_resources
 from src.tuners.utils.session_assembly import (
     aggregate_session_timing,
@@ -816,8 +817,33 @@ class BaseTuner(ABC):
         *,
         title: Optional[str] = None,
     ) -> None:
-        """Render the end-of-round per-worker performance table."""
-        log_worker_metrics(worker_results, title=title)
+        """Render the end-of-round per-worker performance table.
+
+        The running incumbent (from :meth:`collect_best`) is rendered as a
+        trailing "Best Worker" column so every strategy's table matches PBT's.
+        """
+        log_worker_metrics(
+            worker_results,
+            title=title,
+            best_worker_metric=self._best_worker_metric_row(),
+        )
+
+    def _best_worker_metric_row(self) -> Optional[Dict[str, Any]]:
+        """Build the incumbent's metric row for the table's Best Worker column.
+
+        Sourced from :meth:`collect_best` so the best row reflects the same
+        (config, score, metrics) the session ultimately reports. Returns
+        ``None`` when no successful evaluation has been recorded yet (early
+        rounds, or a run where every eval crashed), in which case the table
+        simply omits the column.
+        """
+        try:
+            _, best_score, best_metrics = self.collect_best()
+        except (RuntimeError, ValueError, AttributeError, IndexError):
+            return None
+        if best_metrics is None:
+            return None
+        return build_worker_metric_row(best_metrics, best_score)
 
     def _assemble_results(
         self,
