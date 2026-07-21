@@ -1,6 +1,5 @@
 # Architecture Overview
 
-> Last reviewed: 2026-06-07
 
 See also: [Documentation index](../README.md)
 

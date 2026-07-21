@@ -1,6 +1,5 @@
 # Hardware-Aware Normalization & Warm-Starting
 
-> Last reviewed: 2026-06-15
 
 See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Environment Backends](environment-backends.md), [Cross-Workload Transfer](../research/cross-workload-transfer.md)
 

@@ -1,6 +1,5 @@
 # Algorithm Comparison: PBT vs. State-of-the-Art Auto-Tuners
 
-> Last reviewed: 2026-03-13
 
 See also: [Documentation Index](../README.md)
 
