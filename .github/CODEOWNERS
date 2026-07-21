@@ -1,14 +1,9 @@
-# Default owner — all files
 * @alshawai
 
-# Environment backends (Docker, native PG instances)
 /src/utils/environments/ @alshawai @bodyhedia44 @mahmoud-darwish
 
-# Scoring pipeline
 /src/utils/scoring/ @alshawai @karimali03
-
-# Bayesian Optimization baseline
 /src/tuners/bo/ @alshawai @karimali03
+/src/tuners/distributed/ @bodyhedia44
 
-# Analysis (SCALPEL, importance, tier generation)
 /src/analysis/ @alshawai @mohamed20o03
