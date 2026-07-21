@@ -1,6 +1,5 @@
 # Quickstart
 
-> Last reviewed: 2026-06-07
 
 See also: [setup](setup.md), [overview](../architecture/overview.md), [guides/evaluation-runbook](../guides/evaluation-runbook.md)
 
