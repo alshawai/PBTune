@@ -1,6 +1,5 @@
 # Configuration Management
 
-> Last reviewed: 2026-06-07
 
 See also: [Documentation Index](../README.md), [Hardware-Aware Normalization](hardware-aware-normalization.md), [PostgreSQL Connection and Knobs](postgresql-connection-and-knobs.md), [Autotuning Knob Policy](../reference/autotuning-knob-policy.md)
 

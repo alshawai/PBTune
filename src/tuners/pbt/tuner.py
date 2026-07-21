@@ -1,3 +1,7 @@
+# Copyright (C) 2026 Ibrahim Al-Shawa and PBTune contributors
+# Licensed under the GNU General Public License v3.0
+# See LICENSE file for details
+
 """Population-Based Training tuner on the unified :class:`BaseTuner` lifecycle.
 
 ``PBTTuner`` is the PBT strategy expressed as a concrete

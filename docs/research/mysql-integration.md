@@ -1,6 +1,5 @@
 # MySQL Integration — Comprehensive Implementation Guide
 
-> Last reviewed: 2026-03-13
 
 See also: [Documentation Index](../README.md)
 

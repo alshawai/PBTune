@@ -1,6 +1,5 @@
 # Competitive Analysis: PBT vs. State-of-the-Art DB Auto-Tuners
 
-> Last reviewed: 2026-03-13
 
 See also: [Documentation Index](../README.md)
 

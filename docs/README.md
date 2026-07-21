@@ -1,6 +1,5 @@
 # Documentation
 
-> Last reviewed: 2026-06-18
 
 This documentation is organised by **reader intent** using the [Diátaxis framework](https://diataxis.fr/). Pick the entry point that matches what you need to do right now:
 

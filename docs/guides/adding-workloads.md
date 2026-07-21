@@ -1,6 +1,5 @@
 # Adding a Custom Workload
 
-> Last reviewed: 2026-06-07
 
 See also: [workload-orchestrator](../architecture/workload-orchestrator.md), [benchmarking](../reference/benchmarking.md), [feature-driven-scoring](../architecture/feature-driven-scoring.md), [workloads/README](../../workloads/README.md)
 
