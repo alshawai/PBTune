@@ -1,19 +1,26 @@
 # PBTune
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/6fef48b3-6733-4400-a875-d95a9ce28611" alt="PBTune Banner" width="100%">
+  <img src="https://github.com/user-attachments/assets/aefa0921-cbf2-43df-82c6-110eb1019382" alt="PBTune Banner" width="95%">
 </p>
 
+<div align="center">
 
-[![CI](https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg)](https://github.com/alshawai/PBTune/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) [![GitHub stars](https://img.shields.io/github/stars/alshawai/PBTune)](https://github.com/alshawai/PBTune/stargazers)
+[![CI](https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg)](https://github.com/alshawai/PBTune/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![GitHub stars](https://img.shields.io/github/stars/alshawai/PBTune)](https://github.com/alshawai/PBTune/stargazers)
 
-> **Novel Application of Evolutionary Optimization for Autonomous Database Configuration**
+</div>
 
-This repository contains a research implementation applying **Population-Based Training (PBT)**, originally developed by DeepMind for neural network hyperparameter optimization, to the domain of database configuration tuning. Our work demonstrates that evolutionary optimization strategies can autonomously discover high-performance PostgreSQL configurations without domain expertise.
+This repository contains a research implementation applying **Population-Based Training (PBT)**, originally developed by DeepMind for neural network hyperparameter optimization, to the domain of database configuration tuning. Our work demonstrates that evolutionary optimization strategies can autonomously discover high-performance database configurations without domain expertise.
 
 ## Demo
 
-![PBTune Demo](https://github.com/user-attachments/assets/7054cd5b-8675-44af-ae12-2e158b4677f8)
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/ac0eb73d-a913-43e7-b7ac-367f383b83c2" alt="PBTune Demo" width="95%">
+</div>
 
 ---
 
@@ -51,11 +58,11 @@ This work proposes a **novel alternative**: applying Population-Based Training�
 
 **Key Advantages:**
 
-- ✅ **Parallel Exploration**: Evaluates multiple configurations simultaneously across isolated PostgreSQL instances
-- ✅ **Online Adaptation**: Configurations evolve during optimization, avoiding wasted evaluations
-- ✅ **Sample Efficiency**: Poor performers copy from elites rather than exploring randomly
-- ✅ **No Training Required**: Unlike RL, PBT needs no pre-training phase or external datasets
-- ✅ **Automatic Convergence**: Built-in exploitation naturally drives population toward optimal regions
+- **Parallel Exploration**: Evaluates multiple configurations simultaneously across isolated PostgreSQL instances
+- **Online Adaptation**: Configurations evolve during optimization, avoiding wasted evaluations
+- **Sample Efficiency**: Poor performers copy from elites rather than exploring randomly
+- **No Training Required**: Unlike RL, PBT needs no pre-training phase or external datasets
+- **Automatic Convergence**: Built-in exploitation naturally drives population toward optimal regions
 
 **Novel Contributions:**
 
@@ -63,7 +70,7 @@ This work proposes a **novel alternative**: applying Population-Based Training�
 2. Adaptive metric normalization for heterogeneous workload types
 3. Feature-driven composite scoring with compatibility mode for historical sessions
 4. Intelligent restart management balancing exploration vs. overhead
-5. Multi-instance PostgreSQL orchestration for true parallel evaluation
+5. Multi-instance database orchestration for true parallel evaluation
 
 ---
 
@@ -80,7 +87,7 @@ At regular intervals (generations), the algorithm performs:
 
 1. **Truncation Selection (Exploit)**: Bottom 20% of workers copy configurations from top 20%
 2. **Perturbation (Explore)**: Copied configurations are perturbed (±20% for continuous, probabilistic flip for categorical)
-3. **Evaluation**: All workers evaluated in parallel on isolated PostgreSQL instances
+3. **Evaluation**: All workers evaluated in parallel on isolated database instances
 
 This creates a co-evolutionary process where configurations **evolve during training**, unlike traditional hyperparameter search methods that evaluate configurations independently.
 
@@ -147,7 +154,7 @@ See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for detai
 | **Evolution**             | Exploit-explore algorithms (selection, perturbation)                     | [`src/tuners/pbt/evolution.py`](src/tuners/pbt/evolution.py)                 |
 | **Generation Barriers**   | Lockstep B1–B17 synchronisation for measurement fairness                 | [`src/tuners/engine/barriers.py`](src/tuners/engine/barriers.py)             |
 | **Workload Orchestrator** | Per-worker evaluation: apply config, run benchmark, collect metrics      | [`src/tuners/engine/orchestrator.py`](src/tuners/engine/orchestrator.py)     |
-| **Environment Backends**  | Multi-instance PostgreSQL (Docker / bare-metal), CPU subsets, snapshots  | [`src/utils/environments/`](src/utils/environments/)                         |
+| **Environment Backends**  | Multi-instance database (Docker / bare-metal), CPU subsets, snapshots  | [`src/utils/environments/`](src/utils/environments/)                         |
 | **Knob Space**            | Search space definition, sampling, perturbation, hardware-aware ranges   | [`src/knobs/knob_space.py`](src/knobs/knob_space.py)                         |
 | **Scoring (v2)**          | Feature-driven composite score with reliability gate                     | [`src/utils/scoring/`](src/utils/scoring/)                                   |
 
@@ -162,11 +169,13 @@ See [`docs/architecture/pbt-core.md`](./docs/architecture/pbt-core.md) for compo
 ├── src/                          # Source code
 │   ├── tuners/                   # Tuning engines (PBT + shared base/engine)
 │   │   ├── base.py               # BaseTuner (shared session/CLI scaffolding)
+│   │   ├── bo/                   # BO: Bayesian Optimization baseline
 │   │   ├── engine/               # WorkloadOrchestrator + restart policy + barriers + base worker
+│   │   ├── lhs_design/           # LHS Design to create diverse data for knob importance analysis
 │   │   ├── pbt/                  # PBT: population, worker, evolution, config, tuner, cli
 │   │   └── __main__.py           # Routed CLI entry point (python -m src.tuners pbt)
 │   ├── utils/                    # Shared utilities
-│   │   ├── environments/         # Docker / bare-metal PostgreSQL backends
+│   │   ├── environments/         # Docker / bare-metal database backends
 │   │   ├── scoring/              # Feature-driven scoring v2
 │   │   ├── logger/               # Colored logging + HTML output + context
 │   │   ├── applicator.py         # KnobApplicator
@@ -252,7 +261,7 @@ Create a `.env` file from the template:
 cp .env.example .env
 ```
 
-Edit `.env` with your PostgreSQL credentials:
+Edit `.env` with your database (e.g., PostgreSQL) credentials:
 
 ```env
 DB_USER=postgres
@@ -293,7 +302,9 @@ make check-all
 
 ### Example 1: Rapid Tuning (2-3 minutes)
 
-> **Note**: Actual runtime depends on your hardware (CPU cores, RAM, storage speed). Times shown are estimates for modern multi-core systems with SSD storage.
+> **Important Notes**:  
+> - Actual runtime depends on your hardware (CPU cores, RAM, storage speed). Times shown are estimates for modern multi-core systems with SSD storage.  
+> - The number of knobs does **NOT** scale proportionally to wall-clock time, as PBT applies a candidate configuration from the entire knob space **at once**. But tuning performance may be degraded, causing PBT to require **more generations** to reach optimal performance.
 
 Optimize 5 core knobs with minimal population for quick testing:
 
@@ -323,9 +334,9 @@ python -m src.tuners pbt \
   --population 8
 ```
 
-### Example 3: Comprehensive Tuning (1-2 hours)
+### Example 3: Comprehensive Tuning (2+ hours)
 
-Full knob space (36 parameters) with thorough evaluation:
+Larger knob space (36 parameters) with thorough evaluation:
 
 ```bash
 python -m src.tuners pbt \
@@ -345,21 +356,7 @@ python -m src.tuners pbt \
   --workload-file workloads/custom_queries.json
 ```
 
-### Example 5: Tuning a Real Production Database
-
-Point the tuner at your real database using standard environment variables, and it will automatically use `pg_basebackup` to clone a local snapshot for safe, isolated tuning:
-
-```bash
-export DB_HOST=my-production-replica.domain.com
-export DB_PORT=5432
-export DB_USER=admin
-export DB_PASSWORD=secret
-export DB_NAME=myapp
-
-python -m src.tuners pbt --workload-file workloads/my_real_queries.json
-```
-
-### Example 6: Manual Worker Resource Allocation
+### Example 5: Manual Worker Resource Allocation
 
 Override automatic hardware detection to manually allocate RAM and CPU cores for each parallel worker (up to 95% of host capacity):
 
@@ -602,9 +599,8 @@ Below is an actual configuration discovered by PBT on development hardware (form
 Future work includes rigorous benchmarking:
 
 - Multiple hardware configurations (cloud and on-premise)
-- Diverse workload types (TPC-H, TPC-C, real-world traces)
-- Comparison with baseline tuning methods
-- Statistical significance testing across multiple runs
+- Diverse workload types (YCSB, TPC-C, real-world traces)
+- Comparison with more baseline tuning methods
 
 See `results/` directory for optimization traces from your runs.
 
@@ -614,28 +610,9 @@ See `results/` directory for optimization traces from your runs.
 
 ### Planned Enhancements
 
-#### 1. Test Coverage
-
-Currently, the system lacks comprehensive test coverage. Planned additions:
-
-- **Unit Tests**: Individual component testing (Worker, Evolution, Population)
-- **Integration Tests**: End-to-end PBT workflow validation
-- **Performance Tests**: Regression testing for optimization quality
-- **Fixtures**: Mock PostgreSQL instances for CI/CD integration
-
-Target: >80% code coverage with `pytest` framework.
-
-#### 2. Advanced Features
-
-- **Transfer Learning**: Warm-start PBT from previous optimization runs
-- **Workload Prediction**: Query clustering for adaptive metric weighting
-- **Online Tuning**: Continuous optimization during production workloads
-
-#### 3. Cloud Deployment
-
-- Kubernetes orchestration for multi-instance PostgreSQL
-- AWS RDS/Aurora integration
-- Distributed PBT across cloud regions
+1. **Advanced Features** like Workload prediction -- Query clustering for adaptive metric weighting
+2. **Cloud Deployment**: Kubernetes orchestration for multi-instance database, AWS RDS/Aurora integration
+3. **Multi-DBMS integration**: MySQL, MariaDB.
 
 ---
 
@@ -743,7 +720,7 @@ This research was inspired by [DeepMind's Population-Based Training](https://arx
 
 <div align="center">
 
-**Built with** 🧬 **Evolutionary Optimization** | 🐘 **PostgreSQL** | 🐍 **Python**
+**Built with** 🧬 **Evolutionary Optimization** | 🛢 **Database Configuration** | 🐍 **Python**
 
 _Advancing the state-of-the-art in autonomous database systems_
 
