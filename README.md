@@ -70,8 +70,6 @@ This work proposes a **novel alternative**: applying Population-Based Training�
 2. Adaptive metric normalization for heterogeneous workload types
 3. Feature-driven composite scoring with compatibility mode for historical sessions
 4. Intelligent restart management balancing exploration vs. overhead
-5. Multi-instance database orchestration for true parallel evaluation
-
 ---
 
 ## Key Innovation
@@ -691,21 +689,14 @@ A preprint will be available soon.
 
 PBTune was built by:
 
-- [Ibrahim Al-Shawa](https://github.com/alshawai) — Project lead, PBT core, evaluation framework
-- [AbdelRahman Hedia](https://github.com/bodyhedia44) — Environment backends, Docker orchestration
-- [Mahmoud Darwish](https://github.com/mahmoud-darwish) — Environment backends, infrastructure
-
-Under the supervision of:
-
-- **Prof. Walaa Saber** — Associate Professor, Electrical Engineering, Port Said University
-- **Prof. Emad El-Sayed** — Assistant Professor, Electrical Engineering, Port Said University
+- [Ibrahim Al-Shawa](https://github.com/alshawai)
+- [AbdelRahman Hedia](https://github.com/bodyhedia44)
+- [Mahmoud Darwish](https://github.com/mahmoud-darwish)
 
 With contributions from:
 
-- [Karim AbdelAziz](https://github.com/karimali03) — Scoring pipeline, BO baseline
-- [Mohammad Ahmad](https://github.com/mohamed20o03) — SCALPEL analysis
-
-This research was inspired by [DeepMind's Population-Based Training](https://arxiv.org/abs/1711.09846), the [CMU Database Group](https://db.cs.cmu.edu/) (OtterTune), and the [PostgreSQL Community](https://www.postgresql.org/).
+- [Karim AbdelAziz](https://github.com/karimali03)
+- [Mohammad Ahmad](https://github.com/mohamed20o03)
 
 ---
 
