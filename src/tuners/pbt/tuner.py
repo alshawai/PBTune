@@ -148,6 +148,25 @@ class PBTTuner(BaseTuner):
         self.restart_count: int = 0
         self._restarted_this_generation: bool = False
 
+        # Distributed multi-device mode (populated in _create_environment()).
+        # Typed Any: the Coordinator/FleetBootstrapper classes are imported
+        # lazily inside _create_environment().
+        self._coordinator: Any = None
+        self._bootstrapper: Any = None
+        if self.lifecycle.distributed:
+            if not self.lifecycle.inventory:
+                raise TunerConfigError(
+                    "--distributed requires --inventory <devices.yaml>"
+                )
+            # One worker per dedicated device => no co-tenancy, so the B1–B17
+            # substep barriers (which only equalise co-tenancy) are pointless;
+            # the generation boundary is the sole sync point. Run the whole
+            # fleet concurrently — never batch.
+            self.lifecycle.synchronize_workers = False
+            self.pbt_config.synchronize_workers = False  # session provenance
+            if self.lifecycle.num_parallel_workers < self.pbt_config.population_size:
+                self.lifecycle.num_parallel_workers = self.pbt_config.population_size
+
     @property
     def max_rounds(self) -> int:
         """PBT runs a fixed number of generations."""
@@ -241,6 +260,188 @@ class PBTTuner(BaseTuner):
             len(initial_configs), len(initial_configs) - 1
         )
         return initial_configs[:population_size]
+
+    # ------------------------------------------------------------------
+    # Distributed lifecycle overrides (no-ops unless --distributed)
+    # ------------------------------------------------------------------
+    def _create_environment(self) -> None:
+        """Build the RemoteEnvironment + coordinator when distributed; else base.
+
+        No agents are contacted here — only local objects are built. The SSH
+        bootstrap and health handshake happen in :meth:`_bring_up_instances`.
+        """
+        if not self.lifecycle.distributed:
+            super()._create_environment()
+            return
+
+        from src.config.database import get_db_config
+        from src.tuners.distributed.agent_api import SetupRequest
+        from src.tuners.distributed.bootstrap import FleetBootstrapper
+        from src.tuners.distributed.config import DistributedConfig
+        from src.tuners.distributed.coordinator import Coordinator
+        from src.tuners.engine.orchestrator import WorkloadOrchestratorConfig
+
+        assert self.worker_resources is not None
+        # Guaranteed by the __init__ guard when distributed is set.
+        assert self.lifecycle.inventory is not None
+        db_config = get_db_config()
+        pop_size = self.pbt_config.population_size
+
+        dist_cfg = DistributedConfig.from_inventory_path(
+            self.lifecycle.inventory,
+            request_timeout_s=float(self.lifecycle.agent_timeout),
+            eval_timeout_s=float(self.lifecycle.eval_timeout),
+        )
+        dist_cfg.validate_for_population(pop_size)
+
+        bc = self.benchmark_config
+        if self.benchmark == "sysbench":
+            wl_str = bc.sysbench_workload
+        elif self.benchmark == "tpch":
+            wl_str = "olap"
+        else:
+            wl_str = self._workload_type.value
+        setup_template = SetupRequest(
+            run_id=self.snapshot_identifier,
+            benchmark=self.benchmark or "sysbench",
+            workload_type=wl_str,
+            use_docker=self.lifecycle.use_docker,
+            force_recreate_baseline=self.lifecycle.force_recreate_baseline,
+            tables=getattr(bc, "sysbench_tables", None),
+            table_size=getattr(bc, "sysbench_table_size", None),
+            scale_factor=getattr(bc, "scale_factor", None),
+            image_name=self.lifecycle.docker_image,
+            dbname=db_config.dbname,
+            db_user=db_config.user,
+        )
+
+        coordinator = Coordinator(dist_cfg, setup_template, db_config, pop_size)
+        self._coordinator = coordinator
+        if self.lifecycle.bootstrap:
+            self._bootstrapper = FleetBootstrapper(
+                inventory=dist_cfg.inventory,
+                population_size=pop_size,
+                local_repo_dir=str(Path(__file__).resolve().parents[3]),
+                knob_tier=self.lifecycle.knob_tier,
+                knob_source=self.lifecycle.knob_source,
+                install_deps=self.lifecycle.remote_install_deps,
+                env_exports=(
+                    {"DB_PASSWORD": db_config.password}
+                    if db_config.password
+                    else None
+                ),
+            )
+
+        self.env = coordinator.make_environment(
+            self._workload_executor, self.snapshot_identifier
+        )
+        orchestrator_config = WorkloadOrchestratorConfig(
+            workload_type=self._workload_type,
+            metric_config=self.metric_config,
+            db_config=db_config,
+            warmup_duration=self.benchmark_config.warmup_duration,
+            measurement_duration=self.benchmark_config.evaluation_duration,
+            cooldown_duration=3.0,
+            tuning_mode=self.lifecycle.tuning_mode,
+            adaptive_restart_interval=self.lifecycle.adaptive_restart_interval,
+            random_seed=self.lifecycle.random_seed,
+            warmup_passes=self.benchmark_config.warmup_passes,
+            worker_memory_budget_bytes=self.worker_resources.ram_bytes,
+        )
+        self.orchestrator = coordinator.make_orchestrator(
+            orchestrator_config, self._workload_executor, self.env
+        )
+
+    def _bring_up_instances(self) -> None:
+        """Bring up the device fleet when distributed; else the local flow."""
+        if not self.lifecycle.distributed:
+            super()._bring_up_instances()
+            return
+
+        from src.utils.hardware_info import get_system_info
+
+        self.system_info = get_system_info(data_path=self.data_root)
+        log_section_header(
+            LOGGER, "Bringing up distributed device fleet", top_separator=False
+        )
+
+        # SSH bootstrap (optional) + health/protocol handshake.
+        with self.bootstrap_timing.span("bootstrap_fleet"):
+            if self._bootstrapper is not None:
+                LOGGER.info("Bootstrapping device fleet over SSH...")
+                self._bootstrapper.bootstrap_all()
+            LOGGER.info("Waiting for device agents to report healthy...")
+            self._coordinator.wait_for_agents()
+
+        with self.bootstrap_timing.span("setup_instances"):
+            self._instances = self.env.setup_instances(
+                num_workers=self.num_instances,
+                force_recreate=self.lifecycle.force_recreate_instances,
+                num_parallel_workers=self.num_instances,
+            )
+        with self.bootstrap_timing.span("verify_instances"):
+            self.env.verify_instances()
+
+        # Resolve hardware-aware knob ranges from DEVICE hardware (reported by
+        # the agents), not the coordinator's — so the coordinator can run on any
+        # light machine.
+        self._resolve_device_hardware_ranges()
+
+        # Version-based knob pruning is skipped: the coordinator has no direct
+        # TCP path to the remote instances; the identical-fleet assumption holds
+        # (every device runs the same PostgreSQL).
+        LOGGER.info(
+            "Distributed mode: skipping direct-connection knob prune "
+            "(identical-fleet assumption)."
+        )
+        LOGGER.info(
+            "%s%sDevice fleet is ready.%s", COLORS.bold, COLORS.green, COLORS.reset
+        )
+
+    def _resolve_device_hardware_ranges(self) -> None:
+        """Re-resolve hardware-aware knob ranges from DEVICE hardware."""
+        import dataclasses
+
+        from src.utils.hardware_info import WorkerResources
+
+        get_res = getattr(self.env, "representative_resources", None)
+        res = get_res() if callable(get_res) else None
+        if not res:
+            LOGGER.warning(
+                "No device resources reported; keeping coordinator-derived knob "
+                "ranges. If coordinator hardware differs from the devices, pass "
+                "--worker-ram/--worker-cpus to match the fleet."
+            )
+            return
+        valid = {f.name for f in dataclasses.fields(WorkerResources)}
+        device_res = WorkerResources(**{k: v for k, v in res.items() if k in valid})
+        # Resolve knob ranges against device hardware. We intentionally do NOT
+        # reassign self.worker_resources (an inherited base attribute) here —
+        # the knob space carries the device resources directly.
+        self.full_knob_space.resolve_hardware_ranges(device_res)
+        self.knob_space.worker_resources = device_res
+        LOGGER.info(
+            "Resolved knob hardware ranges from DEVICE hardware "
+            "(RAM=%.1f GB, CPU=%s cores, disk=%s) — coordinator hardware ignored.",
+            (device_res.ram_bytes or 0) / 1e9,
+            device_res.cpu_cores,
+            device_res.disk_type,
+        )
+
+    def teardown(self) -> None:
+        """Stop instances, then shut the device fleet down (distributed only)."""
+        try:
+            super().teardown()
+        finally:
+            if getattr(self.lifecycle, "distributed", False) and getattr(
+                self, "_coordinator", None
+            ) is not None:
+                try:
+                    self._coordinator.shutdown_agents()
+                    if self._bootstrapper is not None:
+                        self._bootstrapper.teardown_all()
+                except (RuntimeError, OSError) as exc:
+                    LOGGER.warning("Device fleet shutdown issue: %s", exc)
 
     def build_optimizer(self) -> None:
         """Wire the :class:`Population` to the live instances and baseline snapshot.

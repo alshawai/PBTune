@@ -51,11 +51,13 @@ nav:
       - Knob Importance Analysis: architecture/knob-importance-analysis.md
       - SCALPEL: architecture/scalpel.md
       - Performance Evaluation: architecture/performance-evaluation.md
+      - Distributed Tuning: architecture/distributed-tuning.md
   - Guides:
       - Adding Knobs: guides/adding-knobs.md
       - Adding Workloads: guides/adding-workloads.md
       - BO Baseline: guides/bo-baseline.md
       - Evaluation Runbook: guides/evaluation-runbook.md
+      - Distributed Tuning: guides/distributed-tuning.md
       - SCALPEL Rollout: guides/scalpel-rollout.md
       - Visualization: guides/visualization.md
   - Reference:
