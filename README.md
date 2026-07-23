@@ -6,6 +6,7 @@
 
 <div align="center">
 
+[![Docs](https://img.shields.io/badge/docs-MkDocs-teal.svg)](https://alshawai.github.io/PBTune/)
 [![CI](https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg)](https://github.com/alshawai/PBTune/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/)
@@ -15,6 +16,8 @@
 </div>
 
 This repository contains a research implementation applying **Population-Based Training (PBT)**, originally developed by DeepMind for neural network hyperparameter optimization, to the domain of database configuration tuning. Our work demonstrates that evolutionary optimization strategies can autonomously discover high-performance database configurations without domain expertise.
+
+📚 **Full Documentation**: [alshawai.github.io/PBTune](https://alshawai.github.io/PBTune/)
 
 ## Demo
 
