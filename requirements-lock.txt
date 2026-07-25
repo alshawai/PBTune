@@ -54,7 +54,7 @@ jupyter_core==5.9.1
 librt==0.9.0
 -e git+https://github.com/karimali03/Bassera.git@55b80867cbf62549efc909f6184cc648dae948e8#egg=llm_suggestions&subdirectory=llm-suggestions
 lxml==6.1.1
-matplotlib-inline==0.2.1
+matplotlib-inline==0.2.2
 more-itertools==11.1.0
 msgpack==1.1.2
 mypy==1.20.2
