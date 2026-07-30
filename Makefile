@@ -7,7 +7,7 @@ install-dev:
 	$(PYTHON) -m pip install -r requirements-dev.txt
 
 test:
-	$(PYTHON) -m pytest -q tests/unit
+	$(PYTHON) -m pytest -q tests/unit $(PYTEST_ARGS)
 
 lint:
 	$(PYTHON) -m ruff check src tests scripts
