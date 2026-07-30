@@ -8,6 +8,7 @@
 
 [![Docs](https://img.shields.io/badge/docs-MkDocs-teal.svg)](https://alshawai.github.io/PBTune/)
 [![CI](https://github.com/alshawai/PBTune/actions/workflows/ci.yml/badge.svg)](https://github.com/alshawai/PBTune/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/alshawai/PBTune/graph/badge.svg)](https://codecov.io/gh/alshawai/PBTune)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PostgreSQL 14+](https://img.shields.io/badge/postgresql-14+-336791.svg)](https://www.postgresql.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)

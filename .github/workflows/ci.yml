@@ -44,3 +44,10 @@ jobs:
 
       - name: Unit tests
         run: make test PYTHON=python PYTEST_ARGS="--cov=src --cov-report=xml"
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
