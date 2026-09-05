@@ -72,6 +72,8 @@ def test_launch_agent_command_wires_worker_and_port():
     assert "--knob-tier core" in cmd
     assert "--base-dir" in cmd and "/var/lib/pbt/instances" in cmd
     assert "nohup" in cmd
+    assert "</dev/null" in cmd
+    assert "agent_pid=$!" in cmd
     assert layout.pid_file in cmd
     assert layout.log_file in cmd
 
@@ -81,7 +83,7 @@ def test_launch_agent_command_env_exports():
     cmd = launch_agent_command(
         _device(), layout, knob_tier="core", env_exports={"DB_PASSWORD": "s3cret"}
     )
-    assert "DB_PASSWORD=s3cret" in cmd
+    assert "nohup env DB_PASSWORD=s3cret python3" in cmd
 
 
 def test_install_deps_command():

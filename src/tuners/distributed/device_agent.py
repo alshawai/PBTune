@@ -34,6 +34,7 @@ import logging
 import threading
 from abc import ABC, abstractmethod
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from src.tuners.distributed import AGENT_PROTOCOL_VERSION
@@ -290,6 +291,10 @@ class LocalDeviceBackend(EvaluationBackend):
     #: the *global* worker id it represents is carried separately for logging.
     LOCAL_WORKER_ID = 0
 
+    #: Distributed mode dedicates one complete device to one worker, so unlike
+    #: co-located local workers there is no need to reserve or divide capacity.
+    DEVICE_RESOURCE_FRACTION = 1.0
+
     def __init__(
         self,
         global_worker_id: int,
@@ -314,10 +319,18 @@ class LocalDeviceBackend(EvaluationBackend):
         self._backend_name: str = ""
         self._snapshot_id: str = ""
 
+    def _detect_resources(self, base_dir: Path) -> Any:
+        """Detect the complete capacity of this worker's dedicated device."""
+        from src.utils.hardware_info import detect_worker_resources
+
+        return detect_worker_resources(
+            max_parallel_workers=1,
+            data_path=base_dir,
+            threshold=self.DEVICE_RESOURCE_FRACTION,
+        )
+
     # -- lifecycle -------------------------------------------------------- #
     def setup(self, req: SetupRequest) -> SetupResponse:
-        from pathlib import Path
-
         from src.benchmarks.sysbench.executor import SysbenchExecutor
         from src.benchmarks.tpch.executor import TPCHExecutor
         from src.config.database import DatabaseConfig
@@ -328,16 +341,15 @@ class LocalDeviceBackend(EvaluationBackend):
         from src.knobs import get_knob_space
         from src.tuners.pbt.worker import PBTWorker as Worker
         from src.utils.environments import EnvironmentFactory
-        from src.utils.hardware_info import detect_worker_resources
         from src.utils.metrics import WorkloadType, create_metric_config
         from src.utils.scoring.workload_features import WorkloadFeatureExtractor
 
         base_dir = Path(self.base_dir)
 
-        # One worker per device => detect resources for a single worker.
-        self._resources = detect_worker_resources(
-            max_parallel_workers=1, data_path=base_dir
-        )
+        # One worker owns this entire dedicated device. Use the full detected
+        # RAM, CPU, and disk budgets; local/co-located mode retains its normal
+        # safety threshold and resource partitioning.
+        self._resources = self._detect_resources(base_dir)
 
         knob_space = get_knob_space(
             self.knob_tier,
