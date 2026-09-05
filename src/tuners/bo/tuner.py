@@ -49,6 +49,7 @@ from src.config.database import get_db_config
 from src.tuners.base import BaseTuner
 from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import WorkloadOrchestrator
+from src.tuners.utils.knob_filter import apply_tuning_mode_filter
 from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.session_writer import build_scoring_block, convert_numpy_types
 from src.tuners.utils.types import (
@@ -72,6 +73,7 @@ from src.utils.logger import (
     log_section_header,
     log_worker_metrics_table,
 )
+from src.utils.hardware_info import WorkerResources
 from src.utils.metrics import PerformanceMetrics
 from src.utils.timing import TimingRecorder
 from src.utils.types import BenchmarkConfig
@@ -218,6 +220,46 @@ class BOTuner(BaseTuner):
         width does. ``degree == 1`` brings up just the foreground instance.
         """
         return max(1, int(self.bo_config.cotenancy_degree))
+
+    def _resolve_resources(self) -> None:
+        """Use the distributed PBT worker's full resource envelope for solo BO.
+
+        A distributed PBT worker owns one complete device and serializes that
+        100%-capacity envelope into its session. When ``--no-cotenant`` runs BO
+        alone on one of those same devices, re-detecting through the local
+        safety threshold would incorrectly reduce its resources. Session
+        resources are therefore authoritative for this matched comparison.
+        """
+        raw_resources = self.bo_config.pbt_worker_resources
+        if not self.bo_config.no_cotenant or not raw_resources:
+            super()._resolve_resources()
+            return
+
+        valid_fields = WorkerResources.__dataclass_fields__.keys()
+        resource_values = {
+            key: value
+            for key, value in raw_resources.items()
+            if key in valid_fields
+        }
+        resources = WorkerResources(**resource_values)
+        if resources.ram_bytes <= 0 or resources.cpu_cores <= 0:
+            raise ValueError(
+                "PBT session worker_resources must contain positive RAM and CPU values"
+            )
+
+        self.worker_resources = resources
+        self.full_knob_space.resolve_hardware_ranges(resources)
+        self.knob_space.worker_resources = resources
+        self.knob_space = apply_tuning_mode_filter(
+            self.full_knob_space, self.lifecycle.tuning_mode
+        )
+        LOGGER.info(
+            "Using authoritative distributed PBT worker resources at full "
+            "dedicated-device capacity (RAM=%.1f GB, CPU=%d cores, disk=%s).",
+            resources.ram_bytes / 1e9,
+            resources.cpu_cores,
+            resources.disk_type,
+        )
 
     def config_summary_lines(self) -> List[Tuple[str, str]]:
         return [

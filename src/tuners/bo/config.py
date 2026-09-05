@@ -284,8 +284,12 @@ class BOConfig:
             if isinstance(knobs, dict) and knobs:
                 self.pbt_knob_names = tuple(sorted(str(name) for name in knobs))
 
-        # Extract worker resources for resource equalization
-        worker_resources = payload.get("worker_resources")
+        # Extract the authoritative per-worker resource envelope. Unified
+        # sessions store it under ``tuning_session``; retain the root-level
+        # fallback for legacy traces.
+        worker_resources = session.get("worker_resources")
+        if not isinstance(worker_resources, dict):
+            worker_resources = payload.get("worker_resources")
         if isinstance(worker_resources, dict):
             self.pbt_worker_resources = worker_resources
 

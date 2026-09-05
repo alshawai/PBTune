@@ -22,9 +22,12 @@ Example ``devices.yaml``
       ssh_key: ~/.ssh/id_rsa    # SSH private key path
       data_dir: /var/lib/pbt    # remote base dir for PG instance data
       python: python3           # remote interpreter used to launch the agent
+            gcp_project: my-project   # optional campaign-end VM shutdown identity
+            gcp_zone: us-central1-a
 
     devices:
-      - host: 10.0.0.11
+            - host: 10.0.0.11
+                gcp_instance: pbt-worker-0
       - host: 10.0.0.12
         agent_port: 8771        # per-device override
       - host: 10.0.0.13
@@ -61,11 +64,25 @@ _FLEET_DEFAULTS: Dict[str, Any] = {
     "data_dir": "/var/lib/pbt",
     "python": "python3",
     "agent_scheme": "http",
+    "gcp_project": None,
+    "gcp_zone": None,
+    "gcp_instance": None,
 }
 
 # Keys a per-device entry is allowed to carry (besides the mandatory ``host``).
 _DEVICE_OVERRIDE_KEYS = frozenset(
-    {"agent_port", "ssh_user", "ssh_key", "data_dir", "python", "agent_scheme", "label"}
+    {
+        "agent_port",
+        "ssh_user",
+        "ssh_key",
+        "data_dir",
+        "python",
+        "agent_scheme",
+        "label",
+        "gcp_project",
+        "gcp_zone",
+        "gcp_instance",
+    }
 )
 
 
@@ -93,6 +110,9 @@ class DeviceSpec:
         ``http`` (default) or ``https``.
     label:
         Optional human-friendly name for logs/reports (defaults to ``host``).
+    gcp_project, gcp_zone, gcp_instance:
+        Explicit Google Compute Engine identity used only when the experiment
+        runner is asked to stop worker VMs after a campaign.
     """
 
     worker_id: int
@@ -104,6 +124,9 @@ class DeviceSpec:
     python: str = "python3"
     agent_scheme: str = "http"
     label: Optional[str] = None
+    gcp_project: Optional[str] = None
+    gcp_zone: Optional[str] = None
+    gcp_instance: Optional[str] = None
 
     @property
     def display_name(self) -> str:
@@ -126,6 +149,9 @@ class DeviceSpec:
             "python": self.python,
             "agent_scheme": self.agent_scheme,
             "label": self.label,
+            "gcp_project": self.gcp_project,
+            "gcp_zone": self.gcp_zone,
+            "gcp_instance": self.gcp_instance,
         }
 
 
@@ -271,6 +297,9 @@ def parse_inventory(raw: Dict[str, Any], *, source_path: Optional[Path] = None) 
                 python=str(merged["python"]),
                 agent_scheme=str(merged["agent_scheme"]),
                 label=merged.get("label"),
+                gcp_project=merged.get("gcp_project"),
+                gcp_zone=merged.get("gcp_zone"),
+                gcp_instance=merged.get("gcp_instance"),
             )
         )
 
