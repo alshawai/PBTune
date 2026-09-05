@@ -129,27 +129,30 @@ def launch_agent_command(
     The agent is started with ``nohup`` from the synced code dir; its PID is
     written to ``layout.pid_file`` and stdout/stderr to ``layout.log_file``.
     """
-    exports = ""
+    env_command = ""
     if env_exports:
-        exports = (
+        env_command = "env " + (
             " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env_exports.items())
             + " "
         )
     agent = (
-        f"{exports}{device.python} -m src.tuners.distributed.device_agent "
+        f"{env_command}{shlex.quote(device.python)} "
+        f"-m src.tuners.distributed.device_agent "
         f"--worker-id {device.worker_id} "
         f"--host 0.0.0.0 --port {device.agent_port} "
         f"--knob-tier {shlex.quote(knob_tier)} "
         f"--knob-source {shlex.quote(knob_source)} "
         f"--base-dir {shlex.quote(layout.instances_dir)} "
-        f"--log-level {log_level}"
+        f"--log-level {shlex.quote(log_level)}"
     )
-    # mkdir -p, cd into code, launch detached, record pid.
+    # Keep setup in the foreground and detach only the agent. The explicit
+    # ``env`` is required because ``nohup KEY=value command`` attempts to
+    # execute a program literally named ``KEY=value``.
     return (
         f"mkdir -p {shlex.quote(layout.root)} {shlex.quote(layout.instances_dir)} && "
         f"cd {shlex.quote(layout.code_dir)} && "
-        f"nohup {agent} > {shlex.quote(layout.log_file)} 2>&1 & "
-        f"echo $! > {shlex.quote(layout.pid_file)}"
+        f"{{ nohup {agent} </dev/null > {shlex.quote(layout.log_file)} 2>&1 & "
+        f"agent_pid=$!; echo \"$agent_pid\" > {shlex.quote(layout.pid_file)}; }}"
     )
 
 

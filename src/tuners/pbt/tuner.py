@@ -264,6 +264,21 @@ class PBTTuner(BaseTuner):
     # ------------------------------------------------------------------
     # Distributed lifecycle overrides (no-ops unless --distributed)
     # ------------------------------------------------------------------
+    def _resolve_resources(self) -> None:
+        """Resolve provisional local resources before the fleet is reachable.
+
+        The base setup order needs a resource profile before agents are
+        bootstrapped. In distributed mode this coordinator-derived profile is
+        temporary and is replaced with agent-reported device resources before
+        any configuration is sampled or evaluated.
+        """
+        if self.lifecycle.distributed:
+            LOGGER.info(
+                "Distributed mode: coordinator resource detection below is "
+                "provisional; fleet resources will replace it after agent setup."
+            )
+        super()._resolve_resources()
+
     def _create_environment(self) -> None:
         """Build the RemoteEnvironment + coordinator when distributed; else base.
 
@@ -399,7 +414,7 @@ class PBTTuner(BaseTuner):
         )
 
     def _resolve_device_hardware_ranges(self) -> None:
-        """Re-resolve hardware-aware knob ranges from DEVICE hardware."""
+        """Promote device hardware to the authoritative worker resource profile."""
         import dataclasses
 
         from src.utils.hardware_info import WorkerResources
@@ -407,22 +422,25 @@ class PBTTuner(BaseTuner):
         get_res = getattr(self.env, "representative_resources", None)
         res = get_res() if callable(get_res) else None
         if not res:
-            LOGGER.warning(
-                "No device resources reported; keeping coordinator-derived knob "
-                "ranges. If coordinator hardware differs from the devices, pass "
-                "--worker-ram/--worker-cpus to match the fleet."
+            raise RuntimeError(
+                "Distributed agents did not report fleet resources; refusing to "
+                "use coordinator hardware for worker knob ranges. Verify that all "
+                "agents run the current code and retry fleet setup."
             )
-            return
         valid = {f.name for f in dataclasses.fields(WorkerResources)}
         device_res = WorkerResources(**{k: v for k, v in res.items() if k in valid})
-        # Resolve knob ranges against device hardware. We intentionally do NOT
-        # reassign self.worker_resources (an inherited base attribute) here —
-        # the knob space carries the device resources directly.
+
+        # Every worker-facing subsystem, including session serialization, must
+        # describe the fleet rather than the lightweight coordinator.
+        self.worker_resources = device_res
         self.full_knob_space.resolve_hardware_ranges(device_res)
         self.knob_space.worker_resources = device_res
+        if self.orchestrator is not None:
+            self.orchestrator.config.worker_memory_budget_bytes = device_res.ram_bytes
         LOGGER.info(
-            "Resolved knob hardware ranges from DEVICE hardware "
-            "(RAM=%.1f GB, CPU=%s cores, disk=%s) — coordinator hardware ignored.",
+            "Promoted DEVICE hardware to the authoritative worker profile "
+            "at 100%% dedicated-device capacity (RAM=%.1f GB, CPU=%s cores, "
+            "disk=%s) — coordinator hardware ignored.",
             (device_res.ram_bytes or 0) / 1e9,
             device_res.cpu_cores,
             device_res.disk_type,
