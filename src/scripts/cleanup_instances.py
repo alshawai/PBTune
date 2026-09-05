@@ -39,6 +39,19 @@ class _NoopBenchmarkExecutor(BenchmarkExecutor):
         return PerformanceMetrics()
 
 
+def _resolve_bare_metal_pgdata(worker_dir: Path) -> Path | None:
+    """Return PGDATA only when ``worker_dir`` has a bare-metal layout.
+
+    Bare-metal clusters store ``PG_VERSION`` either directly in ``worker_N``
+    (legacy) or in ``worker_N/pgdata``. Docker bind mounts instead place it in
+    ``worker_N/pgdata/data`` and must be cleaned through the Docker API.
+    """
+    for candidate in (worker_dir, worker_dir / "pgdata"):
+        if (candidate / "PG_VERSION").is_file():
+            return candidate
+    return None
+
+
 def _docker_force_remove(path: Path) -> None:
     """Uses a root Docker container to bypass permission boundaries and rm -rf a path."""
     if not path.exists():
@@ -138,6 +151,14 @@ def main():
     parser.add_argument(
         "--force", action="store_true", help="Force removal without confirmation"
     )
+    parser.add_argument(
+        "--docker-only",
+        action="store_true",
+        help=(
+            "Stop/remove Docker PostgreSQL containers only; do not inspect "
+            "persisted worker directories as bare-metal instances"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -165,6 +186,11 @@ def main():
     except Exception:
         docker_available = False
 
+    if args.docker_only and not docker_available:
+        logging.error("Docker-only cleanup requested, but Docker is unavailable")
+        return 1
+
+    docker_cleanup_failures: list[str] = []
     if docker_available:
         print("\nCleaning up Docker containers...")
         for container in client.containers.list(all=True):
@@ -176,7 +202,14 @@ def main():
                     container.remove(force=True)
                 except Exception as e:
                     logging.warning(f"Failed to remove {name}: {e}")
-        print("✓ Docker containers cleaned")
+                    docker_cleanup_failures.append(name)
+        if docker_cleanup_failures:
+            logging.error(
+                "Failed to remove Docker container(s): %s",
+                ", ".join(docker_cleanup_failures),
+            )
+        else:
+            print("✓ Docker containers cleaned")
 
         if args.remove_snapshots:
             print("\nCleaning up Docker snapshot images...")
@@ -190,11 +223,22 @@ def main():
                             logging.warning(f"Failed to remove image {tag}: {e}")
             print("✓ Docker snapshots cleaned")
 
-    # Detect running bare-metal instances by checking data directories
+    # Detect only actual bare-metal PGDATA directories. Docker uses
+    # worker_N/pgdata/data, which must not fall through to pg_ctl cleanup.
     worker_dirs = sorted(base_dir.rglob("worker_*")) if base_dir_exists else []
-    if worker_dirs:
+    bare_metal_instances: list[tuple[int, Path]] = []
+    if not args.docker_only:
+        for worker_dir in worker_dirs:
+            suffix = worker_dir.name.split("_", 1)[1]
+            pgdata = _resolve_bare_metal_pgdata(worker_dir)
+            if suffix.isdigit() and pgdata is not None:
+                bare_metal_instances.append((int(suffix), pgdata))
+
+    bare_metal_cleanup_failed = False
+    if bare_metal_instances:
         print(
-            f"\nFound {len(worker_dirs)} instance directories to stop via base environment"
+            f"\nFound {len(bare_metal_instances)} bare-metal PostgreSQL "
+            "instances to stop"
         )
 
         try:
@@ -218,19 +262,25 @@ def main():
             container_prefix="cleanup-worker",
         )
 
-        for worker_dir in worker_dirs:
-            suffix = worker_dir.name.split("_", 1)[1]
-            if suffix.isdigit():
-                worker_id = int(suffix)
-                manager.instances[worker_id] = InstanceConfig(
-                    worker_id=worker_id,
-                    port=5432 + worker_id,
-                    data_dir=worker_dir,
-                    running=True,
-                )
+        for worker_id, pgdata in bare_metal_instances:
+            manager.instances[worker_id] = InstanceConfig(
+                worker_id=worker_id,
+                port=5432 + worker_id,
+                data_dir=pgdata,
+                running=True,
+            )
 
-        manager.stop_all(mode="immediate")
-        print("✓ All bare-metal instances stopped")
+        try:
+            manager.stop_all(mode="immediate")
+        except FileNotFoundError as exc:
+            bare_metal_cleanup_failed = True
+            logging.error(
+                "Cannot stop bare-metal PostgreSQL instances because %s is not "
+                "available on PATH",
+                exc.filename or "pg_ctl",
+            )
+        else:
+            print("✓ All bare-metal instances stopped")
 
     if args.remove_data:
         print("\nRemoving data directories...")
@@ -272,7 +322,7 @@ def main():
             print("✓ Host-level database snapshots removed")
 
     print("\n✓ Cleanup complete!")
-    return 0
+    return 1 if docker_cleanup_failures or bare_metal_cleanup_failed else 0
 
 
 if __name__ == "__main__":

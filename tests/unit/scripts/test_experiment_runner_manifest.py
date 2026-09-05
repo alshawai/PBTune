@@ -370,7 +370,7 @@ devices:
     assert "/srv/pbt/.venv/bin/python -m src.tuners bo" in rendered
     assert "trap cleanup_comparison_instance EXIT" in rendered
     assert "src.scripts.cleanup_instances" in rendered
-    assert "--data-dir /srv/pbt/instances --force" in rendered
+    assert "--data-dir /srv/pbt/instances --force --docker-only" in rendered
 
 
 def test_prepare_comparison_device_stops_other_agents(monkeypatch, tmp_path):
@@ -409,6 +409,7 @@ devices:
     selected = next(cmd for cmd in targets if "10.0.0.12" in cmd)
     assert any("10.0.0.13" in cmd for cmd in targets)
     assert "cleanup_instances" in selected
+    assert "--docker-only" in selected
     assert "agent-worker-1.pid" in selected
     assert "agent-worker-0.pid" in next(
         cmd for cmd in targets if "10.0.0.11" in cmd
