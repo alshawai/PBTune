@@ -88,7 +88,12 @@ class AgentClient:
             except (ValueError, OSError):
                 pass
             err = ErrorResponse.from_dict(body) if body else None
-            detail = err.error if err else exc.reason
+            if err:
+                detail = err.error
+                if err.detail:
+                    detail = f"{detail}: {err.detail}"
+            else:
+                detail = exc.reason
             raise AgentRPCError(
                 f"{method} {url} -> HTTP {exc.code}: {detail}",
                 status=exc.code,

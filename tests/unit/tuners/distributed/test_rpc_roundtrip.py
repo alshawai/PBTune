@@ -12,6 +12,7 @@ Orchestrator wiring exactly as a real fleet would.
 import threading
 from typing import Any, Dict, Optional, Tuple
 from unittest.mock import MagicMock
+import urllib.error
 
 import pytest
 
@@ -25,6 +26,7 @@ from src.tuners.distributed.config import DistributedConfig
 from src.tuners.distributed.coordinator import Coordinator
 from src.tuners.distributed.device_agent import DeviceAgent, EvaluationBackend
 from src.tuners.distributed.inventory import parse_inventory
+from src.tuners.distributed.transport import AgentClient, AgentRPCError
 from src.tuners.pbt.worker import PBTWorker as Worker
 from src.tuners.engine.orchestrator import WorkloadOrchestratorConfig
 from src.utils.metrics import WorkloadType, create_metric_config
@@ -175,6 +177,28 @@ def test_setup_uses_long_operation_timeout(fleet):
 
     client.post.assert_called_once()
     assert client.post.call_args.kwargs["timeout"] == 1800.0
+
+
+def test_http_error_includes_agent_detail(monkeypatch):
+    """Coordinator errors must expose the exception reported by the agent."""
+    body = b'{"error":"agent handler error","detail":"disk full","worker_id":0}'
+    http_error = urllib.error.HTTPError(
+        "http://worker:8770/setup",
+        500,
+        "Internal Server Error",
+        {},
+        MagicMock(read=MagicMock(return_value=body)),
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        MagicMock(side_effect=http_error),
+    )
+
+    with pytest.raises(
+        AgentRPCError,
+        match="HTTP 500: agent handler error: disk full",
+    ):
+        AgentClient("http://worker:8770").post("/setup", {})
 
 
 def test_device_resources_reported_for_knob_ranges(fleet):
