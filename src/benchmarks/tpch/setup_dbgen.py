@@ -225,3 +225,24 @@ def generate_data(dbgen_path: Path, scale_factor: float = 1.0) -> Path:
 
     logger.info("✓ TPC-H data generated (SF=%.1f) in %s", scale_factor, output_dir)
     return output_dir
+
+
+def remove_generated_data(output_dir: Path) -> None:
+    """Remove transient dbgen data after PostgreSQL has consumed it.
+
+    The flat files duplicate the data already loaded into PGDATA and can exceed
+    1 GiB at SF1. Reclaim them before PostgreSQL builds indexes and validates
+    foreign keys, both of which may require substantial temporary disk space.
+    Markers are removed with the files so a later setup regenerates a complete
+    matching data set instead of trusting a stale cache marker.
+    """
+    removed_bytes = 0
+    for tbl_file in output_dir.glob("*.tbl"):
+        removed_bytes += tbl_file.stat().st_size
+        tbl_file.unlink()
+    for marker in output_dir.glob(".generated_sf*"):
+        marker.unlink()
+    logger.info(
+        "Reclaimed %.2f GiB of generated TPC-H flat files",
+        removed_bytes / 1024**3,
+    )

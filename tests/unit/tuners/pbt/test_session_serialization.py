@@ -224,6 +224,17 @@ def _make_tuner(tmp_path, *, generation_history) -> PBTTuner:
     return tuner
 
 
+def test_build_session_payload_before_metric_config_initialization(tmp_path) -> None:
+    """Ctrl-C during early setup must still produce a partial session payload."""
+    tuner = _make_tuner(tmp_path, generation_history=[])
+    tuner.metric_config = None
+
+    payload = tuner.build_session_payload()
+
+    assert "tuning_session" in payload
+    assert "scoring" in payload["tuning_session"]
+
+
 def _assemble(tuner) -> dict:
     return tuner._assemble_results(
         total_time=650.0, tuning_time=620.0, bootstrap_seconds=30.0

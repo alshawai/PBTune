@@ -767,7 +767,11 @@ class PBTTuner(BaseTuner):
 
     def build_session_payload(self) -> Dict[str, Any]:
         """Assemble PBT's strategy-specific session sections (nested schema)."""
-        scoring_metadata = self.metric_config.get_scoring_metadata()
+        scoring_metadata = (
+            self.metric_config.get_scoring_metadata()
+            if self.metric_config is not None
+            else {}
+        )
         best_breakdown = (
             self.population.best_overall_score_breakdown
             if self.population is not None

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from src.benchmarks.tpch.executor import TPCHExecutor
+from src.benchmarks.tpch.setup_dbgen import remove_generated_data
 
 
 class _CursorStub:
@@ -49,3 +50,19 @@ def test_drop_existing_public_tables_noop_when_schema_is_empty() -> None:
 
         assert len(cursor.executed) == 1
         mock_logger.debug.assert_not_called()
+
+
+def test_remove_generated_data_reclaims_tables_and_cache_markers(tmp_path) -> None:
+    """Transient dbgen data should not compete with PostgreSQL index builds."""
+    table_file = tmp_path / "lineitem.tbl"
+    marker = tmp_path / ".generated_sf1.0"
+    binary = tmp_path / "dbgen"
+    table_file.write_bytes(b"test data")
+    marker.write_text("SF=1.0\n", encoding="utf-8")
+    binary.write_text("binary", encoding="utf-8")
+
+    remove_generated_data(tmp_path)
+
+    assert not table_file.exists()
+    assert not marker.exists()
+    assert binary.exists()

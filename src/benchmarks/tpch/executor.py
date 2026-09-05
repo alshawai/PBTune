@@ -12,7 +12,11 @@ from src.utils.logger import get_logger, get_color_context, log_section_header
 from src.utils.metrics import PerformanceMetrics
 from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.benchmarks.tpch import QUERIES_DIR, SCHEMA_SQL, INDEXES_SQL
-from src.benchmarks.tpch.setup_dbgen import find_or_build_dbgen, generate_data
+from src.benchmarks.tpch.setup_dbgen import (
+    find_or_build_dbgen,
+    generate_data,
+    remove_generated_data,
+)
 
 LOGGER = get_logger("TPCHExecutor")
 COLORS = get_color_context()
@@ -135,6 +139,7 @@ class TPCHExecutor(BenchmarkExecutor):
         # Step 3-4: Safely Drop & Create schema
         conn = get_connection(db_config)
         conn.autocommit = True
+        generated_data_removed = False
         try:
             cursor = conn.cursor()
 
@@ -159,6 +164,11 @@ class TPCHExecutor(BenchmarkExecutor):
                         f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, DELIMITER '|')",
                         self._strip_trailing_delimiter(f),
                     )
+
+            # PostgreSQL now owns a complete copy of the data. Delete dbgen's
+            # flat files before index/FK construction needs temporary space.
+            remove_generated_data(self._data_dir)
+            generated_data_removed = True
 
             # Step 6: Build indexes and FKs
             LOGGER.debug("    Building indexes and foreign keys...")
@@ -189,6 +199,14 @@ class TPCHExecutor(BenchmarkExecutor):
             )
 
         finally:
+            if not generated_data_removed and self._data_dir is not None:
+                try:
+                    remove_generated_data(self._data_dir)
+                except OSError as exc:
+                    LOGGER.warning(
+                        "Failed to reclaim generated TPC-H data after setup error: %s",
+                        exc,
+                    )
             conn.close()
 
     def _drop_existing_public_tables(

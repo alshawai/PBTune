@@ -413,7 +413,6 @@ class LocalDeviceBackend(EvaluationBackend):
             force_recreate_baseline=req.force_recreate_baseline,
         )
         env.setup_instances(1)
-        env.initialize_schema(self.LOCAL_WORKER_ID)
 
         orch_config = WorkloadOrchestratorConfig(
             workload_type=workload_type,
