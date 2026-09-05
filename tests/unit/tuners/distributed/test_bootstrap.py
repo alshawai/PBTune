@@ -41,6 +41,8 @@ def test_ssh_command_includes_key_and_target():
     assert "pbt@10.0.0.13" in argv
     assert argv[-1] == "echo hi"
     assert "BatchMode=yes" in argv
+    assert "ServerAliveInterval=30" in argv
+    assert "ServerAliveCountMax=6" in argv
 
 
 def test_ssh_command_without_user_or_key():

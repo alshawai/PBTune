@@ -19,12 +19,18 @@ fleet:
   ssh_key: ~/.ssh/id_rsa    # SSH private key (path is ~ / $VAR expanded)
   data_dir: /var/lib/pbt    # remote base dir for the PG instance's data
   python: python3           # remote interpreter used to launch the agent
+  gcp_project: my-project   # required by --stop-gcp-after-campaign
+  gcp_zone: us-central1-a   # may be overridden per device
 
 devices:
   - host: 10.0.0.11         # -> worker 0
+    gcp_instance: pbt-worker-0
   - host: 10.0.0.12         # -> worker 1
+    gcp_instance: pbt-worker-1
     agent_port: 8771        # per-device override
   - host: 10.0.0.13         # -> worker 2
+    gcp_instance: pbt-worker-2
     ssh_user: ubuntu
   - host: 10.0.0.14         # -> worker 3
+    gcp_instance: pbt-worker-3
     label: rack-a-node-4    # optional friendly name for logs/reports

@@ -264,6 +264,238 @@ def test_smoke_commands_use_minimal_budget(runner_factory):
     assert ev[ev.index("--repetitions") + 1] == "2"
 
 
+def test_distributed_pbt_command_uses_fleet_not_coordinator_resources(tmp_path):
+    """Distributed commands carry fleet controls and omit local resource flags."""
+    from scripts.experiments.experiment_matrix import build_smoke_experiments
+
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text("devices: []\n")
+    runner = ExperimentRunner(
+        dry_run=True,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+        bootstrap=False,
+        remote_install_deps=False,
+        eval_timeout=2400.0,
+        agent_timeout=90.0,
+    )
+    exp = build_smoke_experiments()[0]
+
+    cmd = runner._build_pbt_cmd(exp, seed=42)
+
+    assert "--distributed" in cmd
+    assert cmd[cmd.index("--inventory") + 1] == str(inventory)
+    assert cmd[cmd.index("--eval-timeout") + 1] == "2400.0"
+    assert cmd[cmd.index("--agent-timeout") + 1] == "90.0"
+    assert "--no-bootstrap" in cmd
+    assert "--no-remote-deps" in cmd
+    assert "--worker-ram" not in cmd
+    assert "--worker-cpus" not in cmd
+
+    bo = runner._build_bo_cmd(exp, Path("/remote/trace.json"), seed=42)
+    assert "--no-cotenant" in bo
+    assert "--worker-ram" not in bo
+    assert "--worker-cpus" not in bo
+
+
+def test_distributed_mode_requires_inventory():
+    """A distributed campaign cannot start without a fleet inventory."""
+    with pytest.raises(ValueError, match="requires a fleet inventory"):
+        ExperimentRunner(
+            dry_run=True,
+            no_push=True,
+            execution_mode="distributed",
+        )
+
+
+def test_distributed_preflight_ignores_coordinator_disk(monkeypatch, tmp_path):
+    """Dedicated-device runs never validate the coordinator's block device."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text("devices: []\n")
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+    )
+
+    def _boom(*args, **kwargs):  # pragma: no cover - must never be called
+        raise AssertionError("coordinator disk resolver must not run")
+
+    monkeypatch.setattr(
+        "scripts.experiments.runner._resolve_block_device_node", _boom
+    )
+
+    runner._preflight_disk_isolation()
+
+
+def test_remote_command_runs_on_selected_device(monkeypatch, tmp_path):
+    """BO/EVAL execute remotely and always clean the selected DB instance."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  ssh_user: pbt
+  data_dir: /srv/pbt
+  python: /srv/pbt/.venv/bin/python
+devices:
+  - host: 10.0.0.11
+  - host: 10.0.0.12
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+    )
+    captured: list[str] = []
+
+    def _capture(cmd, cwd=Path(".")):
+        captured.extend(cmd)
+        return True
+
+    monkeypatch.setattr(runner, "_run_command", _capture)
+
+    assert runner._run_remote_command(
+        runner._comparison_device(),
+        ["python", "-m", "src.tuners", "bo", "--no-cotenant"],
+    )
+    rendered = " ".join(captured)
+    assert "pbt@10.0.0.11" in rendered
+    assert "ServerAliveInterval=30" in rendered
+    assert "ServerAliveCountMax=6" in rendered
+    assert "cd /srv/pbt/code" in rendered
+    assert "/srv/pbt/.venv/bin/python -m src.tuners bo" in rendered
+    assert "trap cleanup_comparison_instance EXIT" in rendered
+    assert "src.scripts.cleanup_instances" in rendered
+    assert "--data-dir /srv/pbt/instances --force" in rendered
+
+
+def test_prepare_comparison_device_stops_other_agents(monkeypatch, tmp_path):
+    """All fleet agents and PostgreSQL instances stop before solo BO begins."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  ssh_user: pbt
+  data_dir: /srv/pbt
+devices:
+  - host: 10.0.0.11
+  - host: 10.0.0.12
+  - host: 10.0.0.13
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+        comparison_worker_id=1,
+    )
+    targets: list[str] = []
+
+    def _capture(cmd, cwd=Path(".")):
+        targets.append(" ".join(cmd))
+        return True
+
+    monkeypatch.setattr(runner, "_run_command", _capture)
+
+    runner._prepare_comparison_device()
+
+    assert len(targets) == 3
+    assert any("10.0.0.11" in cmd for cmd in targets)
+    selected = next(cmd for cmd in targets if "10.0.0.12" in cmd)
+    assert any("10.0.0.13" in cmd for cmd in targets)
+    assert "cleanup_instances" in selected
+    assert "agent-worker-1.pid" in selected
+    assert "agent-worker-0.pid" in next(
+        cmd for cmd in targets if "10.0.0.11" in cmd
+    )
+    assert "agent-worker-2.pid" in next(
+        cmd for cmd in targets if "10.0.0.13" in cmd
+    )
+
+
+def test_gcp_campaign_session_stops_all_worker_vms_on_exit(monkeypatch, tmp_path):
+    """Every configured worker VM stops even when the campaign raises."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  gcp_project: pbt-research
+  gcp_zone: us-central1-a
+devices:
+  - host: 10.0.0.11
+    gcp_instance: pbt-worker-0
+  - host: 10.0.0.12
+    gcp_instance: pbt-worker-1
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+        stop_gcp_after_campaign=True,
+    )
+    commands: list[list[str]] = []
+
+    def _capture(cmd, cwd=Path(".")):
+        commands.append(cmd)
+        return True
+
+    monkeypatch.setattr(runner, "_run_command", _capture)
+
+    with pytest.raises(RuntimeError, match="campaign failure"):
+        with runner.gcp_campaign_session():
+            raise RuntimeError("campaign failure")
+
+    assert commands == [
+        [
+            "gcloud",
+            "compute",
+            "instances",
+            "stop",
+            "pbt-worker-0",
+            "--project",
+            "pbt-research",
+            "--zone",
+            "us-central1-a",
+            "--quiet",
+        ],
+        [
+            "gcloud",
+            "compute",
+            "instances",
+            "stop",
+            "pbt-worker-1",
+            "--project",
+            "pbt-research",
+            "--zone",
+            "us-central1-a",
+            "--quiet",
+        ],
+    ]
+
+
+def test_gcp_shutdown_requires_explicit_instance_identity(tmp_path):
+    """Cloud shutdown fails closed instead of targeting VMs heuristically."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text("devices:\n  - host: 10.0.0.11\n")
+    runner = ExperimentRunner(
+        dry_run=True,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+        stop_gcp_after_campaign=True,
+    )
+
+    with pytest.raises(ValueError, match="gcp_project, gcp_zone, and gcp_instance"):
+        runner._stop_gcp_fleet()
+
+
 # ---------------------------------------------------------------------------
 # Version control: stash → pull → stash pop → commit → push (+ retry)
 # ---------------------------------------------------------------------------

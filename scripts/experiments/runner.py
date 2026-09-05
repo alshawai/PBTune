@@ -1,15 +1,23 @@
 import atexit
 import json
 import logging
+import shlex
 import signal
 import subprocess
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from scripts.experiments.experiment_matrix import Experiment
 from src.config.data_root import resolve_data_root
+from src.tuners.distributed.bootstrap import (
+    RemoteLayout,
+    ssh_command,
+    stop_agent_command,
+)
+from src.tuners.distributed.config import ExecutionMode
+from src.tuners.distributed.inventory import DeviceSpec, load_inventory
 from src.utils.hardware_info import detect_worker_resources, _resolve_block_device_node
 from src.tuners.pbt.config import (
     RAPID_CONFIG,
@@ -73,6 +81,14 @@ class ExperimentRunner:
         no_push: bool = False,
         manifest_dir: Path | None = None,
         manifest_path: Path | None = None,
+        execution_mode: ExecutionMode | str = ExecutionMode.LOCAL,
+        inventory: Path | None = None,
+        bootstrap: bool = True,
+        remote_install_deps: bool = True,
+        eval_timeout: float = 1800.0,
+        agent_timeout: float = 60.0,
+        comparison_worker_id: int = 0,
+        stop_gcp_after_campaign: bool = False,
     ):
         """Run experiments and persist progress to per-experiment manifests.
 
@@ -90,6 +106,26 @@ class ExperimentRunner:
         self.no_push = no_push
         self.manifest_dir = manifest_dir or DEFAULT_MANIFEST_DIR
         self.manifest_path_override = manifest_path
+        self.execution_mode = ExecutionMode(execution_mode)
+        self.inventory = inventory.expanduser() if inventory is not None else None
+        self.bootstrap = bootstrap
+        self.remote_install_deps = remote_install_deps
+        self.eval_timeout = eval_timeout
+        self.agent_timeout = agent_timeout
+        self.comparison_worker_id = comparison_worker_id
+        self.stop_gcp_after_campaign = stop_gcp_after_campaign
+        self._fleet_inventory = None
+
+        if self.execution_mode is ExecutionMode.DISTRIBUTED and self.inventory is None:
+            raise ValueError("Distributed execution requires a fleet inventory path")
+        if self.eval_timeout <= 0 or self.agent_timeout <= 0:
+            raise ValueError("Distributed RPC timeouts must be positive")
+        if self.comparison_worker_id < 0:
+            raise ValueError("Comparison worker ID must be non-negative")
+        if self.stop_gcp_after_campaign and not self.distributed:
+            raise ValueError(
+                "GCP fleet shutdown is only available in distributed mode"
+            )
 
         # Active experiment's manifest, populated by run_experiment().
         self._active_manifest_path: Path | None = None
@@ -150,6 +186,236 @@ class ExperimentRunner:
             flags[1],
         )
         return flags
+
+    @property
+    def distributed(self) -> bool:
+        """Whether PBT workers execute on the remote device fleet."""
+        return self.execution_mode is ExecutionMode.DISTRIBUTED
+
+    def _distributed_pbt_flags(self) -> list[str]:
+        """Build remote-agent CLI flags for a distributed PBT command."""
+        if not self.distributed:
+            return []
+        assert self.inventory is not None
+        flags = [
+            "--distributed",
+            "--inventory",
+            str(self.inventory),
+            "--eval-timeout",
+            str(self.eval_timeout),
+            "--agent-timeout",
+            str(self.agent_timeout),
+        ]
+        if not self.bootstrap:
+            flags.append("--no-bootstrap")
+        if not self.remote_install_deps:
+            flags.append("--no-remote-deps")
+        return flags
+
+    def _load_fleet_inventory(self):
+        """Load the configured fleet once for comparison-phase SSH operations."""
+        if self._fleet_inventory is None:
+            assert self.inventory is not None
+            self._fleet_inventory = load_inventory(self.inventory)
+        return self._fleet_inventory
+
+    def _comparison_device(self) -> DeviceSpec:
+        """Return the sole fleet device used for BO and post-hoc evaluation."""
+        return self._load_fleet_inventory().device_for_worker(
+            self.comparison_worker_id
+        )
+
+    @staticmethod
+    def _ssh_transport_options(device: DeviceSpec) -> list[str]:
+        """Build shared non-interactive SSH options for rsync transfers."""
+        options = [
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=6",
+        ]
+        if device.ssh_key:
+            options.extend(["-i", device.ssh_key])
+        return options
+
+    @staticmethod
+    def _ssh_target(device: DeviceSpec) -> str:
+        """Return an SSH target using the inventory's optional user."""
+        return (
+            f"{device.ssh_user}@{device.host}"
+            if device.ssh_user
+            else device.host
+        )
+
+    def _run_remote_command(self, device: DeviceSpec, cmd: list[str]) -> bool:
+        """Execute one CLI command and always stop its PostgreSQL instances."""
+        if not cmd or cmd[0] != "python":
+            raise ValueError("Remote experiment commands must begin with 'python'")
+        layout = RemoteLayout.for_device(device)
+        remote_argv = [device.python, *cmd[1:]]
+        cleanup_argv = [
+            device.python,
+            "-m",
+            "src.scripts.cleanup_instances",
+            "--data-dir",
+            layout.instances_dir,
+            "--force",
+        ]
+        cleanup_cmd = shlex.join(cleanup_argv)
+        remote_cmd = (
+            f"cd {shlex.quote(layout.code_dir)} || exit $?; "
+            f"cleanup_comparison_instance() {{ {cleanup_cmd}; }}; "
+            "trap cleanup_comparison_instance EXIT; "
+            f"{shlex.join(remote_argv)}; phase_exit_code=$?; "
+            "trap - EXIT; cleanup_comparison_instance; cleanup_exit_code=$?; "
+            "if [ \"$phase_exit_code\" -ne 0 ]; then exit \"$phase_exit_code\"; fi; "
+            "exit \"$cleanup_exit_code\""
+        )
+        return self._run_command(ssh_command(device, remote_cmd))
+
+    def _stage_file_on_comparison_device(self, local_path: Path) -> str:
+        """Upload one coordinator artifact while preserving its project path."""
+        device = self._comparison_device()
+        layout = RemoteLayout.for_device(device)
+        try:
+            relative = local_path.resolve().relative_to(PROJECT_ROOT.resolve())
+        except ValueError as exc:
+            raise ValueError(
+                f"Comparison artifact must live under {PROJECT_ROOT}: {local_path}"
+            ) from exc
+
+        remote_path = str(PurePosixPath(layout.code_dir) / relative.as_posix())
+        parent = str(PurePosixPath(remote_path).parent)
+        if not self._run_command(
+            ssh_command(device, f"mkdir -p {shlex.quote(parent)}")
+        ):
+            raise RuntimeError(
+                f"Could not create comparison artifact directory on {device.display_name}"
+            )
+
+        ssh_shell = shlex.join(
+            ["ssh", *self._ssh_transport_options(device)]
+        )
+        upload = [
+            "rsync",
+            "-az",
+            "-e",
+            ssh_shell,
+            str(local_path),
+            f"{self._ssh_target(device)}:{remote_path}",
+        ]
+        if not self._run_command(upload):
+            raise RuntimeError(
+                f"Could not upload {local_path} to {device.display_name}"
+            )
+        return remote_path
+
+    def _sync_comparison_results(self) -> None:
+        """Download BO/evaluation artifacts from the selected device."""
+        device = self._comparison_device()
+        layout = RemoteLayout.for_device(device)
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        ssh_shell = shlex.join(
+            ["ssh", *self._ssh_transport_options(device)]
+        )
+        download = [
+            "rsync",
+            "-az",
+            "-e",
+            ssh_shell,
+            f"{self._ssh_target(device)}:{layout.code_dir}/results/",
+            f"{RESULTS_DIR}/",
+        ]
+        if not self._run_command(download):
+            raise RuntimeError(
+                f"Could not download comparison results from {device.display_name}"
+            )
+
+    def _prepare_comparison_device(self) -> None:
+        """Stop every PBT agent and instance before starting solo comparison."""
+        inventory = self._load_fleet_inventory()
+        selected = self._comparison_device()
+        LOGGER.info(
+            "Using worker %d (%s) exclusively for BO and EVAL; stopping %d "
+            "other fleet device(s).",
+            selected.worker_id,
+            selected.display_name,
+            max(0, len(inventory.devices) - 1),
+        )
+        failures: list[str] = []
+        for device in inventory.devices:
+            layout = RemoteLayout.for_device(device)
+            cleanup = (
+                f"{stop_agent_command(layout)}; "
+                f"if [ -d {shlex.quote(layout.code_dir)} ]; then "
+                f"cd {shlex.quote(layout.code_dir)} && "
+                f"{shlex.quote(device.python)} "
+                "-m src.scripts.cleanup_instances "
+                f"--data-dir {shlex.quote(layout.instances_dir)} --force; "
+                "fi"
+            )
+            if not self._run_command(ssh_command(device, cleanup)):
+                failures.append(device.display_name)
+        if failures:
+            raise RuntimeError(
+                "Could not stop unused fleet device(s): " + ", ".join(failures)
+            )
+
+    def _stop_gcp_fleet(self) -> None:
+        """Stop every worker VM after the complete experiment campaign."""
+        inventory = self._load_fleet_inventory()
+        missing = [
+            device.display_name
+            for device in inventory.devices
+            if not (
+                device.gcp_project
+                and device.gcp_zone
+                and device.gcp_instance
+            )
+        ]
+        if missing:
+            raise ValueError(
+                "GCP shutdown requires gcp_project, gcp_zone, and gcp_instance "
+                "for every fleet device; missing: " + ", ".join(missing)
+            )
+
+        LOGGER.info(
+            "Campaign complete: stopping %d GCP worker VM(s).",
+            len(inventory.devices),
+        )
+        failures: list[str] = []
+        for device in inventory.devices:
+            command = [
+                "gcloud",
+                "compute",
+                "instances",
+                "stop",
+                str(device.gcp_instance),
+                "--project",
+                str(device.gcp_project),
+                "--zone",
+                str(device.gcp_zone),
+                "--quiet",
+            ]
+            if not self._run_command(command):
+                failures.append(device.display_name)
+        if failures:
+            raise RuntimeError(
+                "Could not stop GCP worker VM(s): " + ", ".join(failures)
+            )
+
+    @contextmanager
+    def gcp_campaign_session(self):
+        """Ensure configured GCP worker VMs stop when the campaign exits."""
+        try:
+            yield
+        finally:
+            if self.stop_gcp_after_campaign:
+                self._stop_gcp_fleet()
 
     def _resolve_manifest_path(self, exp_id: str) -> Path:
         """Resolve the manifest path for ``exp_id``.
@@ -437,6 +703,12 @@ class ExperimentRunner:
         """
         if self.dry_run:
             return
+        if self.distributed:
+            LOGGER.info(
+                "Distributed mode: skipping coordinator disk-isolation preflight; "
+                "each PBT worker owns a dedicated fleet device."
+            )
+            return
         data_root = resolve_data_root()
         device = _resolve_block_device_node(data_root)
         if device is None:
@@ -472,7 +744,12 @@ class ExperimentRunner:
         pinning is a quality-of-measurement improvement, not a correctness
         invariant).
         """
-        if self.dry_run:
+        if self.dry_run or self.distributed:
+            if self.distributed:
+                LOGGER.info(
+                    "Distributed mode: leaving coordinator CPU policy unchanged; "
+                    "benchmark execution occurs on dedicated fleet devices."
+                )
             yield
             return
 
@@ -528,6 +805,11 @@ class ExperimentRunner:
     def run_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
         LOGGER.info(f"Starting experiment {exp.id} (Tier {exp.tier})")
 
+        if self.distributed and exp.strategy != "pbt":
+            raise ValueError(
+                "Distributed execution currently supports PBT experiments only"
+            )
+
         # Guarantee Disk-IO parity is enforceable before burning compute.
         self._preflight_disk_isolation()
 
@@ -572,12 +854,32 @@ class ExperimentRunner:
                     pbt_session_path = json_path
                 else:
                     self._mark_status(pbt_key, "failed", duration_s=duration)
+                    if self.distributed:
+                        self._prepare_comparison_device()
                     LOGGER.error("PBT phase failed. Skipping BO and EVAL for this seed.")
                     continue
             else:
                 LOGGER.info(f"Skipping PBT (already done/failed)")
                 json_str = self._active_manifest["runs"][pbt_key].get("session_json")
                 pbt_session_path = PROJECT_ROOT / json_str if json_str else None
+
+            comparison_pbt_session = pbt_session_path
+            if self.distributed:
+                # PBT agent shutdown does not remove its PostgreSQL container.
+                # Clean every fleet host before any comparison or early exit.
+                self._prepare_comparison_device()
+                if not pbt_session_path and not self.dry_run:
+                    LOGGER.error(
+                        "Cannot hand off distributed run: PBT session JSON not found."
+                    )
+                    continue
+                comparison_pbt_session = Path(
+                    self._stage_file_on_comparison_device(
+                        pbt_session_path
+                        if pbt_session_path is not None
+                        else PROJECT_ROOT / "DRY_RUN_PBT_SESSION_PATH.json"
+                    )
+                )
 
             # 2. BO Phase (only if enabled)
             if exp.run_bo:
@@ -588,14 +890,20 @@ class ExperimentRunner:
                         self._mark_status(bo_key, "failed", error="Missing PBT JSON")
                     else:
                         LOGGER.info(f"Phase 2/3: Running BO for {exp.id} (seed {seed})")
-                        cmd = self._build_bo_cmd(exp, pbt_session_path, seed)
+                        cmd = self._build_bo_cmd(exp, comparison_pbt_session, seed)
                         self._mark_status(bo_key, "running", started_at=datetime.utcnow().isoformat() + "Z")
                         
                         start_time = time.time()
-                        success = self._run_command(cmd)
+                        success = (
+                            self._run_remote_command(self._comparison_device(), cmd)
+                            if self.distributed
+                            else self._run_command(cmd)
+                        )
                         duration = time.time() - start_time
                         
                         if success:
+                            if self.distributed:
+                                self._sync_comparison_results()
                             json_path = self._find_latest_session_json(RESULTS_DIR, "bo")
                             json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
                             self._mark_status(bo_key, "done", duration_s=duration, session_json=json_str)
@@ -609,7 +917,13 @@ class ExperimentRunner:
                     LOGGER.info(f"Skipping BO (already done/failed)")
                     json_str = self._active_manifest["runs"].get(bo_key, {}).get("session_json")
                     bo_session_path = PROJECT_ROOT / json_str if json_str else None
-            
+
+            comparison_bo_session = bo_session_path
+            if self.distributed and bo_session_path is not None:
+                comparison_bo_session = Path(
+                    self._stage_file_on_comparison_device(bo_session_path)
+                )
+
             # 3. EVAL Phase
             eval_key = self._get_run_key(exp.id, seed, "eval")
             if not self._is_done(eval_key, retry_failed):
@@ -618,14 +932,25 @@ class ExperimentRunner:
                     self._mark_status(eval_key, "failed", error="Missing PBT JSON")
                 else:
                     LOGGER.info(f"Phase 3/3: Running EVAL for {exp.id} (seed {seed})")
-                    cmd = self._build_eval_cmd(pbt_session_path, bo_session_path, exp.eval_repetitions, seed)
+                    cmd = self._build_eval_cmd(
+                        comparison_pbt_session,
+                        comparison_bo_session,
+                        exp.eval_repetitions,
+                        seed,
+                    )
                     self._mark_status(eval_key, "running", started_at=datetime.utcnow().isoformat() + "Z")
                     
                     start_time = time.time()
-                    success = self._run_command(cmd)
+                    success = (
+                        self._run_remote_command(self._comparison_device(), cmd)
+                        if self.distributed
+                        else self._run_command(cmd)
+                    )
                     duration = time.time() - start_time
                     
                     if success:
+                        if self.distributed:
+                            self._sync_comparison_results()
                         self._mark_status(eval_key, "done", duration_s=duration)
                         self._commit_and_push(exp, seed, "eval")
                     else:
@@ -765,7 +1090,6 @@ class ExperimentRunner:
         return cmd
 
     def _build_pbt_cmd(self, exp: Experiment, seed: int) -> list[str]:
-        worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
             "python", "-m", "src.tuners", "pbt",
             "--config", exp.config_profile,
@@ -780,10 +1104,23 @@ class ExperimentRunner:
             # flag makes that contract part of the experiment record.
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--worker-ram", worker_ram,
-            "--worker-cpus", str(worker_cpus),
             "--verbose", "DEBUG"
         ]
+
+        if self.distributed:
+            # Device agents detect and report their full dedicated-device
+            # resources. Never derive worker limits from the coordinator.
+            cmd.extend(self._distributed_pbt_flags())
+        else:
+            worker_ram, worker_cpus = self._worker_resource_flags(exp)
+            cmd.extend(
+                [
+                    "--worker-ram",
+                    worker_ram,
+                    "--worker-cpus",
+                    str(worker_cpus),
+                ]
+            )
 
         if exp.sysbench_workload:
             cmd.extend(["--sysbench-workload", exp.sysbench_workload])
@@ -833,7 +1170,6 @@ class ExperimentRunner:
         # the session JSON, so these --worker-ram/--worker-cpus flags are
         # intentionally redundant (logged as ignored by the BO runner). They
         # are kept for the standalone-BO path where no session is supplied.
-        worker_ram, worker_cpus = self._worker_resource_flags(exp)
         cmd = [
             "python", "-m", "src.tuners", "bo",
             "--config", exp.config_profile,
@@ -845,10 +1181,23 @@ class ExperimentRunner:
             "--enable-snapshots",
             "--snapshot-restore-interval", "1",
             "--force-recreate-instances",
-            "--worker-ram", worker_ram,
-            "--worker-cpus", str(worker_cpus),
             "--verbose", "INFO"
         ]
+        if self.distributed:
+            # Distributed PBT has no single-host co-tenancy. Run BO alone on
+            # one of the same fleet devices and inherit its full resource
+            # envelope from the PBT session.
+            cmd.append("--no-cotenant")
+        else:
+            worker_ram, worker_cpus = self._worker_resource_flags(exp)
+            cmd.extend(
+                [
+                    "--worker-ram",
+                    worker_ram,
+                    "--worker-cpus",
+                    str(worker_cpus),
+                ]
+            )
         if exp.sysbench_workload:
             cmd.extend(["--sysbench-workload", exp.sysbench_workload])
         if exp.scale_factor is not None:

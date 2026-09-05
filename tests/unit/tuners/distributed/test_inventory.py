@@ -40,6 +40,29 @@ def test_fleet_defaults_and_per_device_overrides():
     assert d2.agent_port == 8770
 
 
+def test_gcp_identity_defaults_and_instance_names():
+    """Project/zone may be fleet defaults while VM names remain per-device."""
+    raw = _minimal()
+    raw["fleet"].update(
+        {"gcp_project": "research-project", "gcp_zone": "us-central1-a"}
+    )
+    for index, device in enumerate(raw["devices"]):
+        device["gcp_instance"] = f"pbt-worker-{index}"
+
+    inventory = parse_inventory(raw)
+
+    assert all(
+        device.gcp_project == "research-project"
+        for device in inventory.devices
+    )
+    assert all(device.gcp_zone == "us-central1-a" for device in inventory.devices)
+    assert [device.gcp_instance for device in inventory.devices] == [
+        "pbt-worker-0",
+        "pbt-worker-1",
+        "pbt-worker-2",
+    ]
+
+
 def test_agent_base_url_and_display_name():
     d = DeviceSpec(worker_id=0, host="host-a", agent_port=9000, label="alpha")
     assert d.agent_base_url == "http://host-a:9000"

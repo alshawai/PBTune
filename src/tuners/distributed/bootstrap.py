@@ -88,7 +88,16 @@ def _ssh_target(device: DeviceSpec) -> str:
 
 
 def _ssh_opts(device: DeviceSpec) -> List[str]:
-    opts = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+    opts = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=6",
+    ]
     if device.ssh_key:
         opts += ["-i", device.ssh_key]
     return opts

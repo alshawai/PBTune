@@ -14,6 +14,7 @@ from scripts.experiments.runner import (
     LEGACY_MANIFEST_PATH,
     ExperimentRunner,
 )
+from src.tuners.distributed.config import ExecutionMode
 
 
 def _print_aggregate_status(manifest_dir: Path, manifest_path: Path | None) -> None:
@@ -73,6 +74,68 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Resume from manifest (default behavior, skips done)")
     parser.add_argument("--retry-failed", action="store_true", help="Retry failed runs from manifest")
     parser.add_argument("--status", action="store_true", help="Print aggregate status across all manifests and exit")
+    execution = parser.add_mutually_exclusive_group()
+    execution.add_argument(
+        "--execution-mode",
+        choices=[mode.value for mode in ExecutionMode],
+        default=ExecutionMode.LOCAL.value,
+        help=(
+            "PBT execution mode: local co-tenant workers or one worker per "
+            "dedicated remote device (default: local)"
+        ),
+    )
+    execution.add_argument(
+        "--distributed",
+        dest="execution_mode",
+        action="store_const",
+        const=ExecutionMode.DISTRIBUTED.value,
+        help="Shortcut for --execution-mode distributed",
+    )
+    parser.add_argument(
+        "--inventory",
+        type=Path,
+        default=None,
+        help="Fleet devices.yaml path (required in distributed mode)",
+    )
+    parser.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help="Use already-running device agents instead of SSH bootstrap",
+    )
+    parser.add_argument(
+        "--no-remote-deps",
+        action="store_true",
+        help="Do not install requirements on devices during SSH bootstrap",
+    )
+    parser.add_argument(
+        "--eval-timeout",
+        type=float,
+        default=1800.0,
+        help="Per-worker remote evaluation timeout in seconds (default: 1800)",
+    )
+    parser.add_argument(
+        "--agent-timeout",
+        type=float,
+        default=60.0,
+        help="Per-agent control timeout in seconds (default: 60)",
+    )
+    parser.add_argument(
+        "--comparison-worker-id",
+        type=int,
+        default=0,
+        help=(
+            "Fleet worker used exclusively for BO and post-hoc evaluation "
+            "after distributed PBT finishes (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--stop-gcp-after-campaign",
+        action="store_true",
+        help=(
+            "Stop every GCP worker VM after all requested experiments finish; "
+            "requires gcp_project, gcp_zone, and gcp_instance in the inventory"
+        ),
+    )
     parser.add_argument(
         "--manifest-dir",
         type=Path,
@@ -95,6 +158,12 @@ def main():
 
     args = parser.parse_args()
     manifest_dir = args.manifest_dir or DEFAULT_MANIFEST_DIR
+
+    if (
+        args.execution_mode == ExecutionMode.DISTRIBUTED.value
+        and args.inventory is None
+    ):
+        parser.error("--execution-mode distributed requires --inventory PATH")
 
     if args.status:
         _print_aggregate_status(manifest_dir, args.manifest)
@@ -121,11 +190,20 @@ def main():
         no_push=args.no_push,
         manifest_dir=manifest_dir,
         manifest_path=args.manifest,
+        execution_mode=args.execution_mode,
+        inventory=args.inventory,
+        bootstrap=not args.no_bootstrap,
+        remote_install_deps=not args.no_remote_deps,
+        eval_timeout=args.eval_timeout,
+        agent_timeout=args.agent_timeout,
+        comparison_worker_id=args.comparison_worker_id,
+        stop_gcp_after_campaign=args.stop_gcp_after_campaign,
     )
 
-    with runner.cpu_performance_session():
-        for exp in experiments_to_run:
-            runner.run_experiment(exp, retry_failed=args.retry_failed)
+    with runner.gcp_campaign_session():
+        with runner.cpu_performance_session():
+            for exp in experiments_to_run:
+                runner.run_experiment(exp, retry_failed=args.retry_failed)
 
 
 if __name__ == "__main__":
