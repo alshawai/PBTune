@@ -11,6 +11,7 @@ Orchestrator wiring exactly as a real fleet would.
 
 import threading
 from typing import Any, Dict, Optional, Tuple
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -152,6 +153,28 @@ def test_setup_and_snapshot_fan_out(fleet):
     # create_snapshot must fan out to EVERY device (baseline on all).
     env.create_snapshot()
     assert all(b.snapshot_calls == 1 for b in backends.values())
+
+
+def test_setup_uses_long_operation_timeout(fleet):
+    """TPC-H setup must not inherit the short agent-control timeout."""
+    coordinator, _ = fleet
+    coordinator.config.request_timeout_s = 60.0
+    coordinator.config.eval_timeout_s = 1800.0
+    env = coordinator.make_environment(schema_provider=None, run_id="test")
+    client = MagicMock()
+    client.post.return_value = SetupResponse(
+        ok=True,
+        port=5440,
+        data_dir="/tmp/fake",
+        backend="fake",
+    ).to_dict()
+    env._clients = {0: client}
+    env._devices = {0: coordinator.devices[0]}
+
+    env.setup_instances(1)
+
+    client.post.assert_called_once()
+    assert client.post.call_args.kwargs["timeout"] == 1800.0
 
 
 def test_device_resources_reported_for_knob_ranges(fleet):

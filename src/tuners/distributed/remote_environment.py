@@ -62,6 +62,7 @@ class RemoteEnvironment(DatabaseEnvironment):
         devices: Dict[int, DeviceSpec],
         setup_template: SetupRequest,
         request_timeout_s: float = 60.0,
+        operation_timeout_s: float = 1800.0,
         force_recreate_baseline: bool = False,
     ):
         super().__init__(
@@ -74,6 +75,7 @@ class RemoteEnvironment(DatabaseEnvironment):
         self._devices = devices
         self._setup_template = setup_template
         self._request_timeout_s = request_timeout_s
+        self._operation_timeout_s = operation_timeout_s
         self._instances: Dict[int, InstanceConfig] = {}
         self._hardware: Dict[int, Dict[str, Any]] = {}
         self._device_resources: Dict[int, Dict[str, Any]] = {}
@@ -119,7 +121,9 @@ class RemoteEnvironment(DatabaseEnvironment):
                 req.force_recreate_baseline = True
             resp = SetupResponse.from_dict(
                 self._client(worker_id).post(
-                    ROUTES["setup"], req.to_dict(), timeout=None
+                    ROUTES["setup"],
+                    req.to_dict(),
+                    timeout=self._operation_timeout_s,
                 )
             )
             if not resp.ok:
@@ -230,7 +234,11 @@ class RemoteEnvironment(DatabaseEnvironment):
         """
         def _snap(wid: int) -> str:
             return SnapshotResponse.from_dict(
-                self._client(wid).post(ROUTES["snapshot"], {}, timeout=None)
+                self._client(wid).post(
+                    ROUTES["snapshot"],
+                    {},
+                    timeout=self._operation_timeout_s,
+                )
             ).snapshot_id
 
         results = self._fan_out(_snap)
@@ -244,7 +252,7 @@ class RemoteEnvironment(DatabaseEnvironment):
             self._client(worker_id).post(
                 ROUTES["reset"],
                 ResetRequest(snapshot_id=snapshot_id).to_dict(),
-                timeout=None,
+                timeout=self._operation_timeout_s,
             )
             return True
         except AgentRPCError as exc:
@@ -270,7 +278,11 @@ class RemoteEnvironment(DatabaseEnvironment):
         req = SetupRequest.from_dict(self._setup_template.to_dict())
         req.force_recreate_baseline = True
         resp = SetupResponse.from_dict(
-            self._client(worker_id).post(ROUTES["setup"], req.to_dict(), timeout=None)
+            self._client(worker_id).post(
+                ROUTES["setup"],
+                req.to_dict(),
+                timeout=self._operation_timeout_s,
+            )
         )
         if resp.ok:
             device = self._devices[worker_id]

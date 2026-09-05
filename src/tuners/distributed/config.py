@@ -45,11 +45,11 @@ class DistributedConfig:
     inventory:
         The parsed device fleet (one device per worker).
     request_timeout_s:
-        Per-RPC timeout for ordinary control calls (setup, reset, health).
+        Per-RPC timeout for short control calls such as health and cleanup.
     eval_timeout_s:
-        Timeout for a ``run_eval`` RPC. Must comfortably exceed
-        warmup + measurement + restart time; a breach marks the worker dead
-        and hands it to the standard rescue path.
+        Timeout for long-running device operations: setup, snapshot/reset,
+        rebuild, and ``run_eval``. Must comfortably exceed database creation,
+        benchmark data loading, warmup, measurement, and restart time.
     health_poll_interval_s, health_timeout_s:
         Polling cadence / overall deadline when waiting for agents to become
         healthy after (bootstrap and) setup.

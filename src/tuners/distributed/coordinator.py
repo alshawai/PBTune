@@ -122,6 +122,7 @@ class Coordinator:
             devices=self.devices,
             setup_template=self.setup_template,
             request_timeout_s=self.config.request_timeout_s,
+            operation_timeout_s=self.config.eval_timeout_s,
         )
 
     def make_orchestrator(
