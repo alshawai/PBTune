@@ -392,6 +392,7 @@ devices:
         no_push=True,
         execution_mode="distributed",
         inventory=inventory,
+        bootstrap=False,
         comparison_worker_id=1,
     )
     targets: list[str] = []
@@ -408,8 +409,9 @@ devices:
     assert any("10.0.0.11" in cmd for cmd in targets)
     selected = next(cmd for cmd in targets if "10.0.0.12" in cmd)
     assert any("10.0.0.13" in cmd for cmd in targets)
-    assert "cleanup_instances" in selected
-    assert "--docker-only" in selected
+    assert "docker ps -aq" in selected
+    assert "docker rm -f" in selected
+    assert "cleanup_instances" not in selected
     assert "agent-worker-1.pid" in selected
     assert "agent-worker-0.pid" in next(
         cmd for cmd in targets if "10.0.0.11" in cmd
@@ -417,6 +419,44 @@ devices:
     assert "agent-worker-2.pid" in next(
         cmd for cmd in targets if "10.0.0.13" in cmd
     )
+
+
+def test_prepare_comparison_device_syncs_code_when_pbt_is_skipped(
+    monkeypatch, tmp_path
+):
+    """Comparison setup must not depend on PBT bootstrap running first."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  ssh_user: pbt
+  data_dir: /srv/pbt
+  python: /srv/pbt/.venv/bin/python
+devices:
+  - host: 10.0.0.11
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+    )
+    commands: list[list[str]] = []
+
+    def _capture(cmd, cwd=Path(".")):
+        commands.append(cmd)
+        return True
+
+    monkeypatch.setattr(runner, "_run_command", _capture)
+
+    runner._prepare_comparison_device()
+    runner._sync_comparison_device_code()
+
+    rendered = [" ".join(command) for command in commands]
+    assert any("docker ps -aq" in command for command in rendered)
+    assert sum("rsync" in command for command in rendered) == 1
+    assert any("pip install -q -r requirements.txt" in command for command in rendered)
 
 
 def test_gcp_campaign_session_stops_all_worker_vms_on_exit(monkeypatch, tmp_path):

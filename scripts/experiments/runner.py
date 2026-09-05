@@ -12,7 +12,9 @@ from pathlib import Path, PurePosixPath
 from scripts.experiments.experiment_matrix import Experiment
 from src.config.data_root import resolve_data_root
 from src.tuners.distributed.bootstrap import (
+    install_deps_command,
     RemoteLayout,
+    rsync_command,
     ssh_command,
     stop_agent_command,
 )
@@ -115,6 +117,7 @@ class ExperimentRunner:
         self.comparison_worker_id = comparison_worker_id
         self.stop_gcp_after_campaign = stop_gcp_after_campaign
         self._fleet_inventory = None
+        self._comparison_code_synced = False
 
         if self.execution_mode is ExecutionMode.DISTRIBUTED and self.inventory is None:
             raise ValueError("Distributed execution requires a fleet inventory path")
@@ -336,6 +339,32 @@ class ExperimentRunner:
                 f"Could not download comparison results from {device.display_name}"
             )
 
+    def _sync_comparison_device_code(self) -> None:
+        """Ensure BO/EVAL use current code even when manifest skips PBT.
+
+        Ordinarily distributed PBT bootstrap performs the repository sync. A
+        resumed campaign can skip PBT, however, so comparison setup must not
+        assume that bootstrap ran in the current invocation.
+        """
+        if not self.bootstrap or self._comparison_code_synced:
+            return
+
+        device = self._comparison_device()
+        layout = RemoteLayout.for_device(device)
+        steps = [
+            ssh_command(device, f"mkdir -p {shlex.quote(layout.code_dir)}"),
+            rsync_command(device, str(PROJECT_ROOT), layout.code_dir),
+        ]
+        if self.remote_install_deps:
+            steps.append(ssh_command(device, install_deps_command(layout, device)))
+
+        for command in steps:
+            if not self._run_command(command):
+                raise RuntimeError(
+                    f"Could not synchronize comparison code to {device.display_name}"
+                )
+        self._comparison_code_synced = True
+
     def _prepare_comparison_device(self) -> None:
         """Stop every PBT agent and instance before starting solo comparison."""
         inventory = self._load_fleet_inventory()
@@ -350,14 +379,16 @@ class ExperimentRunner:
         failures: list[str] = []
         for device in inventory.devices:
             layout = RemoteLayout.for_device(device)
+            # Use Docker directly here instead of the synced Python cleanup
+            # module. A resumed manifest can skip PBT bootstrap, leaving an old
+            # module on the worker that does not understand new cleanup flags.
             cleanup = (
                 f"{stop_agent_command(layout)}; "
-                f"if [ -d {shlex.quote(layout.code_dir)} ]; then "
-                f"cd {shlex.quote(layout.code_dir)} && "
-                f"{shlex.quote(device.python)} "
-                "-m src.scripts.cleanup_instances "
-                f"--data-dir {shlex.quote(layout.instances_dir)} "
-                "--force --docker-only; "
+                "if ! container_ids=\"$(docker ps -aq "
+                "--filter 'name=^/pbt-worker-' "
+                "--filter 'name=^/eval-worker-')\"; then exit 1; fi; "
+                "if [ -n \"$container_ids\" ]; then "
+                "docker rm -f $container_ids; "
                 "fi"
             )
             if not self._run_command(ssh_command(device, cleanup)):
@@ -366,6 +397,7 @@ class ExperimentRunner:
             raise RuntimeError(
                 "Could not stop unused fleet device(s): " + ", ".join(failures)
             )
+        self._sync_comparison_device_code()
 
     def _stop_gcp_fleet(self) -> None:
         """Stop every worker VM after the complete experiment campaign."""
