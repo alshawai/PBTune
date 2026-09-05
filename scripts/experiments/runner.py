@@ -264,6 +264,7 @@ class ExperimentRunner:
             "--data-dir",
             layout.instances_dir,
             "--force",
+            "--docker-only",
         ]
         cleanup_cmd = shlex.join(cleanup_argv)
         remote_cmd = (
@@ -355,7 +356,8 @@ class ExperimentRunner:
                 f"cd {shlex.quote(layout.code_dir)} && "
                 f"{shlex.quote(device.python)} "
                 "-m src.scripts.cleanup_instances "
-                f"--data-dir {shlex.quote(layout.instances_dir)} --force; "
+                f"--data-dir {shlex.quote(layout.instances_dir)} "
+                "--force --docker-only; "
                 "fi"
             )
             if not self._run_command(ssh_command(device, cleanup)):
