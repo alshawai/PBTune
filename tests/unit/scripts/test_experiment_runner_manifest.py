@@ -112,15 +112,12 @@ def test_cross_manifest_index_aggregates_peer_files(runner_factory, tmp_path):
     )
 
 
-def test_paths_to_stage_scoped_to_experiment(runner_factory, tmp_path):
-    """git pathspecs cover the active manifest + workload subtree only.
+def test_paths_to_stage_scoped_to_current_session_layout(runner_factory, tmp_path):
+    """Tuner pathspecs cover the manifest and exact current session root.
 
     The experiment id (``t3_exploit_020``) is a label, not a directory
-    name. The result subtree is workload-keyed
-    (``oltp/<sysbench_workload>`` for sysbench, ``olap`` for TPC-H),
-    matching the on-disk convention every writer in src/ uses.
-    Staging ``exp.id`` directly (the previous behavior) caused
-    ``fatal: pathspec '<exp.id>' did not match any files``.
+    name. Sysbench tuner output uses the single workload key beneath
+    ``sessions/``; the obsolete ``oltp/<workload>`` root must not return.
     """
     from scripts.experiments.experiment_matrix import Experiment
 
@@ -141,8 +138,8 @@ def test_paths_to_stage_scoped_to_experiment(runner_factory, tmp_path):
         run_bo=False,
     )
     runner._active_manifest_path = runner._resolve_manifest_path(exp.id)
-    paths = runner._paths_to_stage(exp)
-    assert "oltp/oltp_read_write" in paths
+    paths = runner._paths_to_stage(exp, "pbt")
+    assert "sessions/oltp_read_write/pbt/extensive" in paths
     # Experiment id must NOT be staged as a path — it's a label.
     assert exp.id not in paths
     for p in paths:
@@ -151,8 +148,18 @@ def test_paths_to_stage_scoped_to_experiment(runner_factory, tmp_path):
         )
 
 
-def test_paths_to_stage_tpch_maps_to_olap(runner_factory, tmp_path):
-    """TPC-H experiments land under ``results/olap/...`` on disk."""
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    [
+        ("pbt", "sessions/olap/pbt/extensive"),
+        ("bo", "sessions/olap/bo/extensive"),
+        ("eval", "comparisons/olap/extensive"),
+    ],
+)
+def test_paths_to_stage_tpch_maps_current_phase_layout(
+    runner_factory, tmp_path, phase, expected
+):
+    """TPC-H pathspecs target each current phase output precisely."""
     from scripts.experiments.experiment_matrix import Experiment
 
     runner = runner_factory()
@@ -172,9 +179,46 @@ def test_paths_to_stage_tpch_maps_to_olap(runner_factory, tmp_path):
         run_bo=True,
     )
     runner._active_manifest_path = runner._resolve_manifest_path(exp.id)
-    paths = runner._paths_to_stage(exp)
-    assert "olap" in paths
+    paths = runner._paths_to_stage(exp, phase)
+    assert expected in paths
     assert exp.id not in paths
+
+
+def test_paths_to_stage_data_driven_ablation_session(runner_factory):
+    """Data-driven tuner paths preserve tier slugging and ablation scope."""
+    from scripts.experiments.experiment_matrix import Experiment
+
+    runner = runner_factory()
+    exp = Experiment(
+        id="t3_source_dd_core",
+        tier=3,
+        description="",
+        benchmark="sysbench",
+        sysbench_workload="oltp_read_write",
+        scale_factor=None,
+        config_profile="thorough",
+        knob_tier="core",
+        knob_source="data_driven",
+        tuning_mode="offline",
+        seeds=(42,),
+        eval_repetitions=5,
+        run_bo=False,
+        ablation_variable="knob_source",
+        ablation_value="data_driven_core",
+    )
+
+    paths = runner._paths_to_stage(exp, "pbt")
+
+    assert (
+        "sessions/oltp_read_write/pbt/core@scalpel-v1/"
+        "ablations/knob_source/data_driven_core"
+    ) in paths
+
+
+def test_paths_to_stage_rejects_unknown_phase(runner_factory):
+    """Unknown phases fail before invoking git with an invalid pathspec."""
+    with pytest.raises(ValueError, match="Unknown experiment phase"):
+        runner_factory()._paths_to_stage(_smoke_exp(), "unknown")
 
 
 def test_default_manifest_dir_is_under_results():

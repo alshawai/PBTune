@@ -461,36 +461,36 @@ class ExperimentRunner:
             return self.manifest_path_override
         return self.manifest_dir / f"{exp_id}.json"
 
-    def _workload_subtree(self, exp: Experiment) -> str:
-        """Return the workload-keyed result subdirectory (relative to
-        ``RESULTS_DIR``) where this experiment's PBT, BO, and eval
-        outputs land.
-
-        Matches the on-disk convention used by ``src.tuners.pbt``,
-        ``src.tuners.bo``, and ``src.evaluation``:
-
-        - ``benchmark="sysbench"`` → ``oltp/<sysbench_workload>``
-        - ``benchmark="tpch"``     → ``olap``
-
-        The previous implementation staged ``exp.id`` directly, which
-        ``git add`` rejected because the experiment id is a label
-        (e.g. ``t2_sysbench_ro``) — never a directory on disk.
-        """
+    def _workload_key(self, exp: Experiment) -> str:
+        """Return the workload segment used by current result writers."""
         if exp.benchmark == "tpch":
             return "olap"
         if exp.benchmark == "sysbench":
-            return f"oltp/{exp.sysbench_workload or 'oltp_read_write'}"
+            return exp.sysbench_workload or "oltp_read_write"
         raise ValueError(
-            f"Cannot derive workload subtree for experiment {exp.id!r}: "
+            f"Cannot derive workload key for experiment {exp.id!r}: "
             f"unknown benchmark {exp.benchmark!r}"
         )
 
-    def _paths_to_stage(self, exp: Experiment) -> list[str]:
-        """Compute the git pathspecs to stage for ``exp``'s commit.
+    @staticmethod
+    def _tier_slug(exp: Experiment) -> str:
+        """Return the tier segment used by current result writers."""
+        if exp.knob_source == "data_driven":
+            return f"{exp.knob_tier}@scalpel-v1"
+        return exp.knob_tier
+
+    def _paths_to_stage(self, exp: Experiment, phase: str) -> list[str]:
+        """Compute phase-specific git pathspecs for one result commit.
 
         Returns paths relative to ``RESULTS_DIR``. Restricting to these
         avoids ``git add -A`` picking up an in-flight peer-machine write
         — the original source of merge conflicts on the results repo.
+
+        Tuner outputs use ``sessions/<workload>/<strategy>/<tier>`` while
+        post-hoc evaluations use ``comparisons/<workload>/<tier>``. Older
+        layouts placed these artifacts directly under ``olap`` or ``oltp``;
+        staging those obsolete roots made successful current runs report
+        ``No changes to commit``.
         """
         paths: list[str] = []
         if self._active_manifest_path is not None:
@@ -501,10 +501,22 @@ class ExperimentRunner:
             except ValueError:
                 # Manifest path lives outside RESULTS_DIR (legacy override
                 # pointing elsewhere). Skip — caller will still commit
-                # the workload subtree below.
+                # the phase output below.
                 pass
-        # Workload subtree is where every phase's output file lands.
-        paths.append(self._workload_subtree(exp))
+
+        workload = self._workload_key(exp)
+        tier = self._tier_slug(exp)
+        if phase in {"pbt", "bo", "lhs"}:
+            path = Path("sessions") / workload / phase / tier
+            if exp.ablation_variable and exp.ablation_value is not None:
+                path /= Path(
+                    "ablations", exp.ablation_variable, str(exp.ablation_value)
+                )
+        elif phase == "eval":
+            path = Path("comparisons") / workload / tier
+        else:
+            raise ValueError(f"Unknown experiment phase: {phase!r}")
+        paths.append(path.as_posix())
         return paths
 
     def _load_manifest(self, path: Path) -> dict:
@@ -644,7 +656,7 @@ class ExperimentRunner:
 
             # 2. Stage only this experiment's artifacts (path scoping avoids
             #    picking up an in-flight peer write).
-            self._git("add", "--", *self._paths_to_stage(exp))
+            self._git("add", "--", *self._paths_to_stage(exp, phase))
             if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
                 LOGGER.info("No changes to commit in results repo.")
                 return
