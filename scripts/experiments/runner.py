@@ -1,15 +1,23 @@
 import atexit
+import fnmatch
 import json
 import logging
 import shlex
 import signal
 import subprocess
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from scripts.experiments.experiment_matrix import Experiment
+from scripts.experiments.run_state import (
+    CampaignFileLock,
+    RunnerIdentity,
+    atomic_write_json,
+    utc_now,
+)
 from src.config.data_root import resolve_data_root
 from src.tuners.distributed.bootstrap import (
     install_deps_command,
@@ -65,15 +73,39 @@ DEFAULT_RESULTS_REMOTE = "origin"
 # with rebase and try again up to this many times.
 PUSH_RETRIES = 3
 STASH_MSG = "pbtune-autostash"
+GCP_STOP_RETRIES = 3
+GCP_STOP_VERIFY_POLLS = 12
+GCP_STOP_VERIFY_DELAY_S = 5.0
 
 LOGGER = logging.getLogger("ExperimentRunner")
 
 
 def _empty_manifest() -> dict:
     return {
-        "started_at": datetime.utcnow().isoformat() + "Z",
+        "started_at": utc_now(),
         "runs": {},
     }
+
+
+@dataclass(frozen=True)
+class RemoteArtifactSpec:
+    """Expected remote result produced by one BO or EVAL attempt."""
+
+    phase: str
+    output_dir: str
+    pattern: str
+    marker_path: str
+    receipt_path: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize the artifact contract into the phase manifest."""
+        return {
+            "phase": self.phase,
+            "output_dir": self.output_dir,
+            "pattern": self.pattern,
+            "marker_path": self.marker_path,
+            "receipt_path": self.receipt_path,
+        }
 
 
 class ExperimentRunner:
@@ -118,6 +150,14 @@ class ExperimentRunner:
         self.stop_gcp_after_campaign = stop_gcp_after_campaign
         self._fleet_inventory = None
         self._comparison_code_synced = False
+        self._runner_identity = RunnerIdentity.create()
+        self._campaign_lock = CampaignFileLock(
+            PROJECT_ROOT / ".agent_work" / "experiment-runner.lock",
+            self._runner_identity,
+        )
+        self._campaign_lock_depth = 0
+        self._active_phase_key: str | None = None
+        self._gcp_stop_completed = False
 
         if self.execution_mode is ExecutionMode.DISTRIBUTED and self.inventory is None:
             raise ValueError("Distributed execution requires a fleet inventory path")
@@ -150,6 +190,28 @@ class ExperimentRunner:
                 level=logging.INFO,
                 format="%(asctime)s [%(levelname)s] %(message)s"
             )
+
+    @contextmanager
+    def _exclusive_runner_session(self) -> Iterator[None]:
+        """Prevent concurrent campaign processes from sharing the fleet."""
+        if self.dry_run:
+            yield
+            return
+
+        if self._campaign_lock_depth:
+            self._campaign_lock_depth += 1
+            try:
+                yield
+            finally:
+                self._campaign_lock_depth -= 1
+            return
+
+        with self._campaign_lock.held():
+            self._campaign_lock_depth = 1
+            try:
+                yield
+            finally:
+                self._campaign_lock_depth = 0
 
     def _effective_parallel_workers(self, exp: Experiment) -> int:
         """Resolve the parallel-worker count the PBT run will actually use.
@@ -254,8 +316,13 @@ class ExperimentRunner:
             else device.host
         )
 
-    def _run_remote_command(self, device: DeviceSpec, cmd: list[str]) -> bool:
-        """Execute one CLI command and always stop its PostgreSQL instances."""
+    def _run_remote_command(
+        self,
+        device: DeviceSpec,
+        cmd: list[str],
+        artifact: RemoteArtifactSpec | None = None,
+    ) -> bool:
+        """Execute a remote phase, receipt its artifact, and clean PostgreSQL."""
         if not cmd or cmd[0] != "python":
             raise ValueError("Remote experiment commands must begin with 'python'")
         layout = RemoteLayout.for_device(device)
@@ -270,11 +337,42 @@ class ExperimentRunner:
             "--docker-only",
         ]
         cleanup_cmd = shlex.join(cleanup_argv)
+        artifact_setup = ""
+        artifact_receipt = ""
+        if artifact is not None:
+            attempt_dir = str(PurePosixPath(artifact.marker_path).parent)
+            artifact_setup = (
+                f"mkdir -p {shlex.quote(attempt_dir)}; "
+                f"rm -f {shlex.quote(artifact.receipt_path)}; "
+                f"touch {shlex.quote(artifact.marker_path)}; "
+            )
+            # GNU find is available on the Linux fleet. The marker makes the
+            # receipt specific to this attempt even when older traces exist.
+            artifact_receipt = (
+                "if [ \"$phase_exit_code\" -eq 0 ]; then "
+                "artifact_path=\"$(find "
+                f"{shlex.quote(artifact.output_dir)} -type f "
+                f"-name {shlex.quote(artifact.pattern)} "
+                f"-newer {shlex.quote(artifact.marker_path)} "
+                "-printf '%T@ %p\\n' 2>/dev/null | sort -nr | "
+                "head -n 1 | cut -d' ' -f2-)\"; "
+                "if [ -z \"$artifact_path\" ]; then "
+                "echo 'Successful phase produced no expected artifact' >&2; "
+                "phase_exit_code=74; "
+                "else "
+                f"printf '%s\\n' \"$artifact_path\" > "
+                f"{shlex.quote(artifact.receipt_path)}.tmp; "
+                f"mv {shlex.quote(artifact.receipt_path)}.tmp "
+                f"{shlex.quote(artifact.receipt_path)}; "
+                "fi; fi; "
+            )
         remote_cmd = (
             f"cd {shlex.quote(layout.code_dir)} || exit $?; "
+            f"{artifact_setup}"
             f"cleanup_comparison_instance() {{ {cleanup_cmd}; }}; "
             "trap cleanup_comparison_instance EXIT; "
             f"{shlex.join(remote_argv)}; phase_exit_code=$?; "
+            f"{artifact_receipt}"
             "trap - EXIT; cleanup_comparison_instance; cleanup_exit_code=$?; "
             "if [ \"$phase_exit_code\" -ne 0 ]; then exit \"$phase_exit_code\"; fi; "
             "exit \"$cleanup_exit_code\""
@@ -339,6 +437,190 @@ class ExperimentRunner:
                 f"Could not download comparison results from {device.display_name}"
             )
 
+    def _sync_comparison_output(self, spec: RemoteArtifactSpec) -> None:
+        """Download only one attempt's canonical phase output subtree."""
+        device = self._comparison_device()
+        layout = RemoteLayout.for_device(device)
+        remote_dir = PurePosixPath(spec.output_dir)
+        try:
+            relative = remote_dir.relative_to(PurePosixPath(layout.code_dir))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Remote output directory escaped code root: {spec.output_dir}"
+            ) from exc
+        if not relative.parts or relative.parts[0] != "results":
+            raise RuntimeError(
+                f"Remote output directory is outside results/: {spec.output_dir}"
+            )
+
+        local_dir = PROJECT_ROOT / Path(*relative.parts)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        ssh_shell = shlex.join(["ssh", *self._ssh_transport_options(device)])
+        download = [
+            "rsync",
+            "-az",
+            "-e",
+            ssh_shell,
+            f"{self._ssh_target(device)}:{spec.output_dir}/",
+            f"{local_dir}/",
+        ]
+        if not self._run_command(download):
+            raise RuntimeError(
+                f"Could not download {spec.phase} output from {device.display_name}"
+            )
+
+    def _remote_artifact_spec(
+        self,
+        exp: Experiment,
+        phase: str,
+        attempt_id: str,
+    ) -> RemoteArtifactSpec:
+        """Build the remote artifact contract for one comparison attempt."""
+        if phase not in {"bo", "eval"}:
+            raise ValueError(f"Remote reconciliation is unsupported for {phase!r}")
+
+        layout = RemoteLayout.for_device(self._comparison_device())
+        relative_output = self._paths_to_stage(exp, phase)[-1]
+        output_dir = str(
+            PurePosixPath(layout.code_dir) / "results" / relative_output
+        )
+        pattern = "trace_*.json" if phase == "bo" else "*comparison_*.json"
+        attempt_dir = PurePosixPath(layout.root) / ".pbtune-attempts"
+        return RemoteArtifactSpec(
+            phase=phase,
+            output_dir=output_dir,
+            pattern=pattern,
+            marker_path=str(attempt_dir / f"{attempt_id}.started"),
+            receipt_path=str(attempt_dir / f"{attempt_id}.artifact"),
+        )
+
+    def _remote_artifact_from_receipt(
+        self,
+        spec: RemoteArtifactSpec,
+        started_at: str | None,
+    ) -> str | None:
+        """Resolve a receipted artifact, with a legacy timestamp fallback."""
+        device = self._comparison_device()
+        receipt = shlex.quote(spec.receipt_path)
+        output_dir = shlex.quote(spec.output_dir)
+        pattern = shlex.quote(spec.pattern)
+        fallback = ""
+        if started_at:
+            fallback = (
+                "else find "
+                f"{output_dir} -type f -name {pattern} "
+                f"-newermt {shlex.quote(started_at)} "
+                "-printf '%T@ %p\\n' 2>/dev/null | sort -nr | "
+                "head -n 1 | cut -d' ' -f2-; "
+            )
+        remote_cmd = (
+            f"if [ -s {receipt} ]; then cat {receipt}; "
+            f"{fallback}"
+            "fi"
+        )
+        result = self._capture_command(ssh_command(device, remote_cmd))
+        if result.returncode != 0:
+            LOGGER.warning(
+                "Could not query remote %s artifact: %s",
+                spec.phase,
+                (result.stderr or result.stdout).strip(),
+            )
+            return None
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return lines[-1] if lines else None
+
+    def _validate_remote_artifact_path(
+        self,
+        remote_path: str,
+        spec: RemoteArtifactSpec,
+    ) -> Path:
+        """Map a trusted remote result path onto its coordinator location."""
+        device = self._comparison_device()
+        layout = RemoteLayout.for_device(device)
+        candidate = PurePosixPath(remote_path)
+        expected_dir = PurePosixPath(spec.output_dir)
+        try:
+            candidate.relative_to(expected_dir)
+            relative = candidate.relative_to(PurePosixPath(layout.code_dir))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Remote artifact escaped its expected directory: {remote_path}"
+            ) from exc
+        if not fnmatch.fnmatch(candidate.name, spec.pattern):
+            raise RuntimeError(
+                f"Remote artifact {candidate.name!r} does not match {spec.pattern!r}"
+            )
+        if not relative.parts or relative.parts[0] != "results":
+            raise RuntimeError(f"Remote artifact is outside results/: {remote_path}")
+        return PROJECT_ROOT / Path(*relative.parts)
+
+    @staticmethod
+    def _validate_reconciled_json(path: Path, phase: str, seed: int) -> None:
+        """Reject malformed or clearly mismatched comparison artifacts."""
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Invalid reconciled artifact {path}: {exc}") from exc
+
+        recorded_seed = None
+        if phase == "bo":
+            recorded_seed = payload.get("tuning_session", {}).get("seed")
+        elif phase == "eval":
+            recorded_seed = payload.get("comparison_metadata", {}).get(
+                "pair_seed_base"
+            )
+        if recorded_seed is not None and int(recorded_seed) != seed:
+            raise RuntimeError(
+                f"Reconciled {phase} artifact seed {recorded_seed} != {seed}"
+            )
+
+    def _reconcile_remote_artifact(
+        self,
+        exp: Experiment,
+        seed: int,
+        phase: str,
+        run_data: dict,
+    ) -> Path | None:
+        """Recover a completed remote BO/EVAL result after coordinator loss."""
+        if self.dry_run:
+            return None
+        artifact_data = run_data.get("remote_artifact") or {}
+        attempt_id = str(run_data.get("attempt_id") or "legacy")
+        spec = RemoteArtifactSpec(
+            phase=phase,
+            output_dir=str(
+                artifact_data.get("output_dir")
+                or self._remote_artifact_spec(exp, phase, attempt_id).output_dir
+            ),
+            pattern=str(
+                artifact_data.get("pattern")
+                or self._remote_artifact_spec(exp, phase, attempt_id).pattern
+            ),
+            marker_path=str(
+                artifact_data.get("marker_path")
+                or self._remote_artifact_spec(exp, phase, attempt_id).marker_path
+            ),
+            receipt_path=str(
+                artifact_data.get("receipt_path")
+                or self._remote_artifact_spec(exp, phase, attempt_id).receipt_path
+            ),
+        )
+        remote_path = self._remote_artifact_from_receipt(
+            spec, run_data.get("started_at")
+        )
+        if remote_path is None:
+            return None
+
+        local_path = self._validate_remote_artifact_path(remote_path, spec)
+        self._sync_comparison_output(spec)
+        if not local_path.is_file():
+            raise RuntimeError(
+                f"Remote artifact receipt resolved to {remote_path}, but rsync did "
+                f"not create {local_path}"
+            )
+        self._validate_reconciled_json(local_path, phase, seed)
+        return local_path
+
     def _sync_comparison_device_code(self) -> None:
         """Ensure BO/EVAL use current code even when manifest skips PBT.
 
@@ -400,7 +682,9 @@ class ExperimentRunner:
         self._sync_comparison_device_code()
 
     def _stop_gcp_fleet(self) -> None:
-        """Stop every worker VM after the complete experiment campaign."""
+        """Stop and verify every worker VM after the experiment campaign."""
+        if self._gcp_stop_completed:
+            return
         inventory = self._load_fleet_inventory()
         missing = [
             device.display_name
@@ -421,6 +705,14 @@ class ExperimentRunner:
             "Campaign complete: stopping %d GCP worker VM(s).",
             len(inventory.devices),
         )
+        shutdown = self._active_manifest.setdefault("fleet_shutdown", {})
+        shutdown.update(
+            requested=True,
+            started_at=utc_now(),
+            status="stopping",
+            devices=shutdown.get("devices", {}),
+        )
+        self._save_manifest()
         failures: list[str] = []
         for device in inventory.devices:
             command = [
@@ -435,21 +727,137 @@ class ExperimentRunner:
                 str(device.gcp_zone),
                 "--quiet",
             ]
-            if not self._run_command(command):
+            device_state = shutdown["devices"].setdefault(
+                str(device.gcp_instance), {}
+            )
+            stopped = False
+            for attempt in range(1, GCP_STOP_RETRIES + 1):
+                current_status = self._gcp_instance_status(device)
+                if current_status == "TERMINATED":
+                    stopped = True
+                    break
+                device_state.update(
+                    status="stopping",
+                    attempt=attempt,
+                    updated_at=utc_now(),
+                )
+                self._save_manifest()
+                if not self._run_command(command):
+                    continue
+                if self.dry_run:
+                    stopped = True
+                    break
+                for verification_poll in range(1, GCP_STOP_VERIFY_POLLS + 1):
+                    current_status = self._gcp_instance_status(device)
+                    device_state.update(
+                        observed_status=current_status,
+                        verification_poll=verification_poll,
+                        updated_at=utc_now(),
+                    )
+                    self._save_manifest()
+                    if current_status == "TERMINATED":
+                        stopped = True
+                        break
+                    if verification_poll < GCP_STOP_VERIFY_POLLS:
+                        time.sleep(GCP_STOP_VERIFY_DELAY_S)
+                if stopped:
+                    break
+
+            if stopped:
+                device_state.update(status="terminated", stopped_at=utc_now())
+                self._save_manifest()
+            else:
+                device_state.update(
+                    status="failed",
+                    updated_at=utc_now(),
+                    error="GCP did not report TERMINATED",
+                )
+                self._save_manifest()
                 failures.append(device.display_name)
         if failures:
+            shutdown.update(status="failed", finished_at=utc_now())
+            self._save_manifest()
             raise RuntimeError(
                 "Could not stop GCP worker VM(s): " + ", ".join(failures)
             )
+        shutdown.update(status="terminated", finished_at=utc_now())
+        self._gcp_stop_completed = True
+        self._save_manifest()
+
+    def _gcp_instance_status(self, device: DeviceSpec) -> str | None:
+        """Return the authoritative Compute Engine status for one VM."""
+        command = [
+            "gcloud",
+            "compute",
+            "instances",
+            "describe",
+            str(device.gcp_instance),
+            "--project",
+            str(device.gcp_project),
+            "--zone",
+            str(device.gcp_zone),
+            "--format=value(status)",
+        ]
+        result = self._capture_command(command)
+        if result.returncode != 0:
+            LOGGER.warning(
+                "Could not verify GCP state for %s: %s",
+                device.display_name,
+                (result.stderr or result.stdout).strip(),
+            )
+            return None
+        return result.stdout.strip().upper() or None
 
     @contextmanager
     def gcp_campaign_session(self):
-        """Ensure configured GCP worker VMs stop when the campaign exits."""
-        try:
-            yield
-        finally:
+        """Own the fleet exclusively and stop GCP VMs on every cleanable exit."""
+        previous_handlers: dict[int, object] = {}
+
+        def _interrupt(signum, _frame) -> None:
+            signal_name = signal.Signals(signum).name
+            raise KeyboardInterrupt(f"Received {signal_name}")
+
+        def _stop_at_exit() -> None:
+            if self.stop_gcp_after_campaign and not self._gcp_stop_completed:
+                try:
+                    self._stop_gcp_fleet()
+                except Exception:
+                    LOGGER.exception("Final GCP fleet shutdown attempt failed")
+
+        with self._exclusive_runner_session():
+            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                try:
+                    previous_handlers[sig] = signal.getsignal(sig)
+                    signal.signal(sig, _interrupt)
+                except (AttributeError, OSError, ValueError):
+                    pass
             if self.stop_gcp_after_campaign:
-                self._stop_gcp_fleet()
+                atexit.register(_stop_at_exit)
+            active_error: BaseException | None = None
+            try:
+                yield
+            except BaseException as exc:
+                active_error = exc
+                raise
+            finally:
+                try:
+                    if self.stop_gcp_after_campaign:
+                        self._stop_gcp_fleet()
+                except Exception:
+                    if active_error is None:
+                        raise
+                    LOGGER.exception(
+                        "GCP fleet shutdown also failed while handling %s",
+                        type(active_error).__name__,
+                    )
+                finally:
+                    if self.stop_gcp_after_campaign:
+                        atexit.unregister(_stop_at_exit)
+                    for sig, previous in previous_handlers.items():
+                        try:
+                            signal.signal(sig, previous)  # type: ignore[arg-type]
+                        except (OSError, TypeError, ValueError):
+                            pass
 
     def _resolve_manifest_path(self, exp_id: str) -> Path:
         """Resolve the manifest path for ``exp_id``.
@@ -521,16 +929,18 @@ class ExperimentRunner:
 
     def _load_manifest(self, path: Path) -> dict:
         if path.exists():
-            return json.loads(path.read_text())
+            manifest = json.loads(path.read_text())
+            if not isinstance(manifest, dict) or not isinstance(
+                manifest.get("runs"), dict
+            ):
+                raise ValueError(f"Invalid experiment manifest structure: {path}")
+            return manifest
         return _empty_manifest()
 
     def _save_manifest(self) -> None:
         if self.dry_run or self._active_manifest_path is None:
             return
-        self._active_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        self._active_manifest_path.write_text(
-            json.dumps(self._active_manifest, indent=2)
-        )
+        atomic_write_json(self._active_manifest_path, self._active_manifest)
 
     def _build_cross_manifest_index(self) -> dict:
         """Aggregate every manifest's ``runs`` for read-only lookups.
@@ -567,6 +977,24 @@ class ExperimentRunner:
         except subprocess.CalledProcessError as e:
             LOGGER.error(f"Command failed with exit code {e.returncode}: {' '.join(cmd)}")
             return False
+
+    def _capture_command(
+        self, cmd: list[str], cwd: Path = PROJECT_ROOT
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a command and retain output without raising on non-zero exit."""
+        if self.dry_run:
+            LOGGER.info("DRY RUN: %s", " ".join(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        try:
+            return subprocess.run(
+                cmd,
+                cwd=cwd,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+        except OSError as exc:
+            return subprocess.CompletedProcess(cmd, 127, "", str(exc))
 
     def _git(
         self, *args: str, check: bool = True, capture: bool = False
@@ -645,9 +1073,12 @@ class ExperimentRunner:
                         (pop.stderr or pop.stdout or "").strip(),
                     )
 
-    def _commit_and_push(self, exp: Experiment, seed: int, phase: str) -> None:
+    def _commit_and_push(
+        self, exp: Experiment, seed: int, phase: str
+    ) -> tuple[str, str | None]:
+        """Publish phase artifacts and return status without changing execution."""
         if self.dry_run or self.no_push:
-            return
+            return ("dry_run" if self.dry_run else "disabled", None)
 
         try:
             # 1. Integrate peer commits first (stash → pull --rebase → pop) so
@@ -659,7 +1090,7 @@ class ExperimentRunner:
             self._git("add", "--", *self._paths_to_stage(exp, phase))
             if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
                 LOGGER.info("No changes to commit in results repo.")
-                return
+                return ("no_changes", None)
 
             # 3. Commit locally.
             msg = f"results({exp.id}): {phase} seed={seed}"
@@ -674,7 +1105,7 @@ class ExperimentRunner:
                 )
                 if push.returncode == 0:
                     LOGGER.info("Successfully pushed %s", msg)
-                    return
+                    return ("published", None)
                 LOGGER.warning(
                     "Push rejected (attempt %d/%d): %s. Re-pulling with rebase.",
                     attempt, PUSH_RETRIES, (push.stderr or "").strip(),
@@ -688,8 +1119,91 @@ class ExperimentRunner:
                 "locally and will be reconciled on the next phase's sync.",
                 PUSH_RETRIES, msg,
             )
-        except subprocess.CalledProcessError as e:
+            return ("failed", "Push retries exhausted")
+        except (OSError, subprocess.CalledProcessError) as e:
             LOGGER.error(f"Failed to commit/push results: {e}")
+            return ("failed", str(e))
+
+    def _flush_publication_record(
+        self,
+        exp: Experiment,
+        seed: int,
+        phase: str,
+    ) -> None:
+        """Publish the manifest's final publication status as metadata."""
+        if self.dry_run or self.no_push or self._active_manifest_path is None:
+            return
+        try:
+            manifest_path = str(self._active_manifest_path.relative_to(RESULTS_DIR))
+        except ValueError:
+            return
+
+        try:
+            self._git("add", "--", manifest_path)
+            if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
+                return
+            message = f"results({exp.id}): record {phase} publication seed={seed}"
+            self._git("commit", "-m", message)
+            remote = self._resolve_remote()
+            for attempt in range(1, PUSH_RETRIES + 1):
+                push = self._git(
+                    "push", remote, RESULTS_BRANCH, check=False, capture=True
+                )
+                if push.returncode == 0:
+                    return
+                LOGGER.warning(
+                    "Publication metadata push rejected (attempt %d/%d): %s",
+                    attempt,
+                    PUSH_RETRIES,
+                    (push.stderr or "").strip(),
+                )
+                self._git(
+                    "pull",
+                    "--rebase",
+                    remote,
+                    RESULTS_BRANCH,
+                    check=False,
+                    capture=True,
+                )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            LOGGER.error("Could not publish manifest metadata: %s", exc)
+
+    def _publish_phase(
+        self,
+        exp: Experiment,
+        seed: int,
+        phase: str,
+        key: str,
+    ) -> None:
+        """Publish results while leaving successful execution independently done."""
+        self._set_publication(key, "pending")
+        status, detail = self._commit_and_push(exp, seed, phase)
+        if status == "failed":
+            self._set_publication(key, status, error=detail)
+        else:
+            self._set_publication(key, status)
+        if status == "published":
+            self._flush_publication_record(exp, seed, phase)
+
+    def _resume_publication_if_needed(
+        self,
+        exp: Experiment,
+        seed: int,
+        phase: str,
+        key: str,
+    ) -> None:
+        """Retry publication independently for an already-completed phase."""
+        entry = self._active_manifest["runs"].get(key, {})
+        if entry.get("status") != "done":
+            return
+        publication_status = entry.get("publication", {}).get("status")
+        if publication_status in {"published", "disabled", "dry_run"}:
+            return
+        LOGGER.info(
+            "Execution is complete but publication is %s; retrying publish.",
+            publication_status or "unrecorded",
+        )
+        self._publish_phase(exp, seed, phase, key)
 
     def _find_latest_session_json(self, output_dir: Path, strategy: str) -> Path | None:
         """Find the most-recently-written session trace for a ``strategy``.
@@ -724,12 +1238,187 @@ class ExperimentRunner:
             return True
         return False
 
+    def _start_phase(
+        self,
+        key: str,
+        *,
+        remote_artifact: RemoteArtifactSpec | None = None,
+    ) -> str:
+        """Create a uniquely owned attempt and mark its phase running."""
+        entry = self._active_manifest["runs"].setdefault(key, {})
+        previous_status = entry.get("status")
+        attempts = entry.setdefault("attempts", [])
+        if previous_status in {"running", "syncing"}:
+            if attempts:
+                attempts[-1].update(
+                    status="stale",
+                    finished_at=utc_now(),
+                    error="Superseded after an incomplete runner invocation",
+                )
+            entry["status"] = "stale"
+
+        attempt_id = f"{self._runner_identity.runner_id}-{len(attempts) + 1}"
+        started_at = utc_now()
+        attempt: dict = {
+            "attempt_id": attempt_id,
+            "number": len(attempts) + 1,
+            "status": "running",
+            "started_at": started_at,
+            "owner": self._runner_identity.to_dict(),
+        }
+        if remote_artifact is not None:
+            attempt["remote_artifact"] = remote_artifact.to_dict()
+        attempts.append(attempt)
+        for stale_field in ("finished_at", "duration_s", "error"):
+            entry.pop(stale_field, None)
+        entry.update(
+            status="running",
+            started_at=started_at,
+            attempt_id=attempt_id,
+            attempt_number=attempt["number"],
+            owner=self._runner_identity.to_dict(),
+        )
+        if remote_artifact is not None:
+            entry["remote_artifact"] = remote_artifact.to_dict()
+        self._active_phase_key = key
+        self._save_manifest()
+        return attempt_id
+
     def _mark_status(self, key: str, status: str, **kwargs) -> None:
         if key not in self._active_manifest["runs"]:
             self._active_manifest["runs"][key] = {}
-        self._active_manifest["runs"][key]["status"] = status
-        self._active_manifest["runs"][key].update(kwargs)
+        entry = self._active_manifest["runs"][key]
+        entry["status"] = status
+        entry.update(kwargs)
+        attempts = entry.get("attempts", [])
+        if attempts:
+            attempts[-1]["status"] = status
+            attempts[-1].update(kwargs)
+            if status in {"done", "failed", "interrupted", "stale"}:
+                finished_at = kwargs.get("finished_at", utc_now())
+                entry["finished_at"] = finished_at
+                attempts[-1].setdefault("finished_at", finished_at)
+        if status in {"done", "failed", "interrupted", "stale"}:
+            self._active_phase_key = None
         self._save_manifest()
+
+    def _mark_interrupted(self, key: str, exc: BaseException) -> None:
+        """Persist interruption before propagating it to campaign cleanup."""
+        self._mark_status(
+            key,
+            "interrupted",
+            finished_at=utc_now(),
+            error=str(exc) or type(exc).__name__,
+        )
+
+    def _set_publication(
+        self,
+        key: str,
+        status: str,
+        *,
+        error: str | None = None,
+    ) -> None:
+        """Track result publication independently from phase execution."""
+        entry = self._active_manifest["runs"].setdefault(key, {})
+        publication = entry.setdefault("publication", {})
+        publication["status"] = status
+        publication["updated_at"] = utc_now()
+        if error:
+            publication["error"] = error
+        else:
+            publication.pop("error", None)
+        self._save_manifest()
+
+    def _set_remote_artifact(
+        self, key: str, spec: RemoteArtifactSpec
+    ) -> None:
+        """Persist the artifact contract before launching a remote process."""
+        entry = self._active_manifest["runs"][key]
+        artifact = spec.to_dict()
+        entry["remote_artifact"] = artifact
+        attempts = entry.get("attempts", [])
+        if attempts:
+            attempts[-1]["remote_artifact"] = artifact
+        self._save_manifest()
+
+    def _try_reconcile_remote_phase(
+        self,
+        exp: Experiment,
+        seed: int,
+        phase: str,
+        key: str,
+        *,
+        retry_failed: bool,
+    ) -> Path | None:
+        """Finalize abandoned remote work when its result already exists."""
+        if not self.distributed:
+            return None
+        run_data = self._active_manifest["runs"].get(key, {})
+        status = run_data.get("status")
+        recoverable = status in {"running", "syncing", "interrupted"} or (
+            status == "failed" and retry_failed
+        )
+        if not recoverable:
+            return None
+
+        artifact = self._reconcile_remote_artifact(
+            exp, seed, phase, run_data
+        )
+        if artifact is None:
+            if status in {"running", "syncing"}:
+                self._mark_status(
+                    key,
+                    "stale",
+                    finished_at=utc_now(),
+                    error="No completed remote artifact found during resume",
+                )
+            return None
+
+        relative = str(artifact.relative_to(PROJECT_ROOT))
+        fields = {
+            "finished_at": utc_now(),
+            "reconciled": True,
+            "artifact_json": relative,
+        }
+        if phase == "bo":
+            fields["session_json"] = relative
+        self._mark_status(key, "done", **fields)
+        self._publish_phase(exp, seed, phase, key)
+        LOGGER.info("Recovered completed remote %s artifact: %s", phase, artifact)
+        return artifact
+
+    @contextmanager
+    def _phase_attempt(
+        self,
+        key: str,
+        *,
+        remote_artifact: RemoteArtifactSpec | None = None,
+    ) -> Iterator[str]:
+        """Record ownership and convert process interruption into durable state."""
+        attempt_id = self._start_phase(key, remote_artifact=remote_artifact)
+        try:
+            yield attempt_id
+        except KeyboardInterrupt as exc:
+            self._mark_interrupted(key, exc)
+            raise
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            if self._active_manifest["runs"].get(key, {}).get("status") == "syncing":
+                self._mark_status(
+                    key,
+                    "syncing",
+                    sync_failed_at=utc_now(),
+                    error=error,
+                )
+                self._active_phase_key = None
+            else:
+                self._mark_status(
+                    key,
+                    "failed",
+                    finished_at=utc_now(),
+                    error=error,
+                )
+            raise
 
     def _preflight_disk_isolation(self) -> None:
         """Fail fast if per-worker Disk-IO limits cannot be enforced.
@@ -849,6 +1538,14 @@ class ExperimentRunner:
                     pass
 
     def run_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
+        """Run one experiment while holding the process-wide fleet lock."""
+        with self._exclusive_runner_session():
+            self._run_experiment_locked(exp, retry_failed=retry_failed)
+
+    def _run_experiment_locked(
+        self, exp: Experiment, retry_failed: bool = False
+    ) -> None:
+        """Execute one experiment after exclusive ownership is established."""
         LOGGER.info(f"Starting experiment {exp.id} (Tier {exp.tier})")
 
         if self.distributed and exp.strategy != "pbt":
@@ -879,33 +1576,60 @@ class ExperimentRunner:
             LOGGER.info(f"=== {exp.id} | Seed {seed} ===")
             pbt_session_path = None
             bo_session_path = None
-            
+
             # 1. PBT Phase
             pbt_key = self._get_run_key(exp.id, seed, "pbt")
             if not self._is_done(pbt_key, retry_failed):
                 LOGGER.info(f"Phase 1/3: Running PBT for {exp.id} (seed {seed})")
                 cmd = self._build_pbt_cmd(exp, seed)
-                self._mark_status(pbt_key, "running", started_at=datetime.utcnow().isoformat() + "Z")
-                
-                start_time = time.time()
-                success = self._run_command(cmd)
-                duration = time.time() - start_time
-                
+                with self._phase_attempt(pbt_key):
+                    start_time = time.monotonic()
+                    success = self._run_command(cmd)
+                    duration = time.monotonic() - start_time
+
+                    if success:
+                        json_path = self._find_latest_session_json(
+                            RESULTS_DIR, "pbt"
+                        )
+                        if json_path is None and not self.dry_run:
+                            raise RuntimeError(
+                                "PBT exited successfully without a session JSON"
+                            )
+                        json_str = (
+                            str(json_path.relative_to(PROJECT_ROOT))
+                            if json_path
+                            else None
+                        )
+                        self._mark_status(
+                            pbt_key,
+                            "done",
+                            duration_s=duration,
+                            finished_at=utc_now(),
+                            session_json=json_str,
+                        )
+                        pbt_session_path = json_path
+                    else:
+                        self._mark_status(
+                            pbt_key,
+                            "failed",
+                            duration_s=duration,
+                            finished_at=utc_now(),
+                            error="PBT command failed",
+                        )
                 if success:
-                    # Find session JSON
-                    json_path = self._find_latest_session_json(RESULTS_DIR, "pbt")
-                    json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
-                    self._mark_status(pbt_key, "done", duration_s=duration, session_json=json_str)
-                    self._commit_and_push(exp, seed, "pbt")
-                    pbt_session_path = json_path
+                    self._publish_phase(exp, seed, "pbt", pbt_key)
                 else:
-                    self._mark_status(pbt_key, "failed", duration_s=duration)
                     if self.distributed:
                         self._prepare_comparison_device()
-                    LOGGER.error("PBT phase failed. Skipping BO and EVAL for this seed.")
+                    LOGGER.error(
+                        "PBT phase failed. Skipping BO and EVAL for this seed."
+                    )
                     continue
             else:
-                LOGGER.info(f"Skipping PBT (already done/failed)")
+                LOGGER.info("Skipping PBT (already done/failed)")
+                self._resume_publication_if_needed(
+                    exp, seed, "pbt", pbt_key
+                )
                 json_str = self._active_manifest["runs"][pbt_key].get("session_json")
                 pbt_session_path = PROJECT_ROOT / json_str if json_str else None
 
@@ -930,39 +1654,112 @@ class ExperimentRunner:
             # 2. BO Phase (only if enabled)
             if exp.run_bo:
                 bo_key = self._get_run_key(exp.id, seed, "bo")
+                recovered_bo = self._try_reconcile_remote_phase(
+                    exp,
+                    seed,
+                    "bo",
+                    bo_key,
+                    retry_failed=retry_failed,
+                )
+                if recovered_bo is not None:
+                    bo_session_path = recovered_bo
                 if not self._is_done(bo_key, retry_failed):
                     if not pbt_session_path and not self.dry_run:
                         LOGGER.error("Cannot run BO: PBT session JSON not found.")
-                        self._mark_status(bo_key, "failed", error="Missing PBT JSON")
+                        self._mark_status(
+                            bo_key,
+                            "failed",
+                            finished_at=utc_now(),
+                            error="Missing PBT JSON",
+                        )
                     else:
                         LOGGER.info(f"Phase 2/3: Running BO for {exp.id} (seed {seed})")
                         cmd = self._build_bo_cmd(exp, comparison_pbt_session, seed)
-                        self._mark_status(bo_key, "running", started_at=datetime.utcnow().isoformat() + "Z")
-                        
-                        start_time = time.time()
-                        success = (
-                            self._run_remote_command(self._comparison_device(), cmd)
-                            if self.distributed
-                            else self._run_command(cmd)
-                        )
-                        duration = time.time() - start_time
-                        
+                        with self._phase_attempt(bo_key) as attempt_id:
+                            artifact_spec = (
+                                self._remote_artifact_spec(
+                                    exp, "bo", attempt_id
+                                )
+                                if self.distributed
+                                else None
+                            )
+                            if artifact_spec is not None:
+                                self._set_remote_artifact(bo_key, artifact_spec)
+                            start_time = time.monotonic()
+                            success = (
+                                self._run_remote_command(
+                                    self._comparison_device(),
+                                    cmd,
+                                    artifact=artifact_spec,
+                                )
+                                if self.distributed
+                                else self._run_command(cmd)
+                            )
+                            duration = time.monotonic() - start_time
+
+                            if success:
+                                if self.distributed:
+                                    self._mark_status(
+                                        bo_key,
+                                        "syncing",
+                                        duration_s=duration,
+                                        remote_completed_at=utc_now(),
+                                    )
+                                    json_path = self._reconcile_remote_artifact(
+                                        exp,
+                                        seed,
+                                        "bo",
+                                        self._active_manifest["runs"][bo_key],
+                                    )
+                                else:
+                                    json_path = self._find_latest_session_json(
+                                        RESULTS_DIR, "bo"
+                                    )
+                                if json_path is None and not self.dry_run:
+                                    raise RuntimeError(
+                                        "BO exited successfully without a session JSON"
+                                    )
+                                json_str = (
+                                    str(json_path.relative_to(PROJECT_ROOT))
+                                    if json_path
+                                    else None
+                                )
+                                self._mark_status(
+                                    bo_key,
+                                    "done",
+                                    duration_s=duration,
+                                    finished_at=utc_now(),
+                                    session_json=json_str,
+                                    artifact_json=json_str,
+                                )
+                                bo_session_path = json_path
+                            else:
+                                self._mark_status(
+                                    bo_key,
+                                    "failed",
+                                    duration_s=duration,
+                                    finished_at=utc_now(),
+                                    error="BO command failed",
+                                )
                         if success:
-                            if self.distributed:
-                                self._sync_comparison_results()
-                            json_path = self._find_latest_session_json(RESULTS_DIR, "bo")
-                            json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
-                            self._mark_status(bo_key, "done", duration_s=duration, session_json=json_str)
-                            self._commit_and_push(exp, seed, "bo")
-                            bo_session_path = json_path
+                            self._publish_phase(exp, seed, "bo", bo_key)
                         else:
-                            self._mark_status(bo_key, "failed", duration_s=duration)
-                            LOGGER.error("BO phase failed. Skipping EVAL for this seed.")
+                            LOGGER.error(
+                                "BO phase failed. Skipping EVAL for this seed."
+                            )
                             continue
                 else:
-                    LOGGER.info(f"Skipping BO (already done/failed)")
-                    json_str = self._active_manifest["runs"].get(bo_key, {}).get("session_json")
-                    bo_session_path = PROJECT_ROOT / json_str if json_str else None
+                    LOGGER.info("Skipping BO (already done/failed)")
+                    self._resume_publication_if_needed(
+                        exp, seed, "bo", bo_key
+                    )
+                    if bo_session_path is None:
+                        json_str = self._active_manifest["runs"].get(
+                            bo_key, {}
+                        ).get("session_json")
+                        bo_session_path = (
+                            PROJECT_ROOT / json_str if json_str else None
+                        )
 
             comparison_bo_session = bo_session_path
             if self.distributed and bo_session_path is not None:
@@ -972,10 +1769,22 @@ class ExperimentRunner:
 
             # 3. EVAL Phase
             eval_key = self._get_run_key(exp.id, seed, "eval")
+            self._try_reconcile_remote_phase(
+                exp,
+                seed,
+                "eval",
+                eval_key,
+                retry_failed=retry_failed,
+            )
             if not self._is_done(eval_key, retry_failed):
                 if not pbt_session_path and not self.dry_run:
                     LOGGER.error("Cannot run EVAL: PBT session JSON not found.")
-                    self._mark_status(eval_key, "failed", error="Missing PBT JSON")
+                    self._mark_status(
+                        eval_key,
+                        "failed",
+                        finished_at=utc_now(),
+                        error="Missing PBT JSON",
+                    )
                 else:
                     LOGGER.info(f"Phase 3/3: Running EVAL for {exp.id} (seed {seed})")
                     cmd = self._build_eval_cmd(
@@ -984,25 +1793,77 @@ class ExperimentRunner:
                         exp.eval_repetitions,
                         seed,
                     )
-                    self._mark_status(eval_key, "running", started_at=datetime.utcnow().isoformat() + "Z")
-                    
-                    start_time = time.time()
-                    success = (
-                        self._run_remote_command(self._comparison_device(), cmd)
-                        if self.distributed
-                        else self._run_command(cmd)
-                    )
-                    duration = time.time() - start_time
-                    
+                    with self._phase_attempt(eval_key) as attempt_id:
+                        artifact_spec = (
+                            self._remote_artifact_spec(exp, "eval", attempt_id)
+                            if self.distributed
+                            else None
+                        )
+                        if artifact_spec is not None:
+                            self._set_remote_artifact(eval_key, artifact_spec)
+                        start_time = time.monotonic()
+                        success = (
+                            self._run_remote_command(
+                                self._comparison_device(),
+                                cmd,
+                                artifact=artifact_spec,
+                            )
+                            if self.distributed
+                            else self._run_command(cmd)
+                        )
+                        duration = time.monotonic() - start_time
+
+                        if success:
+                            if self.distributed:
+                                self._mark_status(
+                                    eval_key,
+                                    "syncing",
+                                    duration_s=duration,
+                                    remote_completed_at=utc_now(),
+                                )
+                                artifact_path = self._reconcile_remote_artifact(
+                                    exp,
+                                    seed,
+                                    "eval",
+                                    self._active_manifest["runs"][eval_key],
+                                )
+                            else:
+                                candidates = sorted(
+                                    RESULTS_DIR.rglob("*comparison_*.json"),
+                                    key=lambda path: path.stat().st_mtime,
+                                )
+                                artifact_path = candidates[-1] if candidates else None
+                            if artifact_path is None and not self.dry_run:
+                                raise RuntimeError(
+                                    "EVAL exited successfully without a result JSON"
+                                )
+                            artifact_json = (
+                                str(artifact_path.relative_to(PROJECT_ROOT))
+                                if artifact_path
+                                else None
+                            )
+                            self._mark_status(
+                                eval_key,
+                                "done",
+                                duration_s=duration,
+                                finished_at=utc_now(),
+                                artifact_json=artifact_json,
+                            )
+                        else:
+                            self._mark_status(
+                                eval_key,
+                                "failed",
+                                duration_s=duration,
+                                finished_at=utc_now(),
+                                error="EVAL command failed",
+                            )
                     if success:
-                        if self.distributed:
-                            self._sync_comparison_results()
-                        self._mark_status(eval_key, "done", duration_s=duration)
-                        self._commit_and_push(exp, seed, "eval")
-                    else:
-                        self._mark_status(eval_key, "failed", duration_s=duration)
+                        self._publish_phase(exp, seed, "eval", eval_key)
             else:
-                LOGGER.info(f"Skipping EVAL (already done/failed)")
+                LOGGER.info("Skipping EVAL (already done/failed)")
+                self._resume_publication_if_needed(
+                    exp, seed, "eval", eval_key
+                )
 
     def _run_lhs_experiment(self, exp: Experiment, retry_failed: bool = False) -> None:
         """Run an LHS-design importance sweep: a single phase, no BO/eval.
@@ -1018,23 +1879,48 @@ class ExperimentRunner:
             key = self._get_run_key(exp.id, seed, "lhs")
             if self._is_done(key, retry_failed):
                 LOGGER.info("Skipping LHS (already done/failed)")
+                self._resume_publication_if_needed(
+                    exp, seed, "lhs", key
+                )
                 continue
 
             LOGGER.info(f"Running LHS-design sweep for {exp.id} (seed {seed})")
             cmd = self._build_lhs_cmd(exp, seed)
-            self._mark_status(key, "running", started_at=datetime.utcnow().isoformat() + "Z")
+            with self._phase_attempt(key):
+                start_time = time.monotonic()
+                success = self._run_command(cmd)
+                duration = time.monotonic() - start_time
 
-            start_time = time.time()
-            success = self._run_command(cmd)
-            duration = time.time() - start_time
-
+                if success:
+                    json_path = self._find_latest_session_json(
+                        RESULTS_DIR, "lhs"
+                    )
+                    if json_path is None and not self.dry_run:
+                        raise RuntimeError(
+                            "LHS exited successfully without a session JSON"
+                        )
+                    json_str = (
+                        str(json_path.relative_to(PROJECT_ROOT))
+                        if json_path
+                        else None
+                    )
+                    self._mark_status(
+                        key,
+                        "done",
+                        duration_s=duration,
+                        finished_at=utc_now(),
+                        session_json=json_str,
+                    )
+                else:
+                    self._mark_status(
+                        key,
+                        "failed",
+                        duration_s=duration,
+                        finished_at=utc_now(),
+                        error="LHS command failed",
+                    )
             if success:
-                json_path = self._find_latest_session_json(RESULTS_DIR, "lhs")
-                json_str = str(json_path.relative_to(PROJECT_ROOT)) if json_path else None
-                self._mark_status(key, "done", duration_s=duration, session_json=json_str)
-                self._commit_and_push(exp, seed, "lhs")
-            else:
-                self._mark_status(key, "failed", duration_s=duration)
+                self._publish_phase(exp, seed, "lhs", key)
 
     def _resolve_warm_start_path(self, exp: Experiment) -> Path | None:
         """Resolve the best_config.json path for a warm-start experiment.
