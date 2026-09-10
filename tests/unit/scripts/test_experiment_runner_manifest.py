@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -76,6 +77,126 @@ def test_active_manifest_isolation(runner_factory, tmp_path):
     assert "expA/seed_1/pbt" not in file_b["runs"]
     assert "expB/seed_1/pbt" in file_b["runs"]
     assert "expB/seed_1/pbt" not in file_a["runs"]
+
+
+def test_phase_attempt_records_owner_and_attempt_history(runner_factory, tmp_path):
+    """Each execution attempt is durably tied to one runner process."""
+    runner = runner_factory()
+    runner._active_manifest_path = tmp_path / "attempt.json"
+    key = "exp/seed_42/pbt"
+
+    with runner._phase_attempt(key) as attempt_id:
+        entry = runner._active_manifest["runs"][key]
+        assert entry["status"] == "running"
+        assert entry["attempt_id"] == attempt_id
+        assert entry["attempt_number"] == 1
+        assert entry["owner"] == runner._runner_identity.to_dict()
+        runner._mark_status(key, "done", session_json="results/trace.json")
+
+    persisted = json.loads(runner._active_manifest_path.read_text())
+    attempt = persisted["runs"][key]["attempts"][0]
+    assert attempt["status"] == "done"
+    assert attempt["owner"]["runner_id"] == runner._runner_identity.runner_id
+
+
+def test_phase_attempt_persists_keyboard_interruption(runner_factory, tmp_path):
+    """Ctrl-C changes a running attempt to interrupted before propagating."""
+    runner = runner_factory()
+    runner._active_manifest_path = tmp_path / "interrupted.json"
+    key = "exp/seed_42/bo"
+
+    with pytest.raises(KeyboardInterrupt, match="SIGINT"):
+        with runner._phase_attempt(key):
+            raise KeyboardInterrupt("SIGINT")
+
+    persisted = json.loads(runner._active_manifest_path.read_text())
+    entry = persisted["runs"][key]
+    assert entry["status"] == "interrupted"
+    assert entry["attempts"][0]["status"] == "interrupted"
+    assert entry["error"] == "SIGINT"
+    assert "finished_at" in entry
+
+
+def test_phase_attempt_preserves_remote_completion_when_sync_fails(
+    runner_factory, tmp_path
+):
+    """A coordinator sync failure remains recoverable rather than execution-failed."""
+    runner = runner_factory()
+    runner._active_manifest_path = tmp_path / "syncing.json"
+    key = "exp/seed_42/bo"
+
+    with pytest.raises(RuntimeError, match="rsync failed"):
+        with runner._phase_attempt(key):
+            runner._mark_status(key, "syncing", remote_completed_at="now")
+            raise RuntimeError("rsync failed")
+
+    persisted = json.loads(runner._active_manifest_path.read_text())
+    entry = persisted["runs"][key]
+    assert entry["status"] == "syncing"
+    assert entry["attempts"][0]["status"] == "syncing"
+    assert entry["error"] == "RuntimeError: rsync failed"
+    assert "sync_failed_at" in entry
+
+
+def test_new_attempt_supersedes_abandoned_running_attempt(runner_factory):
+    """An incomplete prior owner is retained as stale before a retry starts."""
+    runner = runner_factory()
+    key = "exp/seed_42/eval"
+
+    first_id = runner._start_phase(key)
+    second_id = runner._start_phase(key)
+
+    entry = runner._active_manifest["runs"][key]
+    assert first_id != second_id
+    assert entry["attempt_number"] == 2
+    assert entry["attempts"][0]["status"] == "stale"
+    assert entry["attempts"][1]["status"] == "running"
+
+
+def test_publication_failure_does_not_change_execution_status(
+    runner_factory, monkeypatch
+):
+    """A Git failure cannot make an expensive completed phase rerun."""
+    runner = runner_factory()
+    key = "exp/seed_42/pbt"
+    runner._active_manifest["runs"][key] = {"status": "done"}
+    monkeypatch.setattr(
+        runner,
+        "_commit_and_push",
+        lambda exp, seed, phase: ("failed", "push rejected"),
+    )
+
+    runner._publish_phase(_smoke_exp(), 42, "pbt", key)
+
+    entry = runner._active_manifest["runs"][key]
+    assert entry["status"] == "done"
+    assert entry["publication"] == {
+        "status": "failed",
+        "updated_at": entry["publication"]["updated_at"],
+        "error": "push rejected",
+    }
+
+
+def test_completed_phase_retries_only_publication(runner_factory, monkeypatch):
+    """Resume retries a pending push without launching phase execution."""
+    runner = runner_factory()
+    key = "exp/seed_42/pbt"
+    runner._active_manifest["runs"][key] = {
+        "status": "done",
+        "publication": {"status": "failed"},
+    }
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "_publish_phase",
+        lambda exp, seed, phase, run_key: calls.append(
+            (exp.id, seed, phase, run_key)
+        ),
+    )
+
+    runner._resume_publication_if_needed(_smoke_exp(), 42, "pbt", key)
+
+    assert calls == [("smoke_sysbench_rw", 42, "pbt", key)]
 
 
 def test_cross_manifest_index_aggregates_peer_files(runner_factory, tmp_path):
@@ -417,6 +538,125 @@ devices:
     assert "--data-dir /srv/pbt/instances --force --docker-only" in rendered
 
 
+def test_remote_command_writes_attempt_specific_artifact_receipt(
+    monkeypatch, tmp_path
+):
+    """A successful remote phase records the exact newly-created artifact."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  ssh_user: pbt
+  data_dir: /srv/pbt
+  python: /srv/pbt/.venv/bin/python
+devices:
+  - host: 10.0.0.11
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+    )
+    spec = runner._remote_artifact_spec(_smoke_exp(), "bo", "attempt-1")
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        runner,
+        "_run_command",
+        lambda cmd, cwd=Path("."): captured.append(cmd) or True,
+    )
+
+    assert runner._run_remote_command(
+        runner._comparison_device(),
+        ["python", "-m", "src.tuners", "bo"],
+        artifact=spec,
+    )
+
+    rendered = " ".join(captured[0])
+    assert spec.output_dir.startswith("/srv/pbt/code/results/sessions/")
+    assert spec.marker_path in rendered
+    assert spec.receipt_path in rendered
+    assert "find /srv/pbt/code/results/sessions/" in rendered
+    assert "-newer" in rendered
+
+
+def test_resume_reconciles_completed_remote_bo_without_rerun(
+    monkeypatch, tmp_path
+):
+    """A receipt finalizes BO after coordinator loss without executing BO again."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  ssh_user: pbt
+  data_dir: /srv/pbt
+devices:
+  - host: 10.0.0.11
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+        manifest_dir=tmp_path / "manifests",
+    )
+    exp = _smoke_exp()
+    key = runner._get_run_key(exp.id, 42, "bo")
+    spec = runner._remote_artifact_spec(exp, "bo", "attempt-1")
+    artifact = tmp_path / "trace_20260910.json"
+    artifact.write_text(
+        json.dumps({"tuning_session": {"seed": 42}}), encoding="utf-8"
+    )
+    monkeypatch.setattr("scripts.experiments.runner.PROJECT_ROOT", tmp_path)
+    runner._active_manifest_path = tmp_path / "manifest.json"
+    runner._active_manifest["runs"][key] = {
+        "status": "syncing",
+        "attempt_id": "attempt-1",
+        "started_at": "2026-09-10T00:00:00Z",
+        "remote_artifact": spec.to_dict(),
+    }
+    monkeypatch.setattr(
+        runner,
+        "_remote_artifact_from_receipt",
+        lambda artifact_spec, started_at: "/srv/pbt/code/results/trace.json",
+    )
+    monkeypatch.setattr(
+        runner,
+        "_validate_remote_artifact_path",
+        lambda remote_path, artifact_spec: artifact,
+    )
+    monkeypatch.setattr(runner, "_sync_comparison_output", lambda spec: None)
+    published: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "_publish_phase",
+        lambda experiment, seed, phase, run_key: published.append(run_key),
+    )
+
+    recovered = runner._try_reconcile_remote_phase(
+        exp, 42, "bo", key, retry_failed=False
+    )
+
+    assert recovered == artifact
+    assert runner._active_manifest["runs"][key]["status"] == "done"
+    assert runner._active_manifest["runs"][key]["reconciled"] is True
+    assert runner._active_manifest["runs"][key]["session_json"] == artifact.name
+    assert published == [key]
+
+
+def test_reconciled_artifact_rejects_wrong_seed(tmp_path):
+    """A stale result from another seed cannot satisfy a remote attempt."""
+    artifact = tmp_path / "trace.json"
+    artifact.write_text(
+        json.dumps({"tuning_session": {"seed": 123}}), encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="artifact seed 123 != 42"):
+        ExperimentRunner._validate_reconciled_json(artifact, "bo", 42)
+
+
 def test_prepare_comparison_device_stops_other_agents(monkeypatch, tmp_path):
     """All fleet agents and PostgreSQL instances stop before solo BO begins."""
     inventory = tmp_path / "devices.yaml"
@@ -504,7 +744,7 @@ devices:
 
 
 def test_gcp_campaign_session_stops_all_worker_vms_on_exit(monkeypatch, tmp_path):
-    """Every configured worker VM stops even when the campaign raises."""
+    """Every configured worker VM is verified stopped when the campaign raises."""
     inventory = tmp_path / "devices.yaml"
     inventory.write_text(
         """
@@ -532,6 +772,12 @@ devices:
         return True
 
     monkeypatch.setattr(runner, "_run_command", _capture)
+    statuses = iter(["RUNNING", "TERMINATED", "RUNNING", "TERMINATED"])
+    monkeypatch.setattr(
+        runner,
+        "_capture_command",
+        lambda cmd: subprocess.CompletedProcess(cmd, 0, next(statuses), ""),
+    )
 
     with pytest.raises(RuntimeError, match="campaign failure"):
         with runner.gcp_campaign_session():
@@ -563,6 +809,10 @@ devices:
             "--quiet",
         ],
     ]
+    shutdown = runner._active_manifest["fleet_shutdown"]
+    assert shutdown["status"] == "terminated"
+    assert shutdown["devices"]["pbt-worker-0"]["status"] == "terminated"
+    assert shutdown["devices"]["pbt-worker-1"]["status"] == "terminated"
 
 
 def test_gcp_shutdown_requires_explicit_instance_identity(tmp_path):
@@ -579,6 +829,56 @@ def test_gcp_shutdown_requires_explicit_instance_identity(tmp_path):
 
     with pytest.raises(ValueError, match="gcp_project, gcp_zone, and gcp_instance"):
         runner._stop_gcp_fleet()
+
+
+def test_gcp_shutdown_retries_until_terminated_and_is_idempotent(
+    monkeypatch, tmp_path
+):
+    """A VM is retried after an unverified stop and never stopped twice later."""
+    inventory = tmp_path / "devices.yaml"
+    inventory.write_text(
+        """
+fleet:
+  gcp_project: pbt-research
+  gcp_zone: us-central1-a
+devices:
+  - host: 10.0.0.11
+    gcp_instance: pbt-worker-0
+""".strip()
+    )
+    runner = ExperimentRunner(
+        dry_run=False,
+        no_push=True,
+        execution_mode="distributed",
+        inventory=inventory,
+        stop_gcp_after_campaign=True,
+        manifest_dir=tmp_path / "manifests",
+    )
+    runner._active_manifest_path = tmp_path / "manifest.json"
+    commands: list[list[str]] = []
+    statuses = iter(["RUNNING", "STOPPING", "STOPPING", "TERMINATED"])
+    monkeypatch.setattr(
+        runner,
+        "_gcp_instance_status",
+        lambda device: next(statuses),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_command",
+        lambda cmd, cwd=Path("."): commands.append(cmd) or True,
+    )
+    monkeypatch.setattr("scripts.experiments.runner.GCP_STOP_VERIFY_POLLS", 1)
+    monkeypatch.setattr("scripts.experiments.runner.time.sleep", lambda _: None)
+
+    runner._stop_gcp_fleet()
+    runner._stop_gcp_fleet()
+
+    assert len(commands) == 2
+    shutdown = json.loads(runner._active_manifest_path.read_text())[
+        "fleet_shutdown"
+    ]
+    assert shutdown["status"] == "terminated"
+    assert shutdown["devices"]["pbt-worker-0"]["attempt"] == 2
 
 
 # ---------------------------------------------------------------------------
