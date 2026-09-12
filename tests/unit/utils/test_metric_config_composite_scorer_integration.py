@@ -115,3 +115,43 @@ def test_throughput_variance_retained_for_multithreaded_sysbench() -> None:
 
     assert "throughput_variance" in engine._weights
     assert engine._weights["throughput_variance"] > 0.0
+
+
+def test_olap_uncalibrated_fallback_then_calibrated_reload() -> None:
+    """OLAP scoring separates fast/slow configs pre-calibration (OLAP fallback)
+    and adopts the calibrated normalizer after an engine rebuild.
+
+    The rebuild mirrors ``orchestrator.reload_scoring_engine``: once
+    ``metric_config`` has a fitted normalizer, ``create_scoring_engine`` must
+    hand it to the scorer instead of a fresh uncalibrated one.
+    """
+    config = MetricConfig.for_olap()
+
+    # TPC-H-scale configs ~3x apart in latency (fast has higher throughput).
+    fast = _metric(latency_p95=2500.0, throughput=6000.0)
+    slow = _metric(latency_p95=8000.0, throughput=2000.0)
+
+    # Pre-calibration: metric_config has no normalizer, so the engine uses the
+    # OLAP fallback anchors — and must already separate fast from slow.
+    assert config._normalizer is None
+    engine_pre = create_scoring_engine(config)
+    assert not engine_pre._normalizer.is_calibrated
+    assert (
+        engine_pre.compute_breakdown(fast).final_score
+        > engine_pre.compute_breakdown(slow).final_score
+    )
+
+    # Calibrate on an OLAP population, then rebuild (== reload_scoring_engine).
+    population = [
+        _metric(latency_p95=2000.0 + i * 300.0, throughput=6000.0 - i * 150.0)
+        for i in range(20)
+    ]
+    config.update_ranges(population)
+    assert config._normalizer is not None and config._normalizer.is_calibrated
+
+    engine_post = create_scoring_engine(config)
+    assert engine_post._normalizer.is_calibrated  # calibration reached the scorer
+    assert (
+        engine_post.compute_breakdown(fast).final_score
+        > engine_post.compute_breakdown(slow).final_score
+    )

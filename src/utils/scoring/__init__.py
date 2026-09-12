@@ -59,13 +59,21 @@ def create_scoring_engine(metric_config: "MetricConfig") -> CompositeScorer:
     CompositeScorer
         A configured CompositeScorer instance ready to compute score breakdowns.
     """
-    normalizer = None
-    if getattr(metric_config, "_normalizer", None) is None:
+    workload_str = getattr(
+        getattr(
+            metric_config,
+            "workload_type",
+            type("obj", (object,), {"value": "oltp"})(),
+        ),
+        "value",
+        "oltp",
+    ).lower()
+
+    normalizer = getattr(metric_config, "_normalizer", None)
+    if normalizer is None:
         from src.utils.scoring.normalization import QuantileUtilityNormalizer
 
-        normalizer = QuantileUtilityNormalizer()
-    else:
-        normalizer = metric_config._normalizer
+        normalizer = QuantileUtilityNormalizer(workload_type=workload_str)
 
     weight_overrides = {}
     if getattr(metric_config, "scoring_policy", None) == "fixed_v1":
@@ -80,15 +88,7 @@ def create_scoring_engine(metric_config: "MetricConfig") -> CompositeScorer:
 
     engine = CompositeScorer(
         policy_id=getattr(metric_config, "scoring_policy", "fixed_v1"),
-        workload_type=getattr(
-            getattr(
-                metric_config,
-                "workload_type",
-                type("obj", (object,), {"value": "oltp"})(),
-            ),
-            "value",
-            "oltp",
-        ).lower(),
+        workload_type=workload_str,
         latency_metric=getattr(metric_config, "latency_metric", "p95"),
         features=getattr(metric_config, "workload_features", {}),
         normalizer=normalizer,

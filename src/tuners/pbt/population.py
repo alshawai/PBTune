@@ -1222,6 +1222,9 @@ class Population:
             weights_updated,
             just_calibrated,
         )
+
+        self.orchestrator.reload_scoring_engine()  # type: ignore
+
         significant_changes = 0
         engine = self.orchestrator.scorer  # type: ignore
         for worker in self.workers:

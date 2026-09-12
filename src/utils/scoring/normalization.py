@@ -29,6 +29,29 @@ class MetricDirection:
     ZERO_IS_BEST = 0
 
 
+# Fallback anchors used only while the normalizer is uncalibrated (before fit()
+# runs, ~gen 5).
+OLTP_FALLBACK_ANCHORS: Dict[str, Tuple[int, float, float]] = {
+    "latency_p95": (MetricDirection.LOWER_IS_BETTER, 5.0, 2000.0),
+    "latency_p99": (MetricDirection.LOWER_IS_BETTER, 5.0, 3000.0),
+    "latency_variance": (MetricDirection.LOWER_IS_BETTER, 0.0, 500.0),
+    "tail_amplification": (MetricDirection.LOWER_IS_BETTER, 1.0, 10.0),
+    "throughput": (MetricDirection.HIGHER_IS_BETTER, 10.0, 5000.0),
+    "throughput_variance": (MetricDirection.LOWER_IS_BETTER, 0.0, 100.0),
+}
+
+OLAP_FALLBACK_ANCHORS: Dict[str, Tuple[int, float, float]] = {
+    "latency_p95": (MetricDirection.LOWER_IS_BETTER, 1500.0, 6000.0),
+    "latency_p99": (MetricDirection.LOWER_IS_BETTER, 2000.0, 10000.0),
+    "latency_variance": (MetricDirection.LOWER_IS_BETTER, 500.0, 3000.0),
+    "tail_amplification": (MetricDirection.LOWER_IS_BETTER, 5.0, 25.0),
+    "throughput": (MetricDirection.HIGHER_IS_BETTER, 1800.0, 8000.0),
+    # throughput_variance is uniformly 0 for TPC-H (single query-stream pass) and
+    # is dropped from OLAP weights for single-threaded workloads.
+    "throughput_variance": (MetricDirection.LOWER_IS_BETTER, 0.0, 100.0),
+}
+
+
 class QuantileUtilityNormalizer:
     """
     Robust normalizer that maps raw metrics to [0, 1] utility scores.
@@ -44,6 +67,7 @@ class QuantileUtilityNormalizer:
         calibration_window: int = 100,
         drift_threshold: float = 0.2,
         min_samples_for_drift: int = 40,
+        workload_type: str = "oltp",
     ):
         """
         Parameters
@@ -56,6 +80,10 @@ class QuantileUtilityNormalizer:
             Number of recent samples to keep for recalibration
         drift_threshold : float
             Fraction of out-of-support samples that triggers recalibration
+        workload_type : str
+            "oltp" (default) or "olap"; selects the fallback anchor set used
+            before calibration. OLTP anchors are millisecond-scale; OLAP anchors
+            are second-scale TPC-H priors (p05/p95 of observed sf=1 metrics).
         """
         self.logger = get_logger("MetricNormalizer")
 
@@ -72,15 +100,13 @@ class QuantileUtilityNormalizer:
             "scan_efficiency",
         }
 
-        # Fallback anchors for uncalibrated metrics (before fit() is called)
-        self.FALLBACK_ANCHORS = {
-            "latency_p95": (MetricDirection.LOWER_IS_BETTER, 5.0, 2000.0),
-            "latency_p99": (MetricDirection.LOWER_IS_BETTER, 5.0, 3000.0),
-            "latency_variance": (MetricDirection.LOWER_IS_BETTER, 0.0, 500.0),
-            "tail_amplification": (MetricDirection.LOWER_IS_BETTER, 1.0, 10.0),
-            "throughput": (MetricDirection.HIGHER_IS_BETTER, 10.0, 5000.0),
-            "throughput_variance": (MetricDirection.LOWER_IS_BETTER, 0.0, 100.0),
-        }
+        self.workload_type = str(workload_type).lower()
+
+        self.FALLBACK_ANCHORS = dict(
+            OLAP_FALLBACK_ANCHORS
+            if self.workload_type == "olap"
+            else OLTP_FALLBACK_ANCHORS
+        )
 
         # metric_name -> (direction, anchor_low, anchor_high)
         self.anchors: Dict[str, Tuple[int, float, float]] = {}

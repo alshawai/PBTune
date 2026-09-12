@@ -4,7 +4,12 @@ Unit tests for the QuantileUtilityNormalizer.
 
 import numpy as np
 
-from src.utils.scoring.normalization import QuantileUtilityNormalizer
+from src.utils.scoring.normalization import (
+    MetricDirection,
+    OLAP_FALLBACK_ANCHORS,
+    OLTP_FALLBACK_ANCHORS,
+    QuantileUtilityNormalizer,
+)
 from src.utils.metrics import PerformanceMetrics
 
 
@@ -212,3 +217,41 @@ def test_expand_anchor_higher_is_better_upper_utility_saturation_raises_q_high()
         f"HIGHER_IS_BETTER upper-utility saturation should raise q_high; "
         f"old_high={old_high:.4f}, new_high={new_high:.4f}"
     )
+
+
+def test_fallback_anchors_default_to_oltp_and_are_unchanged():
+    """The default (OLTP) fallback anchor set is byte-identical to the historical
+    values — the OLAP addition must not perturb OLTP scoring."""
+    normalizer = QuantileUtilityNormalizer()
+    assert normalizer.workload_type == "oltp"
+    assert normalizer.FALLBACK_ANCHORS == OLTP_FALLBACK_ANCHORS
+    # Historical OLTP latency ceiling (millisecond-scale) unchanged.
+    assert normalizer.FALLBACK_ANCHORS["latency_p99"] == (
+        MetricDirection.LOWER_IS_BETTER,
+        5.0,
+        3000.0,
+    )
+
+
+def test_olap_fallback_discriminates_second_scale_latency():
+    """OLAP fallback anchors keep second-scale TPC-H latencies discriminative
+    instead of clamping them all to zero (the pre-fix bug).
+
+    Under the OLTP fallback, q_high=3000ms means any real TPC-H latency (seconds)
+    clamps to utility 0, so the uncalibrated scorer is blind to query time. The
+    OLAP anchor set (selected via workload_type) spans the observed sf=1 range.
+    """
+    olap = QuantileUtilityNormalizer(workload_type="olap")
+    assert olap.workload_type == "olap"
+    assert olap.FALLBACK_ANCHORS == OLAP_FALLBACK_ANCHORS
+    assert not olap.is_calibrated  # these are the *fallback*, not fitted anchors
+
+    # Two configs 3x apart in p99 latency, both inside the OLAP anchor band.
+    fast = olap.score_metric("latency_p99", 3000.0)
+    slow = olap.score_metric("latency_p99", 9000.0)
+    assert fast > slow > 0.0  # discriminative, not clamped to zero
+
+    # The identical values under the OLTP fallback both clamp to zero.
+    oltp = QuantileUtilityNormalizer()
+    assert oltp.score_metric("latency_p99", 3000.0) == 0.0
+    assert oltp.score_metric("latency_p99", 9000.0) == 0.0
