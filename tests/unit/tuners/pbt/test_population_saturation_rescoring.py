@@ -53,7 +53,10 @@ def _make_worker(worker_id: int, throughput: float, score: float) -> PBTWorker:
 def test_finalize_scores_grounds_best_to_current() -> None:
     """When ranges expand, population should rescore workers and ground historical best."""
     metric_config = _MetricConfigStub(expand=True)
-    orchestrator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    orchestrator = SimpleNamespace(
+        config=SimpleNamespace(metric_config=metric_config),
+        reload_scoring_engine=lambda *_a, **_k: None,
+    )
 
     population = Population(
         knob_space=MagicMock(),
@@ -95,7 +98,10 @@ def test_finalize_scores_grounds_best_to_current() -> None:
 def test_finalize_scores_overwrites_best_if_worse() -> None:
     """If the rescored historical best is worse than the current best, it should be overwritten."""
     metric_config = _MetricConfigStub(expand=True)
-    orchestrator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    orchestrator = SimpleNamespace(
+        config=SimpleNamespace(metric_config=metric_config),
+        reload_scoring_engine=lambda *_a, **_k: None,
+    )
 
     population = Population(
         knob_space=MagicMock(),
@@ -133,7 +139,10 @@ def test_finalize_scores_overwrites_best_if_worse() -> None:
 def test_finalize_scores_always_rescores_workers() -> None:
     """Even when no range expansion is needed, workers should be rescored if features are refined."""
     metric_config = _MetricConfigStub(expand=False)
-    evaluator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    evaluator = SimpleNamespace(
+        config=SimpleNamespace(metric_config=metric_config),
+        reload_scoring_engine=lambda *_a, **_k: None,
+    )
 
     population = Population(
         knob_space=MagicMock(),
@@ -178,7 +187,10 @@ def test_finalize_scores_rescores_on_first_calibration() -> None:
     # ranges_expanded=False isolates the calibration trigger from the
     # incremental saturation path.
     metric_config = _MetricConfigStub(expand=False)
-    orchestrator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    orchestrator = SimpleNamespace(
+        config=SimpleNamespace(metric_config=metric_config),
+        reload_scoring_engine=lambda *_a, **_k: None,
+    )
 
     population = Population(
         knob_space=MagicMock(),
@@ -226,7 +238,10 @@ def test_finalize_scores_skips_rescore_when_nothing_changed() -> None:
     rescore path must remain skipped.
     """
     metric_config = _MetricConfigStub(expand=False)
-    orchestrator = SimpleNamespace(config=SimpleNamespace(metric_config=metric_config))
+    orchestrator = SimpleNamespace(
+        config=SimpleNamespace(metric_config=metric_config),
+        reload_scoring_engine=lambda *_a, **_k: None,
+    )
 
     population = Population(
         knob_space=MagicMock(),

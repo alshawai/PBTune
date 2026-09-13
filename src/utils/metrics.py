@@ -350,7 +350,9 @@ class MetricConfig:
         if self._normalizer is None:
             from src.utils.scoring.normalization import QuantileUtilityNormalizer
 
-            self._normalizer = QuantileUtilityNormalizer()
+            self._normalizer = QuantileUtilityNormalizer(
+                workload_type=self.workload_type.value
+            )
         return self._normalizer
 
     def update_ranges(
