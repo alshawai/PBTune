@@ -15,8 +15,8 @@ operator playbook.
 ## Prerequisites
 
 - A PBT trace under
-  `results/<workload>/pbt_runs/extensive/tuning_sessions/` containing
-  one or more `pbt_results_*.json` files. SCALPEL is designed to run
+  `results/sessions/<workload>/pbt/extensive/traces/` containing
+  one or more `trace_*.json` files. SCALPEL is designed to run
   on the **extensive** tier so it has the broadest tunable space to
   attribute over; it walks down on `--knob-source data_driven` runs
   but expects the importance-attribution data to come from the
@@ -46,7 +46,7 @@ python -m src.tuners.lhs_design \
   --config thorough \
   --design-size 64 \
   --parallel-workers 4
-# → results/oltp/oltp_read_write/lhs_runs/extensive/tuning_sessions/lhs_results_*.json
+# → results/sessions/oltp_read_write/lhs/extensive/traces/trace_*.json
 # → an lhs_design_<ts>.html log is written alongside it, matching PBT/BO.
 ```
 
@@ -57,13 +57,13 @@ cadence; each is overridable by its own flag (here `--design-size` and
 `--parallel-workers` override the `thorough` defaults). The session JSON carries
 `tuning_strategy: "lhs"` and a `design_records` array — one entry per design
 point with its config fractions, metrics, and score breakdown. Point SCALPEL
-at the `lhs_runs/.../tuning_sessions` directory exactly as you would a PBT
+at the `lhs/.../traces` directory exactly as you would a PBT
 trace:
 
 ```bash
 python -m src.scripts.analyze_knob_importance \
   --algorithm scalpel \
-  --results-dir results/oltp/oltp_read_write/lhs_runs/extensive/tuning_sessions \
+  --results-dir results/sessions/oltp_read_write/lhs/extensive/traces \
   --workload-label oltp_read_write \
   --export-tiers auto
 ```
@@ -88,7 +88,7 @@ Quick run with default budgets (~5–10 min on n ≈ 2 000, p ≈ 180):
 ```bash
 python -m src.scripts.analyze_knob_importance \
   --algorithm scalpel \
-  --results-dir results/oltp/oltp_read_write/pbt_runs/extensive/tuning_sessions \
+  --results-dir results/sessions/oltp_read_write/pbt/extensive/traces \
   --workload-label oltp_read_write \
   --export-tiers auto
 ```
@@ -98,7 +98,7 @@ Reduced-budget smoke run (~3–5 min):
 ```bash
 python -m src.scripts.analyze_knob_importance \
   --algorithm scalpel \
-  --results-dir results/oltp/oltp_read_write/pbt_runs/extensive/tuning_sessions \
+  --results-dir results/sessions/oltp_read_write/pbt/extensive/traces \
   --workload-label oltp_read_write \
   --skip-shap \
   --scalpel-boruta-iter 30 \
@@ -128,7 +128,7 @@ python -m src.scripts.analyze_knob_importance \
 ```
 
 The script globs
-`results/*/pbt_runs/extensive/tuning_sessions` (override via
+`results/sessions/*/pbt/extensive/traces` (override via
 `--results-glob`), discovers `(workload_label, results_dir)` pairs
 from the path, and runs the per-workload pipeline. Failures on any
 single workload are logged at WARNING level and skipped — they never
@@ -147,7 +147,7 @@ python -m src.tuners pbt \
   --workload oltp_read_write \
   --tier core \
   --knob-source data_driven
-# → results/oltp/oltp_read_write/pbt_runs/core@scalpel-v1/
+# → results/sessions/oltp_read_write/pbt/core@scalpel-v1/
 ```
 
 Expert-source paths are unchanged. When SCALPEL leaves an
@@ -269,7 +269,7 @@ Every export goes through `os.replace(<path>.tmp, <path>)`, so a
 mid-run crash leaves the prior good `data_driven_tiers.json`
 untouched. To revert a SCALPEL-generated file to a Jenks-era backup,
 git restore the file from before the SCALPEL commit
-(`scalpel-v1`-suffixed paths under `pbt_runs/<tier>/` will not be
+(`scalpel-v1`-suffixed paths under `sessions/<workload>/<strategy>/<tier>/` will not be
 affected — they live alongside legacy paths, not on top of them).
 
 ## CI integration

@@ -32,8 +32,8 @@ The runbook commands and reproducibility checklist live in [EVALUATION_RUNBOOK.m
 ```text
                        ┌─────────────────────────────────┐
                        │  Tuning session JSON            │
-                       │  results/.../pbt_results_*.json │
-                       │  results/.../bo_results_*.json  │
+                       │  results/sessions/{wl}/{strat}/ │
+                       │  {tier}/traces/trace_{ts}.json  │
                        └────────────────┬────────────────┘
                                         │
                                         ▼
@@ -139,7 +139,7 @@ Notable choices:
 - **Identical paired seeds.** Repetition `i` uses `base_seed + i - 1` for *both* the default and the tuned run. The two configurations face the same workload sequence, so paired statistical tests (Wilcoxon, paired bootstrap CI, paired Cohen's d) are valid.
 - **Default knobs come from `KnobSpace.get_default_config()`.** They are not the cluster's current knobs; they are the PostgreSQL defaults captured by the same KnobSpace that produced the tuned config. This is the only way the paired test is fair on knobs the tuner explored.
 - **Tuned knobs come from `session.best_configuration.knobs`.** When the session JSON stores fractional values (hardware-relative knobs), `_resolve_tuned_knobs` calls `KnobSpace.fractions_to_config(...)` against the *evaluation* host's resources, not the original tuning host's. This is what makes "tune on a 16-GB host, evaluate on a 32-GB host" sound — the fractional encoding is the transfer medium.
-- **Output partitioning by tier and workload.** `_resolve_output_dir` writes to `results/{workload_kind}/comparisons/{tier}/` derived from `session.tuning_session.knob_tier`, with a fallback to the session path's `pbt_runs/{tier}/` segment. This keeps the results tree navigable even when the session metadata is partial.
+- **Output partitioning by tier and workload.** `_resolve_output_dir` writes to `results/comparisons/{workload_kind}/{tier}/` derived from `session.tuning_session.knob_tier`, with a fallback to the tier segment following the session path's `{strategy}/` (or legacy `{strategy}_runs/`) directory. This keeps the results tree navigable even when the session metadata is partial.
 
 ---
 
@@ -258,9 +258,9 @@ Every field listed in the [reproducibility checklist of the runbook](../guides/e
 
 ```bash
 python -m src.evaluation \
-  --session results/.../pbt_results_seed42.json \
-  --session results/.../pbt_results_seed123.json \
-  --session results/.../bo_results_seed42.json \
+  --session results/.../trace_seed42.json \
+  --session results/.../trace_seed123.json \
+  --session results/.../trace_seed42.json \
   --repetitions 8
 ```
 
@@ -299,7 +299,7 @@ A reviewer reading a publication-facing comparison shouldn't have to wonder whet
 
 ### 6. Output partitioning by `(workload, tier)`
 
-Running comparisons across many sessions generates many JSONs. The path layout `results/{workload_kind}/comparisons/{tier}/` keeps related artefacts adjacent, and downstream scripts can glob over a tier directory to assemble multi-arm plots without parsing every file.
+Running comparisons across many sessions generates many JSONs. The path layout `results/comparisons/{workload_kind}/{tier}/` keeps related artefacts adjacent, and downstream scripts can glob over a tier directory to assemble multi-arm plots without parsing every file.
 
 ### 7. Loader tolerates schema drift
 

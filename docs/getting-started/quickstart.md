@@ -77,8 +77,8 @@ When the run finishes (or hits convergence), the CLI prints the output paths:
 
 ```text
 ✓ Session complete — best score 0.842 (Worker 1, generation 4)
-  JSON:  results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260607_1842.json
-  HTML:  results/oltp/oltp_read_write/pbt_runs/minimal/logs/pbt_session_20260607_1842.html
+  JSON:  results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260607_1842.json
+  HTML:  results/sessions/oltp_read_write/pbt/minimal/logs/session_20260607_1842.html
 ```
 
 The HTML log is the easiest way to inspect what happened — it's the same colour-coded transcript you saw on the terminal, but persistent and shareable.
@@ -86,7 +86,7 @@ The HTML log is the easiest way to inspect what happened — it's the same colou
 The JSON is the canonical artefact. Open it in any JSON viewer:
 
 ```bash
-python -m json.tool results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_*.json | less
+python -m json.tool results/sessions/oltp_read_write/pbt/minimal/traces/trace_*.json | less
 ```
 
 Look for these top-level keys:
@@ -108,11 +108,11 @@ A tuning session by itself only tells you which configurations PBT explored — 
 
 ```bash
 python -m src.evaluation \
-    --session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_<timestamp>.json \
+    --session results/sessions/oltp_read_write/pbt/minimal/traces/trace_<timestamp>.json \
     --repetitions 5
 ```
 
-This runs the default and tuned configurations against the same workload with paired seeds, then computes Wilcoxon, bootstrap CI, and Cohen's d on the differences. The output JSON in `results/oltp/oltp_read_write/comparisons/minimal/` is what you'd cite in a paper or pull request.
+This runs the default and tuned configurations against the same workload with paired seeds, then computes Wilcoxon, bootstrap CI, and Cohen's d on the differences. The output JSON in `results/comparisons/oltp_read_write/minimal/` is what you'd cite in a paper or pull request.
 
 For the runbook including all flags, scoring-policy overrides, and reproducibility checklist, see [guides/evaluation-runbook](../guides/evaluation-runbook.md).
 

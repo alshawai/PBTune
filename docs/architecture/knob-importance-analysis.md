@@ -12,8 +12,8 @@ translate continuous importance into discrete tiers.
 ## Data Flow
 
 ```text
-results/{workload}/pbt_runs/extensive/tuning_sessions/
-    pbt_results_*.json
+results/sessions/{workload}/pbt/extensive/traces/
+    trace_*.json
                 │
                 ▼  data_loader.load_sessions(...)
                 │  • parse session JSON (fixed_v1 + feature_driven_v2)

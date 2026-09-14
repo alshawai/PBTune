@@ -189,7 +189,7 @@ Only `--design-size` is LHS-specific; every other group below is the shared stra
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--output-dir <path>` | `results` | Base results directory. Session JSON lands under `{output-dir}/{workload}/[{sysbench_workload}/]lhs_runs/{tier}/tuning_sessions/`. |
+| `--output-dir <path>` | `results` | Base results directory. Session JSON lands under `{output-dir}/sessions/{workload}/lhs/{tier}/traces/`. |
 | `--colocate-output` | off | Place results/logs under the data directory (`{data-root}/results`) instead of `./results/`. |
 | `--verbose {DEBUG\|INFO\|WARNING\|ERROR\|TRACE}` | `INFO` | Logging verbosity. |
 | `--no-color` | off | Disable ANSI colour in console output. |

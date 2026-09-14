@@ -112,7 +112,7 @@ Legacy sessions (`timing_schema_version` absent) carry only `total_time_seconds`
 
 ## PBT session schema
 
-File location: `results/{workload_dir}/pbt_runs/{tier}/tuning_sessions/pbt_results_{timestamp}.json`
+File location: `results/sessions/{workload_dir}/pbt/{tier}/traces/trace_{timestamp}.json`
 
 ### Top-level layout
 
@@ -297,7 +297,7 @@ The first six fields are required; later additions (e.g. `python_version`, `dock
 
 ## BO session schema
 
-File location: `results/{workload_dir}/bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json` (or `baseline_sessions/` under some historical paths).
+File location: `results/sessions/{workload_dir}/bo/{tier}/traces/trace_{timestamp}.json` (older pre-rename sessions may use `bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json`).
 
 The schema is **structurally identical** to the PBT session schema with one optimiser-specific addition under `tuning_session`:
 
@@ -322,7 +322,7 @@ The `population_size` field is **absent** for BO (it's not population-based); co
 
 ## Comparison JSON schema
 
-File location: `results/{workload_dir}/comparisons/{tier}/comparison_{timestamp}.json`
+File location: `results/comparisons/{workload_dir}/{tier}/comparison_{timestamp}.json`
 
 Produced by `python -m src.evaluation`. The full schema:
 

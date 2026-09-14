@@ -172,7 +172,7 @@ python -m src.tuners --tier core --benchmark sysbench --design-size 64
 ```
 
 Output lands at
-`results/{workload}/[{sysbench_workload}/]lhs_runs/{tier}/tuning_sessions/lhs_results_*.json`,
+`results/sessions/{workload}/lhs/{tier}/traces/trace_*.json`,
 carrying `tuning_strategy: "lhs"` and a `design_records` array (one entry per
 design point with its config fractions, metrics, and score breakdown) that the
 SCALPEL pipeline consumes.

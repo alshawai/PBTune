@@ -33,7 +33,7 @@ The single most useful command — runs BO with all comparable settings copied f
 
 ```bash
 python -m src.scripts.bo_baseline \
-    --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
+    --pbt-session results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1825.json \
     --seed 42
 ```
 
@@ -81,7 +81,7 @@ python -m src.scripts.bo_baseline \
 ```bash
 for seed in 42 123 456 789 1024; do
     python -m src.scripts.bo_baseline \
-        --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
+        --pbt-session results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1825.json \
         --seed $seed
 done
 ```
@@ -89,7 +89,7 @@ done
 Then run the post-hoc evaluation suite against each output:
 
 ```bash
-for f in results/oltp/oltp_read_write/bo_runs/minimal/tuning_sessions/bo_results_*.json; do
+for f in results/sessions/oltp_read_write/bo/minimal/traces/trace_*.json; do
     python -m src.evaluation --session "$f" --repetitions 5
 done
 ```
@@ -98,8 +98,8 @@ Or feed all of them to the cross-method comparison script for aggregated converg
 
 ```bash
 python -m src.scripts.pbt_vs_bo_comarison \
-    --pbt results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_*.json \
-    --bo  results/oltp/oltp_read_write/bo_runs/minimal/tuning_sessions/bo_results_*.json \
+    --pbt results/sessions/oltp_read_write/pbt/minimal/traces/trace_*.json \
+    --bo  results/sessions/oltp_read_write/bo/minimal/traces/trace_*.json \
     --output-dir analysis/oltp-rw-minimal
 ```
 
@@ -139,7 +139,7 @@ Re-evaluate under a different scoring policy without changing the search space:
 
 ```bash
 python -m src.scripts.bo_baseline \
-    --pbt-session results/.../pbt_results_<timestamp>.json \
+    --pbt-session results/.../traces/trace_<timestamp>.json \
     --scoring-policy feature_driven_v2 \
     --seed 42
 ```
@@ -174,7 +174,7 @@ For the **complete** flag set, see [reference/cli §src.scripts.bo_baseline](../
 Results are written to:
 
 ```text
-{output_dir}/{workload_type}/bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json
+{output_dir}/sessions/{workload_type}/bo/{tier}/traces/trace_{timestamp}.json
 ```
 
 The schema is identical to the PBT session schema with one optimiser-specific addition (`optimizer: "bo_smac3"`, `bo_surrogate`, etc.). Full schema in [reference/session-json-schema §BO session schema](../reference/session-json-schema.md#bo-session-schema).

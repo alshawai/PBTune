@@ -10,12 +10,12 @@ The package is invoked via the CLI `python -m src.visualization` and is the cano
 
 ```text
 results/                              src/visualization/
-├── oltp/{workload}/                       │
-│   └── pbt_runs/{tier}/                   │ loaders/
-│       └── tuning_sessions/         ────► │   session.py
-│           pbt_results_*.json             │   baseline.py
-├── olap/                            ────► │   comparison.py
-│   └── comparisons/{tier}/                │   ablation.py
+├── sessions/{workload}/                   │
+│   └── {pbt,bo,lhs}/{tier}/               │ loaders/
+│       └── traces/                  ────► │   session.py
+│           trace_*.json                   │   baseline.py
+├── comparisons/{workload}/          ────► │   comparison.py
+│   └── {tier}/                            │   ablation.py
 │       comparison_*.json                  │   importance.py
 ├── analysis/{workload}/             ────► │   multi_seed.py
 │   importance_results.json                │
@@ -174,9 +174,9 @@ Each loader knows how to walk a results subtree and build a typed dataclass for 
 
 | Loader | Reads | Produces |
 | --- | --- | --- |
-| `session.py` | `results/{workload}/pbt_runs/{tier}/tuning_sessions/pbt_results_*.json` | `TuningSession` (per-generation history, best config, score breakdown, metadata) |
+| `session.py` | `results/sessions/{workload}/{strategy}/{tier}/traces/trace_*.json` | `TuningSession` (per-generation history, best config, score breakdown, metadata) |
 | `baseline.py` | Default-PostgreSQL baseline JSONs under `results/{workload}/baselines/` | Baseline metric distributions |
-| `comparison.py` | `results/{workload}/comparisons/{tier}/comparison_*.json` | `ComparisonReport` from the post-hoc evaluation suite (see [EVALUATION_SUITE.md](../architecture/evaluation-suite.md)) |
+| `comparison.py` | `results/comparisons/{workload}/{tier}/comparison_*.json` | `ComparisonReport` from the post-hoc evaluation suite (see [EVALUATION_SUITE.md](../architecture/evaluation-suite.md)) |
 | `ablation.py` | Multi-config sweeps for ablation tables | Per-condition metric records |
 | `importance.py` | `results/analysis/{workload}/importance_results.json` | fANOVA + TreeSHAP per-knob importance + pairwise interactions |
 | `multi_seed.py` | Multiple seed-tagged session JSONs | Per-seed convergence curves with mean / std bands |

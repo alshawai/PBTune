@@ -10,12 +10,12 @@ The script does not modify iteration counts, truncate runs, or enforce that inpu
 
 ```bash
 python -m src.scripts.pbt_vs_bo_comarison \
-  --pbt results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
-        results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1831.json \
-        results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1836.json \
-  --bo results/oltp/bo_runs/minimal/tuning_sessions/bo_results_20260504_1921.json \
-       results/oltp/bo_runs/minimal/tuning_sessions/bo_results_20260504_2002.json \
-       results/oltp/bo_runs/minimal/tuning_sessions/bo_results_20260504_2043.json \
+  --pbt results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1825.json \
+        results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1831.json \
+        results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1836.json \
+  --bo results/sessions/oltp_read_write/bo/minimal/traces/trace_20260504_1921.json \
+       results/sessions/oltp_read_write/bo/minimal/traces/trace_20260504_2002.json \
+       results/sessions/oltp_read_write/bo/minimal/traces/trace_20260504_2043.json \
   --output-dir analysis
 ```
 

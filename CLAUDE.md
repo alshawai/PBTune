@@ -46,7 +46,7 @@ python -m src.tuners pbt --benchmark sysbench --sysbench-tables 4
 python -m src.tuners pbt --benchmark tpch --scale-factor 1.0
 
 # Warm-Starting (Transfer Learning across hardware boundaries)
-python -m src.tuners pbt --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners pbt --warm-start results/sessions/olap/pbt/extensive/best_configs/best_YYYYMMDD_HHMM.json
 ```
 
 ### Evaluation Commands
@@ -54,16 +54,16 @@ python -m src.tuners pbt --warm-start results/olap/pbt_runs/extensive/best_confi
 ```bash
 # Compare PBT-tuned config vs default PostgreSQL (Docker, 5 repetitions)
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json
 
 # More repetitions for tighter confidence intervals
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
     --repetitions 10
 
 # Bare-metal fallback (no Docker required — reduced isolation)
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
     --no-docker
 ```
 
@@ -171,8 +171,8 @@ data/                    # Knob metadata, policy, tier CSVs
 └── data_driven_knobs/     # Workload-specific tiers from analysis pipeline
 docs/                    # Documentation (Diataxis: getting-started/guides/reference/architecture/research)
 results/                 # Optimization results
-├── olap/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
-└── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
+├── sessions/{workload}/{pbt,bo,lhs}/{tier}/{traces,best_configs,logs}/
+└── comparisons/{workload}/{tier}/    # {workload}: olap | oltp_read_only | oltp_read_write | oltp_write_only | mixed
 workloads/               # Workload definitions (oltp.json, olap.json, mixed.json, custom)
 tests/                   # Test suite (unit/ — analysis, benchmarks, config, evaluation, knobs, scoring, scripts, tuners/{engine,pbt}, utils)
 ```

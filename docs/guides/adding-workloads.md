@@ -144,7 +144,7 @@ Check that the extracted features match your intuition:
 ```bash
 python -c "
 import json
-data = json.load(open('results/.../tuning_sessions/pbt_results_<timestamp>.json'))
+data = json.load(open('results/.../traces/trace_<timestamp>.json'))
 print(json.dumps(data['workload_features'], indent=2))
 "
 ```

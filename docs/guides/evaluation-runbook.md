@@ -23,7 +23,7 @@ pip install -r requirements-dev.txt
 
 - A completed tuning session JSON file (for example):
 
-`results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json`
+`results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json`
 
 - Docker daemon running for isolated evaluation (recommended)
 
@@ -33,7 +33,7 @@ pip install -r requirements-dev.txt
 
 ```bash
 python -m src.evaluation \
-  --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 10 \
   --seed 50000
 ```
@@ -42,7 +42,7 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-  --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 10 \
   --seed 50000 \
   --no-docker
@@ -52,7 +52,7 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-  --session results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/oltp_read_write/pbt/core/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 8 \
   --sysbench-workload oltp_read_write \
   --sysbench-tables 16 \
@@ -65,7 +65,7 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-  --session results/oltp/oltp_read_only/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/oltp_read_only/pbt/core/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 8 \
   --sysbench-workload oltp_read_only
 ```
@@ -74,7 +74,7 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-  --session results/oltp/oltp_write_only/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/oltp_write_only/pbt/core/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 8 \
   --sysbench-workload oltp_write_only
 ```
@@ -83,7 +83,7 @@ python -m src.evaluation \
 
 ```bash
 python -m src.evaluation \
-  --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 8 \
   --tpch-scale-factor 1.0 \
   --tpch-warmup-passes 2
@@ -97,8 +97,8 @@ workload under the same paired seeds:
 
 ```bash
 python -m src.evaluation \
-  --session results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
-  --bo-session results/oltp/oltp_read_write/bo_runs/core/tuning_sessions/bo_results_YYYYMMDD_HHMM.json \
+  --session results/sessions/oltp_read_write/pbt/core/traces/trace_YYYYMMDD_HHMM.json \
+  --bo-session results/sessions/oltp_read_write/bo/core/traces/trace_YYYYMMDD_HHMM.json \
   --repetitions 10
 ```
 
@@ -111,7 +111,7 @@ historical sessions under the newer feature-driven model):
 
 ```bash
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
     --repetitions 5 \
     --scoring-policy feature_driven_v2
 ```
@@ -122,7 +122,7 @@ By default, the evaluation runner caches the baseline configuration's snapshot a
 
 ```bash
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
     --force-recreate-baseline
 ```
 
@@ -138,9 +138,9 @@ This is expected behavior and reflects the improved metric weighting strategy.
 
 By default, evaluation outputs are written to:
 
-- `results/oltp/{sysbench_workload}/comparisons/{tier}/` for Sysbench OLTP workloads
-- `results/olap/comparisons/{tier}/` for OLAP workloads
-- `results/mixed/comparisons/{tier}/` for mixed or unknown workloads
+- `results/comparisons/{sysbench_workload}/{tier}/` for Sysbench OLTP workloads
+- `results/comparisons/olap/{tier}/` for OLAP workloads
+- `results/comparisons/mixed/{tier}/` for mixed or unknown workloads
 
 Within the selected output directory, artifacts are split as:
 
@@ -149,7 +149,7 @@ Within the selected output directory, artifacts are split as:
 
 The `{tier}` segment is inferred from `tuning_session.knob_tier` in the
 session JSON, with a fallback to the tier segment in the session path
-(`.../pbt_runs/{tier}/...`). If neither source is available, the fallback
+(`.../{strategy}/{tier}/...`). If neither source is available, the fallback
 tier is `unknown`.
 
 Override this with `--output-dir <path>` when needed.

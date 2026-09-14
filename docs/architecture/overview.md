@@ -56,8 +56,8 @@ The design priorities, in order:
                        max gens      │
                                     ▼
                  ┌──────────────────────────────────────────────┐
-                 │   results/.../tuning_sessions/               │
-                 │     pbt_results_*.json                       │
+                 │   results/sessions/.../traces/               │
+                 │     trace_*.json                             │
                  │     (config, score breakdown, history,       │
                  │      reproducibility metadata)               │
                  └──────────────────┬───────────────────────────┘
@@ -139,19 +139,19 @@ Every persisted artefact (session JSON, BO baseline JSON, comparison JSON) is bu
 
 ```text
 results/
-├── oltp/{sysbench_workload}/         # one of oltp_read_only / oltp_read_write / oltp_write_only
-│   ├── pbt_runs/{tier}/
-│   │   └── tuning_sessions/
-│   │       └── pbt_results_<timestamp>.json
-│   ├── bo_runs/{tier}/
-│   │   └── tuning_sessions/
-│   │       └── bo_results_<timestamp>.json
-│   ├── comparisons/{tier}/
-│   │   ├── comparison_<timestamp>.json
-│   │   └── logs/evaluation_<timestamp>.html
-│   └── baselines/
-│       └── default_<timestamp>.json
-├── olap/                             # same structure for TPC-H
+├── sessions/{workload}/                # workload: oltp_read_only / oltp_read_write / oltp_write_only / olap / mixed
+│   ├── pbt/{tier}/
+│   │   ├── traces/
+│   │   │   └── trace_<timestamp>.json
+│   │   ├── best_configs/
+│   │   │   └── best_<timestamp>.json
+│   │   └── logs/
+│   │       └── session_<timestamp>.html
+│   ├── bo/{tier}/                      # same traces/best_configs/logs layout
+│   └── lhs/{tier}/
+├── comparisons/{workload}/{tier}/
+│   ├── comparison_<timestamp>.json
+│   └── logs/evaluation_<timestamp>.html
 └── analysis/{workload_label}/
     ├── importance_results.json
     └── analysis_log.html

@@ -21,7 +21,7 @@ python -m src.tuners pbt \
     --workload oltp --tier core \
     --population 8 --generations 20 \
     --random-seed 42 \
-    --output-dir results/oltp/oltp_read_write/pbt_runs/core/seed_42/
+    --output-dir results/seed_42/
 ```
 
 Report: mean ± std of best score across seeds, plus convergence curves.
@@ -37,7 +37,7 @@ via the post-hoc evaluation suite (`src/evaluation`):
 
 ```bash
 python -m src.evaluation \
-    --session results/oltp/oltp_read_write/pbt_runs/core/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/oltp_read_write/pbt/core/traces/trace_YYYYMMDD_HHMM.json \
     --repetitions 5
 ```
 
@@ -72,20 +72,19 @@ Compare on three axes:
 ## Results Directory Structure
 ```
 results/
-├── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/
-│   ├── baselines/                         # Default PG config benchmarks
-│   ├── pbt_runs/
-│   │   ├── {minimal,core,standard,extensive}/   # By knob tier
-│   │   │   ├── tuning_sessions/
-│   │   │   │   └── pbt_results_{timestamp}.json
-│   │   │   └── best_configs/
-│   │   │       └── best_config_{timestamp}.json # For warm-start
-│   ├── bo_runs/{tier}/
-│   └── comparisons/{tier}/
-├── olap/
-│   └── (same structure for TPC-H)
-└── analysis/{workload}/
+├── sessions/{workload}/{pbt,bo,lhs}/{minimal,core,standard,extensive}/   # By strategy, then knob tier
+│   ├── traces/
+│   │   └── trace_{timestamp}.json              # per-run tuning trace
+│   ├── best_configs/
+│   │   └── best_{timestamp}.json               # For warm-start
+│   └── logs/
+│       └── session_{timestamp}.html
+├── comparisons/{workload}/{tier}/              # Default-vs-tuned evaluation reports
+│   └── comparison_{timestamp}.json
+└── analysis/importance/                         # fANOVA / SHAP / SCALPEL tier outputs
 ```
+{workload} is one granular key (`olap`, `oltp_read_write`, ...); data-driven
+tiers carry an `@scalpel-v1` suffix (e.g. `core@scalpel-v1`).
 
 ## Results JSON Schema
 

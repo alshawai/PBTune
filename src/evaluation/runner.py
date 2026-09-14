@@ -15,7 +15,7 @@ Drives the end-to-end comparative evaluation pipeline:
 4. Run N repetitions with the **tuned** configuration the same way.
 5. Compute non-parametric statistical comparison (Wilcoxon, bootstrap CI,
    primary endpoint at alpha, Holm-corrected secondary endpoints, Cohen's d).
-6. Write the full result to `results/{workload}/comparisons/{tier}`.
+6. Write the full result to `results/comparisons/{workload}/{tier}`.
 7. Print a formatted summary table to stdout.
 
 Fresh-per-run strategy
@@ -114,7 +114,7 @@ class ComparisonRunner:
         runner = ComparisonRunner(ComparisonConfig(
             tuning_session_path=Path(
                 "results/sessions/olap/pbt/extensive/traces/"
-                "pbt_results_20260326_2115.json"
+                "trace_20260326_2115.json"
             ),
             repetitions=5,
         ))
@@ -1363,7 +1363,7 @@ class ComparisonRunner:
         """
         Serialize the ComparisonResult to JSON and write to disk.
 
-        Output path: ``results/{workload}/comparisons/{tier}/comparison_{timestamp}.json``
+        Output path: ``results/comparisons/{workload}/{tier}/comparison_{timestamp}.json``
 
         Args:
             result: The fully populated ComparisonResult.

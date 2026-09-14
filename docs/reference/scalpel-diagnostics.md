@@ -32,7 +32,7 @@ All file writes are atomic via `os.replace(<path>.tmp, <path>)`.
     "generated_at": "2026-06-18T20:01:41+00:00",
     "algorithm": "scalpel-v1",
     "scalpel_version": "1.0",
-    "source_results": "results_temp/oltp/oltp_read_write/pbt_runs/extensive/tuning_sessions",
+    "source_results": "results_temp/oltp_read_write/pbt/extensive/traces",
     "diagnostics": {
       "nuisance_dropped": ["array_nulls", "IntervalStyle", "..."],
       "oob_r2": 0.69,

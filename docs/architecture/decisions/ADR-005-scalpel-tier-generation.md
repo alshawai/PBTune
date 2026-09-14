@@ -116,7 +116,7 @@ Trade-offs:
   `core`/`standard` tiers; downstream
   [`knob_loader`](../../src/knobs/knob_loader.py) walks down to
   the next broader tier with a warning rather than crashing the tuner.
-- Output paths under `results/<workload>/pbt_runs/<tier>/` for
+- Output paths under `results/sessions/<workload>/pbt/<tier>/` for
   `--knob-source data_driven` runs are now suffixed with
   `@scalpel-v1` to prevent collisions with pre-SCALPEL artifacts that
   contained a different knob set under the same canonical tier name.

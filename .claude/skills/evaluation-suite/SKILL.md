@@ -87,7 +87,7 @@ session/timing JSON schema (see `docs/reference/session-json-schema.md`).
 The evaluation CLI supports policy override for re-evaluation:
 ```bash
 python -m src.evaluation \
-    --session results/.../pbt_results_XXXX.json \
+    --session results/.../trace_XXXX.json \
     --scoring-policy feature_driven_v2
 ```
 
@@ -118,7 +118,7 @@ Benchmark parameters (auto-detected from session, override only when needed):
 
 ## Output: ComparisonReport
 
-JSON report saved to `results/{workload}/comparisons/{tier}/`:
+JSON report saved to `results/comparisons/{workload}/{tier}/`:
 ```json
 {
   "session_file": "...",

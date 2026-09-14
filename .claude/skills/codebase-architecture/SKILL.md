@@ -176,14 +176,13 @@ python -m src.scripts.analyze_knob_importance
 
 ```
 results/
-├── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/
-│   ├── pbt_runs/{tier}/{tuning_sessions, best_configs, ...}/
-│   ├── bo_runs/{tier}/
-│   ├── comparisons/{tier}/
-│   └── baselines/
-├── olap/
-│   └── (same structure for TPC-H)
-└── analysis/{workload}/
+├── sessions/{workload}/{pbt,bo,lhs}/{tier}/   # {workload} = one granular key (olap, oltp_read_write, ...)
+│   ├── traces/trace_{timestamp}.json          # per-run tuning trace (was tuning_sessions/*_results_*.json)
+│   ├── best_configs/best_{timestamp}.json     # best config for warm-start
+│   └── logs/session_{timestamp}.html
+├── comparisons/{workload}/{tier}/             # evaluation reports (comparisons BEFORE workload)
+│   └── comparison_{timestamp}.json
+└── analysis/importance/                        # fANOVA/SHAP/SCALPEL importance + tier outputs
 ```
 
 ## Documentation Index
