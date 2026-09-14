@@ -18,11 +18,11 @@ The full evaluation of a single worker follows this pipeline:
 ```
 evaluate_worker(worker)
     ├── apply_configuration(worker.knob_config)
-    │   ├── Separate knobs by context (postmaster vs sighup)
-    │   ├── Write ALL knobs to postgresql.conf
+    │   ├── Validate knobs against pg_settings (type/bounds/context)
+    │   ├── Apply ALL knobs via ALTER SYSTEM SET (→ postgresql.auto.conf)
     │   ├── If postmaster knobs changed → restart via environment backend
-    │   ├── Else if sighup knobs changed → pg_ctl reload
-    │   └── _verify_configuration() via SELECT current_setting()
+    │   ├── Else if sighup knobs changed → SELECT pg_reload_conf()
+    │   └── _verify_and_capture_config() → KnobApplicator.verify() (reads pg_settings)
     ├── _ensure_benchmark_ready()
     │   └── Check tables exist; restore snapshot if needed
     ├── _vacuum_after_dml()

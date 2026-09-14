@@ -45,10 +45,10 @@ Both implement DatabaseEnvironment ABC:
 
 ## Config Application Flow
 
-1. Separate knobs by context (postmaster vs sighup)
-2. Write ALL knobs to postgresql.conf
-3. postmaster changed → `pg_ctl restart`; sighup only → `pg_ctl reload`
-4. Verify via `SELECT current_setting(knob_name)`
+1. Validate knobs against `pg_settings` (type / bounds / context)
+2. Apply ALL knobs via `ALTER SYSTEM SET` (persisted to `postgresql.auto.conf`)
+3. postmaster changed → full restart via env backend `restart_instance()` (bare-metal `pg_ctl stop`+`start`; Docker restarts the container); sighup only → `SELECT pg_reload_conf()`
+4. Read back via `KnobApplicator.verify()` over `pg_settings`
 
 ## Code Locations
 

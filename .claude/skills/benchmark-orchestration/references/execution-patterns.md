@@ -84,10 +84,10 @@ the full evaluation of a single worker:
 ```
 evaluate_worker(worker):
     ├── apply_configuration(worker.knob_config)
-    │   ├── Separate knobs by context (postmaster/sighup)
-    │   ├── Write to postgresql.conf
+    │   ├── Validate knobs against pg_settings (type/bounds/context)
+    │   ├── Apply via ALTER SYSTEM SET (→ postgresql.auto.conf)
     │   ├── _perform_restart() if postmaster knobs changed
-    │   └── _verify_configuration() — SELECT current_setting()
+    │   └── _verify_and_capture_config() → KnobApplicator.verify()
     ├── _ensure_benchmark_ready()
     │   └── Check tables exist, restore snapshot if needed
     ├── _vacuum_after_dml() — VACUUM ANALYZE after DML warmup
@@ -99,12 +99,11 @@ evaluate_worker(worker):
 ```
 
 ### Configuration Verification
-After applying config, the evaluator verifies each knob:
+After applying config, the orchestrator reads back the *applied* (quantised) values:
 ```python
-def _verify_configuration(self):
-    for knob_name, expected_value in config.items():
-        actual = connection.execute(
-            f"SELECT current_setting('{knob_name}')"
-        )
-        # Compare with type-aware tolerance
+def _verify_and_capture_config(self, worker):
+    # KnobApplicator.verify() queries pg_settings for each knob:
+    #   SELECT setting, unit, vartype FROM pg_settings WHERE name = %s
+    # and returns the typed, PostgreSQL-quantised values actually in effect.
+    return self.applicator.verify(worker.knob_config)
 ```

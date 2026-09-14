@@ -38,7 +38,7 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--tier {minimal\|core\|standard\|extensive}` | `minimal` | Knob tier (~5 / 13 / 36 / 80+ knobs). See [adding-knobs](../guides/adding-knobs.md). |
+| `--tier {minimal\|core\|standard\|extensive}` | `minimal` | Knob tier (~5 / 13 / 43 / 170 knobs). See [adding-knobs](../guides/adding-knobs.md). |
 | `--knob-source {expert\|data_driven}` | `expert` | `expert` reads `data/expert_defined_knobs/`; `data_driven` reads `data/data_driven_knobs/{workload}/`. |
 | `--warm-start <path>` | none | Load `best_config.json` from a previous session for fractional warm-start. See [hardware-aware-normalization](../architecture/hardware-aware-normalization.md). |
 

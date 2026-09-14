@@ -5,16 +5,16 @@
 PostgreSQL parameters are categorized by how changes take effect:
 
 ### `postmaster` — Requires Full Restart
-- Changes only take effect after `pg_ctl restart`
+- Changes only take effect after a full instance restart
 - Examples: `shared_buffers`, `max_connections`, `max_worker_processes`, `wal_buffers`
 - **Impact**: Service interruption during restart (1-5s typically)
-- **Code path**: `KnobApplicator.apply_configuration()` writes to `postgresql.conf`, then calls `_restart_postgresql()` which uses `pg_ctl -D <data_dir> restart -m fast`
+- **Code path**: `KnobApplicator.apply()` writes the value via `ALTER SYSTEM SET` (persisted to `postgresql.auto.conf`); activation requires a full restart performed by the environment backend's `restart_instance()` (driven by the orchestrator's `_perform_restart`), not by the applicator
 - **Critical**: Batch ALL postmaster knobs into a single restart per evaluation cycle
 
 ### `sighup` — Requires Reload Only
-- Changes take effect after `pg_ctl reload` (no downtime)
+- Changes take effect after a config reload (`SELECT pg_reload_conf()`, no downtime)
 - Examples: `effective_cache_size`, `random_page_cost`, `work_mem`, `maintenance_work_mem`
-- **Code path**: `KnobApplicator.apply_configuration()` writes to `postgresql.conf`, then `pg_ctl -D <data_dir> reload`
+- **Code path**: `KnobApplicator.apply()` writes the value via `ALTER SYSTEM SET` (persisted to `postgresql.auto.conf`), then reloads via `KnobApplicator._reload_configuration()`, which runs `SELECT pg_reload_conf()`
 - **Note**: Some sighup knobs require active sessions to reconnect to pick up changes
 
 ### `user` — Session-Level SET
@@ -26,12 +26,13 @@ PostgreSQL parameters are categorized by how changes take effect:
 ## Apply Configuration Flow
 
 ```
-KnobApplicator.apply_configuration(config, postmaster_dict, sighup_dict):
-    1. Separate knobs by context
-    2. Write ALL knobs to postgresql.conf (both postmaster + sighup)
-    3. If any postmaster knobs changed: pg_ctl restart -m fast
-    4. Else if only sighup knobs changed: pg_ctl reload
-    5. Verify configuration applied: SELECT current_setting(name) for each knob
+KnobApplicator.apply(knob_config):
+    1. Validate each knob against pg_settings (vartype / min_val / max_val / enumvals / context)
+    2. Write ALL knobs via ALTER SYSTEM SET (persisted to postgresql.auto.conf)
+    3. If any sighup knob changed: reload via SELECT pg_reload_conf()
+    4. Postmaster knobs are flagged in ApplicationResult.restart_required; the orchestrator
+       triggers a full restart through the environment backend's restart_instance()
+    5. Read back via KnobApplicator.verify(), which queries pg_settings for the applied (quantised) values
 ```
 
 ## Restart Minimization Strategy

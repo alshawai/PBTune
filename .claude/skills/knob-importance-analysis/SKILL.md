@@ -66,7 +66,7 @@ shap      # SHAP values (TreeSHAP for random forests)
 ## Data-Driven Tier Generation
 
 ### Current State: Expert-Defined Tiers
-Minimal (5) → Core (10) → Standard (20) → Extensive (40+) with boundaries
+Minimal (5) → Core (13) → Standard (43) → Extensive (170) with boundaries
 set by domain expertise. These serve as the default until data-driven tiers
 are validated.
 

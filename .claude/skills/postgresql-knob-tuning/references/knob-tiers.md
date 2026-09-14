@@ -10,19 +10,19 @@ Fewer knobs = faster convergence but potentially suboptimal.
 | Tier | Count | Purpose | CSV Source |
 |------|-------|---------|------------|
 | `minimal` | 5 | Quick testing, debugging, CI | `data/expert_defined_knobs/minimal_knobs.csv` |
-| `core` | 10 | Standard experiments | `data/expert_defined_knobs/core_knobs.csv` |
-| `standard` | 20 | Comprehensive analysis | `data/expert_defined_knobs/standard_knobs.csv` |
-| `extensive` | 40+ | Research-grade full sweep | `data/expert_defined_knobs/extensive_knobs.csv` |
+| `core` | 13 | Standard experiments | `data/expert_defined_knobs/core_knobs.csv` |
+| `standard` | 43 | Comprehensive analysis | `data/expert_defined_knobs/standard_knobs.csv` |
+| `extensive` | 170 | Research-grade full sweep | `data/expert_defined_knobs/extensive_knobs.csv` |
 
 ### Expert-Defined Tier Membership (Current)
 
-**Minimal (5):** `shared_buffers`, `work_mem`, `effective_cache_size`, `random_page_cost`, `max_connections`
+**Minimal (5):** `shared_buffers`, `work_mem`, `effective_cache_size`, `random_page_cost`, `max_parallel_workers_per_gather`
 
-**Core (10):** Minimal + `maintenance_work_mem`, `checkpoint_completion_target`, `wal_buffers`, `max_worker_processes`, `max_parallel_workers`
+**Core (13):** Minimal + `maintenance_work_mem`, `checkpoint_completion_target`, `checkpoint_timeout`, `default_statistics_target`, `effective_io_concurrency`, `wal_buffers`, `max_connections`, `max_worker_processes`
 
-**Standard (20):** Core + WAL, planner, and I/O knobs
+**Standard (43):** Core + WAL, planner, and I/O knobs
 
-**Extensive (40+):** All tunable knobs from `pg_settings` with curated safe bounds
+**Extensive (170):** All tunable knobs from `pg_settings` with curated safe bounds
 
 ### Data-Driven Tiers (Future — via knob-importance-analysis)
 
@@ -47,8 +47,8 @@ Key columns:
 
 ## Regenerating Tier CSVs
 
-After modifying `src/knobs/knob_metadata.py`:
+After modifying `data/knob_metadata.json`:
 ```bash
-python -m src.knobs
+python -m src.scripts.analyze_knobs
 ```
 This runs the full pipeline: `pg_settings → retrieval → preprocess → tier CSVs`

@@ -58,7 +58,7 @@ Both facades are configured with two non-default settings:
 - `deterministic=False` — database benchmarks have inherent measurement variance from concurrent host activity, scheduling, and PostgreSQL background work. Setting `deterministic=True` would tell SMAC each `(config, seed)` pair has a fixed cost; that would prevent SMAC from re-evaluating incumbents and lead to overconfident decisions on noisy observations.
 - `SobolInitialDesign` — quasi-random initial points instead of pure-random. Sobol sequences cover the search space more uniformly during the pilot phase, which matters because the pilot observations are what calibrate the normaliser.
 
-The default of `rf` reflects the `extensive` tier's high dimensionality (~80 knobs) where GP behaviour degrades.
+The default of `rf` reflects the `extensive` tier's high dimensionality (~170 knobs) where GP behaviour degrades.
 
 ---
 
@@ -211,7 +211,7 @@ SMAC3 is the most widely-cited BO library in the systems-tuning literature (Otte
 
 ### 2. Random Forest as the default surrogate
 
-GP surrogates are the textbook BO choice but degrade at the dimensionality of `extensive` tier (~80 knobs) and don't handle the mixed continuous/integer/categorical search space without kernel engineering. RF is more robust to both and is the default. Users tuning low-dimensional spaces (`minimal` tier, ~5 knobs) can switch to GP via `--bo-surrogate gp`.
+GP surrogates are the textbook BO choice but degrade at the dimensionality of `extensive` tier (~170 knobs) and don't handle the mixed continuous/integer/categorical search space without kernel engineering. RF is more robust to both and is the default. Users tuning low-dimensional spaces (`minimal` tier, ~5 knobs) can switch to GP via `--bo-surrogate gp`.
 
 ### 3. Pilot + Freeze instead of online recalibration
 

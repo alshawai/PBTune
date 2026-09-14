@@ -13,8 +13,8 @@ PostgreSQL parameters have three contexts that determine how they take effect:
 
 | Context | Mechanism | Restart? | Code Path |
 |---------|-----------|----------|-----------|
-| `postmaster` | Modify `postgresql.conf` + restart via `pg_ctl restart` | **Yes** | `KnobApplicator._restart_postgresql()` |
-| `sighup` | Modify `postgresql.conf` + `pg_ctl reload` | No | `KnobApplicator._reload_configuration()` |
+| `postmaster` | `ALTER SYSTEM SET` → `postgresql.auto.conf`, then full instance restart | **Yes** | Env backend `restart_instance()` (via orchestrator `_perform_restart`) |
+| `sighup` | `ALTER SYSTEM SET` → `postgresql.auto.conf`, then reload | No | `KnobApplicator._reload_configuration()` (`SELECT pg_reload_conf()`) |
 | `user` | `SET parameter = value` (session-level) | No | Direct SQL |
 
 **Critical rule:** Batch all `postmaster` knobs together to minimize restarts. One restart for all postmaster changes per evaluation cycle.
@@ -24,9 +24,9 @@ PostgreSQL parameters have three contexts that determine how they take effect:
 | Tier | Count | Use Case | CSV File |
 |------|-------|----------|----------|
 | `minimal` | 5 | Quick testing, debugging | `data/expert_defined_knobs/minimal_knobs.csv` |
-| `core` | 10 | Standard tuning | `data/expert_defined_knobs/core_knobs.csv` |
-| `standard` | 20 | Comprehensive tuning | `data/expert_defined_knobs/standard_knobs.csv` |
-| `extensive` | 40+ | Research-grade full analysis | `data/expert_defined_knobs/extensive_knobs.csv` |
+| `core` | 13 | Standard tuning | `data/expert_defined_knobs/core_knobs.csv` |
+| `standard` | 43 | Comprehensive tuning | `data/expert_defined_knobs/standard_knobs.csv` |
+| `extensive` | 170 | Research-grade full analysis | `data/expert_defined_knobs/extensive_knobs.csv` |
 
 ## Hardware-Relative Fractional Representation
 
@@ -60,14 +60,14 @@ new_value = value * uniform(factor_min, factor_max)
 ```
 
 ## Dangerous Knob Identification
-Some PostgreSQL knobs from `pg_settings` have absurdly wide native ranges (e.g., `max_connections: 1–2,147,483,647`). These ~30-40 knobs in the extensive tier have curated `TuningMetadata` entries in `src/knobs/knob_metadata.py` with safe `tuning_min`/`tuning_max` bounds.
+Some PostgreSQL knobs from `pg_settings` have absurdly wide native ranges (e.g., `max_connections: 1–2,147,483,647`). These knobs have curated `TuningMetadata` entries (~80) in `data/knob_metadata.json` with safe `tuning_min`/`tuning_max` bounds; `src/knobs/knob_metadata.py` only defines the `TuningMetadata` dataclass and its JSON loader.
 
 ## Knob Metadata Pipeline
 ```
 pg_settings → retrieval.py → raw CSV → preprocess_knobs.py (+TuningMetadata) → tier CSVs
 ```
 
-To regenerate tier CSVs after metadata changes: `python -m src.knobs`
+To regenerate tier CSVs after metadata changes: `python -m src.scripts.analyze_knobs` (or `python -m src.knobs.preprocess_knobs`)
 
 ## Warm-Start (Transfer Learning Level 1)
 ```bash

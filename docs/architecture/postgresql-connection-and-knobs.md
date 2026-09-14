@@ -133,7 +133,7 @@ Pandas-backed bulk loaders. `if_exists` accepts `"fail"`, `"replace"`, or `"appe
 
 ## Knobs layer (`src/knobs/`)
 
-This is the layer that turns "PostgreSQL has 350 parameters" into "here are 36 parameters with sensible bounds and metadata for tuning."
+This is the layer that turns "PostgreSQL has 350 parameters" into "here are 43 parameters with sensible bounds and metadata for tuning."
 
 ### `retrieval.py`
 
@@ -275,8 +275,8 @@ data/
 ├── expert_defined_knobs/
 │   ├── minimal_knobs.csv                 # ~5 knobs
 │   ├── core_knobs.csv                    # ~13 knobs
-│   ├── standard_knobs.csv                # ~36 knobs
-│   └── extensive_knobs.csv               # 80+ knobs
+│   ├── standard_knobs.csv                # 43 knobs
+│   └── extensive_knobs.csv               # 170 knobs
 └── data_driven_knobs/
     └── {workload_label}/                 # e.g. oltp_read_write
         ├── minimal_knobs.csv
@@ -286,7 +286,7 @@ data/
         └── data_driven_tiers.json
 ```
 
-Counts depend on the PostgreSQL version of the source database; on PG 14+ the `extensive` tier currently lands around 80 knobs after policy filtering.
+Counts depend on the PostgreSQL version of the source database; on PG 14+ the `extensive` tier currently lands around 170 knobs after policy filtering.
 
 ---
 
