@@ -17,13 +17,13 @@ FOR generation g = 1, ..., G:
     FOR each worker wᵢ ∈ P (in parallel via ThreadPoolExecutor):
         Apply wᵢ.config to PostgreSQL instance i
         Run workload benchmark, measure metrics
-        wᵢ.score = MetricConfig.compute_score(metrics)
+        wᵢ.score = CompositeScorer.compute_breakdown(metrics, features).final_score
     
-    IF g ≥ 2:
-        Update normalization ranges from observed data (adaptive normalization)
+    Once ≥ max(20, 5·population_size) non-failure samples accrued (one-time):
+        Calibrate normalization ranges from observed data (adaptive normalization)
     
     IF any metric saturated (normalized component ≥ 0.95):
-        Expand normalization ranges by 50%, re-evaluate
+        Widen the saturated anchor (~20% of current range), rescore
     
     Truncation selection:
         bottom = workers in bottom Q% by score
@@ -55,7 +55,7 @@ Worker lifecycle:
 The canonical scoring contract is:
 
 ```
-S = 100 × G × Σ(w_i × u_i)
+S = 100 × G × Σ(w_i × u_i) / (1 − w_error)
 ```
 
 Where:
@@ -63,6 +63,7 @@ Where:
 - **w_i** — metric weight from the active scoring policy (Σw_i = 1)
 - **u_i** ∈ [0, 1] — normalized utility from the quantile normalizer
 - **S** ∈ [0, 100] — final bounded score
+- **w_error** — the `error_rate` weight; `error_rate` is excluded from Σ and the `(1 − w_error)` denominator renormalizes the remaining weights to sum to 1
 
 Active scoring policies (see `src/utils/scoring/policies.py`):
 - `feature_driven_v2` — default for new runs (dynamic weights from workload features)
@@ -72,14 +73,14 @@ See the `scoring-pipeline` skill for full details on `CompositeScorer`,
 `QuantileUtilityNormalizer`, and feature-driven weights.
 
 ### Adaptive Normalization
-- Activates at generation ≥ 2 (need observed data)
+- Activates once ≥ max(20, 5·population_size) non-failure samples accrue (one-time, guarded by `_ranges_calibrated`; ≈ gen 5 — not a fixed generation index)
 - Uses 5th/95th percentiles of observed latency and throughput
-- Adds 20% padding to computed bounds
+- Scoring flows through `CompositeScorer` (via `create_scoring_engine`); `MetricConfig.compute_score()` no longer exists
 - Purpose: prevent scoring from being dominated by arbitrary initial range estimates
 
 ### Saturation Detection
 - Checks if any normalized metric component ≥ 0.95
-- When detected: expand bounds by 50% of current range
+- When detected: widen the saturated anchor by ~20% of current range via `expand_metric_anchor` (PBT passes `expansion_factor=0.25`, but that parameter is deprecated/ignored)
 - Purpose: restore discrimination power when metrics hit normalization ceiling
 
 ### Convergence Detection

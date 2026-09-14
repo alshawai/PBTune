@@ -94,7 +94,7 @@ The system follows a layered architecture:
 6. **Restart Policy** (`src/tuners/engine/restart_policy.py`): TuningMode-driven restart decisions
 7. **Environment Factory** (`src/utils/environments/factory.py`): Docker / bare-metal lifecycle
 8. **Knob Space** (`src/knobs/knob_space.py`): Search space definition and LHS sampling
-9. **Composite Scorer** (`src/utils/scoring/`): Feature-driven score = G × Σ(wᵢ × uᵢ)
+9. **Composite Scorer** (`src/utils/scoring/`): Feature-driven score = 100 × G × Σ(wᵢ × uᵢ) / (1 − w_error)
 10. **Timing Recorder** (`src/utils/timing.py`, `src/utils/session_clock.py`): Monotonic-clock instrumentation (schema v1.1)
 
 ### Key Design Patterns
@@ -227,7 +227,7 @@ python -m src.tuners pbt --tier core --config standard --verbose DEBUG
 - `src/tuners/engine/orchestrator.py` - WorkloadOrchestrator (apply → run → measure)
 - `src/knobs/knob_space.py` - Knob space management
 - `src/utils/environments/factory.py` - Environment backend selection and lifecycle
-- `src/utils/scoring/scorer.py` - CompositeScorer (S = G × Σ(wᵢ × uᵢ))
+- `src/utils/scoring/scorer.py` - CompositeScorer (S = 100 × G × Σ(wᵢ × uᵢ) / (1 − w_error))
 - `src/utils/timing.py` - Timing instrumentation primitives (schema v1.1)
 - `docs/architecture/feature-driven-scoring.md` - Canonical reference for the scoring-v2 architecture
 - `docs/architecture/overview.md` - Top-level system map

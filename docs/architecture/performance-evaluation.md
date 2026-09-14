@@ -64,14 +64,14 @@ The previous evaluator module has been retired; all evaluation logic now lives u
                                ▼
                   ┌──────────────────────────┐
                   │   CompositeScorer        │
-                  │  G × Σ(w_i · u_i)        │
+                  │ 100·G·Σ(w·u)/(1−w_err)   │
                   │  (see FEATURE_DRIVEN_*)  │
                   └────────────┬─────────────┘
                                │
                                ▼
                   ┌──────────────────────────┐
                   │     ScoreBreakdown       │
-                  │  score ∈ [0, 1]          │
+                  │  score ∈ [0, 100]        │
                   │  + per-metric components │
                   └────────────┬─────────────┘
                                │
@@ -157,13 +157,13 @@ Used by session writers, the BO baseline, the post-hoc evaluation suite, and the
 The orchestrator never imports the scoring math directly; it delegates to the `CompositeScorer` configured on the [`MetricConfig`](../../src/utils/metrics.py) attached to its `WorkloadOrchestratorConfig`. The contract is:
 
 ```python
-score_breakdown: ScoreBreakdown = scorer.score(metrics, workload_features)
-final_score: float = score_breakdown.score      # ∈ [0, 1]
+breakdown: ScoreBreakdown = scorer.compute_breakdown(metrics, workload_features)
+final_score: float = breakdown.final_score      # ∈ [0, 100]
 ```
 
 `ScoreBreakdown` (see [`src/utils/scoring/contracts.py`](../../src/utils/scoring/contracts.py)) carries the resolved weights, per-metric utilities, reliability gate value, and the policy / metric reference version. Sessions persist this breakdown so post-hoc tools can rescore consistently.
 
-The score is bounded by `[0, 1]`. The legacy `× 100.0` scaling factor used in the old policy is no longer part of the pipeline — comparisons, dashboards, and the BO baseline all read fractional scores from `ScoreBreakdown.score`.
+The score is bounded by `[0, 100]` — `scorer.py` computes `final_score = total * 100.0`. `error_rate` is excluded from the weighted sum and divided out via `(1 − w_error)`; comparisons, dashboards, and the BO baseline all read `ScoreBreakdown.final_score`.
 
 For the math, the floor-constrained softmax over feature-conditioned logits, and the reliability gate, see [FEATURE_DRIVEN_SCORING.md](feature-driven-scoring.md).
 
@@ -272,9 +272,9 @@ There are **no** workload-specific scoring functions any more. A single `Composi
 
 The orchestrator stays workload-agnostic. Workload-specific logic lives in [`BenchmarkExecutor`](../../src/benchmarks/executor.py) implementations ([`SysbenchExecutor`](../../src/benchmarks/sysbench/executor.py), [`TPCHExecutor`](../../src/benchmarks/tpch/executor.py), [`WorkloadExecutor`](../../src/benchmarks/workload.py)). This keeps the scoring contract and the barrier sequence shared across benchmarks.
 
-### 2. Score in `[0, 1]`, not `[0, 100]`
+### 2. Score in `[0, 100]`
 
-The previous `× 100.0` scaling factor existed only to make logs more readable. It now leaks into post-hoc analysis and BO cost transforms in confusing ways, so the score is kept in `[0, 1]` and any human-facing rounding happens at the display layer.
+`scorer.py` multiplies the gated, renormalized utility sum by `100.0`, so `ScoreBreakdown.final_score` lands in `[0, 100]`. Post-hoc analysis, dashboards, and BO cost transforms all read this same `[0, 100]` value; there is no separate fractional score.
 
 ### 3. Read-back at B5
 

@@ -60,7 +60,7 @@ CLI args (src.tuners pbt → pbt/cli.py)
 ### `src/utils/scoring/` — Feature-Driven Scoring (v2)
 | File | Responsibility |
 |------|---------------|
-| `scorer.py` | `CompositeScorer`: G × Σ(w_i × u_i) |
+| `scorer.py` | `CompositeScorer`: 100 × G × Σ(w_i × u_i) / (1 − w_error) |
 | `normalization.py` | `QuantileUtilityNormalizer`: quantile anchoring, drift, saturation |
 | `weights.py` | `FeatureDrivenWeightModel`: floor-constrained softmax |
 | `policies.py` | `ScoringPolicySpec`, `fixed_v1`, `feature_driven_v2` definitions |
