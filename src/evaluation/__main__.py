@@ -112,8 +112,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--repetitions",
         metavar="N",
         type=int,
-        default=5,
-        help="Number of independent runs per configuration (default: 5).",
+        default=10,
+        help="Number of independent runs per configuration (default: 10).",
     )
     bench_grp.add_argument(
         "--tpch-scale-factor",
@@ -298,10 +298,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "--repetitions must be at least 2 (need paired observations for Wilcoxon)."
         )
-    if args.repetitions < 5:
+    if args.repetitions < 8:
         logger.warning(
-            "Running only %d repetitions. Wilcoxon signed-rank requires "
-            "N ≥ 5 for p < 0.05 (two-sided). Consider --repetitions 5.",
+            "Running only %d repetitions. The two-sided Wilcoxon signed-rank "
+            "test cannot reach p<0.05 below N=6 (min p at N=5 is 0.0625) and "
+            "stays underpowered until N>=8. Consider --repetitions 10 (default).",
             args.repetitions,
         )
 
