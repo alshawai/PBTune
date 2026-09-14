@@ -6,7 +6,7 @@ See also: [Documentation index](../README.md), [pbt-core](pbt-core.md), [feature
 
 The BO baseline is a [SMAC3](https://github.com/automl/SMAC3)-based Bayesian-Optimisation tuner that runs against the same `KnobSpace`, the same `WorkloadOrchestrator`, and the same `DatabaseEnvironment` backends as PBT. It exists as a **controlled comparison baseline** for academic peer review — to defend the claim that PBT is competitive against the most widely-cited alternative for database configuration tuning.
 
-This document covers **how the baseline is shaped and why**. The runbook for actually launching BO runs lives in [guides/bo-baseline](../guides/bo-baseline.md). For its CLI flags see [reference/cli §src.scripts.bo_baseline](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline).
+This document covers **how the baseline is shaped and why**. The runbook for actually launching BO runs lives in [guides/bo-baseline](../guides/bo-baseline.md). For its CLI flags see [reference/cli §src.tuners bo](../reference/cli.md#srctuners-bo--bayesian-optimisation-baseline).
 
 The design priorities are:
 
@@ -23,7 +23,7 @@ The design priorities are:
 3. [Pilot + Freeze normalisation](#pilot--freeze-normalisation)
 4. [Snapshot restoration parity](#snapshot-restoration-parity)
 5. [Quantisation and read-back parity](#quantisation-and-read-back-parity)
-6. [Parallel BO and resource equalisation](#parallel-bo-and-resource-equalisation)
+6. [Co-tenancy and resource equalisation](#co-tenancy-and-resource-equalisation)
 7. [Ask-tell execution model](#ask-tell-execution-model)
 8. [Implementation notes](#implementation-notes)
 9. [Design decisions](#design-decisions)
@@ -35,14 +35,14 @@ The design priorities are:
 
 | File | Responsibility |
 | --- | --- |
-| [`config.py`](../../src/scripts/bo_baseline/config.py) | `BOConfig` dataclass — all tuning parameters in a frozen record. |
-| [`search_space.py`](../../src/scripts/bo_baseline/search_space.py) | Translates `KnobSpace` ↔ `ConfigSpace` (SMAC3's parameter format). |
-| [`objective.py`](../../src/scripts/bo_baseline/objective.py) | SMAC3-compatible objective function (returns cost = `100 - score`). |
-| [`result_writer.py`](../../src/scripts/bo_baseline/result_writer.py) | Serialises results into PBT-compatible session JSON. |
-| [`runner.py`](../../src/scripts/bo_baseline/runner.py) | `BOBaselineRunner` — orchestrates the optimisation, owns the ask-tell loop. |
-| [`__main__.py`](../../src/scripts/bo_baseline/__main__.py) | CLI entry point. |
+| [`config.py`](../../src/tuners/bo/config.py) | `BOConfig` dataclass — all tuning parameters in a frozen record. |
+| [`search_space.py`](../../src/tuners/bo/search_space.py) | Translates `KnobSpace` ↔ `ConfigSpace` (SMAC3's parameter format). |
+| [`objective.py`](../../src/tuners/bo/objective.py) | SMAC3-compatible objective function (returns cost = `100 - score`). |
+| [`cotenant.py`](../../src/tuners/bo/cotenant.py) | Co-tenancy background-load manager — reproduces PBT's single-host contention during each measurement window. |
+| [`tuner.py`](../../src/tuners/bo/tuner.py) | `BOTuner(BaseTuner)` — owns the ask-tell loop, Pilot+Freeze normalisation, and lifecycle integration. |
+| [`cli.py`](../../src/tuners/bo/cli.py) / [`__main__.py`](../../src/tuners/bo/__main__.py) | Argument parsing and CLI entry point (`python -m src.tuners bo`). |
 
-Every component except `runner.py` is small and pure (the runner is where the integration with the rest of the codebase happens). This split lets the search-space translation and result-writer be tested independently of SMAC3.
+Session-JSON serialisation is shared across strategies in [`session_writer.py`](../../src/tuners/utils/session_writer.py) (`write_bo_results`), not a BO-local module. Every component except `tuner.py` is small and pure (the tuner is where integration with the rest of the codebase happens). This split lets the search-space translation be tested independently of SMAC3.
 
 ---
 
@@ -133,11 +133,11 @@ PBT does the same merge for its lineage tracking and session JSON; the differenc
 
 ---
 
-## Parallel BO and resource equalisation
+## Co-tenancy and resource equalisation
 
-The runner supports parallel BO evaluation, mirroring PBT's parallel-worker model so cross-method comparisons are wall-clock fair as well as evaluation-budget fair.
+BO evaluates one trial at a time, but it reproduces PBT's single-host contention so cross-method comparisons are fair rather than measuring BO in an unrealistically quiet environment.
 
-- `--batched-bo` enables the parallel ask-tell loop (see next section).
+- `--cotenancy-degree N` runs `N` concurrent instances during each measurement window — one foreground BO trial plus `N − 1` background-load instances — so a BO measurement sees the same contention a PBT generation does. `1` disables background load; when `--pbt-session` is provided it is matched to that session's `num_parallel_workers`.
 - `--resource-division N` is the denominator for per-worker resource slicing — same role as `num_parallel_workers` for PBT in [hardware-aware-normalization](hardware-aware-normalization.md).
 - When `--pbt-session` is provided, BO copies `num_parallel_workers` from the reference session and applies it as `--resource-division`, ensuring per-worker RAM/CPU budgets match.
 - If the reference session includes `worker_resources` (a per-worker resource record), BO uses **that** for knob-range resolution rather than dividing fresh local host resources. This handles the case where the comparison is run on different hardware than the original session.
@@ -149,23 +149,19 @@ If the reference PBT session is missing any of `population_size`, `total_generat
 
 ## Ask-tell execution model
 
-The runner has two execution paths:
+`BOTuner` drives SMAC3 through a single explicit ask-tell loop (it never calls `facade.optimize()`); the loop lives in [`tuner.py`](../../src/tuners/bo/tuner.py) so the Pilot+Freeze normalisation and lifecycle hooks can wrap each step.
 
-- **Sequential path (default)** uses SMAC3's standard `facade.optimize()` loop with the objective function as a closure.
-- **Parallel path (`--batched-bo`)** uses explicit ask-tell control inside [`runner.py`](../../src/scripts/bo_baseline/runner.py).
+Each iteration follows this cycle:
 
-In ask-tell mode each batch follows this cycle:
+1. `facade.ask()` — request one `TrialInfo` (the next configuration to try).
+2. The configuration is evaluated once, under co-tenant background load, via the shared `WorkloadOrchestrator`.
+3. The result is returned via `facade.tell(trial_info, TrialValue(cost=...))`.
+4. The surrogate is updated before the next `ask()`.
 
-1. `ask()` — request `num_parallel_workers` `TrialInfo` objects for the current batch.
-2. Configurations are evaluated concurrently using a local `ThreadPoolExecutor`.
-3. Each completed trial is returned via `tell(trial_info, TrialValue(cost=...))`.
-4. After the whole batch is told, the surrogate is updated before the next `ask()` call.
+The design has two intentional constraints:
 
-The design has three intentional constraints:
-
-- **`Scenario(n_workers=1)`** — SMAC's own parallel mode uses Dask process workers, which would force pickling of the orchestrator + environment objects (Docker clients in particular don't pickle cleanly). Keeping `n_workers=1` and parallelising in-process via threads avoids the pickling problem entirely.
-- **In-process ThreadPoolExecutor** — the database environment lives in the runner's process; threads share its handle without any serialisation.
-- **Per-worker previous-config tracking** — the restart-detection logic in `objective.py` needs to know "did *this worker's* previous config require a restart-on-change?" Since multiple workers may suggest different configs concurrently, that state is kept per-worker rather than globally.
+- **`Scenario(n_workers=1)`** — SMAC's own parallel mode uses Dask process workers, which would force pickling of the orchestrator + environment objects (Docker clients in particular don't pickle cleanly). BO stays single-worker and reproduces PBT's contention through co-tenancy (background-load instances) rather than concurrent BO trials.
+- **Per-iteration previous-config tracking** — the restart-detection logic in `objective.py` needs to know "did the previous configuration require a restart-on-change?", so that state is tracked across iterations rather than recomputed.
 
 ---
 
@@ -175,7 +171,7 @@ A few specifics worth knowing when modifying the BO baseline:
 
 ### Search space translation
 
-[`search_space.py`](../../src/scripts/bo_baseline/search_space.py) translates `KnobSpace` into a SMAC3 `ConfigSpace`:
+[`search_space.py`](../../src/tuners/bo/search_space.py) translates `KnobSpace` into a SMAC3 `ConfigSpace`:
 
 - Integer knobs with `scale=log` clamp `min` to 1 (log(0) is undefined).
 - Float knobs with `scale=log` clamp `min` to `1e-9`.
@@ -184,7 +180,7 @@ A few specifics worth knowing when modifying the BO baseline:
 
 ### Objective function
 
-[`objective.py`](../../src/scripts/bo_baseline/objective.py) returns a cost on a `[0, 100]` scale (SMAC minimises cost):
+[`objective.py`](../../src/tuners/bo/objective.py) returns a cost on a `[0, 100]` scale (SMAC minimises cost):
 
 ```text
 cost = 100 - score                   # normal evaluation
@@ -199,7 +195,7 @@ Restart detection runs before each evaluation and triggers a restart only when a
 
 ### Result serialisation
 
-[`result_writer.py`](../../src/scripts/bo_baseline/result_writer.py) emits session JSON with the same schema as PBT (see [reference/session-json-schema](../reference/session-json-schema.md)). Differences:
+Session serialisation ([`write_bo_results` in `session_writer.py`](../../src/tuners/utils/session_writer.py)) emits session JSON with the same schema as PBT (see [reference/session-json-schema](../reference/session-json-schema.md)). Differences:
 
 - `generation_history[]` has one element per BO iteration; `worker_scores` and `worker_configs` are length-1 arrays. This keeps downstream tooling (visualization loaders, evaluation suite, comparison script) workload-agnostic across PBT and BO.
 - The best configuration is extracted from SMAC's incumbent at the end of optimisation, not from the maximum-score evaluation in history (those can differ if SMAC's surrogate believes a particular point is the predicted optimum even though it was not the empirically-best evaluation).
@@ -225,9 +221,9 @@ PBT's online recalibration is incompatible with surrogate-model training (see [P
 
 Surrogate gradients depend on faithful input observation. Without the merge, the BO baseline would systematically underperform any optimiser that doesn't have to guess the quantisation grid — biasing the comparison against BO. The merge is non-optional.
 
-### 5. In-process threads for parallel BO
+### 5. Single-worker BO with co-tenancy, not parallel BO trials
 
-The Dask-based parallelism path that SMAC offers natively can't pickle the Docker client. Keeping parallelism in-process via threads sidesteps the issue and matches PBT's `ThreadPoolExecutor` model, which makes the per-worker accounting (resource slicing, restart detection) straightforward to share between the two optimisers.
+SMAC's native Dask parallelism can't pickle the Docker client, and running concurrent BO trials would break the surrogate's one-observation-per-config accounting. BO instead stays single-worker (`Scenario(n_workers=1)`) and reproduces PBT's host contention through co-tenant background load, keeping per-iteration accounting (resource slicing, restart detection) simple.
 
 ### 6. Cost in `[0, 100]`, not `[0, 1]`
 
@@ -243,5 +239,5 @@ SMAC's penalty regions (timeouts, failures) are easier to reason about with conc
 - **[feature-driven-scoring](feature-driven-scoring.md)** — the scoring engine BO consumes.
 - **[environment-backends](environment-backends.md)** — Docker / bare-metal backends BO shares with PBT.
 - **[hardware-aware-normalization](hardware-aware-normalization.md)** — `WorkerResources` slicing, applied identically across optimisers.
-- **[reference/cli](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline)** — full BO CLI flag reference.
+- **[reference/cli](../reference/cli.md#srctuners-bo--bayesian-optimisation-baseline)** — full BO CLI flag reference.
 - **[reference/session-json-schema §BO session schema](../reference/session-json-schema.md#bo-session-schema)** — output JSON shape.

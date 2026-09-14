@@ -157,7 +157,7 @@ src/database/            # connection, data_loader, management
 src/knobs/               # knob_space, knob_loader, knob_metadata, retrieval, preprocess_knobs, policy
 src/benchmarks/          # executor + sysbench/ + tpch/
 src/scripts/             # setup_database, cleanup_instances, analyze_knobs, analyze_knob_importance,
-                         # pbt_vs_bo_comarison (sic), bo_baseline/ subpackage
+                         # pbt_vs_bo_comarison (sic)
 src/visualization/       # plots, loaders, registry, theme, export, __main__
 docker/                  # Docker evaluation images
 ├── eval.Dockerfile      # PostgreSQL + sysbench + TPC-H dbgen

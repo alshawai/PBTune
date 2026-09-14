@@ -247,7 +247,6 @@ load_knobs_for_tier(tier, source="expert", workload=None) -> df
 | `analyze_knobs.py` | `python -m src.scripts.analyze_knobs` | Run the preprocessing pipeline and refresh tier CSVs. |
 | `analyze_knob_importance.py` | `python -m src.scripts.analyze_knob_importance` | Run fANOVA + TreeSHAP + tier generation across PBT session results. See [KNOB_IMPORTANCE_ANALYSIS.md](knob-importance-analysis.md). |
 | `cleanup_instances.py` | `python -m src.scripts.cleanup_instances` | Tear down stale Docker containers / bare-metal data dirs from prior runs. |
-| `bo_baseline/` | `python -m src.scripts.bo_baseline` | The Bayesian-Optimisation baseline. Documented separately in [BO_BASELINE.md](../guides/bo-baseline.md). |
 | `pbt_vs_bo_comarison.py` | `python -m src.scripts.pbt_vs_bo_comarison` | Cross-method comparison. Documented in [PBT_VS_BO_COMPARISON.md](../guides/pbt-vs-bo-comparison.md). |
 
 ---

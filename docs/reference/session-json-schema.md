@@ -5,7 +5,7 @@ See also: [evaluation-suite](../architecture/evaluation-suite.md), [feature-driv
 Every tuning run, evaluation comparison, and analysis pass emits or consumes one of three JSON shapes:
 
 - **PBT session** — produced by `python -m src.tuners pbt`
-- **BO session** — produced by `python -m src.scripts.bo_baseline`
+- **BO session** — produced by `python -m src.tuners bo`
 - **Comparison report** — produced by `python -m src.evaluation`
 
 This page is the schema reference for tooling authors and reviewers. The session loader in [`src/evaluation/loader.py`](../../src/evaluation/loader.py) is the authoritative implementation; this doc summarises what it expects.
@@ -308,7 +308,7 @@ The schema is **structurally identical** to the PBT session schema with one opti
 | `bo_surrogate` | str | `rf` (Random Forest) or `gp` (Gaussian Process). |
 | `bo_acquisition` | str | `"EI"` or facade default. |
 | `iterations` | int | Total iterations completed. |
-| `num_parallel_workers` | int | When `--batched-bo` is used. |
+| `num_parallel_workers` | int | Co-tenancy degree — concurrent instances during each BO measurement window. |
 | `resource_equalization` | bool | Whether BO inherited per-worker resource slices from `--pbt-session`. |
 | `reference_pbt_session` | str \| null | Path to the reference PBT session. |
 | `reference_pbt_knobs` | list[str] \| null | Knob names copied from the reference session. |

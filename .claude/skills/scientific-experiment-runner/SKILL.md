@@ -116,7 +116,7 @@ Hardware provenance is captured via `src/utils/hardware_info.py`.
 This project ships an SMAC3-based BO baseline and a cross-method comparison script:
 
 ```bash
-python -m src.scripts.bo_baseline        # Runs the SMAC3 baseline
+python -m src.tuners bo                  # Runs the SMAC3 baseline
 python -m src.scripts.pbt_vs_bo_comarison  # Cross-method comparison (filename typo intentional)
 ```
 

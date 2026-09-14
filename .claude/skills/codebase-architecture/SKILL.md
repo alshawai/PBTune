@@ -127,7 +127,7 @@ CLI args (src.tuners pbt → pbt/cli.py)
 | `src/database/` | PostgreSQL connection + management (`connection.py`, `data_loader.py`, `management.py`) |
 | `src/knobs/` | Knob metadata, retrieval, preprocessing, policy (`knob_metadata.py`, `retrieval.py`, `preprocess_knobs.py`, `policy.py`) |
 | `src/benchmarks/` | Benchmark executor interfaces (`executor.py`, `sysbench/`, `tpch/`) |
-| `src/scripts/` | Setup, cleanup, knob analysis, BO baseline (`bo_baseline/` subpackage), `pbt_vs_bo_comarison.py` (filename typo is intentional) |
+| `src/scripts/` | Setup, cleanup, knob analysis, `pbt_vs_bo_comarison.py` (filename typo is intentional) |
 | `src/config/` | Global database configuration |
 
 ## Key Data Types
@@ -158,7 +158,7 @@ make fix-and-check  # auto-fix then re-run check-all
 ```bash
 python -m src.tuners pbt                # PBT tuning
 python -m src.evaluation                # Post-hoc default-vs-tuned comparison
-python -m src.scripts.bo_baseline       # SMAC3 BO baseline
+python -m src.tuners bo                 # SMAC3 BO baseline
 python -m src.scripts.pbt_vs_bo_comarison  # Cross-method comparison (filename typo is intentional)
 python -m src.visualization             # Publication figure generation
 ```

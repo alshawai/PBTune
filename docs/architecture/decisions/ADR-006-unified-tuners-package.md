@@ -276,3 +276,14 @@ left intact as the original decision.
   `python -m src.tuner.main` are dead.
 - **BO** has not yet migrated — it remains at `src/scripts/bo_baseline/` and is
   the next arc, adopting the same `BaseTuner` + subpackage + CLI-router pattern.
+
+## Addendum (2026-09-14): BO migrated onto `BaseTuner`
+
+The "next arc" above is done. BO now lives at [`src/tuners/bo/`](../../src/tuners/bo)
+as `BOTuner(BaseTuner)` and is invoked through the unified router
+`python -m src.tuners bo ...` (direct door `python -m src.tuners.bo ...`); the
+`src/scripts/bo_baseline/` package is gone. Session serialisation is the shared
+`write_bo_results` in [`session_writer.py`](../../src/tuners/utils/session_writer.py).
+Per `src/tuners/utils/types.py`, PBT, LHS-design, and BO have all been migrated
+onto this framework. The historical body above records the point-in-time state
+before this migration and is left intact.
