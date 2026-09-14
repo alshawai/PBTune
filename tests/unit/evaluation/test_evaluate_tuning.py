@@ -398,25 +398,32 @@ class TestComputeComparisonStatistics:
         )
         assert stats.alpha == pytest.approx(0.05)
 
-    def test_returns_primary_plus_two_secondary_metrics(
+    def test_metric_set_is_primary_secondary_and_reported(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Statistics include score, benchmark latency, throughput, and memory endpoints."""
+        """Metrics = primary (score) + tested secondaries + reported endpoints.
+
+        memory_utilization and buffer_miss_rate are intentionally absent
+        (superseded by memory_pressure); they live only in the raw per-rep table.
+        """
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
         metric_names = {mc.metric_name for mc in stats.metrics}
         assert metric_names == {
             "score",
-            "latency_p95",
+            # tested secondaries (Holm family)
             "throughput",
-            "memory_utilization",
+            "latency_p99",
             "memory_pressure",
-            "buffer_miss_rate",
-            "tail_amplification",
             "scan_efficiency",
+            # reported-only (descriptive, never tested)
+            "latency_p95",
+            "latency_p50",
+            "error_rate",
+            "tail_amplification",
             "latency_variance",
         }
 
@@ -432,30 +439,34 @@ class TestComputeComparisonStatistics:
         latency_mc = next(m for m in stats.metrics if m.metric_name == "latency_p95")
         assert latency_mc.higher_is_better is False
 
-    def test_memory_utilization_in_secondary_endpoints(
+    def test_memory_pressure_replaces_memory_utilization(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Memory utilization is tracked as a secondary comparison endpoint."""
+        """memory_pressure is the memory endpoint; memory_utilization is dropped."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
         metric_names = {m.metric_name for m in stats.metrics}
-        assert "memory_utilization" in metric_names
+        assert "memory_pressure" in metric_names
+        assert "memory_utilization" not in metric_names
+        assert "buffer_miss_rate" not in metric_names
 
-    def test_tpch_uses_latency_p99_endpoint(
+    def test_latency_p99_is_the_tested_latency_for_both_benchmarks(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """TPC-H statistical endpoint uses latency_p99 instead of p95."""
-        stats = compute_comparison_statistics(
-            default_runs, tuned_runs, benchmark="tpch"
-        )
-        metric_names = {mc.metric_name for mc in stats.metrics}
-        assert "latency_p99" in metric_names
-        assert "latency_p95" not in metric_names
+        """latency_p99 is the Holm-tested latency endpoint for sysbench AND tpch;
+        latency_p95 is reported-only (not tested)."""
+        for benchmark in ("sysbench", "tpch"):
+            stats = compute_comparison_statistics(
+                default_runs, tuned_runs, benchmark=benchmark
+            )
+            by_name = {mc.metric_name: mc for mc in stats.metrics}
+            assert by_name["latency_p99"].endpoint_role == "secondary"
+            assert by_name["latency_p95"].endpoint_role == "reported"
 
     def test_endpoint_directionality_score(
         self,
@@ -493,33 +504,33 @@ class TestComputeComparisonStatistics:
         latency_mc = next(m for m in stats.metrics if m.metric_name == "latency_p95")
         assert latency_mc.higher_is_better is False
 
-    def test_endpoint_directionality_memory_utilization(
+    def test_endpoint_directionality_memory_pressure(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Memory utilization should have higher_is_better=False (lower is better)."""
+        """memory_pressure should have higher_is_better=False (lower is better)."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
-        mem_util_mc = next(
-            m for m in stats.metrics if m.metric_name == "memory_utilization"
+        mem_mc = next(
+            m for m in stats.metrics if m.metric_name == "memory_pressure"
         )
-        assert mem_util_mc.higher_is_better is False
+        assert mem_mc.higher_is_better is False
 
-    def test_endpoint_directionality_buffer_miss_rate(
+    def test_endpoint_directionality_scan_efficiency(
         self,
         default_runs: list[RunResult],
         tuned_runs: list[RunResult],
     ) -> None:
-        """Buffer miss rate should have higher_is_better=False (lower is better)."""
+        """scan_efficiency should have higher_is_better=True."""
         stats = compute_comparison_statistics(
             default_runs, tuned_runs, benchmark="sysbench"
         )
-        miss_rate_mc = next(
-            m for m in stats.metrics if m.metric_name == "buffer_miss_rate"
+        scan_mc = next(
+            m for m in stats.metrics if m.metric_name == "scan_efficiency"
         )
-        assert miss_rate_mc.higher_is_better is False
+        assert scan_mc.higher_is_better is True
 
     def test_ci_is_ordered(
         self,
@@ -587,17 +598,133 @@ class TestComputeComparisonStatistics:
         assert stats.secondary_correction_method == "holm"
         assert stats.primary_endpoint == "score"
         assert set(stats.secondary_endpoints) == {
-            "latency_p95",
             "throughput",
-            "memory_utilization",
+            "latency_p99",
             "memory_pressure",
-            "buffer_miss_rate",
-            "tail_amplification",
             "scan_efficiency",
-            "latency_variance",
         }
         assert stats.power_warning is not None
         assert "0.0625" in stats.power_warning
+
+    # -- New-behaviour tests: curated family, degenerate guard, finite d -------
+
+    @staticmethod
+    def _make_pair(
+        config_type: str,
+        run_number: int,
+        *,
+        score: float,
+        tps: float,
+        p99: float,
+        memory_pressure: float = 0.0,
+        scan_efficiency: float = 0.0,
+    ) -> RunResult:
+        """Build a RunResult with control over the tested-secondary metrics."""
+        return RunResult(
+            config_type=config_type,
+            run_number=run_number,
+            pair_seed=50_000 + run_number - 1,
+            order_in_pair=1 if config_type == "default" else 2,
+            metrics=PerformanceMetrics(
+                latency_p50=p99 * 0.5,
+                latency_p95=p99 * 0.8,
+                latency_p99=p99,
+                throughput=tps,
+                error_rate=0.0,
+                memory_utilization=0.5,
+                memory_pressure=memory_pressure,
+                scan_efficiency=scan_efficiency,
+                total_queries=int(tps * 60),
+                total_time=60.0,
+            ),
+            score=score,
+            duration_seconds=90.0,
+        )
+
+    def test_reported_endpoints_are_never_significant(
+        self,
+        default_runs: list[RunResult],
+        tuned_runs: list[RunResult],
+    ) -> None:
+        """Reported endpoints carry descriptive stats but are never tested."""
+        stats = compute_comparison_statistics(
+            default_runs, tuned_runs, benchmark="sysbench"
+        )
+        reported = [m for m in stats.metrics if m.endpoint_role == "reported"]
+        assert {m.metric_name for m in reported} == {
+            "latency_p95",
+            "latency_p50",
+            "error_rate",
+            "tail_amplification",
+            "latency_variance",
+        }
+        assert all(not m.significant for m in reported)
+        assert all(m.metric_name not in stats.significant_metrics for m in reported)
+
+    def test_degenerate_secondary_excluded_and_flagged(self) -> None:
+        """A constant tested-secondary is reported but excluded from Holm."""
+        n = 8
+        default = [
+            self._make_pair(
+                "default", i + 1, score=40.0 + i, tps=800.0 + 5 * i, p99=200.0,
+                memory_pressure=0.10, scan_efficiency=0.5,
+            )
+            for i in range(n)
+        ]
+        tuned = [
+            self._make_pair(
+                "tuned", i + 1, score=60.0 + i, tps=1200.0 + 5 * i, p99=150.0,
+                memory_pressure=0.10, scan_efficiency=0.5,  # identical → degenerate
+            )
+            for i in range(n)
+        ]
+        stats = compute_comparison_statistics(default, tuned, benchmark="sysbench")
+        by_name = {m.metric_name: m for m in stats.metrics}
+        for name in ("memory_pressure", "scan_efficiency"):
+            assert by_name[name].endpoint_role == "secondary"
+            assert by_name[name].p_value_corrected == pytest.approx(1.0)
+            assert by_name[name].significant is False
+            assert name not in stats.significant_metrics
+
+    def test_degenerate_endpoints_do_not_dilute_active_holm(self) -> None:
+        """Adding degenerate secondaries must not worsen an active endpoint's
+        corrected p-value (the Holm anti-dilution fix)."""
+        n = 8
+
+        def build(mp_default, mp_tuned, se_default, se_tuned):
+            default = [
+                self._make_pair(
+                    "default", i + 1, score=40.0, tps=800.0 + i, p99=200.0,
+                    memory_pressure=mp_default, scan_efficiency=se_default,
+                )
+                for i in range(n)
+            ]
+            tuned = [
+                self._make_pair(
+                    "tuned", i + 1, score=60.0, tps=1200.0 + i, p99=150.0,
+                    memory_pressure=mp_tuned, scan_efficiency=se_tuned,
+                )
+                for i in range(n)
+            ]
+            return compute_comparison_statistics(default, tuned, benchmark="sysbench")
+
+        # A: memory_pressure & scan_efficiency degenerate (constant across arms).
+        stats_a = build(0.1, 0.1, 0.5, 0.5)
+        # B: they vary (tuned better) → non-degenerate → enter the Holm family.
+        stats_b = build(0.2, 0.1, 0.5, 0.7)
+
+        tp_a = next(m for m in stats_a.metrics if m.metric_name == "throughput")
+        tp_b = next(m for m in stats_b.metrics if m.metric_name == "throughput")
+        # Fewer family members in A ⇒ throughput is corrected no more harshly.
+        assert tp_a.p_value_corrected <= tp_b.p_value_corrected
+
+    def test_cohens_d_is_finite_when_std_zero(self) -> None:
+        """A perfectly-consistent effect yields a finite (JSON-safe) Cohen's d."""
+        import numpy as np
+
+        d = _paired_cohens_d(np.array([5.0, 5.0, 5.0, 5.0]))
+        assert np.isfinite(d)
+        assert d > 0
 
 
 # ===========================================================================
@@ -620,6 +747,67 @@ class TestRunnerHelpers:
     )
     def test_extract_pg_major(self, pg_str: str, expected: str) -> None:
         assert _extract_pg_major(pg_str) == expected
+
+    def test_populate_full_metrics_derives_pressure_and_efficiency(self) -> None:
+        """The metric-parity helper derives memory_pressure, scan_efficiency,
+        rows, and buffer-miss from the env + pg_stat deltas (tuning parity)."""
+        from pathlib import Path
+        from src.evaluation.runner import ComparisonRunner
+
+        runner = ComparisonRunner(
+            ComparisonConfig(tuning_session_path=Path("x.json"))
+        )
+        env = MagicMock()
+        env.collect_memory_utilization.return_value = 0.20
+        env.collect_cache_hit_ratio.return_value = 0.90
+        metrics = PerformanceMetrics(throughput=1000.0)
+        # (blks_read, blks_hit, tup_returned, tup_fetched, ins, upd, del)
+        before = (100, 900, 0, 0, 0, 0, 0)
+        after = (200, 1800, 500, 400, 10, 5, 2)
+
+        runner._populate_full_metrics(metrics, env, before, after)
+
+        assert metrics.memory_utilization == pytest.approx(0.20)
+        assert metrics.cache_hit_ratio == pytest.approx(0.90)
+        assert metrics.memory_pressure == pytest.approx(0.20 * (1.0 - 0.90))
+        assert metrics.rows_returned == 500
+        assert metrics.rows_examined == 400
+        assert metrics.buffer_miss_rate == pytest.approx(0.1)  # 100/(100+900)
+        assert metrics.scan_efficiency == pytest.approx(0.8)  # min(400,500)/max
+
+    def test_aggregate_value_median_and_mode(self) -> None:
+        """_aggregate_value takes the median of numeric reps, else the mode."""
+        from src.evaluation.runner import ComparisonRunner
+
+        agg = ComparisonRunner._aggregate_value
+        assert agg([100, 200, 300]) == 200
+        assert agg(["on", "on", "off"]) == "on"
+        assert agg([None, None]) is None
+
+    def test_verify_delta_capture_and_render(self) -> None:
+        """Verification capture records per-rep data and renders without error."""
+        from pathlib import Path
+        from types import SimpleNamespace
+        from src.evaluation.runner import ComparisonRunner
+
+        runner = ComparisonRunner(
+            ComparisonConfig(tuning_session_path=Path("x.json"))
+        )
+        for _ in range(2):
+            runner._capture_verification(
+                "pbt",
+                {"shared_buffers": 900000, "work_mem": 4096},
+                {"shared_buffers": "16384", "work_mem": "4096"},
+                SimpleNamespace(
+                    db_config={"shared_buffers": 16384, "work_mem": 4096},
+                    matches={"shared_buffers": False, "work_mem": True},
+                ),
+            )
+        cap = runner._verify_capture["pbt"]
+        assert len(cap["match_samples"]) == 2
+        assert cap["requested"]["shared_buffers"] == 900000
+        # Renders the mismatch (shared_buffers) table without raising.
+        runner._log_verify_delta_table()
 
     def test_metrics_to_score_sysbench_high_tps(self) -> None:
         """High TPS, low latency → score approaches 100."""
@@ -1316,7 +1504,7 @@ class TestCLI:
 
             main(["--session", str(sample_session_file)])
 
-        assert captured_config["repetitions"] == 5
+        assert captured_config["repetitions"] == 10
         assert captured_config["benchmark"] is None
         assert captured_config["use_docker"] is True
         assert captured_config["output_dir"] is None

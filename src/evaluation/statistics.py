@@ -46,13 +46,26 @@ from src.evaluation.types import (
 LOGGER = get_logger("Statistics")
 
 _PRIMARY_ENDPOINT = "score"
-_SECONDARY_ENDPOINT_BASE = (
+
+# Secondary endpoints subject to Holm family-wise correction. Deliberately
+# curated to metrics that are (a) genuinely measured in the evaluation harness
+# and (b) not a monotone restatement of another member.
+_SECONDARY_ENDPOINTS = (
     "throughput",
-    "memory_utilization",
+    "latency_p99",
     "memory_pressure",
-    "buffer_miss_rate",
-    "tail_amplification",
     "scan_efficiency",
+)
+
+# Reported for context (summary table + JSON) but never hypothesis-tested:
+# near-constant on healthy runs (``error_rate``), highly correlated with a
+# tested endpoint (``latency_p95`` / ``latency_p50`` vs ``latency_p99``), or
+# niche restatements (``tail_amplification``, ``latency_variance``).
+_REPORTED_ENDPOINTS = (
+    "latency_p95",
+    "latency_p50",
+    "error_rate",
+    "tail_amplification",
     "latency_variance",
 )
 
@@ -61,6 +74,9 @@ _N_BOOTSTRAP = 10_000
 
 # Family-wise significance level before correction
 _ALPHA = 0.05
+
+# Finite sentinel for a perfectly-consistent paired effect (std == 0).
+_MAX_COHENS_D = 1e6
 
 
 def compute_comparison_statistics(
@@ -108,19 +124,18 @@ def compute_comparison_statistics(
 
     n = len(default_sorted)
 
-    latency_endpoint = "latency_p99" if benchmark == "tpch" else "latency_p95"
-    secondary_endpoints = (latency_endpoint, *_SECONDARY_ENDPOINT_BASE)
-
     metric_comparisons: list[MetricComparison] = []
 
-    primary_extractor = _build_extractor(_PRIMARY_ENDPOINT)
-    primary_default = [primary_extractor(r) for r in default_sorted]
-    primary_tuned = [primary_extractor(r) for r in tuned_sorted]
+    def _vals(metric_name: str, runs: list[RunResult]) -> list[float]:
+        extractor = _build_extractor(metric_name)
+        return [extractor(r) for r in runs]
+
+    # Primary endpoint: score (tested at alpha, no multiplicity correction) ──
     primary_metric = _compare_metric(
         metric_name=_PRIMARY_ENDPOINT,
-        default_vals=primary_default,
-        tuned_vals=primary_tuned,
-        higher_is_better=True,
+        default_vals=_vals(_PRIMARY_ENDPOINT, default_sorted),
+        tuned_vals=_vals(_PRIMARY_ENDPOINT, tuned_sorted),
+        higher_is_better=_higher_is_better(_PRIMARY_ENDPOINT),
         endpoint_role="primary",
         alpha=alpha,
     )
@@ -132,35 +147,52 @@ def compute_comparison_statistics(
     )
     metric_comparisons.append(primary_metric)
 
-    secondary_metrics: list[MetricComparison] = []
-    for metric_name in secondary_endpoints:
-        # Determine directionality from METRIC_DIRECTIONALITY, default to lower_is_better
-        directionality = METRIC_DIRECTIONALITY.get(metric_name, "lower_is_better")
-        higher_is_better = directionality == "higher_is_better"
-        extractor = _build_extractor(metric_name)
-        default_vals = [extractor(r) for r in default_sorted]
-        tuned_vals = [extractor(r) for r in tuned_sorted]
-
-        mc = _compare_metric(
-            metric_name=metric_name,
-            default_vals=default_vals,
-            tuned_vals=tuned_vals,
-            higher_is_better=higher_is_better,
+    # Secondary endpoints: Holm-corrected over the NON-degenerate members
+    secondary_metrics = [
+        _compare_metric(
+            metric_name=name,
+            default_vals=_vals(name, default_sorted),
+            tuned_vals=_vals(name, tuned_sorted),
+            higher_is_better=_higher_is_better(name),
             endpoint_role="secondary",
             alpha=alpha,
         )
-        secondary_metrics.append(mc)
-
-    secondary_adjusted = _holm_adjusted_pvalues(
-        [mc.p_value for mc in secondary_metrics]
-    )
+        for name in _SECONDARY_ENDPOINTS
+    ]
+    active = [mc for mc in secondary_metrics if not _is_degenerate(mc)]
+    degenerate = [mc for mc in secondary_metrics if _is_degenerate(mc)]
     _apply_significance(
-        metrics=secondary_metrics,
-        adjusted_p_values=secondary_adjusted,
+        metrics=active,
+        adjusted_p_values=_holm_adjusted_pvalues([mc.p_value for mc in active]),
         alpha=alpha,
         correction_method="holm",
     )
+    for mc in degenerate:
+        mc.p_value_corrected = 1.0
+        mc.significant = False
+        mc.correction_method = "holm"
+    if degenerate:
+        LOGGER.info(
+            "Excluded %d degenerate (all-zero-difference) endpoint(s) from the "
+            "Holm family so they do not dilute the correction: %s",
+            len(degenerate),
+            ", ".join(mc.metric_name for mc in degenerate),
+        )
     metric_comparisons.extend(secondary_metrics)
+
+    # Reported endpoints: descriptive context only, never hypothesis-tested
+    for name in _REPORTED_ENDPOINTS:
+        reported = _compare_metric(
+            metric_name=name,
+            default_vals=_vals(name, default_sorted),
+            tuned_vals=_vals(name, tuned_sorted),
+            higher_is_better=_higher_is_better(name),
+            endpoint_role="reported",
+            alpha=alpha,
+        )
+        reported.significant = False
+        reported.correction_method = None
+        metric_comparisons.append(reported)
 
     for mc in metric_comparisons:
         LOGGER.debug(
@@ -180,7 +212,7 @@ def compute_comparison_statistics(
 
     power_warning = _build_power_warning(n)
 
-    # Overall improvement uses the score metric
+    # Overall improvement uses the score (primary) endpoint.
     score_mc = next(
         mc for mc in metric_comparisons if mc.metric_name == _PRIMARY_ENDPOINT
     )
@@ -195,7 +227,7 @@ def compute_comparison_statistics(
         power_warning=power_warning,
         alpha=alpha,
         primary_endpoint=_PRIMARY_ENDPOINT,
-        secondary_endpoints=list(secondary_endpoints),
+        secondary_endpoints=list(_SECONDARY_ENDPOINTS),
         primary_significant=score_mc.significant,
         secondary_correction_method="holm",
     )
@@ -387,7 +419,9 @@ def _paired_cohens_d(differences: np.ndarray) -> float:
     mean_diff = float(np.mean(differences))
     std_diff = float(np.std(differences, ddof=1))
     if std_diff == 0.0:
-        return 0.0 if mean_diff == 0.0 else math.copysign(float("inf"), mean_diff)
+        if mean_diff == 0.0:
+            return 0.0
+        return math.copysign(_MAX_COHENS_D, mean_diff)
     return mean_diff / std_diff
 
 
@@ -404,13 +438,46 @@ def _stat_summary(values: list[float]) -> StatSummary:
     )
 
 
+def _higher_is_better(metric_name: str) -> bool:
+    """
+    Return True when a larger value is better for this metric.
+
+    The composite ``score`` is higher-is-better by construction; every other
+    metric follows ``METRIC_DIRECTIONALITY`` (defaulting to lower-is-better).
+    """
+    if metric_name == _PRIMARY_ENDPOINT:
+        return True
+    return (
+        METRIC_DIRECTIONALITY.get(metric_name, "lower_is_better")
+        == "higher_is_better"
+    )
+
+
+def _is_degenerate(mc: MetricComparison) -> bool:
+    """
+    True when a metric has no paired signal (both arms identical per pair).
+
+    Such an endpoint yields a Wilcoxon p of 1.0 and carries no information;
+    keeping it in the Holm family would only inflate the multiplier and
+    over-correct the endpoints that actually vary. It is still reported, but
+    excluded from the correction family.
+    """
+    default_vals = np.asarray(mc.default.values, dtype=float)
+    tuned_vals = np.asarray(mc.tuned.values, dtype=float)
+    if default_vals.size == 0 or tuned_vals.size != default_vals.size:
+        return True
+    return bool(np.allclose(default_vals - tuned_vals, 0.0))
+
+
 def _build_extractor(metric_name: str) -> Callable[[RunResult], float]:
     """Return a function that extracts the named metric from a RunResult."""
     extractors: dict[str, Callable[[RunResult], float]] = {
         "score": lambda r: r.score,
+        "latency_p50": lambda r: r.metrics.latency_p50,
         "latency_p95": lambda r: r.metrics.latency_p95,
         "latency_p99": lambda r: r.metrics.latency_p99,
         "throughput": lambda r: r.metrics.throughput,
+        "error_rate": lambda r: r.metrics.error_rate,
         "memory_utilization": lambda r: r.metrics.memory_utilization,
         "memory_pressure": lambda r: getattr(r.metrics, "memory_pressure", 0.0),
         "buffer_miss_rate": lambda r: getattr(r.metrics, "buffer_miss_rate", 0.0),

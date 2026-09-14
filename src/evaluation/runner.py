@@ -42,12 +42,31 @@ from typing import Any
 
 from src.config.database import DatabaseConfig, get_db_config
 from src.utils.environments import EnvironmentFactory, DatabaseEnvironment
-from src.utils.hardware_info import WorkerResources as RuntimeWorkerResources
-from src.utils.logger import add_html_file_logging, get_evaluation_banner, get_logger
+from src.utils.hardware_info import (
+    WorkerResources as RuntimeWorkerResources,
+    log_system_info,
+)
+from src.utils.logger import (
+    add_html_file_logging,
+    get_color_context,
+    get_evaluation_banner,
+    get_isolation_warning_banner,
+    get_logger,
+    log_section_header,
+    log_worker_metrics_table,
+)
 from src.utils.metrics import PerformanceMetrics, create_metric_config
 from src.utils.scoring import create_scoring_engine
 from src.config.data_root import resolve_data_root
 from src.utils.calibration import rescore_metrics_globally
+from src.utils.metric_instrumentation import MetricInstrumentationEngine
+from src.database.connection import get_connection
+from src.tuners.engine.worker_metrics import (
+    collect_system_metrics,
+    compute_io_metrics,
+    fetch_pg_stat_database_snapshot,
+)
+from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.benchmarks.sysbench.executor import (
     SysbenchExecutor,
     DEFAULT_SYSBENCH_WORKLOAD,
@@ -74,6 +93,7 @@ from src.evaluation.types import (
 )
 
 LOGGER = get_logger("Runner")
+COLORS = get_color_context()
 
 
 class ComparisonRunner:
@@ -103,6 +123,7 @@ class ComparisonRunner:
         self.base_db_config: DatabaseConfig | None = None
         self.timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._session_log_path: Path | None = None
+        self._verify_capture: dict[str, dict[str, Any]] = {}
 
     def run(self) -> ComparisonResult:
         """
@@ -162,6 +183,9 @@ class ComparisonRunner:
         )
         LOGGER.info("\n%s", banner)
         LOGGER.info("  HTML Log: %s", self._session_log_path)
+        if not self.config.use_docker:
+            LOGGER.warning("\n%s", get_isolation_warning_banner())
+        log_system_info(LOGGER, session.system_info)
         if benchmark == "sysbench":
             LOGGER.info(
                 "  Effective Sysbench params: workload=%s tables=%d table_size=%d"
@@ -181,10 +205,16 @@ class ComparisonRunner:
 
         tuned_knobs = self._resolve_tuned_knobs(session)
 
-        LOGGER.info("\n── Tuned Configuration Applied ──")
+        log_section_header(
+            LOGGER,
+            "%sTuned Configuration Applied (%d knobs)%s",
+            COLORS.bold,
+            len(tuned_knobs),
+            COLORS.reset,
+            top_separator=False,
+        )
         for _k, _v in sorted(tuned_knobs.items()):
             LOGGER.info("  %-40s = %s", _k, _v)
-        LOGGER.info("── (%d knobs total) ──", len(tuned_knobs))
 
         executor = self._create_executor()
 
@@ -235,8 +265,7 @@ class ComparisonRunner:
         # prior, not the PBT session's drifted vector. PBT refines features
         # via EMA every generation; using its drifted vector to grade the
         # head-to-head bakes whatever direction PBT happened to drift into
-        # the rubric, which is asymmetric since the default arm never had a
-        # chance to influence those features.
+        # the rubric, which is asymmetric.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -278,6 +307,7 @@ class ComparisonRunner:
 
         output_path = self._save_result(result)
         result.output_path = output_path
+        self._log_verify_delta_table()
         self._print_summary(result)
 
         return result
@@ -338,24 +368,39 @@ class ComparisonRunner:
         LOGGER.info("\n%s", banner)
         LOGGER.info("  Mode     : Multi-arm comparison (%d arms)", arm_count)
         LOGGER.info("  HTML Log : %s", self._session_log_path)
+        if not self.config.use_docker:
+            LOGGER.warning("\n%s", get_isolation_warning_banner())
+        log_system_info(LOGGER, pbt_session.system_info)
 
         pbt_knobs = self._resolve_tuned_knobs(pbt_session)
         arms: dict[str, dict[str, Any]] = {"default": {}, "pbt": pbt_knobs}
         knobs_by_arm: dict[str, dict[str, Any]] = {"default": {}, "pbt": pbt_knobs}
 
-        LOGGER.info("\n── Tuned Configuration Applied (PBT) ──")
+        log_section_header(
+            LOGGER,
+            "%sTuned Configuration Applied — PBT (%d knobs)%s",
+            COLORS.bold,
+            len(pbt_knobs),
+            COLORS.reset,
+            top_separator=False,
+        )
         for _k, _v in sorted(pbt_knobs.items()):
             LOGGER.info("  %-40s = %s", _k, _v)
-        LOGGER.info("── (%d knobs total) ──", len(pbt_knobs))
 
         if bo_session:
             bo_knobs = self._resolve_tuned_knobs(bo_session)
             arms["bo"] = bo_knobs
             knobs_by_arm["bo"] = bo_knobs
-            LOGGER.info("\n── Tuned Configuration Applied (BO) ──")
+            log_section_header(
+                LOGGER,
+                "%sTuned Configuration Applied — BO (%d knobs)%s",
+                COLORS.bold,
+                len(bo_knobs),
+                COLORS.reset,
+                top_separator=False,
+            )
             for _k, _v in sorted(bo_knobs.items()):
                 LOGGER.info("  %-40s = %s", _k, _v)
-            LOGGER.info("── (%d knobs total) ──", len(bo_knobs))
 
         executor = self._create_executor()
 
@@ -439,6 +484,7 @@ class ComparisonRunner:
 
         output_path = self._save_multi_arm_result(result)
         result.output_path = output_path
+        self._log_verify_delta_table()
         self._print_multi_arm_summary(result)
 
         return result
@@ -821,22 +867,18 @@ class ComparisonRunner:
             default_runs.append(default_run)
             tuned_runs.append(tuned_run)
 
-            _d, _t = default_run, tuned_run
-            LOGGER.info(
-                "➤ Pair %d complete  [%.1fs | %.1fs]:\n"
-                "     default : score=%8.3f  p95=%9.2f ms  tps=%9.1f  mem=%6.1f%%\n"
-                "     tuned   : score=%8.3f  p95=%9.2f ms  tps=%9.1f  mem=%6.1f%%",
-                run_number,
-                _d.duration_seconds,
-                _t.duration_seconds,
-                _d.score,
-                _d.metrics.latency_p95,
-                _d.metrics.throughput,
-                _d.metrics.memory_utilization * 100.0,
-                _t.score,
-                _t.metrics.latency_p95,
-                _t.metrics.throughput,
-                _t.metrics.memory_utilization * 100.0,
+            log_worker_metrics_table(
+                LOGGER,
+                [
+                    build_worker_metric_row(default_run.metrics, default_run.score),
+                    build_worker_metric_row(tuned_run.metrics, tuned_run.score),
+                ],
+                worker_labels=["default", "tuned"],
+                title=(
+                    f"\n➤ Pair {run_number}/{self.config.repetitions} metrics  "
+                    f"[default {default_run.duration_seconds:.1f}s | "
+                    f"tuned {tuned_run.duration_seconds:.1f}s]"
+                ),
             )
 
         if not default_runs or not tuned_runs:
@@ -861,8 +903,6 @@ class ComparisonRunner:
             return {}
         try:
             active_config = env.get_db_config(worker_id=0)
-            from src.database.connection import get_connection
-
             conn = get_connection(config=active_config)
             cursor = conn.cursor()
             placeholders = ",".join(["%s"] * len(param_names))
@@ -936,18 +976,16 @@ class ComparisonRunner:
             for arm_name, run in rep_runs.items():
                 runs_by_arm[arm_name].append(run)
 
-            summary_parts = []
-            for arm_name in arm_order:
-                r = rep_runs[arm_name]
-                summary_parts.append(
-                    f"{arm_name}(score={r.score:8.3f}, "
-                    f"p95={r.metrics.latency_p95:9.2f}ms, "
-                    f"tps={r.metrics.throughput:9.1f}, "
-                    f"mem={r.metrics.memory_utilization * 100.0:6.1f}%, "
-                    f"dur={r.duration_seconds:6.1f}s)"
-                )
-            LOGGER.info(
-                "➤ Rep %d complete:\n     %s", run_number, "\n     ".join(summary_parts)
+            log_worker_metrics_table(
+                LOGGER,
+                [
+                    build_worker_metric_row(
+                        rep_runs[arm_name].metrics, rep_runs[arm_name].score
+                    )
+                    for arm_name in arm_order
+                ],
+                worker_labels=list(arm_order),
+                title=f"\n➤ Rep {run_number}/{self.config.repetitions} metrics",
             )
 
         total_successful = min(len(v) for v in runs_by_arm.values())
@@ -969,6 +1007,61 @@ class ComparisonRunner:
             len(arms),
         )
         return runs_by_arm
+
+    @staticmethod
+    def _connect_pg(db_config, max_retries: int = 1, retry_delay: float = 1.0):
+        """Connect adapter matching ``fetch_pg_stat_database_snapshot``'s API."""
+        return get_connection(config=db_config, connect_timeout=5)
+
+    @staticmethod
+    def _disconnect_pg(conn) -> None:
+        """Disconnect adapter matching ``fetch_pg_stat_database_snapshot``'s API."""
+        try:
+            if conn is not None and not getattr(conn, "closed", True):
+                conn.close()
+        except Exception:  # best-effort cleanup
+            pass
+
+    def _populate_full_metrics(
+        self,
+        metrics: PerformanceMetrics,
+        env: DatabaseEnvironment,
+        stats_before,
+        stats_after,
+    ) -> None:
+        """
+        Populate the full metric set for parity with the tuning loop.
+
+        Reuses the strategy-agnostic engine collectors so evaluation derives
+        memory, cache-hit, I/O, row-count, buffer-miss, memory pressure, and
+        scan efficiency identically to how PBT recorded them. Without this the
+        newer secondary endpoints (memory_pressure, scan_efficiency) would be
+        structurally 0.0 in evaluation.
+        """
+        sys_metrics = collect_system_metrics(env, worker_id=0)
+        metrics.memory_utilization = sys_metrics.get("memory_utilization", 0.0)
+        metrics.cache_hit_ratio = sys_metrics.get("cache_hit_ratio", 0.0)
+        metrics.memory_pressure = metrics.memory_utilization * (
+            1.0 - metrics.cache_hit_ratio
+        )
+        if stats_before is not None and stats_after is not None:
+            compute_io_metrics(
+                metrics,
+                stats_before=stats_before,
+                stats_after=stats_after,
+                worker_logger=LOGGER,
+            )
+        metrics.scan_efficiency = (
+            MetricInstrumentationEngine.calculate_scan_efficiency(
+                metrics.cache_hit_ratio,
+                rows_examined=(
+                    metrics.rows_examined if metrics.rows_examined > 0 else None
+                ),
+                rows_returned=(
+                    metrics.rows_returned if metrics.rows_returned > 0 else None
+                ),
+            )
+        )
 
     def _run_single(
         self,
@@ -1061,6 +1154,9 @@ class ComparisonRunner:
                         len(verification.failed_params),
                         verification.failed_params,
                     )
+                self._capture_verification(
+                    config_type, knobs, boot_values, verification
+                )
 
             setup_elapsed = time.monotonic() - setup_started
             LOGGER.debug("  Environment setup completed in %.1fs", setup_elapsed)
@@ -1079,7 +1175,23 @@ class ComparisonRunner:
                     warmup=int(self.config.sysbench_warmup_seconds or 30),
                     random_seed=pair_seed,
                 )
+
+            # Bracket the measurement with pg_stat_database snapshots so we can
+            # derive the same I/O, row-count, and buffer-miss metrics the tuning
+            # loop records.
+            stats_before = fetch_pg_stat_database_snapshot(
+                active_config,
+                connect=self._connect_pg,
+                disconnect=self._disconnect_pg,
+                worker_logger=LOGGER,
+            )
             metrics = executor.execute(ctx)
+            stats_after = fetch_pg_stat_database_snapshot(
+                active_config,
+                connect=self._connect_pg,
+                disconnect=self._disconnect_pg,
+                worker_logger=LOGGER,
+            )
             bench_elapsed = time.monotonic() - bench_started
             LOGGER.debug(
                 "  Benchmark execution completed in %.1fs (setup=%.1fs)",
@@ -1087,7 +1199,7 @@ class ComparisonRunner:
                 setup_elapsed,
             )
 
-            metrics.memory_utilization = env.collect_memory_utilization(worker_id=0)
+            self._populate_full_metrics(metrics, env, stats_before, stats_after)
 
             score = _metrics_to_score(
                 metrics,
@@ -1220,88 +1332,195 @@ class ComparisonRunner:
                 continue
         return "unknown"
 
-    def _print_summary(self, result: ComparisonResult) -> None:
-        """Print a formatted comparison summary table to stdout."""
-        stats = result.statistics
+    def _capture_verification(
+        self,
+        config_type: str,
+        requested: dict[str, Any],
+        boot_values: dict[str, str],
+        verification: Any,
+    ) -> None:
+        """Record per-rep applied-vs-verified knob data for an end-of-run table."""
+        cap = self._verify_capture.setdefault(
+            config_type,
+            {
+                "requested": dict(requested),
+                "boot": dict(boot_values),
+                "actual_samples": [],
+                "match_samples": [],
+            },
+        )
+        cap["actual_samples"].append(dict(verification.db_config))
+        cap["match_samples"].append(dict(verification.matches))
 
-        # Header
-        print("\n" + "═" * 68)
-        print("  EVALUATION SUMMARY")
-        print(f"  Session : {result.config.tuning_session_path.name}")
+    @staticmethod
+    def _aggregate_value(values: list[Any]) -> Any:
+        """Median of numeric readings, else the most common value (over reps)."""
+        present = [v for v in values if v is not None]
+        if not present:
+            return None
+        numeric: list[float] = []
+        for v in present:
+            try:
+                numeric.append(float(v))
+            except (TypeError, ValueError):
+                numeric = []
+                break
+        if numeric:
+            import numpy as _np
+
+            med = float(_np.median(numeric))
+            return int(med) if all(x.is_integer() for x in numeric) else round(med, 4)
+        from collections import Counter
+
+        return Counter(str(v) for v in present).most_common(1)[0][0]
+
+    def _log_verify_delta_table(self) -> None:
+        """Log one applied-vs-verified knob table per arm, aggregated over reps.
+
+        Aggregating the read-back across the N repetitions flattens transient
+        per-run noise, so only knobs that consistently fail to reach their
+        requested value are surfaced — the "why won't this config reproduce"
+        aid, reported once at the end.
+        """
+        if not self._verify_capture:
+            return
+        log_section_header(
+            LOGGER,
+            "%sApplied-vs-Verified Knobs (aggregated over reps)%s",
+            COLORS.bold,
+            COLORS.reset,
+            top_separator=False,
+        )
+        for arm, cap in self._verify_capture.items():
+            requested = cap["requested"]
+            match_samples = cap["match_samples"]
+            n = len(match_samples)
+            mismatched = [
+                k
+                for k in requested
+                if not all(s.get(k, False) for s in match_samples)
+            ]
+            if not mismatched:
+                LOGGER.info(
+                    "  %s%s%s: all %d knobs verified across %d reps ✓",
+                    COLORS.green,
+                    arm,
+                    COLORS.reset,
+                    len(requested),
+                    n,
+                )
+                continue
+            lines = [
+                f"  {arm}: {len(mismatched)} of {len(requested)} knob(s) did not "
+                f"verify consistently across {n} reps",
+                f"    {'Knob':<34}{'Requested':>16}{'Default':>16}{'Actual(agg)':>16}",
+                "    " + "─" * 82,
+            ]
+            for k in mismatched:
+                actual = self._aggregate_value(
+                    [s.get(k) for s in cap["actual_samples"]]
+                )
+                lines.append(
+                    f"    {k:<34}{str(requested.get(k)):>16}"
+                    f"{str(cap['boot'].get(k, '?')):>16}{str(actual):>16}"
+                )
+            LOGGER.warning("\n%s", "\n".join(lines))
+
+    def _print_summary(self, result: ComparisonResult) -> None:
+        """Log the comparison summary through the logger.
+
+        Routed through the logger (not ``print``) so the single most important
+        artifact of a run is captured in the HTML session log, not only stdout.
+        """
+        stats = result.statistics
         benchmark_name = result.config.benchmark or result.session_data.benchmark
-        print(f"  Benchmark: {benchmark_name.upper()}")
-        print(f"  Reps    : {result.config.repetitions}")
-        print(f"  Env     : {'Docker' if result.config.use_docker else 'bare-metal'}")
+
+        log_section_header(
+            LOGGER, "%sEVALUATION SUMMARY%s", COLORS.bold, COLORS.reset
+        )
         if benchmark_name == "sysbench":
-            print(
-                "  Params  : "
+            params = (
                 f"tables={result.config.sysbench_tables}, "
                 f"table_size={result.config.sysbench_table_size}, "
                 f"duration={result.config.sysbench_duration}s, "
                 f"warmup={result.config.sysbench_warmup_seconds}s"
             )
         else:
-            print(
-                "  Params  : "
+            params = (
                 f"scale_factor={result.config.scale_factor}, "
                 f"warmup_passes={result.config.tpch_warmup_passes}"
             )
-        print("═" * 68)
-
-        # Per-metric table  (Median ± SD columns)
-        header = (
-            f"  {'Metric':<18} {'Default Med ± SD':>18} {'Tuned Med ± SD':>18} "
-            f"{'Δ%':>9} {'p (adj)':>9} {'Cohen d':>8} {'Sig':>4}"
+        LOGGER.info(
+            "  Session: %s%s%s | Benchmark: %s | Reps: %d | Env: %s | %s",
+            COLORS.cyan,
+            result.config.tuning_session_path.name,
+            COLORS.reset,
+            benchmark_name.upper(),
+            result.config.repetitions,
+            "Docker" if result.config.use_docker else "bare-metal",
+            params,
         )
-        print(header)
-        print("  " + "─" * 90)
 
+        role_tag = {"primary": "P", "secondary": "S", "reported": "R"}
+        lines = [
+            f"  {'Metric':<20}{'Role':>5}{'Default Med±SD':>20}"
+            f"{'Tuned Med±SD':>20}{'Δ%':>9}{'p(adj)':>9}{'Cohen d':>9}{'Sig':>5}",
+            "  " + "─" * 97,
+        ]
         for mc in stats.metrics:
-            d_str = f"{mc.default.median:.3f} ± {mc.default.std:.3f}"
-            t_str = f"{mc.tuned.median:.3f} ± {mc.tuned.std:.3f}"
-            imp = mc.improvement_pct
-            star = "✓" if mc.significant else " "
-            print(
-                f"  {mc.metric_name:<18} "
-                f"{d_str:>18} "
-                f"{t_str:>18} "
-                f"{imp:>+9.1f}% "
-                f"{mc.p_value_corrected:>9.4f} "
-                f"{mc.cohens_d:>8.2f} "
-                f"{star:>4}"
+            d_str = f"{mc.default.median:.3f}±{mc.default.std:.3f}"
+            t_str = f"{mc.tuned.median:.3f}±{mc.tuned.std:.3f}"
+            sig = (
+                "·"
+                if mc.endpoint_role == "reported"
+                else ("✓" if mc.significant else "")
             )
+            lines.append(
+                f"  {mc.metric_name:<20}{role_tag.get(mc.endpoint_role, '?'):>5}"
+                f"{d_str:>20}{t_str:>20}{mc.improvement_pct:>+8.1f}%"
+                f"{mc.p_value_corrected:>9.4f}{mc.cohens_d:>9.2f}{sig:>5}"
+            )
+        lines.append("  " + "─" * 97)
+        lines.append(
+            "  Legend: [P]rimary tested at alpha · [S]econdary Holm-corrected · "
+            "[R]eported not tested (·)"
+        )
+        LOGGER.info("\n%s", "\n".join(lines))
 
-        print("  " + "─" * 90)
-        print(f"\n  Overall improvement : {stats.overall_improvement_pct:+.1f}%")
         ci_lo, ci_hi = stats.overall_improvement_ci
-        print(f"  Bootstrap 95% CI   : [{ci_lo:+.1f}%, {ci_hi:+.1f}%]")
-        print(f"  Alpha              : {stats.alpha:.4f}")
-        print(f"  Primary endpoint   : {stats.primary_endpoint}")
-        print(f"  Primary significant: {'yes' if stats.primary_significant else 'no'}")
-        print("  Statistical test   : Wilcoxon signed-rank (paired, two-sided)")
-        print(
-            "  Secondary endpoints: "
-            f"{', '.join(stats.secondary_endpoints) or 'none'} "
-            f"({stats.secondary_correction_method} corrected)"
+        LOGGER.info(
+            "  Overall improvement (score): %s%+.1f%%%s  95%% CI [%+.1f%%, %+.1f%%]",
+            COLORS.teal,
+            stats.overall_improvement_pct,
+            COLORS.reset,
+            ci_lo,
+            ci_hi,
         )
-        n_pairs = stats.n_pairs
-        print(f"  Paired sample size : N={n_pairs}")
+        LOGGER.info(
+            "  Primary=%s significant=%s (alpha=%.4f)  |  Secondary (Holm): %s",
+            stats.primary_endpoint,
+            "yes" if stats.primary_significant else "no",
+            stats.alpha,
+            ", ".join(stats.secondary_endpoints) or "none",
+        )
+        LOGGER.info(
+            "  Statistical test: Wilcoxon signed-rank (paired, two-sided)  |  "
+            "Paired N=%d  |  Significant: %s",
+            stats.n_pairs,
+            ", ".join(stats.significant_metrics) or "none",
+        )
         if stats.power_warning:
-            print(f"  Power note         : {stats.power_warning}")
+            LOGGER.warning("  Power: %s", stats.power_warning)
         if result.scoring_metadata:
-            print(
-                "  Rescoring mode     : "
-                f"{result.scoring_metadata.get('mode')} "
-                f"(latency={result.scoring_metadata.get('latency_metric')})"
+            LOGGER.info(
+                "  Rescoring: mode=%s latency=%s",
+                result.scoring_metadata.get("mode"),
+                result.scoring_metadata.get("latency_metric"),
             )
-        print(
-            f"  Significant metrics: {', '.join(stats.significant_metrics) or 'none'}"
-        )
         if result.output_path:
-            print(f"\n  Results written to : {result.output_path}")
+            LOGGER.info("  Results written to : %s", result.output_path)
         if result.log_path:
-            print(f"  Session log written: {result.log_path}")
-        print("═" * 68 + "\n")
+            LOGGER.info("  Session log written: %s", result.log_path)
 
     def _save_multi_arm_result(self, result: MultiArmComparisonResult) -> Path:
         """Serialize a MultiArmComparisonResult to JSON and write to disk."""
@@ -1318,72 +1537,88 @@ class ComparisonRunner:
         return output_path
 
     def _print_multi_arm_summary(self, result: MultiArmComparisonResult) -> None:
-        """Print a formatted multi-arm comparison summary to stdout."""
+        """Log the multi-arm comparison summary through the logger."""
+        import numpy as _np
+
         benchmark_name = result.config.benchmark or result.session_data.benchmark
         arm_names = sorted(result.runs_by_arm.keys())
         n_reps = len(next(iter(result.runs_by_arm.values())))
 
-        print("\n" + "═" * 90)
-        print("  MULTI-ARM EVALUATION SUMMARY")
-        print(f"  Arms      : {', '.join(arm_names)}")
-        print(f"  Benchmark : {benchmark_name.upper()}")
-        print(f"  Reps      : {n_reps}")
-        print(f"  Env       : {'Docker' if result.config.use_docker else 'bare-metal'}")
-        print("═" * 90)
-
-        import numpy as _np
-
-        header = (
-            f"  {'Arm':<12} {'Score Med ± SD':>18} "
-            f"{'Throughput Med ± SD':>22} {'Latency p95 Med ± SD':>24}"
+        log_section_header(
+            LOGGER, "%sMULTI-ARM EVALUATION SUMMARY%s", COLORS.bold, COLORS.reset
         )
-        print(header)
-        print("  " + "─" * 78)
+        LOGGER.info(
+            "  Arms: %s | Benchmark: %s | Reps: %d | Env: %s",
+            ", ".join(arm_names),
+            benchmark_name.upper(),
+            n_reps,
+            "Docker" if result.config.use_docker else "bare-metal",
+        )
+
+        def _med_sd(vals: list[float]) -> tuple[float, float]:
+            arr = _np.asarray(vals, dtype=float)
+            sd = float(_np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+            return float(_np.median(arr)), sd
+
+        lines = [
+            f"  {'Arm':<10}{'Score':>16}{'Throughput':>18}"
+            f"{'Latency p99':>18}{'Mem pressure':>16}",
+            "  " + "─" * 76,
+        ]
         for arm_name in arm_names:
             runs = result.runs_by_arm[arm_name]
-            scores = [r.score for r in runs]
-            tps = [r.metrics.throughput for r in runs]
-            lat = [r.metrics.latency_p95 for r in runs]
-            sc_str = f"{float(_np.median(scores)):.2f} ± {float(_np.std(scores, ddof=1) if len(scores) > 1 else 0.0):.2f}"
-            tp_str = f"{float(_np.median(tps)):.1f} ± {float(_np.std(tps, ddof=1) if len(tps) > 1 else 0.0):.1f}"
-            lt_str = f"{float(_np.median(lat)):.2f} ± {float(_np.std(lat, ddof=1) if len(lat) > 1 else 0.0):.2f}"
-            print(f"  {arm_name:<12} {sc_str:>18} {tp_str:>22} {lt_str:>24}")
-        print("  " + "─" * 78)
+            sc_m, sc_s = _med_sd([r.score for r in runs])
+            tp_m, tp_s = _med_sd([r.metrics.throughput for r in runs])
+            lt_m, lt_s = _med_sd([r.metrics.latency_p99 for r in runs])
+            mp_m, mp_s = _med_sd([r.metrics.memory_pressure for r in runs])
+            lines.append(
+                f"  {arm_name:<10}{f'{sc_m:.2f}±{sc_s:.2f}':>16}"
+                f"{f'{tp_m:.1f}±{tp_s:.1f}':>18}{f'{lt_m:.2f}±{lt_s:.2f}':>18}"
+                f"{f'{mp_m:.3f}±{mp_s:.3f}':>16}"
+            )
+        lines.append("  " + "─" * 76)
+        LOGGER.info("\n%s", "\n".join(lines))
 
-        print("\n  PAIRWISE COMPARISONS (score)")
-        print("  " + "─" * 74)
-        header = (
-            f"  {'Pair':<22} {'Δ%':>9} {'95% CI':>18} "
-            f"{'p (adj)':>9} {'Cohen d':>8} {'Sig':>4}"
-        )
-        print(header)
-        print("  " + "─" * 74)
-
+        pw_lines = [
+            f"  {'Pair':<22}{'Δ% (score)':>13}{'95% CI':>20}"
+            f"{'p(adj)':>9}{'Cohen d':>9}{'Sig':>5}",
+            "  " + "─" * 78,
+        ]
         for pw in result.pairwise_statistics:
             score_mc = next(
                 mc for mc in pw.statistics.metrics if mc.metric_name == "score"
             )
-            label = f"{pw.arm_a} vs {pw.arm_b}"
             ci_lo, ci_hi = score_mc.improvement_ci
-            star = "✓" if score_mc.significant else " "
-            print(
-                f"  {label:<22} "
-                f"{score_mc.improvement_pct:>+9.1f}% "
-                f"[{ci_lo:>+7.1f}%, {ci_hi:>+7.1f}%] "
-                f"{score_mc.p_value_corrected:>9.4f} "
-                f"{score_mc.cohens_d:>8.2f} "
-                f"{star:>4}"
+            sig = "✓" if score_mc.significant else ""
+            pw_lines.append(
+                f"  {f'{pw.arm_a} vs {pw.arm_b}':<22}"
+                f"{score_mc.improvement_pct:>+12.1f}%"
+                f"{f'[{ci_lo:+.1f}%, {ci_hi:+.1f}%]':>20}"
+                f"{score_mc.p_value_corrected:>9.4f}{score_mc.cohens_d:>9.2f}{sig:>5}"
             )
-
-        print("  " + "─" * 74)
-        print("  Statistical test: Wilcoxon signed-rank (paired, two-sided)")
-        print(f"  Paired sample size: N={n_reps}")
-
+        pw_lines.append("  " + "─" * 78)
+        LOGGER.info(
+            "  %sPAIRWISE (primary endpoint: score)%s\n%s",
+            COLORS.bold,
+            COLORS.reset,
+            "\n".join(pw_lines),
+        )
+        LOGGER.info(
+            "  Statistical test: Wilcoxon signed-rank (paired, two-sided) | "
+            "Paired N=%d | Full per-metric pairwise stats are in the JSON.",
+            n_reps,
+        )
+        first_stats = (
+            result.pairwise_statistics[0].statistics
+            if result.pairwise_statistics
+            else None
+        )
+        if first_stats and first_stats.power_warning:
+            LOGGER.warning("  Power: %s", first_stats.power_warning)
         if result.output_path:
-            print(f"\n  Results written to : {result.output_path}")
+            LOGGER.info("  Results written to : %s", result.output_path)
         if result.log_path:
-            print(f"  Session log written: {result.log_path}")
-        print("═" * 90 + "\n")
+            LOGGER.info("  Session log written: %s", result.log_path)
 
 
 def _metrics_to_score(
@@ -1469,9 +1704,20 @@ def _serialize_result(result: ComparisonResult) -> dict[str, Any]:
             "latency_p50": s.latency_p50,
             "latency_p95": s.latency_p95,
             "latency_p99": s.latency_p99,
+            "latency_variance": s.latency_variance,
+            "tail_amplification": s.tail_amplification,
             "throughput": s.throughput,
+            "throughput_variance": s.throughput_variance,
             "error_rate": s.error_rate,
             "memory_utilization": s.memory_utilization,
+            "memory_pressure": s.memory_pressure,
+            "cache_hit_ratio": s.cache_hit_ratio,
+            "buffer_miss_rate": s.buffer_miss_rate,
+            "scan_efficiency": s.scan_efficiency,
+            "io_read_mb": s.io_read_mb,
+            "io_write_mb": s.io_write_mb,
+            "rows_examined": s.rows_examined,
+            "rows_returned": s.rows_returned,
             "total_queries": s.total_queries,
             "total_time": s.total_time,
         }
@@ -1607,9 +1853,20 @@ def _serialize_multi_arm_result(result: MultiArmComparisonResult) -> dict[str, A
             "latency_p50": s.latency_p50,
             "latency_p95": s.latency_p95,
             "latency_p99": s.latency_p99,
+            "latency_variance": s.latency_variance,
+            "tail_amplification": s.tail_amplification,
             "throughput": s.throughput,
+            "throughput_variance": s.throughput_variance,
             "error_rate": s.error_rate,
             "memory_utilization": s.memory_utilization,
+            "memory_pressure": s.memory_pressure,
+            "cache_hit_ratio": s.cache_hit_ratio,
+            "buffer_miss_rate": s.buffer_miss_rate,
+            "scan_efficiency": s.scan_efficiency,
+            "io_read_mb": s.io_read_mb,
+            "io_write_mb": s.io_write_mb,
+            "rows_examined": s.rows_examined,
+            "rows_returned": s.rows_returned,
             "total_queries": s.total_queries,
             "total_time": s.total_time,
         }

@@ -27,7 +27,8 @@ class ComparisonConfig:
         benchmark: Benchmark type — `"sysbench"` or `"tpch"`.
             `None` (default) to auto-detect from the tuning session.
         repetitions: Number of independent runs per configuration.
-            Default 5, consistent with OtterTune/CDBTune methodology.
+            Default 10 — the two-sided Wilcoxon signed-rank test cannot reach
+            p<0.05 below N=6 and stays underpowered until N≥8.
         scale_factor: TPC-H scale factor.
             None means resolve from session metadata or benchmark default.
         sysbench_duration: Sysbench measurement duration in seconds.
@@ -51,7 +52,7 @@ class ComparisonConfig:
 
     tuning_session_path: Path
     benchmark: Optional[str] = None
-    repetitions: int = 5
+    repetitions: int = 10
     scale_factor: Optional[float] = None
     sysbench_duration: Optional[int] = None
     sysbench_tables: Optional[int] = None
