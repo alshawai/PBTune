@@ -343,20 +343,19 @@ class Population:
         Parameters
         ----------
         instances : List[InstanceConfig]
-            List of InstanceConfig objects from PostgresInstanceManager
+            List of InstanceConfig objects from the DatabaseEnvironment backend
         dbname : str
             Database name to connect to
         user : str
             PostgreSQL username
         password : str
-            PostgreSQL password# Snapshot manager deleted
-
+            PostgreSQL password
 
         Example
         -------
         >>> population.initialize()
-        >>> instance_manager = PostgresInstanceManager(...)
-        >>> instances = instance_manager.setup_instances(num_workers=8)
+        >>> environment = EnvironmentFactory.create(schema_provider)
+        >>> instances = environment.setup_instances(num_workers=8)
         >>> population.setup_worker_instances(instances, dbname='mydb', user='myuser')
         """
 

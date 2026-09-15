@@ -46,7 +46,7 @@ python -m src.evaluation --session <path> [--repetitions N] [--no-docker]
 
 | Mode | Mechanism | Isolation Level |
 |------|-----------|-----------------|
-| Docker (default) | Fresh container per run, cgroup limits, tmpfs | **Full** (publication-quality) |
+| Docker (default) | Fresh container per run, cgroup limits (`mem_limit`, `nano_cpus`, `cpuset_cpus`, blkio), bind-mounted PGDATA | **Full** (publication-quality) |
 | Bare-metal (`--no-docker`) | Shared host, `pg_ctl` restart between runs | **Reduced** (development only) |
 
 Docker containers use `docker/eval.Dockerfile` with pre-installed sysbench + TPC-H dbgen.

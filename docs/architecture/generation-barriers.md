@@ -190,7 +190,7 @@ Population.train_generation()
   │     │     │
   │     │     ├─► connect()
   │     │     ├─► barriers.wait("connected", worker_id)       # B1
-  │     │     ├─► apply_config()
+  │     │     ├─► apply_configuration()
   │     │     ├─► barriers.wait("config_applied", worker_id)  # B2
   │     │     ├─► maybe_restart()
   │     │     ├─► barriers.wait("restarted", worker_id)       # B3

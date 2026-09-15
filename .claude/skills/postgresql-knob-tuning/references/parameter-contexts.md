@@ -50,4 +50,4 @@ The legacy `RestartCostModel` was archived to `prototypes/restart_cost_model/`.
 
 Each PBT worker gets its own PostgreSQL instance:
 - Base port: 5440 (worker i gets port `5440 + worker_id`)
-- Data directory: `{pg_data_base}/worker_{worker_id}/`
+- Data directory: `{base_dir}/{benchmark_subpath}/worker_{worker_id}/pgdata/` (default `base_dir`: `./.instances`)

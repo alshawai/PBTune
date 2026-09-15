@@ -65,8 +65,8 @@ Each PBT worker gets a dedicated PostgreSQL instance to enable true parallel eva
 | Component | Detail |
 |-----------|--------|
 | **Port scheme** | `base_port + worker_id` (default base: 5440) |
-| **Data dirs** | `{pg_data_base}/worker_{worker_id}/` |
-| **Backends** | `DockerEnvironment` (with CPU subset isolation, ADR-004) or `BareMetalEnvironment` |
+| **Data dirs** | `{base_dir}/{benchmark_subpath}/worker_{worker_id}/pgdata/` (default `base_dir`: `./.instances`) |
+| **Backends** | `DockerEnvironment` (CPU subset isolation, ADR-004), `BareMetalEnvironment`, or `RemoteEnvironment` for distributed runs |
 | **Creation** | `initdb → configure postgresql.conf → pg_ctl start` |
 | **Auto-detect** | Finds `pg_ctl`/`initdb` via PATH or common install dirs |
 | **Reuse** | Reuses existing data dirs if already initialized |

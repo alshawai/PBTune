@@ -7,7 +7,7 @@ The Population-Based Training (PBT) Auto-Tuning framework employs a unique **Dua
 
 ## Architecture: `BenchmarkExecutor` ABC
 
-All executors subclass the common **`BenchmarkExecutor`** ABC (`src/benchmarks/executor.py` — `prepare()` + `validate()` + `execute()`), allowing the `PostgresInstanceManager` to initialize worker database schemas without knowing benchmark-specific details.
+All executors subclass the common **`BenchmarkExecutor`** ABC (`src/benchmarks/executor.py` — `prepare()` + `validate()` + `execute()`), allowing the active `DatabaseEnvironment` backend to initialize worker database schemas without knowing benchmark-specific details.
 
 ```
 ┌─────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐
@@ -22,9 +22,9 @@ All executors subclass the common **`BenchmarkExecutor`** ABC (`src/benchmarks/e
              └─────────────────────────────│─────────────────────────────┘
                                            ▼
                             ┌──────────────────────────┐
-                            │  PostgresInstanceManager │
+                            │  DatabaseEnvironment     │
                             │                          │
-                            │  _initialize_schema():   │
+                            │  initialize_schema():    │
                             │    if !validate() →      │
                             │       prepare()          │
                             └──────────────────────────┘
@@ -86,63 +86,51 @@ Developers can copy logs from `pg_stat_statements`, define them in a custom `.js
 
 ### Tuning Against a Real Database Snapshot
 
-If you have a production replica and want the tuner to optimize against your _actual_ schema and data (not just `sbtest` tables), you do not need the `schema` block or placeholders at all.
+> **Not implemented.** The tuner does **not** clone an external database. `EnvironmentFactory.create()` always provisions fresh local instances — Docker `postgres:<major>` containers, or bare-metal `initdb` clusters — and `get_db_config()` always returns `127.0.0.1:5440+i`, so a `DB_HOST` pointing at a replica never reaches a worker. `pg_basebackup` is not used anywhere in the codebase. The only cloning that happens is worker-to-worker between local instances: `rsync -a --delete` on bare-metal, a throwaway container running `cp -R` under Docker.
 
-The PBT tuner uses standard PostgreSQL tools (`pg_basebackup`) to clone whichever database you point it to.
+What works today is deriving your workload from real production traffic. `WorkloadExecutor` accepts raw, unparameterised SQL, so you can tune against your actual queries and their real relative weights — but the schema those queries need must be one the benchmark `SchemaProvider` can create.
 
-**Workflow for tuning a real database:**
+**1. Extract your top queries and their weights** from your production database. This query returns the most frequent statements with weights already normalised to sum to 1:
 
-1. **Provide connection details to your real database** via environment variables:
+```sql
+WITH total AS (SELECT sum(calls) as total_calls FROM pg_stat_statements)
+SELECT
+    query,
+    calls,
+    ROUND((calls::numeric / total.total_calls::numeric), 4) as weight,
+    mean_exec_time
+FROM pg_stat_statements, total
+ORDER BY calls DESC
+LIMIT 20;
+```
 
-   ```bash
-   export DB_HOST=my-production-replica.domain.com
-   export DB_PORT=5432
-   export DB_USER=admin
-   export DB_PASSWORD=secret
-   export DB_NAME=myapp
-   ```
+**2. Write a workload file without placeholders** (`my_real_queries.json`):
 
-2. **Extract your top queries and their weights** from your production database. Run this query to get your most frequent statements along with automatically calculated JSON weights:
+```json
+{
+  "name": "Production Trace",
+  "queries": [
+    {
+      "sql": "SELECT SUM(salary) FROM employees WHERE department = 'Sales';",
+      "weight": 0.6
+    },
+    {
+      "sql": "SELECT * FROM orders o JOIN customers c ON o.customer_id = c.id LIMIT 10;",
+      "weight": 0.4
+    }
+  ]
+}
+```
 
-   ```sql
-   WITH total AS (SELECT sum(calls) as total_calls FROM pg_stat_statements)
-   SELECT
-       query,
-       calls,
-       ROUND((calls::numeric / total.total_calls::numeric), 4) as weight,
-       mean_exec_time
-   FROM pg_stat_statements, total
-   ORDER BY calls DESC
-   LIMIT 20;
-   ```
+_(No `{table}` or `{id}` placeholders needed — `WorkloadExecutor` runs raw SQL as written.)_
 
-3. **Prepare a custom workload without placeholders** containing the extracted queries (`my_real_queries.json`):
+**3. Run the tuner:**
 
-   ```json
-   {
-     "name": "Production Trace",
-     "queries": [
-       {
-         "sql": "SELECT SUM(salary) FROM employees WHERE department = 'Sales';",
-         "weight": 0.6
-       },
-       {
-         "sql": "SELECT * FROM orders o JOIN customers c ON o.customer_id = c.id LIMIT 10;",
-         "weight": 0.4
-       }
-     ]
-   }
-   ```
+```bash
+python -m src.tuners pbt --workload-file workloads/my_real_queries.json
+```
 
-   _(Notice there are no `{table}` or `{id}` placeholders — the `WorkloadExecutor` natively supports raw unparameterized SQL)._
-
-4. **Run the tuner:**
-   ```bash
-   python -m src.tuners pbt --workload-file workloads/my_real_queries.json
-   ```
-
-**What happens under the hood:**
-The tuner connects to your `DB_HOST`, uses `pg_basebackup` to pull a binary snapshot of your entire database locally, spins up 4 isolated parallel worker instances from that exact snapshot, and executes your raw queries against them, scoring the performance of different knob configurations.
+**The gap.** `WorkloadExecutor.prepare()` creates `sbtest` tables, so raw SQL referencing your own tables (`employees`, `orders`, …) has nothing to run against on a worker instance. Closing that — provisioning worker instances from a real database snapshot rather than from a `SchemaProvider` — is the unimplemented half of this workflow. Until then, either shape your queries against the `sbtest` schema, or add a `SchemaProvider` implementation that creates your schema (see [Adding Workloads](../guides/adding-workloads.md)).
 
 ## Note on PBT Relative Scoring
 

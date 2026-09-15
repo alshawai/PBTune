@@ -261,7 +261,7 @@ The `schema` block is optional; without it the executor logs a warning and defau
 
 ### Real-database workloads
 
-For tuning against a real production replica (see [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot)), the workload file omits both the `schema` block and the placeholders — `WorkloadExecutor` natively supports raw unparameterised SQL. The orchestrator's apply / measure / score pipeline is unchanged; the schema is whatever `pg_basebackup` cloned from the source database.
+`WorkloadExecutor` natively supports raw unparameterised SQL, so a workload file may omit both the `schema` block and the placeholders, and the orchestrator's apply / measure / score pipeline is unchanged. Note that the tuner does **not** clone an external database into the workers — every worker instance is provisioned locally and its schema comes from the benchmark's `SchemaProvider`. See [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot) for the current limits.
 
 ---
 

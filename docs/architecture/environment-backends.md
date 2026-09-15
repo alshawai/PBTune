@@ -68,8 +68,12 @@ class DatabaseEnvironment(ABC):
     # Connection + telemetry
     @abstractmethod def get_db_config(self, worker_id: int) -> DatabaseConfig: ...
     @abstractmethod def collect_memory_utilization(self, worker_id: int) -> float: ...
-    @abstractmethod def collect_cache_hit_ratio(self, worker_id: int) -> float: ...
-    @abstractmethod def reset_statistics(self, worker_id: int) -> bool: ...
+    @abstractmethod def get_resource_allocations(self) -> list[WorkerResourceAllocation]: ...
+
+    # Concrete on the base class — subclasses inherit these
+    def initialize_schema(self, worker_id: int) -> None: ...
+    def collect_cache_hit_ratio(self, worker_id: int) -> float: ...
+    def reset_statistics(self, worker_id: int) -> bool: ...
 ```
 
 `InstanceConfig` is the per-worker record (`worker_id`, `port`, `data_dir`, `running`). The base class provides shared helpers for schema initialisation, connection-readiness polling, and persisted-configuration reset (so a per-worker `postgresql.auto.conf` doesn't leak knobs from a previous session).
@@ -79,7 +83,7 @@ class DatabaseEnvironment(ABC):
 | Guarantee | How |
 | --- | --- |
 | **One PostgreSQL per worker** | Distinct port (`base_port + worker_id`), distinct data directory. |
-| **Worker isolation by file system** | Per-worker data dir under `.instances/<run_id>/<benchmark_subpath>/worker_N/`. |
+| **Worker isolation by file system** | Per-worker data dir under `.instances/<benchmark_subpath>/worker_N/`. |
 | **Repeatable schema** | Schema initialisation delegated to the `BenchmarkExecutor` (Sysbench / TPC-H / template). The schema-provider's `validate()` is run at every start to detect drift. |
 | **Repeatable baseline** | Per-run baseline snapshot taken once, restored periodically (`snapshot_restore_interval`) to combat data drift over long sessions. |
 | **Liveness reporting** | `verify_instances()` walks every worker and confirms it accepts connections; the population's health-check thread uses this to detect dead instances. |
@@ -123,7 +127,7 @@ The factory:
 **Strongest isolation.** One container per worker, started from the resolved PostgreSQL image, with:
 
 - **Distinct port** (`base_port + worker_id`) bound to `127.0.0.1`.
-- **Distinct PGDATA volume** mounted from `.instances/<run_id>/<benchmark_subpath>/worker_N/pgdata/`.
+- **Distinct PGDATA volume** mounted from `.instances/<benchmark_subpath>/worker_N/pgdata/`.
 - **CPU subset pinning** via `--cpuset-cpus` (computed from the host CPU count and the number of parallel workers — see [ADR-004](decisions/ADR-004-docker-cpu-subset-isolation.md)).
 - **RAM cap** via `--memory` derived from `worker_resources.ram_bytes`.
 - **Network mode** appropriate for `host.docker.internal` semantics so the orchestrator (running on the host) can reach the container.
@@ -144,7 +148,7 @@ The CPU budget is derived from `worker_resources.cpu_cores`. If the host has few
 | `restart_instance(k)` | Stop + start. Used after `postmaster`-context knob changes. |
 | `recover_instance(k)` | Restart with longer timeout; used by the dead-worker rescue path before it gives up and rebuilds. |
 | `rebuild_worker_instance(k)` | Tear down container + volume; recreate from baseline snapshot. |
-| `clone_instances(src, [dst1, dst2…])` | Stop sources and dests; rsync `src` PGDATA to each destination; restart all. The fast-path used by exploit. |
+| `clone_instances(src, [dst1, dst2…])` | Stop source and dests; copy `src` PGDATA into each destination with a throwaway container running `cp -R`; restart all. The fast-path used by exploit. |
 | `cleanup(remove_data=True)` | Remove all containers and (optionally) all PGDATA dirs for this `run_id`. |
 
 The Docker class also derives bounded timeouts for snapshot creation, snapshot restoration, and Docker-API calls to keep a single hung container from stalling cleanup.
@@ -160,7 +164,7 @@ The Docker class also derives bounded timeouts for snapshot creation, snapshot r
 **Weaker isolation.** Per-worker `initdb` data directories on the host filesystem, started/stopped via `pg_ctl`. There is no CPU pinning and no kernel-level memory cap — the OS scheduler is free to interleave the workers, and the `worker_memory_budget_bytes` value is purely advisory (used for normalisation, not enforcement).
 
 ```text
-.instances/<run_id>/<benchmark_subpath>/
+.instances/<benchmark_subpath>/
 ├── _baseline/                  # one shared snapshot directory
 └── worker_0/pgdata/            # per-worker data dirs
     worker_1/pgdata/
@@ -218,9 +222,9 @@ Restoring to a baseline snapshot every `snapshot_restore_interval` generations r
 
 | | Docker | Bare-metal |
 | --- | --- | --- |
-| Snapshot artefact | Tar archive of the baseline PGDATA volume | Cold copy of the baseline PGDATA directory |
-| Restoration | Stop container, rsync from snapshot tar, start container | Stop instance, rsync from snapshot dir, start instance |
-| Atomicity | Snapshot is read-only; rsync from a separate volume | Snapshot is read-only; rsync from a separate dir |
+| Snapshot artefact | Cold copy of the baseline PGDATA directory on the host | Cold copy of the baseline PGDATA directory |
+| Restoration | Stop container, repopulate PGDATA with a throwaway container running `cp -R /source/. /dest/`, start container | Stop instance, `rsync -a --delete` from snapshot dir, start instance |
+| Atomicity | Snapshot dir is read-only; copied from a separate directory | Snapshot is read-only; rsync from a separate dir |
 | Time budget | `_derive_snapshot_timeout()` / `_derive_restore_ready_timeout()` | Bounded by the per-call timeout passed to the rsync helper |
 
 ---
@@ -250,7 +254,7 @@ Grouping multiple destinations under one source lets the backend share scan/copy
 
 ### Backend implementations
 
-- **Docker**: stop source + dests → use `docker cp` or a host-side rsync from the source's bind-mounted PGDATA → restart dests.
+- **Docker**: stop source + dests → run a throwaway container that does `cp -R /source/. /dest/` between the bind-mounted PGDATA directories → restart dests. (No `docker cp`, no tar archive, no rsync.)
 - **Bare-metal**: stop source + dests → rsync source's data dir to each dest's data dir → start all.
 
 `clone_instances` returns a single `bool` — partial failure across destinations is reported in the population's log but treated as a generation-level retry rather than a hard error, since the dead-worker rescue path will pick up the failed clone on the next generation boundary.
@@ -272,9 +276,9 @@ The same chain runs *during* a generation when `GenerationBarrier.abort()` is ca
 
 ## Design decisions
 
-### 1. One interface, two backends
+### 1. One interface, several backends
 
-The orchestrator and population code never branches on backend type. A future third backend (Kubernetes pods, AWS RDS, Aurora) plugs in as a third `DatabaseEnvironment` subclass. The factory's branching is the only place that knows which is which.
+The orchestrator and population code never branches on backend type. A third subclass already exists — `RemoteEnvironment` ([src/tuners/distributed/remote_environment.py](../../src/tuners/distributed/remote_environment.py)), which proxies the same lifecycle calls to per-device HTTP agents for distributed runs; it is constructed directly rather than through the factory. Further backends (Kubernetes pods, AWS RDS, Aurora) would plug in the same way. The factory's branching is the only place that knows which local backend is which.
 
 ### 2. Docker as default, bare-metal as opt-in fallback
 
