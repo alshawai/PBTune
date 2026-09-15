@@ -24,9 +24,9 @@ concrete ``setup()`` reads those to build the shared environment and populates
 ``self.knob_space`` / ``self.full_knob_space`` / ``self.orchestrator`` /
 ``self.worker_resources`` for the strategy hooks to use.
 
-The incumbent PBT/BO tuners are NOT retrofitted onto this ABC in this change
-(copy-not-refactor); ``LHSDesignTuner`` is its first concrete user. See
-ADR-006 for the migration boundary.
+All three strategies now subclass this ABC: ``PBTTuner`` (``pbt/tuner.py``),
+``BOTuner`` (``bo/tuner.py``) and ``LHSDesignTuner`` (``lhs_design/tuner.py``).
+See ADR-006 for the migration history.
 """
 
 from __future__ import annotations

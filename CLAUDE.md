@@ -128,7 +128,19 @@ src/tuners/               # Unified tuner framework (BaseTuner + per-strategy su
 │   ├── config.py         # PBTConfig + profile constants
 │   ├── cli.py            # `python -m src.tuners.pbt ...`
 │   └── __main__.py
+├── bo/                   # Bayesian-optimisation baseline strategy
+│   ├── tuner.py          # BOTuner(BaseTuner) — SMAC3 ask-tell loop
+│   ├── search_space.py   # KnobSpace → ConfigSpace translation
+│   ├── objective.py      # Trial objective wrapper
+│   ├── cotenant.py       # Co-tenancy / resource-division controls
+│   ├── config.py, cli.py, __main__.py
 ├── lhs_design/           # LHS-sampling strategy (tuner, cli, __main__)
+├── distributed/          # Multi-device execution path
+│   ├── coordinator.py    # Fleet coordinator
+│   ├── remote_environment.py  # RemoteEnvironment(DatabaseEnvironment)
+│   ├── remote_orchestrator.py # Per-device orchestration
+│   ├── device_agent.py, agent_api.py, transport.py
+│   └── bootstrap.py, config.py, inventory.py
 └── utils/                # session_assembly, tuner_logging, session_writer, types, profiles, …
 
 src/utils/

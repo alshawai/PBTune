@@ -137,7 +137,7 @@ CLI args (src.tuners pbt → pbt/cli.py)
 | `PerformanceMetrics` | `src/utils/metrics.py` | Raw metric record from evaluation |
 | `Worker` | `src/tuners/engine/worker.py` | Config + score + history |
 | `KnobDefinition` | `src/knobs/knob_space.py` | Knob metadata (type, bounds, context) |
-| `TunerConfig` | `src/tuners/pbt/config.py` | Session configuration |
+| `PBTConfig` | `src/tuners/pbt/config.py` | Session configuration |
 | `ScoringPolicySpec` | `src/utils/scoring/policies.py` | Policy definition |
 | `ComparisonConfig` | `src/evaluation/types.py` | Evaluation session config |
 | `TimingRecorder`, `TimingRecord` | `src/utils/timing.py` | Timing instrumentation primitives |
