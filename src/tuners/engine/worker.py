@@ -55,7 +55,17 @@ class BaseWorker:
     Attributes
     ----------
     worker_id : int
-        Unique identifier for this worker (0 to num_parallel_workers-1).
+        **Instance index** for this worker (0 to num_parallel_workers-1). This
+        is the key the :class:`~src.utils.environments.base.DatabaseEnvironment`
+        uses to resolve the worker's container/port/PGDATA, so it must always
+        match an instance the environment actually provisioned.
+
+    display_id : Optional[int]
+        Identity used for *logging only*. Defaults to ``worker_id``. Distributed
+        mode sets this to the fleet-global worker id while ``worker_id`` stays at
+        the device's local instance index (each device provisions exactly one
+        instance, at index 0), so logs remain globally meaningful without
+        environment lookups being keyed on an index that does not exist locally.
 
     knob_space : KnobSpace
         The search space defining valid configurations.
@@ -93,6 +103,8 @@ class BaseWorker:
     knob_config: Optional[Dict[str, Any]] = None
     score_breakdown: Optional[ScoreBreakdown] = None
 
+    display_id: Optional[int] = None
+
     port: Optional[int] = None
     db_config: Optional[DatabaseConfig] = None
     force_restart_next_eval: bool = True
@@ -106,7 +118,12 @@ class BaseWorker:
             self.knob_config = self.knob_space.sample_random_config(
                 seed=None  # Different seed for each worker ensures diversity
             )
-        self.logger = get_logger("Worker", worker_id=self.worker_id)
+        self.logger = get_logger("Worker", worker_id=self.display_worker_id)
+
+    @property
+    def display_worker_id(self) -> int:
+        """Identity to show in logs — the global id when one was supplied."""
+        return self.worker_id if self.display_id is None else self.display_id
 
     def get_config_copy(self) -> Dict[str, Any]:
         """
@@ -125,8 +142,8 @@ class BaseWorker:
     def __repr__(self) -> str:
         """Human-readable representation."""
         port_str = f", port={self.port}" if self.port is not None else ""
-        return f"BaseWorker(id={self.worker_id}{port_str})"
+        return f"BaseWorker(id={self.display_worker_id}{port_str})"
 
     def __str__(self) -> str:
         """Simple string representation."""
-        return f"Worker-{self.worker_id}"
+        return f"Worker-{self.display_worker_id}"

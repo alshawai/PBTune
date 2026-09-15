@@ -42,6 +42,7 @@ class FakeBackend(EvaluationBackend):
         self.reset_calls = 0
         self.eval_calls = 0
         self.last_knob_config: Dict[str, Any] = {}
+        self.last_force_restart: Optional[bool] = None
 
     def setup(self, req: SetupRequest) -> SetupResponse:
         self.setup_calls += 1
@@ -55,6 +56,9 @@ class FakeBackend(EvaluationBackend):
                 "cpu_cores": 64,
                 "disk_type": "SSD",
             },
+            # A real backend echoes what it actually built its orchestrator
+            # with; the coordinator rejects any device that stays silent.
+            effective_orchestrator=req.orchestrator_echo(),
         )
 
     def create_snapshot(self) -> str:
@@ -69,6 +73,7 @@ class FakeBackend(EvaluationBackend):
     ) -> Tuple[Dict[str, Any], bool, Dict[str, Any], Optional[Dict[str, Any]]]:
         self.eval_calls += 1
         self.last_knob_config = dict(req.knob_config)
+        self.last_force_restart = req.force_restart
         # Throughput scales with the (fake) knob so scoring can differentiate.
         knob_val = float(req.knob_config.get("shared_buffers", 1))
         metrics = {
@@ -81,7 +86,9 @@ class FakeBackend(EvaluationBackend):
             "total_queries": 1000,
             "total_time": 60.0,
         }
-        return metrics, False, {"shared_buffers": knob_val}, None
+        # A forced restart is reported as having happened, so the coordinator's
+        # one-shot flag can be cleared.
+        return metrics, bool(req.force_restart), {"shared_buffers": knob_val}, None
 
     def cleanup(self, remove_data: bool) -> None:
         pass
@@ -119,7 +126,11 @@ def fleet():
         inventory=inventory, health_timeout_s=10.0, health_poll_interval_s=0.1
     )
     setup_template = SetupRequest(
-        run_id="test", benchmark="sysbench", workload_type="oltp_read_write"
+        run_id="test",
+        benchmark="sysbench",
+        workload_type="oltp_read_write",
+        measurement_duration=120.0,
+        warmup_duration=60.0,
     )
     db_config = DatabaseConfig(
         user="postgres", password="", host="ignored", port=0, dbname="test"
@@ -169,6 +180,7 @@ def test_setup_uses_long_operation_timeout(fleet):
         port=5440,
         data_dir="/tmp/fake",
         backend="fake",
+        effective_orchestrator=coordinator.setup_template.orchestrator_echo(),
     ).to_dict()
     env._clients = {0: client}
     env._devices = {0: coordinator.devices[0]}
@@ -232,6 +244,9 @@ def test_run_eval_scores_centrally(fleet):
     # higher-throughput worker must score at least as high.
     w_low = Worker(worker_id=0, knob_space=None, knob_config={"shared_buffers": 1})
     w_high = Worker(worker_id=1, knob_space=None, knob_config={"shared_buffers": 4})
+    # Isolate scoring from the restart path (workers default to force-restart).
+    w_low.force_restart_next_eval = False
+    w_high.force_restart_next_eval = False
 
     m_low, s_low, restart_low, actual_low, timing_low = orchestrator.evaluate_worker(
         w_low, generation=0
@@ -244,6 +259,39 @@ def test_run_eval_scores_centrally(fleet):
     assert actual_low == {"shared_buffers": 1.0}
     assert timing_low is not None  # fresh TimingRecorder, never None
     assert s_high >= s_low  # central scoring rewards higher throughput
+
+
+def test_force_restart_reaches_the_device_and_then_clears(fleet):
+    """A rescued worker's forced restart must cross the RPC, once.
+
+    The device keeps one long-lived worker object across every evaluation, so
+    the coordinator has to drive this per-eval rather than relying on the
+    worker's own self-clearing default.
+    """
+    coordinator, backends = fleet
+    coordinator.wait_for_agents()
+    env = coordinator.make_environment(schema_provider=None, run_id="test")
+    env.setup_instances(2)
+
+    orch_config = WorkloadOrchestratorConfig(
+        workload_type=WorkloadType.OLTP,
+        metric_config=create_metric_config("oltp"),
+        db_config=coordinator.db_config,
+    )
+    orchestrator = coordinator.make_orchestrator(orch_config, executor=None, env=env)
+
+    worker = Worker(worker_id=0, knob_space=None, knob_config={"shared_buffers": 1})
+    worker.force_restart_next_eval = True
+
+    _, _, restart_occurred, _, _ = orchestrator.evaluate_worker(worker, generation=0)
+
+    assert backends[0].last_force_restart is True
+    assert restart_occurred is True
+    # One-shot: confirmed by the device, so the coordinator clears its copy.
+    assert worker.force_restart_next_eval is False
+
+    orchestrator.evaluate_worker(worker, generation=1)
+    assert backends[0].last_force_restart is False
 
 
 def test_config_only_clone_resets_targets(fleet):

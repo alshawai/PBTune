@@ -42,6 +42,13 @@ __all__ = [
     "load_inventory",
 ]
 
-AGENT_PROTOCOL_VERSION = "1.0"
+AGENT_PROTOCOL_VERSION = "2.0"
 """Wire-protocol version. Coordinator and agent must agree on the major
-version; a mismatch is a hard error surfaced by the /health handshake."""
+version; a mismatch is a hard error surfaced by the /health handshake.
+
+Bumped to 2.0 when ``SetupRequest`` gained the measurement-window and
+restart-policy fields. The major bump is deliberate: a 1.x agent silently
+ignores them and benchmarks its own default window, which is precisely the
+defect this protocol change exists to remove. Failing the handshake makes a
+fleet that was not re-bootstrapped obvious immediately, rather than after a
+multi-hour run has produced unusable measurements."""

@@ -318,6 +318,7 @@ class LocalDeviceBackend(EvaluationBackend):
         self._data_dir: str = ""
         self._backend_name: str = ""
         self._snapshot_id: str = ""
+        self._effective_orchestrator: Dict[str, Any] = {}
 
     def _detect_resources(self, base_dir: Path) -> Any:
         """Detect the complete capacity of this worker's dedicated device."""
@@ -334,10 +335,7 @@ class LocalDeviceBackend(EvaluationBackend):
         from src.benchmarks.sysbench.executor import SysbenchExecutor
         from src.benchmarks.tpch.executor import TPCHExecutor
         from src.config.database import DatabaseConfig
-        from src.tuners.engine.orchestrator import (
-            WorkloadOrchestrator,
-            WorkloadOrchestratorConfig,
-        )
+        from src.tuners.engine.orchestrator import WorkloadOrchestrator
         from src.knobs import get_knob_space
         from src.tuners.pbt.worker import PBTWorker as Worker
         from src.utils.environments import EnvironmentFactory
@@ -414,16 +412,26 @@ class LocalDeviceBackend(EvaluationBackend):
         )
         env.setup_instances(1)
 
-        orch_config = WorkloadOrchestratorConfig(
+        orch_config = self._build_orchestrator_config(
+            req,
             workload_type=workload_type,
             metric_config=metric_config,
             db_config=db_config,
-            worker_memory_budget_bytes=self._resources.ram_bytes,
         )
         orchestrator = WorkloadOrchestrator(orch_config, executor, env)
 
+        # ``worker_id`` is the *environment instance index*, and this device
+        # provisioned exactly one instance — at LOCAL_WORKER_ID. Tagging the
+        # worker with the fleet-global id instead would make every
+        # environment lookup (container name, host port, PGDATA dir) miss:
+        # memory/cache-hit collection would silently return 0.0, and snapshot
+        # restore would provision a *second*, phantom instance at
+        # ``base_port + global_id`` while the real one was never restored.
+        # The global id rides along as ``display_id`` so logs stay globally
+        # meaningful without any lookup being keyed on it.
         worker = Worker(
-            worker_id=self.global_worker_id,
+            worker_id=self.LOCAL_WORKER_ID,
+            display_id=self.global_worker_id,
             knob_space=knob_space,
             knob_config={},
             db_config=env.get_db_config(self.LOCAL_WORKER_ID),
@@ -444,7 +452,104 @@ class LocalDeviceBackend(EvaluationBackend):
             data_dir=self._data_dir,
             backend=self._backend_name,
             resources=self._serialize_resources(),
+            effective_orchestrator=self._effective_orchestrator,
         )
+
+    def _build_orchestrator_config(
+        self,
+        req: SetupRequest,
+        *,
+        workload_type: Any,
+        metric_config: Any,
+        db_config: Any,
+    ) -> Any:
+        """Build the device's orchestrator config from the coordinator's request.
+
+        The device used to construct this with durations left at their dataclass
+        defaults (warmup 30s / measurement 60s), so a run configured for a 180s
+        sysbench window silently measured 90s on every device. Every field the
+        coordinator sends is honoured here, and the two that have no safe
+        default are required outright.
+
+        Raises
+        ------
+        ValueError
+            If the coordinator did not send the measurement window. Failing the
+            setup is deliberate: a device that guesses its own window produces
+            measurements that cannot be compared with anything else.
+        """
+        from src.tuners.distributed.agent_api import (
+            REQUIRED_ORCHESTRATOR_SETUP_FIELDS,
+        )
+        from src.tuners.engine.orchestrator import WorkloadOrchestratorConfig
+        from src.utils.types import TuningMode
+
+        missing = [
+            name
+            for name in REQUIRED_ORCHESTRATOR_SETUP_FIELDS
+            if getattr(req, name, None) is None
+        ]
+        if missing:
+            raise ValueError(
+                "Coordinator did not send the measurement window "
+                f"({', '.join(missing)}); refusing to fall back to the device's "
+                "own defaults, which would measure a different window than the "
+                "rest of the run. Upgrade the coordinator to a build that sends "
+                "them (agent protocol "
+                f"{AGENT_PROTOCOL_VERSION})."
+            )
+
+        # Fields the coordinator may legitimately leave unset keep the shared
+        # dataclass default rather than being forced to None.
+        optional: Dict[str, Any] = {}
+        for name in (
+            "cooldown_duration",
+            "warmup_passes",
+            "adaptive_restart_interval",
+            "vacuum_analyze_timeout_seconds",
+        ):
+            value = getattr(req, name, None)
+            if value is not None:
+                optional[name] = value
+
+        config = WorkloadOrchestratorConfig(
+            workload_type=workload_type,
+            metric_config=metric_config,
+            db_config=db_config,
+            warmup_duration=float(req.warmup_duration),  # type: ignore[arg-type]
+            measurement_duration=float(req.measurement_duration),  # type: ignore[arg-type]
+            tuning_mode=(
+                TuningMode(req.tuning_mode)
+                if req.tuning_mode is not None
+                else TuningMode.OFFLINE
+            ),
+            random_seed=req.random_seed,
+            worker_memory_budget_bytes=self._resources.ram_bytes,
+            **optional,
+        )
+
+        # Echoed to the coordinator so a version skew that drops these fields
+        # is caught at setup instead of corrupting a multi-hour run.
+        self._effective_orchestrator = {
+            "measurement_duration": config.measurement_duration,
+            "warmup_duration": config.warmup_duration,
+            "cooldown_duration": config.cooldown_duration,
+            "warmup_passes": config.warmup_passes,
+            "tuning_mode": config.tuning_mode.value,
+            "adaptive_restart_interval": config.adaptive_restart_interval,
+            "random_seed": config.random_seed,
+            "vacuum_analyze_timeout_seconds": config.vacuum_analyze_timeout_seconds,
+        }
+        LOGGER.info(
+            "➤ Worker %d measurement window: warmup=%.1fs measurement=%.1fs "
+            "(mode=%s, cooldown=%.1fs)",
+            self.global_worker_id,
+            config.warmup_duration,
+            config.measurement_duration,
+            config.tuning_mode.value,
+            config.cooldown_duration,
+        )
+        return config
 
     def _serialize_resources(self) -> Dict[str, Any]:
         """Serialise the device's detected WorkerResources for the coordinator."""
@@ -477,6 +582,10 @@ class LocalDeviceBackend(EvaluationBackend):
         self._require_setup()
         worker = self._worker
         worker.knob_config = dict(req.knob_config)
+        # This device's worker object outlives every evaluation, so the flag
+        # must be driven by the coordinator each time rather than left to the
+        # worker's own default (which self-clears after the first restart).
+        worker.force_restart_next_eval = bool(req.force_restart)
 
         # Optional coordinator-issued synchronised start: hold until the shared
         # epoch so every device begins its evaluation at the same wall-clock.

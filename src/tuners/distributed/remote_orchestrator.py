@@ -109,6 +109,10 @@ class RemoteWorkloadOrchestrator(WorkloadOrchestrator):
             apply_config=apply_config,
             restore_due=restore_due,
             next_eval_will_restore=next_eval_will_restore,
+            # The device holds its own long-lived worker object, so this
+            # coordinator-side decision (set when a dead worker is rescued)
+            # only reaches it over the wire.
+            force_restart=bool(getattr(worker, "force_restart_next_eval", False)),
         )
 
         restart_occurred = False
@@ -125,6 +129,11 @@ class RemoteWorkloadOrchestrator(WorkloadOrchestrator):
                 restart_occurred = resp.restart_occurred
                 actual_config = resp.actual_config
                 timing = resp.timing
+                # Mirror the local orchestrator: a forced restart is a one-shot
+                # request, cleared once the device confirms it happened. The
+                # device clears its own copy, which the coordinator never sees.
+                if req.force_restart and restart_occurred:
+                    worker.force_restart_next_eval = False
             else:
                 worker.logger.error(
                     " ➤ Remote eval reported failure: %s", resp.error or "unknown"
