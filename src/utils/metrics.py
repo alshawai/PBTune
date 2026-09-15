@@ -500,6 +500,17 @@ class MetricConfig:
 
 
 # Priorities: Low latency, High throughput
+#
+# NOTE: these three configs deliberately carry NO ``workload_features``. The
+# feature vector is a property of a concrete workload (sysbench script + table
+# geometry, TPC-H scale factor + query set), not of the workload *type*, so it
+# is extracted per run by ``WorkloadFeatureExtractor`` and injected through
+# ``create_metric_config(..., workload_features=...)``. Passing
+# ``workload_features=None`` therefore yields an EMPTY vector, not a
+# type-conditioned prior — under ``feature_driven_v2`` that means weights fall
+# back to the policy's bare base logits and stop distinguishing OLTP from OLAP.
+# Callers that need a prior must extract one; see ADR-007 and
+# ``src.evaluation.feature_policy`` for the post-hoc path.
 OLTP_METRIC_CONFIG = MetricConfig(
     workload_type=WorkloadType.OLTP,
     weight_latency=0.50,
