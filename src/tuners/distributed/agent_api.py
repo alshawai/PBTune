@@ -111,6 +111,29 @@ class HealthResponse:
 # --------------------------------------------------------------------------- #
 # /setup
 # --------------------------------------------------------------------------- #
+#: Fields of :class:`SetupRequest` that shape the device's
+#: ``WorkloadOrchestratorConfig``. Echoed in :class:`SetupResponse` so a
+#: coordinator talking to an agent that ignores them fails loudly instead of
+#: silently measuring the wrong window.
+ORCHESTRATOR_SETUP_FIELDS = (
+    "measurement_duration",
+    "warmup_duration",
+    "cooldown_duration",
+    "warmup_passes",
+    "tuning_mode",
+    "adaptive_restart_interval",
+    "random_seed",
+    "vacuum_analyze_timeout_seconds",
+)
+
+#: Fields with no safe default — a device that did not receive them cannot run
+#: a faithful evaluation and must refuse setup.
+REQUIRED_ORCHESTRATOR_SETUP_FIELDS = (
+    "measurement_duration",
+    "warmup_duration",
+)
+
+
 @dataclass
 class SetupRequest:
     """Instruct the agent to create/prepare its single local PG instance.
@@ -131,8 +154,32 @@ class SetupRequest:
     image_name: Optional[str] = None
     dbname: str = "test_dataset"
     db_user: str = "postgres"
+    # ---- Measurement window + restart policy -------------------------- #
+    # The device builds its own ``WorkloadOrchestratorConfig``; without these
+    # it would silently fall back to that dataclass's defaults and measure a
+    # *different* window than the coordinator configured (the bug behind
+    # sysbench running ``--time=90`` for a 180s configuration). The durations
+    # have no safe default, so the agent REJECTS a setup that omits them.
+    measurement_duration: Optional[float] = None
+    warmup_duration: Optional[float] = None
+    cooldown_duration: Optional[float] = None
+    warmup_passes: Optional[int] = None
+    tuning_mode: Optional[str] = None  # TuningMode value, e.g. "offline"
+    adaptive_restart_interval: Optional[int] = None
+    random_seed: Optional[int] = None
+    vacuum_analyze_timeout_seconds: Optional[float] = None
     # Free-form extras for forward-compat without a protocol bump.
     extra: Dict[str, Any] = field(default_factory=dict)
+
+    def orchestrator_echo(self) -> Dict[str, Any]:
+        """The orchestrator-shaping subset, as the device should echo it back.
+
+        Used on both sides of the setup handshake: the agent reports what it
+        actually built its orchestrator with, and the coordinator compares that
+        against what it sent (see
+        :func:`~src.tuners.distributed.remote_environment.verify_orchestrator_echo`).
+        """
+        return {name: getattr(self, name) for name in ORCHESTRATOR_SETUP_FIELDS}
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -162,6 +209,11 @@ class SetupResponse:
     backend: str
     detail: Optional[str] = None
     resources: Dict[str, Any] = field(default_factory=dict)
+    #: The orchestrator-shaping values the device *actually* built its
+    #: ``WorkloadOrchestratorConfig`` with. Empty when the agent predates
+    #: :data:`ORCHESTRATOR_SETUP_FIELDS`, which the coordinator treats as a
+    #: hard error rather than a silent fallback to the wrong window.
+    effective_orchestrator: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -175,6 +227,7 @@ class SetupResponse:
             backend=d.get("backend", ""),
             detail=d.get("detail"),
             resources=d.get("resources", {}) or {},
+            effective_orchestrator=d.get("effective_orchestrator", {}) or {},
         )
 
 
@@ -240,6 +293,13 @@ class RunEvalRequest:
     apply_config: bool = True
     restore_due: bool = False
     next_eval_will_restore: bool = False
+    # Coordinator-side flag set when a worker was rescued from death (its
+    # configuration was resampled and its instance recovered), so the next
+    # evaluation must restart PostgreSQL before measuring. Genuinely per-eval,
+    # hence it rides here rather than on the setup request. The device's worker
+    # object is long-lived across evaluations, so without this the flag would be
+    # consumed once on the device's first eval and never set again.
+    force_restart: bool = False
     # Optional coordinator-issued synchronised measurement start (Phase 4).
     # ``None`` => start measuring immediately after warmup.
     measurement_start_epoch: Optional[float] = None
@@ -255,6 +315,7 @@ class RunEvalRequest:
             apply_config=bool(d.get("apply_config", True)),
             restore_due=bool(d.get("restore_due", False)),
             next_eval_will_restore=bool(d.get("next_eval_will_restore", False)),
+            force_restart=bool(d.get("force_restart", False)),
             measurement_start_epoch=d.get("measurement_start_epoch"),
         )
 

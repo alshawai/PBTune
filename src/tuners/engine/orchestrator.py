@@ -383,7 +383,7 @@ class WorkloadOrchestrator:
         """
         if worker.db_config is None:
             raise ValueError(
-                f"Worker {worker.worker_id} has no db_config; instance must be "
+                f"Worker {worker.display_worker_id} has no db_config; instance must be "
                 "brought up before running a workload"
             )
 
@@ -392,7 +392,7 @@ class WorkloadOrchestrator:
                 db_config=worker.db_config,
                 duration=self.config.measurement_duration,
                 warmup=self.config.warmup_duration,
-                worker_id=worker.worker_id,
+                worker_id=worker.display_worker_id,
                 random_seed=effective_seed,
                 warmup_passes=self.config.warmup_passes,
             )
@@ -403,7 +403,7 @@ class WorkloadOrchestrator:
             db_config=worker.db_config,
             duration=self.config.measurement_duration,
             warmup=self.config.warmup_duration,
-            worker_id=worker.worker_id,
+            worker_id=worker.display_worker_id,
             random_seed=effective_seed,
             connection=connection,
             pre_measurement_callback=pre_measurement_callback,
@@ -525,7 +525,7 @@ class WorkloadOrchestrator:
         """
         if not worker.db_config:
             raise ValueError(
-                f"[Worker-{worker.worker_id}] Missing db_config for evaluation"
+                f"[Worker-{worker.display_worker_id}] Missing db_config for evaluation"
             )
 
         recorder = TimingRecorder()
@@ -560,7 +560,7 @@ class WorkloadOrchestrator:
                 knob_applicator = KnobApplicator(
                     db_config=worker.db_config,
                     config=applicator_config,
-                    worker_id=worker.worker_id,
+                    worker_id=worker.display_worker_id,
                 )
 
                 force_restart = worker.force_restart_next_eval
@@ -582,7 +582,7 @@ class WorkloadOrchestrator:
                         " Performing snapshot restore (serves as restart)..."
                     )
                     # Close connection before restore (instance will stop)
-                    self.disconnect(connection, worker_id=worker.worker_id)
+                    self.disconnect(connection, worker_id=worker.display_worker_id)
                     connection = None
 
                     with recorder.span("snapshot_restore"):
@@ -598,12 +598,13 @@ class WorkloadOrchestrator:
                         # Attempt rebuild on restore failure
                         worker.logger.error(
                             "Snapshot restore failed for [Worker-%d]; attempting rebuild",
-                            worker.worker_id,
+                            worker.display_worker_id,
                         )
                         rebuilt = self.env.rebuild_worker_instance(worker.worker_id)
                         if not rebuilt:
                             raise RuntimeError(
-                                f"Snapshot restore and rebuild both failed for worker {worker.worker_id}"
+                                "Snapshot restore and rebuild both failed for worker "
+                                f"{worker.display_worker_id}"
                             )
                         restart_occurred = True
 
@@ -619,7 +620,7 @@ class WorkloadOrchestrator:
                     )
 
             if restart_occurred:
-                self.disconnect(connection, worker_id=worker.worker_id)
+                self.disconnect(connection, worker_id=worker.display_worker_id)
                 connection = None  # Will reconnect in B4
             _barrier("restarted")
             last_completed_barrier = "restarted"
@@ -833,7 +834,7 @@ class WorkloadOrchestrator:
             # ── B17: Disconnect ──────────────────────────────────────
             self.disconnect(
                 connection,
-                worker_id=worker.worker_id if hasattr(worker, "worker_id") else None,
+                worker_id=getattr(worker, "display_worker_id", None),
             )
 
             # Only call the disconnected barrier on the NORMAL path.

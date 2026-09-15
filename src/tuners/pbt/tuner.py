@@ -316,6 +316,24 @@ class PBTTuner(BaseTuner):
             wl_str = "olap"
         else:
             wl_str = self._workload_type.value
+
+        # Built first so the setup request can carry the *same* values: each
+        # device rebuilds its own orchestrator locally, and anything not sent
+        # here silently reverts to the shared dataclass defaults on the device.
+        orchestrator_config = WorkloadOrchestratorConfig(
+            workload_type=self._workload_type,
+            metric_config=self.metric_config,
+            db_config=db_config,
+            warmup_duration=self.benchmark_config.warmup_duration,
+            measurement_duration=self.benchmark_config.evaluation_duration,
+            cooldown_duration=3.0,
+            tuning_mode=self.lifecycle.tuning_mode,
+            adaptive_restart_interval=self.lifecycle.adaptive_restart_interval,
+            random_seed=self.lifecycle.random_seed,
+            warmup_passes=self.benchmark_config.warmup_passes,
+            worker_memory_budget_bytes=self.worker_resources.ram_bytes,
+        )
+
         setup_template = SetupRequest(
             run_id=self.snapshot_identifier,
             benchmark=self.benchmark or "sysbench",
@@ -328,6 +346,16 @@ class PBTTuner(BaseTuner):
             image_name=self.lifecycle.docker_image,
             dbname=db_config.dbname,
             db_user=db_config.user,
+            measurement_duration=orchestrator_config.measurement_duration,
+            warmup_duration=orchestrator_config.warmup_duration,
+            cooldown_duration=orchestrator_config.cooldown_duration,
+            warmup_passes=orchestrator_config.warmup_passes,
+            tuning_mode=orchestrator_config.tuning_mode.value,
+            adaptive_restart_interval=orchestrator_config.adaptive_restart_interval,
+            random_seed=orchestrator_config.random_seed,
+            vacuum_analyze_timeout_seconds=(
+                orchestrator_config.vacuum_analyze_timeout_seconds
+            ),
         )
 
         coordinator = Coordinator(dist_cfg, setup_template, db_config, pop_size)
@@ -349,19 +377,6 @@ class PBTTuner(BaseTuner):
 
         self.env = coordinator.make_environment(
             self._workload_executor, self.snapshot_identifier
-        )
-        orchestrator_config = WorkloadOrchestratorConfig(
-            workload_type=self._workload_type,
-            metric_config=self.metric_config,
-            db_config=db_config,
-            warmup_duration=self.benchmark_config.warmup_duration,
-            measurement_duration=self.benchmark_config.evaluation_duration,
-            cooldown_duration=3.0,
-            tuning_mode=self.lifecycle.tuning_mode,
-            adaptive_restart_interval=self.lifecycle.adaptive_restart_interval,
-            random_seed=self.lifecycle.random_seed,
-            warmup_passes=self.benchmark_config.warmup_passes,
-            worker_memory_budget_bytes=self.worker_resources.ram_bytes,
         )
         self.orchestrator = coordinator.make_orchestrator(
             orchestrator_config, self._workload_executor, self.env

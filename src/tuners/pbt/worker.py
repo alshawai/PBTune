@@ -281,7 +281,7 @@ class PBTWorker(BaseWorker):
         parent_str = f", parent={self.parent_id}" if self.parent_id is not None else ""
         port_str = f", port={self.port}" if self.port is not None else ""
         return (
-            f"PBTWorker(id={self.worker_id}, "
+            f"PBTWorker(id={self.display_worker_id}, "
             f"score={self.performance_score:.4f}, "
             f"steps={self.step_count}, "
             f"status={status}"
@@ -291,7 +291,7 @@ class PBTWorker(BaseWorker):
 
     def __str__(self) -> str:
         """Simple string representation."""
-        return f"Worker-{self.worker_id} (score={self.performance_score:.4f})"
+        return f"Worker-{self.display_worker_id} (score={self.performance_score:.4f})"
 
     def to_dict(self) -> Dict[str, Any]:
         """

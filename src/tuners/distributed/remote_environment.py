@@ -36,6 +36,7 @@ from src.config.database import DatabaseConfig
 from src.tuners.distributed.agent_api import (
     CleanupRequest,
     HealthResponse,
+    ORCHESTRATOR_SETUP_FIELDS,
     ResetRequest,
     ROUTES,
     SetupRequest,
@@ -48,6 +49,64 @@ from src.utils.environments.base import DatabaseEnvironment, InstanceConfig
 from src.utils.logger import get_logger
 
 LOGGER = get_logger("RemoteEnvironment")
+
+#: Tolerance when comparing float durations echoed back over JSON.
+_DURATION_TOLERANCE_S = 1e-6
+
+
+def verify_orchestrator_echo(
+    worker_id: int, req: SetupRequest, resp: SetupResponse
+) -> None:
+    """Fail loudly when a device did not adopt the coordinator's measurement window.
+
+    The device builds its own ``WorkloadOrchestratorConfig``. If it ignores the
+    values we sent — because it is running an older build, or because a field
+    was dropped in transit — it falls back to defaults and measures a different
+    window than the rest of the run, which silently invalidates every
+    cross-arm comparison. The agent therefore echoes what it actually used, and
+    any divergence is a hard error at setup rather than a discovery made after
+    a multi-hour run.
+
+    Raises
+    ------
+    RuntimeError
+        If the echo is missing or disagrees with the request.
+    """
+    if not resp.effective_orchestrator:
+        raise RuntimeError(
+            f"Device agent for worker {worker_id} did not report its effective "
+            "orchestrator configuration. It is almost certainly running an "
+            "older build that ignores the measurement-window fields and would "
+            "benchmark a different window than the coordinator configured. "
+            "Re-bootstrap the fleet from the current revision."
+        )
+
+    sent = req.orchestrator_echo()
+    divergent = []
+    for name in ORCHESTRATOR_SETUP_FIELDS:
+        expected = sent.get(name)
+        if expected is None:
+            continue  # Coordinator deferred to the device default; nothing to check.
+        actual = resp.effective_orchestrator.get(name)
+        if isinstance(expected, float) or isinstance(actual, float):
+            try:
+                if (
+                    abs(float(actual) - float(expected))  # type: ignore[arg-type]
+                    <= _DURATION_TOLERANCE_S
+                ):
+                    continue
+            except (TypeError, ValueError):
+                pass
+        elif actual == expected:
+            continue
+        divergent.append(f"{name}: sent {expected!r}, device used {actual!r}")
+
+    if divergent:
+        raise RuntimeError(
+            f"Device agent for worker {worker_id} did not adopt the "
+            "coordinator's orchestrator configuration: "
+            + "; ".join(divergent)
+        )
 
 
 class RemoteEnvironment(DatabaseEnvironment):
@@ -130,6 +189,7 @@ class RemoteEnvironment(DatabaseEnvironment):
                 raise RuntimeError(
                     f"Device setup failed for worker {worker_id}: {resp.detail}"
                 )
+            verify_orchestrator_echo(worker_id, req, resp)
             return resp
 
         results = self._fan_out(_setup, list(range(num_workers)))
@@ -285,6 +345,7 @@ class RemoteEnvironment(DatabaseEnvironment):
             )
         )
         if resp.ok:
+            verify_orchestrator_echo(worker_id, req, resp)
             device = self._devices[worker_id]
             self._instances[worker_id] = InstanceConfig(
                 worker_id=worker_id,
