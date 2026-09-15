@@ -31,8 +31,8 @@ FOR generation g = 1, ..., G:
     
     FOR each (bad, good) in zip(bottom, top):
         IF bad.is_ready(ready_interval):
-            bad.clone_from(good)          # Exploit: copy config + score
-            bad.perturb(knob_space)       # Explore: randomly perturb config
+            bad.clone_from(good, current_generation)          # Exploit: copy knob values
+            bad.perturb(perturbation_factors=(0.8, 1.2))      # Explore: perturb config
 ```
 
 ## Key Invariants

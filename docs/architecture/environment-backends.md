@@ -86,7 +86,7 @@ class DatabaseEnvironment(ABC):
 | **Worker isolation by file system** | Per-worker data dir under `.instances/<benchmark_subpath>/worker_N/`. |
 | **Repeatable schema** | Schema initialisation delegated to the `BenchmarkExecutor` (Sysbench / TPC-H / template). The schema-provider's `validate()` is run at every start to detect drift. |
 | **Repeatable baseline** | Per-run baseline snapshot taken once, restored periodically (`snapshot_restore_interval`) to combat data drift over long sessions. |
-| **Liveness reporting** | `verify_instances()` walks every worker and confirms it accepts connections; the population's health-check thread uses this to detect dead instances. |
+| **Liveness reporting** | `verify_instances()` walks every worker and confirms it accepts connections. It is called synchronously at setup and during recovery — there is no background health-check thread. |
 
 Backends differ in **how strong** the isolation is — see the per-backend sections below.
 
@@ -236,19 +236,22 @@ Since commit `4165ceb`, exploit no longer just copies knob values — it also **
 The orchestration:
 
 ```text
-Population.exploit_and_explore():
-  pairs = truncation_selection(workers, ...)
-  group = collections.defaultdict(list)
-  for poor_idx, elite_idx in pairs:
-      group[elite_idx].append(poor_idx)
+Population.train_generation():
+  # 1. evolution first — the module function returns the exploit pairs
+  pairs = execute_exploit_explore(workers=..., perturbation_factors=..., ...)
+  #        internally: poor.clone_from(elite, current_generation)
+  #                    poor.perturb(perturbation_factors=(0.8, 1.2))
 
-  for elite_idx, dst_ids in group.items():
-      environment.clone_instances(elite_idx, dst_ids)
-
+  # 2. then the physical clone, grouped by source worker_id
+  clones_by_source = collections.defaultdict(list)
   for poor_idx, elite_idx in pairs:
-      workers[poor_idx].clone_from(workers[elite_idx], generation, environment)
-      workers[poor_idx].perturb(...)
+      clones_by_source[workers[elite_idx].worker_id].append(workers[poor_idx].worker_id)
+
+  for source_id, target_ids in clones_by_source.items():
+      environment.clone_instances(source_id, target_ids)
 ```
+
+Note the order: `clone_from` copies knob values only (it takes no `environment` argument and performs no I/O), and the PGDATA copy happens afterwards, keyed by `worker_id` rather than list index.
 
 Grouping multiple destinations under one source lets the backend share scan/copy passes when the same elite is the source for several poor workers — small but useful when exploit pairings cluster.
 
@@ -263,9 +266,9 @@ Grouping multiple destinations under one source lets the backend share scan/copy
 
 ## Health checks and dead-worker rescue
 
-Each backend exposes the per-worker `is_alive(worker_id)` pattern via `verify_instances()` and the `recover_instance` / `rebuild_worker_instance` recovery ladder. The population layer uses these to:
+There is no per-worker `is_alive()` method. Each backend exposes `verify_instances()`, which walks every worker and confirms it accepts connections, plus the `recover_instance` / `rebuild_worker_instance` recovery ladder. These are called **synchronously** during setup and recovery — there is no background health-check thread. The population layer uses them to:
 
-1. Periodically check every worker's PostgreSQL process.
+1. Confirm at setup that every worker's PostgreSQL accepts connections.
 2. If a worker is unhealthy, attempt `recover_instance` (cheaper, restart-only).
 3. If recovery fails, attempt `rebuild_worker_instance` (more expensive, reclones from baseline).
 4. If rebuild fails, the worker is marked dead; the population's `rescue_dead_workers()` will resample a fresh config and a fresh instance on the next generation boundary.
@@ -307,7 +310,7 @@ Multiple poor workers exploiting the same elite become one rsync pass with a fan
 - **[PBT Core Components](pbt-core.md)** — how the population drives the environment.
 - **[Workload Orchestrator](workload-orchestrator.md)** — how an evaluation invokes start/stop/restart.
 - **[Hardware-Aware Normalization](hardware-aware-normalization.md)** — `WorkerResources` and warm-start.
-- **[Generation Barriers](generation-barriers.md)** — how `is_alive()` informs `abort()`.
+- **[Generation Barriers](generation-barriers.md)** — the two barrier escape paths and the hung-worker gap.
 - **[ADR-004 — Docker CPU subset isolation](decisions/ADR-004-docker-cpu-subset-isolation.md)** — design decision.
 - **[BENCHMARKING.md](../reference/benchmarking.md)** — schema providers (Sysbench / TPC-H / template).
 - **[BO_BASELINE.md](../guides/bo-baseline.md)** — how the BO baseline reuses the same environment layer.

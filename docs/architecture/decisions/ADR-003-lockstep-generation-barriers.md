@@ -1,6 +1,6 @@
 # ADR-003: Lockstep Generation Barriers for Measurement Fairness
 
-- Status: Accepted
+- Status: Accepted (partially corrected — see [Addendum 2026-09-15](#addendum-2026-09-15-the-out-of-band-liveness-detector-was-never-built))
 - Date: 2026-05-30
 
 ## Context
@@ -64,3 +64,33 @@ Trade-offs:
 The barrier is opt-in: the orchestrator only calls `barriers.wait(...)` when a `GenerationBarrier` instance is passed in. Callers that want sequential evaluation pass a barrier object with `enabled=False`, which is a structural no-op. Existing tests that mock the orchestrator's body are unaffected.
 
 The session JSON now records, per generation, the wall-clock duration of each barrier and whether the barrier was broken — this is what enabled the analysis showing measurement-window overlap is achieved in practice. See [generation-barriers](../generation-barriers.md) and [tests/unit/tuners/engine/test_barriers.py](../../../tests/unit/tuners/engine/test_barriers.py).
+
+---
+
+## Addendum (2026-09-15): the out-of-band liveness detector was never built
+
+The decision above assumed an out-of-band liveness detector as the counterpart to
+rejecting per-barrier timeouts. **That detector does not exist in the codebase.** There is
+no `DatabaseEnvironment.is_alive()` method and no health-check thread; the two references
+to them in *Decision* item 2 and in the *Consequences* trade-offs describe an intended
+mechanism, not a shipped one. The rest of the ADR — the B1–B17 barrier set, the no-timeout
+rationale, `drain_remaining`, and the `enabled=False` sequential mode — is accurate.
+
+What actually ships:
+
+- `barriers.abort()` has exactly one PBT call site: the `except` clause around
+  `future.result()` in `Population.evaluate_generation()`
+  ([src/tuners/pbt/population.py](../../../src/tuners/pbt/population.py)). It fires only
+  when a worker's evaluation **raises**.
+- `drain_remaining(start_from, worker_id)` is unchanged and still the graceful path for a
+  worker that catches its own exception.
+- Liveness probing is the synchronous `environment.verify_instances()`, called at setup
+  and inside the recovery ladder — not from a poller.
+
+**Consequence — the hang bound stated above does not hold.** "A truly hung worker holds
+the generation until the health-check thread calls `abort()`" is wrong; a worker that
+hangs without raising blocks its peers at the next barrier *indefinitely*, because nothing
+outside that thread can trip the abort. The no-timeout decision therefore currently trades
+false-positive hang detection for an unbounded real one. Closing the gap needs a genuine
+out-of-band liveness thread (calling `verify_instances()` on an interval and aborting on
+confirmed death), which remains unimplemented.
