@@ -414,10 +414,21 @@ The primary endpoint's `wilcoxon_p` is uncorrected. Secondary endpoints' `wilcox
 
 These two blocks look similar but answer different questions:
 
-- **`session_scoring_metadata`** — what the source tuning session was scored under. Carries the session's `scoring_policy`, `scoring_policy_version`, `metric_reference_version`, `workload_features`, `normalization_metadata`, and best `score_breakdown`. Use this to attribute scores in the source session correctly.
+- **`session_scoring_metadata`** — what the source tuning session was scored under. Carries the session's `scoring_policy`, `scoring_policy_version`, `metric_reference_version`, `workload_features`, `normalization_metadata`, and best `score_breakdown`. In a multi-arm comparison this is keyed per arm (`pbt`, `bo`), each with that arm's own `workload_features`. Use this to attribute scores in the source session correctly.
 - **`scoring_metadata`** — what *this evaluation* used to compute the comparison scores. May differ from the session metadata if `--scoring-policy` was used to rescore historical sessions under a newer policy. Use this to interpret the `default_runs[].score` and `tuned_runs[].score` values.
 
 If they match (the common case), there's no ambiguity. If they differ, downstream tooling should display both versions to avoid misleading interpretation.
+
+The `workload_features` in these two blocks are **expected** to differ for a PBT arm, and that is not a version mismatch. A tuning session persists the vector as it stood at the end of the run — PBT moves its features while searching by design — whereas the evaluation scores every arm with one vector re-derived from its own benchmark parameters. `scoring_metadata` therefore also carries the provenance of that choice:
+
+| Field | Meaning |
+| --- | --- |
+| `workload_feature_policy` | Policy identifier, currently `eval_static_prior`. |
+| `workload_feature_policy_version` | Version of the derivation rule. |
+| `workload_feature_source` | Which extractor call produced the vector. |
+| `workload_feature_inputs` | The effective benchmark parameters it was derived from, so the vector can be recomputed. |
+
+Comparison files written before ADR-007 carry `"workload_features": {}` and no `workload_feature_policy` key; their absence identifies a comparison scored under the older feature-blind rubric. See [ADR-007](../architecture/decisions/ADR-007-evaluation-workload-feature-policy.md).
 
 ---
 

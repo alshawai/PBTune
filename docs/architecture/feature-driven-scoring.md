@@ -165,6 +165,14 @@ The orchestrator constructs the engine __lazily under a lock__ so the first per-
 
 The post-hoc evaluation suite uses the same factory: when `--scoring-policy feature_driven_v2` overrides a session originally tagged `fixed_v1`, the suite calls `create_scoring_engine` with a re-tagged `MetricConfig`, then rescores the persisted raw `PerformanceMetrics`.
 
+### Which feature vector post-hoc evaluation scores with
+
+Because `feature_driven_v2` derives its weights from the feature vector alone, the vector a comparison scores with _is_ the rubric. The arms of a comparison do not agree on one: PBT deliberately moves its vector while it searches, BO and LHS keep the static prior, and a default arm has no session vector at all.
+
+Post-hoc evaluation therefore uses __neither__ — it re-extracts the static prior from its own effective benchmark parameters, applies that single vector to every arm, and records the policy and derivation inputs in the comparison JSON. Passing no vector is _not_ equivalent: the workload-type `MetricConfig` constants define no feature priors, so an omitted vector collapses `feature_driven_v2` to its bare base logits and stops distinguishing OLTP from OLAP.
+
+See [ADR-007](decisions/ADR-007-evaluation-workload-feature-policy.md) and [src/evaluation/feature_policy.py](../../src/evaluation/feature_policy.py).
+
 ## Outlier Filtering
 
 __Location__: [src/utils/scoring/outlier_filtering.py](../../src/utils/scoring/outlier_filtering.py)

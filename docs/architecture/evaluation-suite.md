@@ -153,6 +153,7 @@ Notable choices:
 - **Tuning-config normalisation.** `_normalize_tuning_config()` coerces numeric fields (`population_size`, `total_generations`, `sysbench_table_size`, `tpch_scale_factor`, etc.) from strings or floats into the right types, since older runs sometimes wrote durations as strings.
 - **Benchmark / workload inference.** When a session JSON omits `benchmark_name` or `workload_type`, `_infer_benchmark_and_workload()` derives them from the session path (`results/oltp/oltp_read_write/...` → sysbench OLTP; `results/olap/...` → TPC-H OLAP).
 - **Version compatibility check.** `_check_version_compatibility` warns (does not block) on metric-reference-version mismatches between sessions in a multi-arm comparison. The user can override the active scoring policy via `--scoring-policy` to force re-evaluation under newer weights — at which point the comparison JSON records both the original session policies and the active comparison policy.
+- **Workload features are not taken from any session.** The loader still reads each session's persisted `workload_features` (they are recorded per arm in the output and logged as divergence against the comparison rubric), but they never feed the score. The runner resolves one vector of its own via [`feature_policy.py`](../../src/evaluation/feature_policy.py) and scores every arm with it — see [ADR-007](decisions/ADR-007-evaluation-workload-feature-policy.md).
 
 The runbook [EVALUATION_RUNBOOK.md](../guides/evaluation-runbook.md) lists the metadata fields the loader populates so a reviewer can audit them.
 
