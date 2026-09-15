@@ -14,7 +14,7 @@
 │         │       └── evaluate_worker(worker) × N                 │
 │         │           ├── apply_configuration(worker.knob_config) │
 │         │           ├── _ensure_benchmark_ready()               │
-│         │           ├── executor.run_benchmark()                │
+│         │           ├── executor.execute(ctx)                   │
 │         │           ├── collect_system_metrics()                │
 │         │           ├── metric_config.compute_score(metrics)    │
 │         │           └── worker.update_metrics(metrics, score)   │

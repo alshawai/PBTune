@@ -5,9 +5,9 @@ See also: [Documentation Index](../README.md)
 
 The Population-Based Training (PBT) Auto-Tuning framework employs a unique **Dual-Evaluation Benchmarking Strategy** designed to support both rigorous academic peer-review and flexible real-world application tuning.
 
-## Architecture: SchemaProvider Protocol
+## Architecture: `BenchmarkExecutor` ABC
 
-All executors implement a common **SchemaProvider** interface (`prepare()` + `validate()`), allowing the `PostgresInstanceManager` to initialize worker database schemas without knowing benchmark-specific details.
+All executors subclass the common **`BenchmarkExecutor`** ABC (`src/benchmarks/executor.py` — `prepare()` + `validate()` + `execute()`), allowing the `PostgresInstanceManager` to initialize worker database schemas without knowing benchmark-specific details.
 
 ```
 ┌─────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐
@@ -18,7 +18,7 @@ All executors implement a common **SchemaProvider** interface (`prepare()` + `va
 │  validate() → SQL count │  │  validate() → SQL count  │  │  validate() → SQL count  │
 │  execute() → sysbench   │  │  execute() → psycopg2    │  │  execute() → Python SQL  │
 └────────────┬────────────┘  └─────────────┬────────────┘  └─────────────┬────────────┘
-             │              SchemaProvider │                             │
+             │           BenchmarkExecutor │                             │
              └─────────────────────────────│─────────────────────────────┘
                                            ▼
                             ┌──────────────────────────┐
@@ -30,7 +30,7 @@ All executors implement a common **SchemaProvider** interface (`prepare()` + `va
                             └──────────────────────────┘
 ```
 
-All executors implement the common **SchemaProvider** interface, allowing the `PostgresInstanceManager` to initialize worker database schemas without knowing benchmark-specific details.
+All three executors satisfy the same ABC, so the schema-initialisation path never needs benchmark-specific knowledge.
 
 ## 1. Academic Validation: External C-Binary Benchmarks
 
@@ -154,11 +154,11 @@ The practical implication is that the benchmark driver can differ, but the score
 
 All benchmark executors implement a common interface for schema management and execution:
 
-### SchemaProvider Protocol
+### `BenchmarkExecutor` ABC
 
 - `prepare(db_config)`: Initialize benchmark schema (create tables, load data)
 - `validate(db_config)`: Verify schema matches expected configuration
-- `execute(db_config, duration)`: Run benchmark and return metrics
+- `execute(ctx: ExecutionContext)`: Run benchmark and return metrics — duration, warmup, worker id and db config all travel inside `ExecutionContext`
 
 ### Executor Implementations
 

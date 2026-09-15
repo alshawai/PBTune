@@ -12,14 +12,15 @@ sysbench oltp_read_write \
     --tables=10 --table-size=100000 \
     prepare
 
-# 2. Run (with warmup)
+# 2. Run (sysbench has no warmup flag — warmup is folded into --time
+#         and trimmed by the parser)
 sysbench oltp_read_write \
     --db-driver=pgsql \
     --pgsql-host=127.0.0.1 --pgsql-port={port} \
     --pgsql-db={dbname} --pgsql-user={user} --pgsql-password={password} \
     --tables=10 --table-size=100000 \
-    --threads={threads} --time={duration} --warmup-time={warmup} \
-    --report-interval=1 \
+    --threads={threads} --time={duration + warmup} \
+    --report-interval=1 --percentile=99 --histogram=on \
     run
 
 # 3. Cleanup (drop tables)
@@ -36,8 +37,15 @@ ERROR_PATTERN = r"errors:\s+(\d+)"
 
 ### Error Handling
 - `subprocess.run(timeout=...)` prevents hangs
-- Non-zero exit code → `failure_type = "benchmark_crash"`
-- Parse errors → `failure_type = "output_parse_error"`
+- Non-zero exit code → executor raises `RuntimeError`; the orchestrator's workload-execution
+  handler tags `failure_type = "EXECUTION_CRASH"` and returns zeroed metrics
+- Parsed throughput of 0 → executor raises `RuntimeError` (same path; there is no
+  `benchmark_crash` / `output_parse_error` failure type)
+
+### Warmup Handling
+sysbench is invoked with `--time={duration + warmup}` — no warmup flag is passed.
+`_parse_output` then discards the first `max(0, len(samples) // 4)` `--report-interval`
+samples before computing steady-state throughput/latency variance.
 
 ---
 
@@ -47,24 +55,30 @@ ERROR_PATTERN = r"errors:\s+(\d+)"
 Sequential execution of all 22 TPC-H queries. No parallelism.
 
 ```python
-query_times = []
+latencies_ms = []
 for i in range(1, 23):
-    sql = load_query(f"queries/q{i}.sql")
+    sql = load_query(f"{i}.sql")      # query files are 1.sql .. 22.sql (no "q" prefix)
     start = time.time()
     cursor.execute(sql)
     cursor.fetchall()
-    elapsed = time.time() - start
-    query_times.append(elapsed)
+    latencies_ms.append((time.time() - start) * 1000.0)
 
-# Metric: geometric mean of all query times
-power_at_size = geometric_mean(query_times)
+# Metrics: latency percentiles + QphH throughput (no Power@Size / geometric mean)
+metrics.latency_p50 = float(np.percentile(sorted(latencies_ms), 50))
+metrics.latency_p95 = float(np.percentile(sorted(latencies_ms), 95))
+metrics.latency_p99 = float(np.percentile(sorted(latencies_ms), 99))
+metrics.throughput = (total_queries / total_time) * 3600.0
+metrics.throughput_unit = "QphH"
 ```
 
+Any query error or statement timeout fast-fails the run: `execute()` returns a fatal
+penalty with `failure_type = "query_failed_or_timeout"` (there is no partial scoring).
+
 ### Statement Timeout
-Scales with `scale_factor` to accommodate larger datasets:
+Scales with `scale_factor`, floored at 60 s:
 ```python
-timeout_ms = base_timeout * scale_factor  # e.g., 60000ms * SF
-SET statement_timeout = '{timeout_ms}'
+timeout_ms = max(60000, int(300000 * scale_factor))   # base 5 min, 60 s floor
+cursor.execute(f"SET statement_timeout = {timeout_ms}")   # unquoted
 ```
 
 ### Data Generation
@@ -91,8 +105,8 @@ evaluate_worker(worker):
     ├── _ensure_benchmark_ready()
     │   └── Check tables exist, restore snapshot if needed
     ├── _vacuum_after_dml() — VACUUM ANALYZE after DML warmup
-    ├── executor.run_benchmark()
-    │   └── SysbenchExecutor.run() or TPCHExecutor.run()
+    ├── executor.execute(ctx)
+    │   └── SysbenchExecutor.execute(ctx) or TPCHExecutor.execute(ctx)
     ├── collect_system_metrics()
     │   └── psutil: CPU%, memory%, I/O counters
     └── Return (PerformanceMetrics, score)

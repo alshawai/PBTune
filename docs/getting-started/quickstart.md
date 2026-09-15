@@ -15,7 +15,7 @@ This guide walks you through your first PBT tuning session and explains what's h
 
 You have:
 
-- Run [setup](setup.md) successfully (`.venv` active, `.env` configured, sysbench 1.1.0 in `PATH`).
+- Run [setup](setup.md) successfully (`.venv` active, `.env` configured, sysbench in `PATH`).
 - Either Docker running (recommended) or a local PostgreSQL 14+ accepting connections.
 
 Verify:
@@ -123,7 +123,7 @@ For the runbook including all flags, scoring-policy overrides, and reproducibili
 | `Docker unavailable, falling back to Bare Metal` warning | Docker daemon not running or not reachable. | Start Docker, or accept reduced isolation (fine for development; not for publication). |
 | `connection refused` on port 5440 | A previous session left an instance behind. | `python -m src.scripts.cleanup_instances` |
 | `DB_PASSWORD environment variable is required` | `.env` not loaded or missing the variable. | Re-check [setup §3](setup.md#3-install-dependencies); confirm the `.env` exists in the project root. |
-| `sysbench: command not found` | sysbench 1.1.0 not installed (the prepackaged 1.0.20 is **not sufficient**). | Follow [setup §Sysbench](setup.md). |
+| `sysbench: command not found` | sysbench not installed or not on `PATH`. | Follow [setup §Sysbench](setup.md). |
 | First generation takes far longer than later ones | TPC-H `dbgen` is compiling and generating data the first time. | Expected — only happens once per scale factor. |
 
 ## Where to go next

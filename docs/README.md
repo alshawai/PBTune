@@ -17,7 +17,7 @@ This documentation is organised by **reader intent** using the [Diátaxis framew
 
 Learning-oriented. Read in order; each builds on the previous.
 
-- [setup](getting-started/setup.md) — install dependencies, configure `.env`, build sysbench 1.1.0
+- [setup](getting-started/setup.md) — install dependencies, configure `.env`, install sysbench
 - [quickstart](getting-started/quickstart.md) — run your first PBT session end-to-end and inspect the results
 
 ## guides/ — How-to
@@ -38,7 +38,7 @@ Information-oriented. For looking things up, not for reading top-to-bottom.
 
 - [cli](reference/cli.md) — consolidated CLI flag reference across `src.tuners pbt`, `src.evaluation`, `src.tuners bo`, `src.scripts.pbt_vs_bo_comarison`, `src.visualization`
 - [session-json-schema](reference/session-json-schema.md) — schema of the PBT/BO session JSON artefacts and the comparison JSON
-- [benchmarking](reference/benchmarking.md) — dual-evaluation strategy and `SchemaProvider` protocol
+- [benchmarking](reference/benchmarking.md) — dual-evaluation strategy and the `BenchmarkExecutor` ABC
 - [autotuning-knob-policy](reference/autotuning-knob-policy.md) — per-knob tuning rationale and safety classification
 - [metrics-validation](reference/metrics-validation.md) — academic validation of the multi-objective scoring formulation
 - [scalpel-diagnostics](reference/scalpel-diagnostics.md) — every field SCALPEL writes to `data_driven_tiers.json` and the `scalpel_diagnostics.json` sibling
