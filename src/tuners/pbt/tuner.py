@@ -566,6 +566,7 @@ class PBTTuner(BaseTuner):
                 metrics=w.metrics,
                 score_breakdown=w.score_breakdown,
                 timing=w.last_eval_timing,
+                actual_config=w.last_actual_config,
             )
             for w in self.population.workers
         ]
@@ -660,7 +661,7 @@ class PBTTuner(BaseTuner):
                 self.population, "_restore_due_next_gen", False
             )
 
-            metrics, score, restart_occurred, _actual_db_config, eval_timing = (
+            metrics, score, restart_occurred, actual_db_config, eval_timing = (
                 self.orchestrator.evaluate_worker(
                     worker,
                     apply_config=True,
@@ -676,6 +677,7 @@ class PBTTuner(BaseTuner):
                 self._restarted_this_generation = True
 
             worker.last_eval_timing = eval_timing
+            worker.last_actual_config = actual_db_config or None
             return metrics, score
 
         except (ConnectionError, psycopg2.Error) as exc:

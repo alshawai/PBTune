@@ -135,9 +135,17 @@ class WorkerEvalResult:
         The scorer's breakdown for this worker, or ``None``. When absent but
         ``metrics`` is present, the record builder recomputes it so a breakdown
         is never silently dropped.
-    timing
+    timing : Optional[Any]
         Per-worker timing recorder for this evaluation (``last_eval_timing``),
         or ``None``. Must expose ``to_dict(include_summary=...)``.
+
+    actual_config : Optional[Dict[str, Any]]
+        The SHOW-verified knob values returned by the device after the
+        evaluation (``last_actual_config`` on the worker).  ``None`` when
+        unavailable (local mode before threading, or on failure).  Written
+        into ``worker_scores[n]["actual_config"]`` in the trace JSON so a
+        consumer can audit whether restart-required knobs reached their
+        intended values on-device.
     """
 
     worker_id: int
@@ -146,6 +154,7 @@ class WorkerEvalResult:
     metrics: Optional[Any] = None
     score_breakdown: Optional[Any] = None
     timing: Optional[Any] = None
+    actual_config: Optional[Dict[str, Any]] = None
 
 
 @dataclass

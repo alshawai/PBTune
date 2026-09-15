@@ -33,6 +33,7 @@ import argparse
 import logging
 import threading
 from abc import ABC, abstractmethod
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -43,6 +44,7 @@ from src.tuners.distributed.agent_api import (
     CleanupRequest,
     ErrorResponse,
     HealthResponse,
+    LogsResponse,
     ResetRequest,
     ROUTES,
     RunEvalRequest,
@@ -107,6 +109,35 @@ class EvaluationBackend(ABC):
         return {}
 
 
+# Maximum number of log lines buffered per evaluation.  Old lines are silently
+# dropped (deque's maxlen behaviour) once the cap is reached, keeping memory
+# usage bounded even for very long restart-retry sequences.
+_MAX_LOG_LINES = 500
+
+
+class _EvalLogHandler(logging.Handler):
+    """A ``logging.Handler`` that appends formatted records to a deque.
+
+    Attached to the ``"DeviceAgent"`` logger hierarchy before each evaluation
+    so that apply / restart / verify messages are captured into the per-eval
+    buffer and can be fetched by the coordinator via ``GET /logs``.
+    """
+
+    def __init__(self, buffer: deque) -> None:
+        super().__init__()
+        self._buffer = buffer
+        # Plain-text formatter — no ANSI, no colour codes, safe for HTML.
+        self.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._buffer.append(self.format(record))
+        except Exception:  # noqa: BLE001 — logging must never raise
+            self.handleError(record)
+
+
 class AgentState:
     """Holds the backend, its assigned worker id, and a lifecycle lock."""
 
@@ -116,6 +147,15 @@ class AgentState:
         self.lock = threading.Lock()  # serialise mutating ops on the instance
         self.is_set_up = False
         self.shutdown_event = threading.Event()
+
+        # Per-evaluation log buffer.  Cleared before each /run_eval dispatch
+        # and exposed (read-only) via GET /logs so the coordinator can drain it.
+        self.eval_log_buffer: deque = deque(maxlen=_MAX_LOG_LINES)
+        self._log_handler = _EvalLogHandler(self.eval_log_buffer)
+        # Capture everything the DeviceAgent logger hierarchy emits.  This
+        # includes the WorkloadOrchestrator and env sub-loggers that run
+        # locally on the device during the evaluation.
+        logging.getLogger("DeviceAgent").addHandler(self._log_handler)
 
     def health(self) -> HealthResponse:
         try:
@@ -165,6 +205,15 @@ class _AgentHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
         if self.path == ROUTES["health"]:
             write_json(self, 200, self.state.health().to_dict())
+        elif self.path == ROUTES["logs"]:
+            write_json(
+                self,
+                200,
+                LogsResponse(
+                    worker_id=self.state.worker_id,
+                    lines=list(self.state.eval_log_buffer),
+                ).to_dict(),
+            )
         else:
             self._fail(404, f"unknown route: GET {self.path}")
 
@@ -204,6 +253,9 @@ class _AgentHandler(BaseHTTPRequestHandler):
 
         elif path == ROUTES["run_eval"]:
             eval_req = RunEvalRequest.from_dict(body)
+            # Clear the per-eval log buffer before running so GET /logs after
+            # the response reflects only the lines from *this* evaluation.
+            self.state.eval_log_buffer.clear()
             # run_eval holds the lock: one evaluation at a time per device.
             with state.lock:
                 metrics, restart_occurred, actual_cfg, timing = state.backend.run_eval(

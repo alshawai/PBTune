@@ -366,6 +366,37 @@ class CleanupRequest:
         return cls(remove_data=bool(d.get("remove_data", False)))
 
 
+# --------------------------------------------------------------------------- #
+# /logs  (fetch recent evaluation-time log lines)
+# --------------------------------------------------------------------------- #
+@dataclass
+class LogsResponse:
+    """Recent log lines buffered by the agent during the last evaluation.
+
+    The agent clears its in-memory log buffer immediately before starting
+    each ``/run_eval`` dispatch and exposes whatever was captured via this
+    endpoint.  The coordinator fetches it immediately after the eval RPC
+    returns and re-emits each line through a ``Worker-N`` logger so the
+    lines appear in the session HTML exactly as coordinator-local messages.
+
+    ``lines`` is ordered chronologically; plain-text (no ANSI codes).
+    When no evaluation has run yet the list is empty.
+    """
+
+    worker_id: int
+    lines: list  # List[str] — plain-text log lines
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "LogsResponse":
+        return cls(
+            worker_id=int(d.get("worker_id", -1)),
+            lines=list(d.get("lines", []) or []),
+        )
+
+
 # Routes recognised by the agent HTTP server. Kept here so client and server
 # share a single source of truth.
 ROUTES = {
@@ -374,6 +405,7 @@ ROUTES = {
     "snapshot": "/snapshot",
     "reset": "/reset",
     "run_eval": "/run_eval",
+    "logs": "/logs",
     "cleanup": "/cleanup",
     "shutdown": "/shutdown",
 }

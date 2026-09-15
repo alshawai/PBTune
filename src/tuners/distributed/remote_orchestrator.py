@@ -27,7 +27,7 @@ from src.tuners.engine.orchestrator import (
     WorkloadOrchestratorConfig,
 )
 from src.tuners.engine.worker import BaseWorker
-from src.tuners.distributed.agent_api import ROUTES, RunEvalRequest, RunEvalResponse
+from src.tuners.distributed.agent_api import ROUTES, LogsResponse, RunEvalRequest, RunEvalResponse
 from src.tuners.distributed.transport import AgentClient, AgentRPCError
 from src.utils.metrics import PerformanceMetrics
 from src.utils.timing import TimingRecorder
@@ -145,6 +145,11 @@ class RemoteWorkloadOrchestrator(WorkloadOrchestrator):
             worker.logger.error(" ➤ Remote eval RPC failed: %s", exc)
             metrics = PerformanceMetrics(failure_type=self._dead_failure_type)
 
+        # Fetch and re-emit worker log lines into the coordinator's logging
+        # pipeline so they appear in the session HTML.  Best-effort: a failed
+        # fetch never aborts the evaluation.
+        self._fetch_and_relay_worker_logs(client, worker.worker_id)
+
         engine = self._get_scoring_engine()
         score_breakdown = engine.compute_breakdown(metrics, worker_logger=worker.logger)
         worker.score_breakdown = score_breakdown
@@ -157,3 +162,31 @@ class RemoteWorkloadOrchestrator(WorkloadOrchestrator):
             actual_config,
             _recorder_from_timing(timing),
         )
+
+    def _fetch_and_relay_worker_logs(
+        self, client: AgentClient, worker_id: int
+    ) -> None:
+        """Pull ``GET /logs`` from the agent and relay lines to the coordinator logger.
+
+        Lines are re-emitted at INFO level through a ``Worker-<id>`` logger so
+        they appear in the session HTML under a recognisable prefix.
+        The call is non-blocking (uses the short agent-control timeout, not the
+        long eval timeout) and all errors are swallowed so this never affects
+        the evaluation result.
+        """
+        import logging as _logging
+
+        try:
+            log_resp = LogsResponse.from_dict(
+                client.get(ROUTES["logs"])
+            )
+            if not log_resp.lines:
+                return
+            remote_logger = _logging.getLogger(f"Worker-{worker_id}")
+            for line in log_resp.lines:
+                remote_logger.info("[device] %s", line)
+        except Exception as exc:  # noqa: BLE001 — telemetry only
+            import logging as _l
+            _l.getLogger(__name__).debug(
+                "Failed to fetch logs from worker %d: %s", worker_id, exc
+            )

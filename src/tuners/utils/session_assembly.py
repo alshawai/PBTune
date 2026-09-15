@@ -104,6 +104,11 @@ def build_generation_record(
                     if result.timing is not None
                     else None
                 ),
+                # SHOW-verified knob values actually in effect on the instance
+                # after the evaluation.  Empty dict when unavailable (local mode
+                # before threading, or on failure) so loaders can access the key
+                # unconditionally.
+                "actual_config": result.actual_config or {},
             }
         )
         worker_configs.append(
