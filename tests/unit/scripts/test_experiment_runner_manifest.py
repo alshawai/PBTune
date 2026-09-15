@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from scripts.experiments.experiment_matrix import Experiment
 from scripts.experiments.runner import (
     DEFAULT_MANIFEST_DIR,
     LEGACY_MANIFEST_PATH,
@@ -1118,3 +1119,59 @@ def test_preflight_skipped_in_dry_run(monkeypatch):
         "scripts.experiments.runner._resolve_block_device_node", _boom
     )
     runner._preflight_disk_isolation()  # must not raise or call resolver
+
+
+def test_find_latest_session_json_scoped_to_experiment(tmp_path, monkeypatch):
+    """_find_latest_session_json must scope search to the experiment's workload/tier directory."""
+    runner = _build_runner(monkeypatch, dry_run=True)
+    results_dir = tmp_path / "results"
+
+    sysbench_exp = Experiment(
+        id="t1_sysbench_rw",
+        tier=1,
+        description="Sysbench RW",
+        benchmark="sysbench",
+        sysbench_workload="oltp_read_write",
+        scale_factor=None,
+        config_profile="thorough",
+        knob_tier="extensive",
+        knob_source="expert",
+        tuning_mode="offline",
+        seeds=(42,),
+        eval_repetitions=5,
+        run_bo=True,
+    )
+    tpch_exp = Experiment(
+        id="t1_tpch",
+        tier=1,
+        description="TPCH OLAP",
+        benchmark="tpch",
+        sysbench_workload=None,
+        scale_factor=1.0,
+        config_profile="thorough",
+        knob_tier="extensive",
+        knob_source="expert",
+        tuning_mode="offline",
+        seeds=(42,),
+        eval_repetitions=5,
+        run_bo=True,
+    )
+
+    sysbench_trace_dir = results_dir / "sessions" / "oltp_read_write" / "pbt" / "extensive" / "traces"
+    tpch_trace_dir = results_dir / "sessions" / "olap" / "pbt" / "extensive" / "traces"
+    sysbench_trace_dir.mkdir(parents=True)
+    tpch_trace_dir.mkdir(parents=True)
+
+    sysbench_file = sysbench_trace_dir / "trace_20260101_1000.json"
+    sysbench_file.write_text("{}")
+
+    tpch_file = tpch_trace_dir / "trace_20260101_1100.json"
+    tpch_file.write_text("{}")
+
+    # Global search picks the newer file (tpch_file)
+    assert runner._find_latest_session_json(results_dir, "pbt") == tpch_file
+
+    # Scoped search picks the trace specific to the experiment's workload/tier
+    assert runner._find_latest_session_json(results_dir, "pbt", exp=sysbench_exp) == sysbench_file
+    assert runner._find_latest_session_json(results_dir, "pbt", exp=tpch_exp) == tpch_file
+

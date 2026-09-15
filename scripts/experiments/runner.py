@@ -1205,7 +1205,9 @@ class ExperimentRunner:
         )
         self._publish_phase(exp, seed, phase, key)
 
-    def _find_latest_session_json(self, output_dir: Path, strategy: str) -> Path | None:
+    def _find_latest_session_json(
+        self, output_dir: Path, strategy: str, exp: Experiment | None = None
+    ) -> Path | None:
         """Find the most-recently-written session trace for a ``strategy``.
 
         Every strategy now writes a strategy-agnostic ``trace_*.json`` (the
@@ -1214,15 +1216,26 @@ class ExperimentRunner:
         disambiguates PBT / BO / LHS. The legacy per-strategy stem
         (``{strategy}_results_*.json``, written under the old ``<strategy>_runs/``
         layout) is still matched so pre-rename runs resolve.
+
+        When ``exp`` is provided, the search is scoped exclusively to that
+        experiment's workload/tier directory to prevent picking up traces from
+        unrelated parallel or past runs.
         """
-        if not output_dir.exists():
+        search_dir = output_dir
+        if exp is not None:
+            relative_output = self._paths_to_stage(exp, strategy)[-1]
+            scoped_dir = output_dir / relative_output
+            if scoped_dir.exists():
+                search_dir = scoped_dir
+
+        if not search_dir.exists():
             return None
         candidates: list[Path] = [
             p
-            for p in output_dir.rglob("trace_*.json")
-            if f"/{strategy}/" in p.as_posix()
+            for p in search_dir.rglob("trace_*.json")
+            if f"/{strategy}/" in p.as_posix() or search_dir != output_dir
         ]
-        candidates.extend(output_dir.rglob(f"{strategy}_results_*.json"))
+        candidates.extend(search_dir.rglob(f"{strategy}_results_*.json"))
         candidates = sorted(set(candidates), key=lambda p: p.stat().st_mtime)
         return candidates[-1] if candidates else None
 
@@ -1589,7 +1602,7 @@ class ExperimentRunner:
 
                     if success:
                         json_path = self._find_latest_session_json(
-                            RESULTS_DIR, "pbt"
+                            RESULTS_DIR, "pbt", exp=exp
                         )
                         if json_path is None and not self.dry_run:
                             raise RuntimeError(
@@ -1713,7 +1726,7 @@ class ExperimentRunner:
                                     )
                                 else:
                                     json_path = self._find_latest_session_json(
-                                        RESULTS_DIR, "bo"
+                                        RESULTS_DIR, "bo", exp=exp
                                     )
                                 if json_path is None and not self.dry_run:
                                     raise RuntimeError(
@@ -1893,7 +1906,7 @@ class ExperimentRunner:
 
                 if success:
                     json_path = self._find_latest_session_json(
-                        RESULTS_DIR, "lhs"
+                        RESULTS_DIR, "lhs", exp=exp
                     )
                     if json_path is None and not self.dry_run:
                         raise RuntimeError(
