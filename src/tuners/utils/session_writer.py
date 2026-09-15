@@ -113,12 +113,21 @@ def build_scoring_block(
     """Build the unified ``tuning_session.scoring`` sub-block.
 
     Every strategy scores its configs through the same engine, so the scoring
-    provenance (policy, versions, the static workload-feature prior, the
+    provenance (policy, versions, the workload-feature vector, the
     normalization ranges) and the winning config's ``score_breakdown`` are
     serialized under one namespaced block regardless of strategy. Downstream
     loaders read ``tuning_session.scoring`` first and fall back to the legacy
     flat keys, so folding these six fields here keeps a single code path for
     PBT and LHS while remaining tolerant of older/BO-flat sessions.
+
+    ``workload_features`` is the vector as it stood **at the end of the
+    session**, not the static prior the run started from. Strategies that move
+    their features while searching (PBT, via
+    :class:`~src.tuners.engine.feature_refinement.WorkloadFeatureRefiner`)
+    therefore persist a vector specific to that run's search path, while
+    strategies that never refine (BO, LHS) persist the static prior unchanged.
+    Post-hoc comparison must not grade arms with these vectors — see ADR-007
+    and :mod:`src.evaluation.feature_policy`.
 
     ``scoring_metadata`` is the dict returned by ``MetricConfig
     .get_scoring_metadata()``; ``score_breakdown`` is the best config's

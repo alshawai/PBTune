@@ -1,11 +1,21 @@
 """Regression tests for fairness fixes #2 and #3.
 
-Fix #2: ComparisonRunner.run() and ComparisonRunner.run_multi_arm()
-must pass ``workload_features=None`` to ``rescore_metrics_globally``
-so the head-to-head head uses the static workload-feature prior for
-both arms. Using PBT's session-derived (drifted) feature vector would
-co-adapt the rubric to PBT and asymmetrically grade BO on a vector it
-never trained against.
+Fix #2 (revised — see ADR-007): ComparisonRunner.run() and
+ComparisonRunner.run_multi_arm() must score every arm with the
+evaluation's *own* static workload-feature prior, resolved by
+``src.evaluation.feature_policy.resolve_evaluation_workload_features``
+from the effective benchmark parameters.
+
+The original form of this fix passed ``workload_features=None`` on the
+belief that it fell back to a workload-type-conditioned prior. It does
+not: ``OLTP_METRIC_CONFIG``/``OLAP_METRIC_CONFIG``/``MIXED_METRIC_CONFIG``
+define no feature priors, so ``None`` yields an empty vector and
+``feature_driven_v2`` collapses to its bare base logits — one rubric for
+every workload, under-weighting ``scan_efficiency`` roughly 11x on TPC-H.
+Symmetry across arms was preserved; workload conditioning was not. The
+call sites must therefore pass a resolved vector, and must never pass a
+session-derived one (which would grade every arm on one arm's search
+path).
 
 Fix #3: PBT's cold-start LHS init must include the PostgreSQL default
 config as worker 0 — matching BO's pilot, which prepends the default
@@ -51,24 +61,38 @@ def _kwarg(call: ast.Call, name: str) -> ast.expr | None:
     return None
 
 
+def _attribute_chain(node: ast.expr) -> str:
+    """Render a dotted attribute expression, e.g. ``a.b.c``, else ""."""
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
 # ── Fix #2 ──────────────────────────────────────────────────────────
 
 
-def test_eval_runner_uses_static_workload_features_prior() -> None:
-    """Both rescore call sites in evaluation/runner.py must pass
-    ``workload_features=None``.
+def test_eval_runner_scores_arms_with_resolved_evaluation_prior() -> None:
+    """Both rescore call sites must pass the resolved evaluation prior.
 
-    Regression: previously these passed ``session.workload_features``
-    and ``pbt_session.workload_features`` respectively, baking PBT's
-    EMA-drifted feature vector into the head-to-head rubric and
-    asymmetrically penalizing BO.
+    Guards two distinct regressions at once:
+
+    - passing ``session.workload_features`` / ``pbt_session.workload_features``
+      would bake one arm's end-of-session vector into the shared rubric;
+    - passing ``None`` would silently yield an empty vector, dropping
+      workload conditioning from the weights entirely.
     """
     source = RUNNER_PATH.read_text()
     calls = _find_rescore_calls(source)
 
     # The runner has exactly two head-to-head rescore calls (run()
     # for two-arm, run_multi_arm() for n-arm). If a future refactor
-    # adds more, they must also pass workload_features=None.
+    # adds more, they must also pass the resolved evaluation prior.
     assert len(calls) >= 2, (
         f"Expected at least 2 rescore_metrics_globally call sites in "
         f"{RUNNER_PATH.name}, found {len(calls)}"
@@ -78,14 +102,45 @@ def test_eval_runner_uses_static_workload_features_prior() -> None:
         wf = _kwarg(call, "workload_features")
         assert wf is not None, (
             f"rescore_metrics_globally at line {call.lineno} must pass "
-            f"workload_features explicitly (None for the static prior)"
+            f"workload_features explicitly"
         )
-        assert isinstance(wf, ast.Constant) and wf.value is None, (
-            f"rescore_metrics_globally at line {call.lineno} must pass "
-            f"workload_features=None (got {ast.dump(wf)}). Using a "
-            f"session-derived feature vector creates an asymmetric "
-            f"rubric across arms."
+        assert not (isinstance(wf, ast.Constant) and wf.value is None), (
+            f"rescore_metrics_globally at line {call.lineno} passes "
+            f"workload_features=None. That is an EMPTY vector, not a "
+            f"workload-type prior: feature_driven_v2 then weights every "
+            f"workload with its bare base logits. Pass the vector resolved "
+            f"by resolve_evaluation_workload_features instead (ADR-007)."
         )
+
+        chain = _attribute_chain(wf)
+        assert chain.endswith("scoring_features.features"), (
+            f"rescore_metrics_globally at line {call.lineno} must pass the "
+            f"evaluation's resolved prior (scoring_features.features), got "
+            f"{chain or ast.dump(wf)}."
+        )
+        assert "session" not in chain, (
+            f"rescore_metrics_globally at line {call.lineno} passes a "
+            f"session-derived feature vector ({chain}). A session's vector "
+            f"belongs to that arm's search path and would grade every other "
+            f"arm on it."
+        )
+
+
+def test_eval_runner_resolves_prior_from_feature_policy() -> None:
+    """The runner must source its prior from the feature-policy module.
+
+    Keeps the derivation in one reviewable place rather than re-deriving
+    a vector inline per call site.
+    """
+    source = RUNNER_PATH.read_text()
+    assert "resolve_evaluation_workload_features" in source, (
+        "evaluation/runner.py must resolve its scoring prior via "
+        "src.evaluation.feature_policy.resolve_evaluation_workload_features"
+    )
+    assert "workload_features=session.workload_features" not in source, (
+        "evaluation/runner.py must not score any run with a session's "
+        "persisted feature vector"
+    )
 
 
 # ── Fix #3 ──────────────────────────────────────────────────────────

@@ -77,6 +77,11 @@ from src.benchmarks.executor import BenchmarkExecutor, ExecutionContext
 from src.knobs import get_knob_space
 from src.utils.applicator import ApplicatorConfig, KnobApplicator
 from src.evaluation.exceptions import DockerEnvironmentError
+from src.evaluation.feature_policy import (
+    ResolvedWorkloadFeatures,
+    describe_feature_divergence,
+    resolve_evaluation_workload_features,
+)
 from src.evaluation.loader import load_tuning_session
 from src.evaluation.statistics import (
     compute_comparison_statistics,
@@ -230,6 +235,12 @@ class ComparisonRunner:
             "Running paired default/tuned comparisons for %d repetitions...",
             self.config.repetitions,
         )
+        scoring_features = self._resolve_scoring_features(
+            benchmark=benchmark,
+            executor=executor,
+            cpu_cores=session.worker_resources.cpu_cores,
+            session_vectors={"tuned": session.workload_features},
+        )
         default_runs, tuned_runs = self._run_paired_comparisons(
             tuned_knobs=tuned_knobs,
             session=session,
@@ -237,6 +248,7 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
+            workload_features=scoring_features.features,
         )
 
         all_runs = sorted(
@@ -261,11 +273,11 @@ class ComparisonRunner:
                 eval_ref_version,
             )
 
-        # Score both arms (default vs tuned) under the STATIC workload-feature
-        # prior, not the PBT session's drifted vector. PBT refines features
-        # via EMA every generation; using its drifted vector to grade the
-        # head-to-head bakes whatever direction PBT happened to drift into
-        # the rubric, which is asymmetric.
+        # Score both arms (default vs tuned) under the evaluation's own static
+        # workload-feature prior, never the session's persisted vector (ADR-007).
+        # A PBT session deliberately moves its features mid-run to adapt its own
+        # objective, so grading the head-to-head with that end-state vector would
+        # bake the tuner's search path into the rubric it is judged by.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -273,8 +285,9 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
-            workload_features=None,
+            workload_features=scoring_features.features,
         )
+        scoring_metadata = {**scoring_metadata, **scoring_features.as_metadata()}
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
 
@@ -417,6 +430,17 @@ class ComparisonRunner:
             len(arms),
             self.config.repetitions,
         )
+        session_vectors: dict[str, dict[str, float]] = {
+            "pbt": pbt_session.workload_features
+        }
+        if bo_session:
+            session_vectors["bo"] = bo_session.workload_features
+        scoring_features = self._resolve_scoring_features(
+            benchmark=benchmark,
+            executor=executor,
+            cpu_cores=pbt_session.worker_resources.cpu_cores,
+            session_vectors=session_vectors,
+        )
         runs_by_arm = self._run_multi_arm_repetitions(
             arms=arms,
             session=pbt_session,
@@ -424,19 +448,19 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
+            workload_features=scoring_features.features,
         )
 
         all_runs = sorted(
             [r for arm_runs in runs_by_arm.values() for r in arm_runs],
             key=lambda r: (r.run_number, r.order_in_pair, r.config_type),
         )
-        # Multi-arm head-to-head: score every arm under the SAME static
-        # workload-feature prior. Using the PBT session's drifted vector
-        # (refined via EMA every generation during PBT training) would
-        # give PBT a co-adapted rubric while BO is graded on a vector it
-        # never trained against. workload_features=None falls back to the
-        # workload-type-conditioned base prior in create_metric_config,
-        # which is symmetric across arms.
+        # Multi-arm head-to-head: every arm is scored with the SAME vector, and
+        # that vector belongs to the evaluation, not to any arm (ADR-007,
+        # policy `eval_static_prior`). PBT ends a session with a moved feature
+        # vector by design, BO ends with the static prior, and the default arm
+        # has no session at all — so the only rubric all three can share is one
+        # re-derived from the benchmark parameters actually being measured.
         _, rescored_scores, scoring_metadata = rescore_metrics_globally(
             [r.metrics for r in all_runs],
             benchmark=benchmark,
@@ -444,8 +468,9 @@ class ComparisonRunner:
             scoring_policy=eval_policy,
             scoring_policy_version=eval_policy_version,
             metric_reference_version=eval_ref_version,
-            workload_features=None,
+            workload_features=scoring_features.features,
         )
+        scoring_metadata = {**scoring_metadata, **scoring_features.as_metadata()}
         for run, score in zip(all_runs, rescored_scores, strict=True):
             run.score = score
 
@@ -467,6 +492,7 @@ class ComparisonRunner:
                     "scoring_policy": pbt_session.scoring_policy,
                     "scoring_policy_version": pbt_session.scoring_policy_version,
                     "metric_reference_version": pbt_session.metric_reference_version,
+                    "workload_features": pbt_session.workload_features,
                 },
                 **(
                     {
@@ -474,6 +500,7 @@ class ComparisonRunner:
                             "scoring_policy": bo_session.scoring_policy,
                             "scoring_policy_version": bo_session.scoring_policy_version,
                             "metric_reference_version": bo_session.metric_reference_version,
+                            "workload_features": bo_session.workload_features,
                         }
                     }
                     if bo_session
@@ -580,6 +607,89 @@ class ComparisonRunner:
             table_size=int(self.config.sysbench_table_size or 100_000),
             script=str(self.config.sysbench_workload or DEFAULT_SYSBENCH_WORKLOAD),
         )
+
+    def _resolve_scoring_features(
+        self,
+        *,
+        benchmark: str,
+        executor: BenchmarkExecutor,
+        cpu_cores: int | None,
+        session_vectors: dict[str, dict[str, float]],
+    ) -> ResolvedWorkloadFeatures:
+        """
+        Resolve the workload-feature prior every arm is scored with, and log it.
+
+        One vector grades all arms (ADR-007, policy ``eval_static_prior``): it is
+        re-extracted from this evaluation's own effective benchmark parameters
+        rather than taken from any arm's tuning session, so no arm is graded on
+        a rubric co-adapted to its own search path.
+
+        ``session_vectors`` maps an arm label to that arm's persisted
+        ``scoring.workload_features``. Divergence from the evaluation prior is
+        logged for interpretation only — it never feeds the score. A PBT session
+        is *expected* to diverge, since moving its features mid-session is how
+        PBT adapts its own objective while it searches.
+
+        Args:
+            benchmark: Benchmark driver — ``"sysbench"`` or ``"tpch"``.
+            executor: The evaluation's benchmark executor.
+            cpu_cores: Detected core count of the evaluation host.
+            session_vectors: Arm label → persisted session feature vector.
+
+        Returns:
+            The :class:`ResolvedWorkloadFeatures` used to score every arm.
+        """
+        resolved = resolve_evaluation_workload_features(
+            benchmark=benchmark,
+            executor=executor,
+            config=self.config,
+            cpu_cores=cpu_cores,
+        )
+
+        log_section_header(
+            LOGGER,
+            "%sScoring Workload Features (%s v%s)%s",
+            COLORS.bold,
+            resolved.policy,
+            resolved.policy_version,
+            COLORS.reset,
+            top_separator=False,
+        )
+        LOGGER.info("  Derived from: %s", resolved.source)
+        LOGGER.info(
+            "  Inputs: %s",
+            ", ".join(f"{k}={v}" for k, v in sorted(resolved.inputs.items())),
+        )
+        for name, value in sorted(resolved.features.items()):
+            LOGGER.info("    %-28s = %.4f", name, value)
+
+        for arm, vector in sorted(session_vectors.items()):
+            if not vector:
+                LOGGER.info(
+                    "  %s session recorded no workload features (nothing to compare).",
+                    arm,
+                )
+                continue
+
+            divergence = describe_feature_divergence(resolved.features, vector)
+            if not divergence:
+                LOGGER.info("  %s session vector matches the evaluation prior.", arm)
+                continue
+
+            LOGGER.info(
+                "  %s session vector diverges on %d feature(s) — reported, not scored:",
+                arm,
+                len(divergence),
+            )
+            for name, (session_value, eval_value) in divergence.items():
+                LOGGER.info(
+                    "    %-28s session=%.4f  evaluation=%.4f",
+                    name,
+                    session_value,
+                    eval_value,
+                )
+
+        return resolved
 
     def _resolve_effective_benchmark_params(
         self,
@@ -810,11 +920,16 @@ class ComparisonRunner:
         scoring_policy: str,
         scoring_policy_version: str,
         metric_reference_version: str,
+        workload_features: dict[str, float],
     ) -> tuple[list[RunResult], list[RunResult]]:
         """
         Execute strict paired runs where each pair shares one deterministic seed.
 
         For pair i, both default and tuned runs use seed = pair_seed_base + i - 1.
+
+        ``workload_features`` is the evaluation's own prior (ADR-007) and is
+        applied to both arms, so the per-run scores logged here are computed on
+        the same rubric as the final globally-rescored values.
         """
         default_runs: list[RunResult] = []
         tuned_runs: list[RunResult] = []
@@ -841,6 +956,7 @@ class ComparisonRunner:
                     scoring_policy=scoring_policy,
                     scoring_policy_version=scoring_policy_version,
                     metric_reference_version=metric_reference_version,
+                    workload_features=workload_features,
                 )
                 tuned_run = self._run_single(
                     config_type="tuned",
@@ -853,6 +969,7 @@ class ComparisonRunner:
                     scoring_policy=scoring_policy,
                     scoring_policy_version=scoring_policy_version,
                     metric_reference_version=metric_reference_version,
+                    workload_features=workload_features,
                 )
             except Exception as exc:
                 failed_pairs += 1
@@ -926,12 +1043,17 @@ class ComparisonRunner:
         scoring_policy: str,
         scoring_policy_version: str,
         metric_reference_version: str,
+        workload_features: dict[str, float],
     ) -> dict[str, list[RunResult]]:
         """
         Execute N repetitions across all arms, sharing seeds per repetition.
 
         For each repetition, every arm is evaluated with the same pair_seed,
         preserving the paired experimental design for pairwise Wilcoxon tests.
+
+        ``workload_features`` is the evaluation's own prior (ADR-007), applied
+        identically to every arm so no arm's per-run score is computed on a
+        rubric derived from its own tuning session.
         """
         runs_by_arm: dict[str, list[RunResult]] = {name: [] for name in arms}
         arm_order = sorted(arms.keys())
@@ -961,6 +1083,7 @@ class ComparisonRunner:
                         scoring_policy=scoring_policy,
                         scoring_policy_version=scoring_policy_version,
                         metric_reference_version=metric_reference_version,
+                        workload_features=workload_features,
                     )
                     rep_runs[arm_name] = run
             except Exception as exc:
@@ -1075,6 +1198,7 @@ class ComparisonRunner:
         scoring_policy: str,
         scoring_policy_version: str,
         metric_reference_version: str,
+        workload_features: dict[str, float],
     ) -> RunResult:
         """
         Execute one benchmark repetition in a fresh environment.
@@ -1085,6 +1209,10 @@ class ComparisonRunner:
         2. Apply tuned knobs if config_type == "tuned"
         3. Execute benchmark measurement
         4. Tear down environment (stop + cleanup)
+
+        ``workload_features`` is the evaluation's resolved prior (ADR-007), not
+        ``session.workload_features`` — the session vector belongs to one arm's
+        search path and would grade every other arm on that arm's rubric.
         """
         benchmark_name = self.config.benchmark or session.benchmark
         run_started = time.monotonic()
@@ -1207,7 +1335,7 @@ class ComparisonRunner:
                 scoring_policy=scoring_policy,
                 scoring_policy_version=scoring_policy_version,
                 metric_reference_version=metric_reference_version,
-                workload_features=session.workload_features,
+                workload_features=workload_features,
             )
 
             return RunResult(
