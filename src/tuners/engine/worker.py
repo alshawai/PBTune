@@ -95,6 +95,13 @@ class BaseWorker:
     last_eval_timing : Optional[TimingRecorder]
         The per-evaluation timing recorder from the most recent
         ``evaluate_worker`` call, stashed for session serialization.
+
+    last_actual_config : Optional[Dict[str, Any]]
+        The SHOW-verified knob values that were in effect on the instance
+        after the last evaluation completed.  ``None`` before the first eval
+        and on evaluation failure.  Stashed here so the session assembler can
+        persist it into the trace without touching the return signature of
+        ``evaluate_worker``.
     """
 
     worker_id: int
@@ -109,6 +116,7 @@ class BaseWorker:
     db_config: Optional[DatabaseConfig] = None
     force_restart_next_eval: bool = True
     last_eval_timing: Optional[TimingRecorder] = None
+    last_actual_config: Optional[Dict[str, Any]] = None
 
     logger: Logger = field(init=False, repr=False)
 

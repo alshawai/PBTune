@@ -327,3 +327,55 @@ def test_rpc_failure_marks_worker_dead(fleet):
 
     assert metrics.failure_type == "EXECUTION_CRASH"  # handed to rescue path
     assert isinstance(score, float)
+
+
+def test_actual_config_persisted_into_generation_record(fleet):
+    """actual_config from the device flows into worker_scores in the trace."""
+    from src.tuners.utils.session_assembly import build_generation_record
+    from src.tuners.utils.types import WorkerEvalResult
+
+    coordinator, backends = fleet
+    coordinator.wait_for_agents()
+    env = coordinator.make_environment(schema_provider=None, run_id="test")
+    env.setup_instances(2)
+
+    orch_config = WorkloadOrchestratorConfig(
+        workload_type=WorkloadType.OLTP,
+        metric_config=create_metric_config("oltp"),
+        db_config=coordinator.db_config,
+    )
+    orchestrator = coordinator.make_orchestrator(orch_config, executor=None, env=env)
+
+    w = Worker(worker_id=0, knob_space=None, knob_config={"shared_buffers": 2})
+    metrics, score, _restart, actual_cfg, timing = orchestrator.evaluate_worker(
+        w, generation=0
+    )
+
+    # FakeBackend returns {"shared_buffers": 2.0} as the actual_config.
+    assert actual_cfg == {"shared_buffers": 2.0}
+
+    # Build a minimal generation record using the returned actual_config.
+    import time
+
+    result = WorkerEvalResult(
+        worker_id=0,
+        knob_config={"shared_buffers": 2},
+        score=score,
+        metrics=metrics,
+        timing=timing,
+        actual_config=actual_cfg,
+    )
+    now = time.time()
+    record = build_generation_record(
+        generation=0,
+        best_score_this_round=score,
+        worker_results=[result],
+        generation_elapsed_seconds=1.0,
+        tuning_start_time=now,
+        start_time=now,
+    )
+
+    ws = record["worker_scores"]
+    assert len(ws) == 1
+    assert "actual_config" in ws[0], "actual_config key missing from worker_scores entry"
+    assert ws[0]["actual_config"] == {"shared_buffers": 2.0}
