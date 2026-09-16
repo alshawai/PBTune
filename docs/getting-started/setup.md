@@ -68,7 +68,7 @@ pip install -r requirements-dev.txt
 - **pandas**: Data processing for knob retrieval
 - **python-dotenv**: Environment variable management
 
-**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](../architecture/performance-evaluation.md#system-monitoring-with-psutil) for details.
+**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](../architecture/performance-evaluation.md#system-monitoring) for details.
 
 #### Sysbench (required for OLTP benchmarking)
 

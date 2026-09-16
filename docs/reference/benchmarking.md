@@ -88,7 +88,7 @@ Developers can copy logs from `pg_stat_statements`, define them in a custom `.js
 
 > **Not implemented.** The tuner does **not** clone an external database. `EnvironmentFactory.create()` always provisions fresh local instances — Docker `postgres:<major>` containers, or bare-metal `initdb` clusters — and `get_db_config()` always returns `127.0.0.1:5440+i`, so a `DB_HOST` pointing at a replica never reaches a worker. `pg_basebackup` is not used anywhere in the codebase. The only cloning that happens is worker-to-worker between local instances: `rsync -a --delete` on bare-metal, a throwaway container running `cp -R` under Docker.
 
-What works today is deriving your workload from real production traffic. `WorkloadExecutor` accepts raw, unparameterised SQL, so you can tune against your actual queries and their real relative weights — but the schema those queries need must be one the benchmark `SchemaProvider` can create.
+What works today is deriving your workload from real production traffic. `WorkloadExecutor` accepts raw, unparameterised SQL, so you can tune against your actual queries and their real relative weights — but the schema those queries need must be one a `BenchmarkExecutor.prepare()` can create.
 
 **1. Extract your top queries and their weights** from your production database. This query returns the most frequent statements with weights already normalised to sum to 1:
 
@@ -130,7 +130,7 @@ _(No `{table}` or `{id}` placeholders needed — `WorkloadExecutor` runs raw SQL
 python -m src.tuners pbt --workload-file workloads/my_real_queries.json
 ```
 
-**The gap.** `WorkloadExecutor.prepare()` creates `sbtest` tables, so raw SQL referencing your own tables (`employees`, `orders`, …) has nothing to run against on a worker instance. Closing that — provisioning worker instances from a real database snapshot rather than from a `SchemaProvider` — is the unimplemented half of this workflow. Until then, either shape your queries against the `sbtest` schema, or add a `SchemaProvider` implementation that creates your schema (see [Adding Workloads](../guides/adding-workloads.md)).
+**The gap.** `WorkloadExecutor.prepare()` creates `sbtest` tables, so raw SQL referencing your own tables (`employees`, `orders`, …) has nothing to run against on a worker instance. Closing that — provisioning worker instances from a real database snapshot rather than from a `BenchmarkExecutor` — is the unimplemented half of this workflow. Until then, either shape your queries against the `sbtest` schema, or add a `BenchmarkExecutor` subclass whose `prepare()` creates your schema (see [Adding Workloads](../guides/adding-workloads.md)).
 
 ## Note on PBT Relative Scoring
 

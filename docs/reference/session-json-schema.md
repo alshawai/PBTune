@@ -72,9 +72,9 @@ Component names are snake_case and stable: they are the dimension key in the cos
 The `workload` component's semantics depend on the executor metadata:
 
 - `executor="benchmark"` (sysbench, tpch): warmup and measurement are not separately bracketed — the C-binary owns the warmup/measurement boundary internally. The reported `seconds` is the wall-clock duration of the subprocess call, which dominates both phases plus any process startup overhead. The configured `sysbench_warmup_seconds` / `sysbench_duration_seconds` (or `tpch_warmup_passes` / measurement-pass count) live in `tuning_session` and give the configured-vs-observed perspective.
-- `executor="internal"` (template-driven JSON workloads): warmup and measurement are **not yet** separately bracketed in the v1.0 schema. Splitting them is a follow-up to Phase 2C.10 of the timing instrumentation plan ([`docs/research/timing-instrumentation-plan.md`](../research/timing-instrumentation-plan.md)) and will land in a later schema bump. Until then, the bracket reports the combined wall-clock of both phases together.
+- `executor="internal"` (template-driven JSON workloads): warmup and measurement are **not yet** separately bracketed in the v1.1 schema — the orchestrator emits a single `workload` span for both (`orchestrator.py:411`). Splitting them will land in a later schema bump. Until then, the bracket reports the combined wall-clock of both phases together.
 
-For sysbench specifically, the audit's [Phase 2C.10 note](../research/timing-instrumentation-plan.md) records that warmup / measurement durations can be reported as the configured values with `observed=False` metadata. The v1.0 emitter does not yet add that metadata; downstream tools that need the breakdown should consult the `tuning_session` configuration fields and treat the bracket as a single-block total.
+For sysbench specifically, warmup / measurement durations could in principle be reported as the configured values with `observed=False` metadata. The v1.1 emitter does not add that metadata; downstream tools that need the breakdown should consult the `tuning_session` configuration fields and treat the bracket as a single-block total.
 
 ### Worker timing JSON example
 

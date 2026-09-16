@@ -266,7 +266,7 @@ Each entry has `knob`, `expert_tier`, and `data_tier`:
 
 The audit is **report-only** — SCALPEL never modifies its tier
 assignments based on the prior. See the rationale in
-[ADR-005](../architecture/decisions/ADR-005-scalpel-tier-generation.md#why-the-dba-prior-audit-is-report-only).
+[ADR-005 §Alternatives Considered, item 3](../architecture/decisions/ADR-005-scalpel-tier-generation.md#alternatives-considered).
 
 ## `importance_results.json` (the `tier_generation` block)
 

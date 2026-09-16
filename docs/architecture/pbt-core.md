@@ -246,7 +246,7 @@ class GenerationResult:
 
 ### Score finalisation
 
-`_finalize_scores()` runs **every generation** (inside `Population.train_generation()`), not once at session end. Before calibration it only tracks the overall best; on the just-calibrated generation — or when anchors expand or weights change — it calls `orchestrator.reload_scoring_engine()` and rescores the current workers plus the historical best against the current anchors, so pre- and post-calibration generations stay comparable. A separate global post-hoc rescore helper lives in [src/tuners/utils/calibration.py](../../src/tuners/utils/calibration.py) and is used by the evaluation suite.
+`_finalize_scores()` runs **every generation** (inside `Population.train_generation()`), not once at session end. Before calibration it only tracks the overall best; on the just-calibrated generation — or when anchors expand or weights change — it calls `orchestrator.reload_scoring_engine()` and rescores the current workers plus the historical best against the current anchors, so pre- and post-calibration generations stay comparable. A separate global post-hoc rescore helper lives in [src/utils/calibration.py](../../src/utils/calibration.py) and is used by the evaluation suite.
 
 ---
 

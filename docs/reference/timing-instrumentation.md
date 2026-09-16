@@ -1,7 +1,7 @@
 # Timing Instrumentation — Contributor Guide
 
 > Schema version this guide describes: **v1.1**
-> See also: [session JSON schema (timing section)](session-json-schema.md#timing-instrumentation-v11), [timing instrumentation plan](../research/timing-instrumentation-plan.md)
+> See also: [session JSON schema (timing section)](session-json-schema.md#timing-instrumentation-v11)
 
 This guide explains how to add a new component bracket to the PBTune timing instrumentation and how to read the timing data the system emits. The schema is documented in the [session JSON schema](session-json-schema.md#timing-instrumentation-v11); this page is about the *code* side.
 

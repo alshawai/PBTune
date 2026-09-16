@@ -169,7 +169,7 @@ If the features look off (e.g. `olap_complexity` near 1 for a clearly OLTP workl
 
 ## Variant: tuning against real production queries
 
-> **Partly unimplemented.** The tuner cannot clone a production database into the workers. Every worker instance is provisioned locally and its schema is created by the benchmark's `SchemaProvider`, so raw SQL against your own tables currently has no schema to run against. Only the query-and-weight half of this workflow works today. See [benchmarking §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot).
+> **Partly unimplemented.** The tuner cannot clone a production database into the workers. Every worker instance is provisioned locally and its schema is created by the benchmark executor's `prepare()`, so raw SQL against your own tables currently has no schema to run against. Only the query-and-weight half of this workflow works today. See [benchmarking §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot).
 
 A workload file may omit both the `schema` block and the placeholders — `WorkloadExecutor` natively supports raw unparameterised SQL:
 

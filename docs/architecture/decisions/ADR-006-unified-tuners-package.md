@@ -3,19 +3,20 @@
 - Status: Accepted — copy-not-refactor invariant later superseded (see 2026-07-17 addendum)
 - Date: 2026-06-19
 - Relates to:
-  [`src/tuner`](../../src/tuner) (PBT),
-  [`src/scripts/bo_baseline`](../../src/scripts/bo_baseline) (BO),
-  and the new [`src/tuners`](../../src/tuners) package (LHS-design + shared core).
+  `src/tuner` (PBT) and `src/scripts/bo_baseline` (BO) — both since deleted,
+  and the new [`src/tuners`](../../../src/tuners) package (LHS-design + shared core).
 
 ## Context
 
 The project ships two configuration-tuning strategies today:
 
-1. **PBT** — Population-Based Training, in
-   [`src/tuner/main.py`](../../src/tuner/main.py) (`PBTTuner`).
+1. **PBT** — Population-Based Training, in `src/tuner/main.py` (`PBTTuner`).
 2. **BO** — a Bayesian Optimization baseline, in
-   [`src/scripts/bo_baseline/runner.py`](../../src/scripts/bo_baseline/runner.py)
-   (`BOBaselineRunner`).
+   `src/scripts/bo_baseline/runner.py` (`BOBaselineRunner`).
+
+*(Both paths are historical — see the 2026-07-17 and 2026-09-14 addenda. PBT now
+lives at [`src/tuners/pbt/`](../../../src/tuners/pbt) and BO at
+[`src/tuners/bo/`](../../../src/tuners/bo).)*
 
 Both classes independently re-implement an almost identical *lifecycle
 scaffold* around their genuinely different optimizer cores:
@@ -37,7 +38,7 @@ when `pg_settings` is unreachable, BO re-raises).
 
 We want to add a **third** strategy — a Latin Hypercube Sampling (LHS)
 *importance-design* tuner — without tripling the duplication. The research
-framing (see [`docs/guides/scalpel-rollout.md`](../../docs/guides/scalpel-rollout.md))
+framing (see [`docs/guides/scalpel-rollout.md`](../../guides/scalpel-rollout.md))
 is that SCALPEL applied to an LHS *design* over the knob space yields
 DBA-competitive tiers, whereas applied to PBT trajectory variance the signal
 is too narrow. The LHS tuner must run in parallel like PBT (barriers,
@@ -45,9 +46,9 @@ per-worker resources) and emit a schema-compatible session JSON.
 
 ## Decision
 
-Introduce a new top-level package, [`src/tuners`](../../src/tuners), that holds:
+Introduce a new top-level package, [`src/tuners`](../../../src/tuners), that holds:
 
-- **`BaseTuner`** ([`src/tuners/base.py`](../../src/tuners/base.py)) — an ABC
+- **`BaseTuner`** ([`src/tuners/base.py`](../../../src/tuners/base.py)) — an ABC
   encoding the invariant lifecycle as a concrete `run()` template method
   (Template Method pattern). It owns timing instrumentation, the generation
   loop, the teardown guard, and result assembly, and delegates the
@@ -68,7 +69,7 @@ Introduce a new top-level package, [`src/tuners`](../../src/tuners), that holds:
   - `calibration.py` — the global score-recalibration utilities (relocated
     here from the now-deleted `src/utils/rescoring.py`; see the 2026-06-22
     addendum). *(Later moved again to
-    [`src/utils/calibration.py`](../../src/utils/calibration.py) during the
+    [`src/utils/calibration.py`](../../../src/utils/calibration.py) during the
     2026-07 migration — see the 2026-07-17 addendum.)*
   - `session_writer.py` — `convert_numpy_types`, `build_session_header`, and
     the session/best-config write helpers.
@@ -100,8 +101,8 @@ The session JSON keeps `benchmark_name` as the **workload driver**
 (`"sysbench"` / `"tpch"` / custom) and adds `tuning_strategy`
 (`"pbt"` / `"bo"` / `"lhs"`) as a separate discriminator (see the prior
 `tuning_strategy` field migration). A session has exactly one of each. Loaders
-in [`src/analysis/data_loader.py`](../../src/analysis/data_loader.py) and
-[`src/evaluation/loader.py`](../../src/evaluation/loader.py) read the explicit
+in [`src/analysis/data_loader.py`](../../../src/analysis/data_loader.py) and
+[`src/evaluation/loader.py`](../../../src/evaluation/loader.py) read the explicit
 field and fall back to a path heuristic (`/pbt_runs/`, `/bo_runs/`,
 `/lhs_runs/`) for legacy files.
 
@@ -138,7 +139,7 @@ field and fall back to a path heuristic (`/pbt_runs/`, `/bo_runs/`,
 
 ## Addendum (2026-06-19): `LHSDesignTuner` — the first concrete strategy
 
-[`src/tuners/lhs_design/tuner.py`](../../src/tuners/lhs_design/tuner.py) is the first
+[`src/tuners/lhs_design/tuner.py`](../../../src/tuners/lhs_design/tuner.py) is the first
 concrete `BaseTuner`. It evaluates a **fixed** Latin Hypercube Sampling design
 over the knob space — no evolution, no exploit/explore, no perturbation:
 
@@ -155,7 +156,7 @@ over the knob space — no evolution, no exploit/explore, no perturbation:
    knob varies independently of performance. That independence is exactly what
    SCALPEL needs: applied to this design the per-knob importance signal is
    wide enough to tier; applied to PBT's optimization *trajectory* the variance
-   collapses (see [`docs/guides/scalpel-rollout.md`](../../docs/guides/scalpel-rollout.md)).
+   collapses (see [`docs/guides/scalpel-rollout.md`](../../guides/scalpel-rollout.md)).
 
 The tuner *composes* PBT's environment, orchestrator, and `Worker` machinery
 for the actual apply→run→measure step, but drives them through the
@@ -186,14 +187,14 @@ still holds.
 
 ### Strategy-agnostic CLI + profile registry
 
-[`src/tuners/cli.py`](../../src/tuners/cli.py) now owns the full strategy-agnostic
+[`src/tuners/cli.py`](../../../src/tuners/cli.py) now owns the full strategy-agnostic
 flag surface (Tuning Configuration, Workload Settings, Instance Management,
 Per-Worker Resources, Scoring & Normalization, Output & Logging). A new strategy
 entry point shrinks to *just* its own knobs (for LHS, only `--design-size`) plus a
 call to `add_common_groups`.
 
 The profile system mirrors PBT's two-layer model. `PROFILES` in
-[`src/tuners/utils/profiles.py`](../../src/tuners/utils/profiles.py) maps
+[`src/tuners/utils/profiles.py`](../../../src/tuners/utils/profiles.py) maps
 `--config` to a `TunerProfile` carrying the default worker count and a matched
 `BenchmarkConfig`; individual flags then override the profile under the
 "`None` means keep the profile default" convention. The profiles are
@@ -210,7 +211,7 @@ per-profile cadence (`snapshot_restore_interval`: rapid=10 / standard=5 /
 thorough=1 / research=1, numerically identical to PBT's restart cadence), so a
 fresh batch no longer inherits the drifted DB state left by the previous one. The
 CLI/profile choice is combined with the workload bundle's own decision via a
-logical AND in [`src/tuners/base.py`](../../src/tuners/base.py): a forced
+logical AND in [`src/tuners/base.py`](../../../src/tuners/base.py): a forced
 read-only / TPC-H auto-disable still wins, but otherwise the operator's
 `--enable-snapshots` / `--disable-snapshots` / `--snapshot-restore-interval`
 selection is honored.
@@ -224,7 +225,7 @@ PBT and BO already produce.
 ### Probe-disk diagnostics
 
 `--probe-disk` (default on) calibrates the per-worker disk I/O budget with a short
-`fio` probe. [`src/utils/hardware_info.py`](../../src/utils/hardware_info.py) now
+`fio` probe. [`src/utils/hardware_info.py`](../../../src/utils/hardware_info.py) now
 emits a WARNING when probing was requested but `fio` is absent, instead of
 silently falling back to the heuristic budget. That file is shared with PBT/BO but
 sits *outside* the copy-not-refactor boundary (it is not under `src/tuner/` or
@@ -238,7 +239,7 @@ The global score-recalibration utilities moved from the now-deleted
 all consumers repointed. PBT and BO remain unmodified. *(During the 2026-07
 migration the post-hoc recalibration pathway was removed from the tuner
 lifecycle entirely and this leaf relocated once more to
-[`src/utils/calibration.py`](../../src/utils/calibration.py) — see the
+[`src/utils/calibration.py`](../../../src/utils/calibration.py) — see the
 2026-07-17 addendum.)*
 
 ## Addendum (2026-07-17): copy-not-refactor invariant superseded — PBT migrated, `src/tuner/` deleted
@@ -254,22 +255,22 @@ left intact as the original decision.
 **What changed:**
 
 - **PBT is now a `BaseTuner` strategy.** `PBTTuner(BaseTuner)` lives at
-  [`src/tuners/pbt/tuner.py`](../../src/tuners/pbt/tuner.py). The PBT-specific
-  core relocated under [`src/tuners/pbt/`](../../src/tuners/pbt) —
+  [`src/tuners/pbt/tuner.py`](../../../src/tuners/pbt/tuner.py). The PBT-specific
+  core relocated under [`src/tuners/pbt/`](../../../src/tuners/pbt) —
   `population.py`, `evolution.py`, `config.py` (was `tuner_config.py`), and
   `worker.py` (`PBTWorker`).
 - **`Worker` was split.** The generic evaluation vehicle `BaseWorker` lives at
-  [`src/tuners/engine/worker.py`](../../src/tuners/engine/worker.py); PBT
+  [`src/tuners/engine/worker.py`](../../../src/tuners/engine/worker.py); PBT
   evolution mechanics (`is_ready`/`clone_from`/`perturb`) moved onto
   `PBTWorker(BaseWorker)` in `src/tuners/pbt/worker.py`.
 - **The engine layer is shared.** `orchestrator.py`, `barriers.py`,
   `restart_policy.py`, and `worker.py` sit under
-  [`src/tuners/engine/`](../../src/tuners/engine), with the former
+  [`src/tuners/engine/`](../../../src/tuners/engine), with the former
   `evaluate_worker` monolith decomposed into `activation.py`, `maintenance.py`,
   `feature_refinement.py`, `worker_metrics.py`, and `reliability_gate.py`.
 - **Foundation modules moved out of the PBT tree** (Phase 1): `knob_space.py`
-  and `knob_loader.py` → [`src/knobs/`](../../src/knobs); `workload.py` →
-  [`src/benchmarks/`](../../src/benchmarks).
+  and `knob_loader.py` → [`src/knobs/`](../../../src/knobs); `workload.py` →
+  [`src/benchmarks/`](../../../src/benchmarks).
 - **The legacy `src/tuner/` package is deleted.** Its entry point is gone;
   invoke PBT via the unified router `python -m src.tuners pbt ...` (or the
   direct door `python -m src.tuners.pbt ...`). References to
@@ -279,11 +280,11 @@ left intact as the original decision.
 
 ## Addendum (2026-09-14): BO migrated onto `BaseTuner`
 
-The "next arc" above is done. BO now lives at [`src/tuners/bo/`](../../src/tuners/bo)
+The "next arc" above is done. BO now lives at [`src/tuners/bo/`](../../../src/tuners/bo)
 as `BOTuner(BaseTuner)` and is invoked through the unified router
 `python -m src.tuners bo ...` (direct door `python -m src.tuners.bo ...`); the
 `src/scripts/bo_baseline/` package is gone. Session serialisation is the shared
-`write_bo_results` in [`session_writer.py`](../../src/tuners/utils/session_writer.py).
+`write_bo_results` in [`session_writer.py`](../../../src/tuners/utils/session_writer.py).
 Per `src/tuners/utils/types.py`, PBT, LHS-design, and BO have all been migrated
 onto this framework. The historical body above records the point-in-time state
 before this migration and is left intact.

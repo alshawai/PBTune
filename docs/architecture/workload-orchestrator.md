@@ -105,7 +105,7 @@ Field-by-field:
 | `db_config` | Base PostgreSQL credentials. The environment substitutes `host` / `port` per worker. |
 | `warmup_duration` | Seconds spent in B8 warmup before measurement. Default 30. |
 | `measurement_duration` | Seconds in the timed measurement window (B9). The only window that contributes to the score. Default 60. |
-| `cooldown_duration` | Quiescence period after `apply_config` and before warmup. Default 5. |
+| `cooldown_duration` | Quiescence period after `apply_configuration` and before warmup. Default 5. |
 | `tuning_mode` | `ONLINE` / `OFFLINE` / `ADAPTIVE` — see [Restart policy](#restart-policy-and-tuning-modes). |
 | `adaptive_restart_interval` | When `tuning_mode=ADAPTIVE`, restart every N generations even if no postmaster knob changed. |
 | `random_seed` | Propagated to the workload executor's RNG for deterministic query selection. |
@@ -261,7 +261,7 @@ The `schema` block is optional; without it the executor logs a warning and defau
 
 ### Real-database workloads
 
-`WorkloadExecutor` natively supports raw unparameterised SQL, so a workload file may omit both the `schema` block and the placeholders, and the orchestrator's apply / measure / score pipeline is unchanged. Note that the tuner does **not** clone an external database into the workers — every worker instance is provisioned locally and its schema comes from the benchmark's `SchemaProvider`. See [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot) for the current limits.
+`WorkloadExecutor` natively supports raw unparameterised SQL, so a workload file may omit both the `schema` block and the placeholders, and the orchestrator's apply / measure / score pipeline is unchanged. Note that the tuner does **not** clone an external database into the workers — every worker instance is provisioned locally and its schema comes from the benchmark executor's `prepare()`. See [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot) for the current limits.
 
 ---
 

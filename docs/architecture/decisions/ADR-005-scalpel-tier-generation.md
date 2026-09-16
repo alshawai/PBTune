@@ -3,11 +3,11 @@
 - Status: Accepted
 - Date: 2026-06-18
 - Supersedes: silhouette + Jenks tier generation in
-  [`src/analysis/tier_generator.py`](../../src/analysis/tier_generator.py).
+  [`src/analysis/tier_generator.py`](../../../src/analysis/tier_generator.py).
 
 ## Context
 
-Until June 2026, [`tier_generator.generate_tiers`](../../src/analysis/tier_generator.py)
+Until June 2026, [`tier_generator.generate_tiers`](../../../src/analysis/tier_generator.py)
 partitioned PostgreSQL knobs into the canonical
 `{minimal, core, standard, extensive}` tier system by:
 
@@ -45,7 +45,7 @@ stability-audited.
 Replace silhouette + Jenks with **SCALPEL** —
 **S**ignificance-**C**overage-stability **A**lgorithm for **L**ayered
 **PE**rformance-knob **L**abeling. SCALPEL runs in
-[`src/analysis/scalpel.py`](../../src/analysis/scalpel.py) and consists
+[`src/analysis/scalpel.py`](../../../src/analysis/scalpel.py) and consists
 of three layers wrapped around a shared Random Forest surrogate:
 
 1. **Layer 1 — Significance gate.** A BORUTA-style selector with shadow
@@ -72,7 +72,7 @@ Two upstream defenses keep the algorithm honest:
 
 - A **nuisance filter** drops display/auth/observability knobs from
   consideration before any modelling. The exact-name and prefix lists
-  live in [`data/knob_policy.json`](../../data/knob_policy.json) under
+  live in [`data/knob_policy.json`](../../../data/knob_policy.json) under
   `IMPORTANCE_NUISANCE_EXCLUSIONS` and `IMPORTANCE_NUISANCE_PREFIXES`,
   with an operator-overridable allow-list.
 - A **DBA-prior audit** flags expert-`minimal` knobs that did not land
@@ -114,7 +114,7 @@ Trade-offs:
   knobs land in `tentative` or `rejected` on a noisy workload. SCALPEL
   treats this as a degenerate-result signal and emits empty
   `core`/`standard` tiers; downstream
-  [`knob_loader`](../../src/knobs/knob_loader.py) walks down to
+  [`knob_loader`](../../../src/knobs/knob_loader.py) walks down to
   the next broader tier with a warning rather than crashing the tuner.
 - Output paths under `results/sessions/<workload>/pbt/<tier>/` for
   `--knob-source data_driven` runs are now suffixed with
@@ -162,7 +162,7 @@ The downstream JSON schema and Python API surface are preserved:
   `metadata.algorithm = "scalpel-v1"`, `metadata.scalpel_version`,
   `metadata.diagnostics`. The `extensive: null` convention still means
   "every tunable knob"; downstream
-  [`get_knobs_by_tier`](../../src/knobs/knob_metadata.py) continues to
+  [`get_knobs_by_tier`](../../../src/knobs/knob_metadata.py) continues to
   accumulate `minimal ⊂ core ⊂ standard` at read time.
 - `tier_generator.generate_tiers(marginal_importances, workload_label)`
   keeps its legacy signature. Internally it now delegates to the
@@ -194,9 +194,9 @@ in `tests/unit/analysis/test_tier_generator.py` were rewritten to
 assert SCALPEL invariants.
 
 For the rollout playbook, see
-[../../docs/guides/scalpel-rollout.md](../guides/scalpel-rollout.md)
+[../../docs/guides/scalpel-rollout.md](../../guides/scalpel-rollout.md)
 and the reference at
-[../../docs/reference/scalpel-diagnostics.md](../reference/scalpel-diagnostics.md).
+[../../docs/reference/scalpel-diagnostics.md](../../reference/scalpel-diagnostics.md).
 
 ## Addendum (v1.1) — stability calibration + parallelization
 

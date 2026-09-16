@@ -1506,7 +1506,7 @@ tests/integration/test_cross_dbms.py
 2. Configure `local_infile=ON` for TPC-H data loading
 3. Create PBT user and database
 4. Set environment variables (`PBT_DBMS=mysql`, `DB_PORT=3306`, etc.)
-5. Run knob preprocessing pipeline: `python -m src.knobs --dbms mysql`
+5. Run knob preprocessing pipeline: `python -m src.knobs.preprocess_knobs --dbms mysql` (the `--dbms` flag is part of this proposal; today the module takes a CSV path)
 6. Run PBT: `python -m src.tuner --dbms mysql --workload sysbench`
 
 ---

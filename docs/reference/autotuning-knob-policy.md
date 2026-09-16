@@ -128,7 +128,7 @@ the already-annotated dataframe.
    }
    ```
 
-4. Update the knob's row in the [full inventory](#5-full-knob-decision-inventory-all-397) below: set Decision to
+4. Update the knob's row in the [full inventory](#5-full-knob-decision-inventory) below: set Decision to
    `Exclude`, and fill in the Reason Code and Reason columns.
 5. Run the preprocessing pipeline and confirm the exclusion count increases by 1:
 

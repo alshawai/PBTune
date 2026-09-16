@@ -7,7 +7,7 @@ Consolidated reference for every command-line flag across all six user-facing en
 
 ```text
 python -m src.tuners pbt                 # tuning sessions (PBT)
-python -m src.tuners                      # LHS-design importance-sampling tuner
+python -m src.tuners lhs                 # LHS-design importance-sampling tuner
 python -m src.evaluation                 # post-hoc default-vs-tuned comparison
 python -m src.tuners bo                  # SMAC3 Bayesian-Optimisation baseline
 python -m src.scripts.pbt_vs_bo_comarison  # cross-method comparison
