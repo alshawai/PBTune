@@ -182,7 +182,7 @@ Bare-metal is sufficient when:
 It is **not** sufficient for:
 
 - Comparing PBT against the BO baseline. Both methods need identical resource constraints; only Docker enforces them.
-- Multi-seed campaigns whose results will appear in a paper. The `comparison_metadata.evaluation_environment` field will record `bare-metal-fallback` and the post-hoc evaluation suite will mark the run as reduced-isolation.
+- Multi-seed campaigns whose results will appear in a paper. The `comparison_metadata.evaluation_environment` field will record `bare-metal` and the post-hoc evaluation suite will mark the run as reduced-isolation.
 
 The factory emits a banner-style warning whenever it returns a bare-metal environment so the user notices the regression.
 

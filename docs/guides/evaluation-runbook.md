@@ -167,12 +167,12 @@ For each run, verify the generated comparison JSON includes:
 - `comparison_metadata.repetitions`
 - `comparison_metadata.evaluation_environment`
 - `comparison_metadata.resource_constraints`
-- `comparison_metadata.scoring_policy`
-- `comparison_metadata.scoring_policy_version`
-- `comparison_metadata.metric_reference_version`
-- `comparison_metadata.workload_features`
-- `comparison_metadata.normalization_metadata`
-- `comparison_metadata.score_breakdown`
+- `session_info.scoring_policy`
+- `session_info.scoring_policy_version`
+- `session_info.metric_reference_version`
+- `session_scoring_metadata.workload_features`
+- `session_scoring_metadata.normalization_metadata`
+- `session_scoring_metadata.score_breakdown`
 - `comparison_metadata.reproducibility.python_version`
 - `comparison_metadata.reproducibility.postgres_version`
 - `comparison_metadata.reproducibility.docker_image` (when Docker mode is used)
@@ -198,10 +198,12 @@ For each run, verify the generated comparison JSON includes:
 ## Statistical Endpoint Policy
 
 - Primary endpoint: `score` tested at $\alpha = 0.05$ (no family correction).
-- Secondary endpoint family: benchmark latency endpoint + throughput +
-  memory utilization.
-  - Sysbench secondary latency endpoint: `latency_p95`.
-  - TPC-H secondary latency endpoint: `latency_p99`.
+- Secondary endpoint family (4 endpoints, Holm-corrected): `throughput`,
+  `latency_p99`, `memory_pressure`, `scan_efficiency`. The family is fixed —
+  it does not vary by benchmark.
+- Reported but never tested (5): `latency_p95`, `latency_p50`, `error_rate`,
+  `tail_amplification`, `latency_variance`. These carry `endpoint_role="reported"`
+  and no p-value of record.
 - Secondary p-values use Holm correction.
 - Score comparisons should be interpreted with the recorded scoring policy and
   policy version from the comparison JSON when comparing results across runs.

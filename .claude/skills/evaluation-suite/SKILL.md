@@ -21,7 +21,7 @@ PBT-tuned config vs. default PostgreSQL config.
 ```
 python -m src.evaluation --session <path> [--repetitions N] [--no-docker]
     │
-    ├── SessionLoader.load()           → ComparisonConfig
+    ├── load_tuning_session(path)      → TuningSessionData
     │   ├── Parse best_config from session JSON
     │   ├── Extract scoring metadata (policy, version)
     │   └── Detect benchmark type (sysbench/tpch)
@@ -34,9 +34,9 @@ python -m src.evaluation --session <path> [--repetitions N] [--no-docker]
     │   │   └── Collect PerformanceMetrics
     │   └── Return paired RunResult lists
     │
-    └── StatisticalAnalyzer.analyze()
+    └── compute_comparison_statistics()
         ├── Wilcoxon signed-rank test (primary)
-        ├── Bootstrap confidence intervals (BCa, 10000 resamples)
+        ├── Bootstrap confidence intervals (percentile, 10000 resamples)
         ├── Holm-Bonferroni correction for secondary endpoints
         ├── Cohen's d effect size
         └── Generate ComparisonReport JSON
@@ -59,12 +59,20 @@ Docker containers use `docker/eval.Dockerfile` with pre-installed sysbench + TPC
 - **α**: 0.05 (two-sided)
 
 ### Secondary Endpoints (Holm-corrected)
-- Latency P95, Throughput, Error Rate
-- Each gets Wilcoxon test with Holm-Bonferroni α correction
+Four endpoints, fixed regardless of benchmark: `throughput`, `latency_p99`,
+`memory_pressure`, `scan_efficiency` (`_SECONDARY_ENDPOINTS`). Curated to metrics that
+are genuinely measured and are not monotone restatements of one another.
+- Each gets a Wilcoxon test with Holm-Bonferroni α correction
+
+### Reported Endpoints (never hypothesis-tested)
+`latency_p95`, `latency_p50`, `error_rate`, `tail_amplification`, `latency_variance`
+(`_REPORTED_ENDPOINTS`). They appear in the summary table and JSON with
+`endpoint_role="reported"` and carry no p-value of record — near-constant on healthy
+runs, highly correlated with a tested endpoint, or niche restatements.
 
 ### Effect Size
 - **Cohen's d**: standardized mean difference
-- **Bootstrap CI**: BCa method, 10,000 resamples, 95% confidence
+- **Bootstrap CI**: percentile method, 10,000 resamples, 95% confidence
 
 ### Minimum Repetitions
 - 5 reps (default) — minimum for Wilcoxon test validity
@@ -72,17 +80,17 @@ Docker containers use `docker/eval.Dockerfile` with pre-installed sysbench + TPC
 
 ## Session Loading & Compatibility
 
-The loader handles legacy sessions without scoring-v2 metadata by applying
-compatibility defaults:
+The loader fills any scoring metadata a session omits with the current default
+constants from `src/utils/scoring/constants.py`:
 ```
-scoring_policy = "fixed_v1"
-scoring_policy_version = "1.0"
-metric_reference_version = "v1"
+scoring_policy = "feature_driven_v2"
+scoring_policy_version = "2.0"
+metric_reference_version = "v2"
 ```
 
-For new runs, the active default is `feature_driven_v2`; `fixed_v1` is retained
-for compatibility with legacy sessions. The loader is also tolerant of the v1.1
-session/timing JSON schema (see `docs/reference/session-json-schema.md`).
+`fixed_v1` is retained only for sessions that name it explicitly. The loader is also
+tolerant of the v1.1 session/timing JSON schema (see
+`docs/reference/session-json-schema.md`).
 
 The evaluation CLI supports policy override for re-evaluation:
 ```bash
@@ -121,19 +129,43 @@ Benchmark parameters (auto-detected from session, override only when needed):
 JSON report saved to `results/comparisons/{workload}/{tier}/`:
 ```json
 {
-  "session_file": "...",
-  "benchmark": "sysbench",
-  "repetitions": 5,
-  "environment": "docker",
-  "default_results": [...],
-  "tuned_results": [...],
+  "comparison_metadata": {
+    "timestamp": "...",
+    "tuning_session_path": "...",
+    "benchmark": "sysbench",
+    "repetitions": 5,
+    "evaluation_environment": "docker",
+    "benchmark_parameters": { ... },
+    "resource_constraints": { ... },
+    "reproducibility": { ... }
+  },
+  "tuned_knobs":  { ... },
+  "default_runs": [ RunResult, ... ],
+  "tuned_runs":   [ RunResult, ... ],
   "statistics": {
-    "primary": { "statistic": ..., "p_value": ..., "effect_size": ... },
-    "secondary": { ... },
-    "bootstrap_ci": { "lower": ..., "upper": ... }
-  }
+    "metrics": [ MetricComparison, ... ],
+    "alpha": 0.05,
+    "primary_endpoint": "score",
+    "primary_significant": true,
+    "secondary_endpoints": [ ... ],
+    "secondary_correction_method": "holm",
+    "n_pairs": 5,
+    "power_warning": null,
+    "overall_improvement_pct": ...,
+    "overall_improvement_ci": [ ..., ... ]
+  },
+  "scoring_metadata":         { ... },
+  "session_info":             { ... },
+  "session_scoring_metadata": { ... },
+  "system_info":              { ... }
 }
 ```
+
+`statistics.metrics` is a JSON **list**, one `MetricComparison` per endpoint — not a
+map keyed by metric name. Each entry carries `metric_name`, `default`/`tuned`
+(`StatSummary` with `mean`/`std`/`median`/`iqr_lower`/`iqr_upper`/`n`/`values`),
+`improvement_pct`, `improvement_ci`, `p_value`, `p_value_corrected`, `cohens_d`,
+`significant`, `higher_is_better`, `endpoint_role` and `correction_method`.
 
 ## Code Locations
 
@@ -150,7 +182,7 @@ JSON report saved to `results/comparisons/{workload}/{tier}/`:
 
 ## Common Pitfalls
 
-1. **Scoring policy mismatch**: If the session used `feature_driven_v2` but evaluation defaults to `fixed_v1`, scores won't be comparable — check session metadata
+1. **Scoring policy mismatch**: The loader defaults a session's missing scoring metadata to `feature_driven_v2`/`2.0`/`v2`, so a genuinely legacy `fixed_v1` session must name its policy explicitly or its scores will be read under the wrong policy — check session metadata
 2. **Insufficient repetitions**: Wilcoxon requires ≥5 paired observations; <10 gives wide CIs
 3. **Bare-metal noise**: Background processes inflate variance — always prefer Docker for publication results
 4. **Fresh containers**: Each run MUST start from a clean state; reusing containers introduces warm-cache bias

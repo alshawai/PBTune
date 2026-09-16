@@ -164,7 +164,8 @@ src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
 ├── exceptions.py        # Domain-specific exception hierarchy
 └── __main__.py          # CLI: python -m src.evaluation
 
-src/analysis/            # data_loader, importance, hardware_validator, tier_generator, timing_breakdown
+src/analysis/            # data_loader, importance, hardware_validator, tier_generator, timing_breakdown,
+                         # scalpel + scalpel_significance + scalpel_stability (SCALPEL tiering)
 src/database/            # connection, data_loader, management
 src/knobs/               # knob_space, knob_loader, knob_metadata, retrieval, preprocess_knobs, policy
 src/benchmarks/          # executor + sysbench/ + tpch/

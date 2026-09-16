@@ -158,7 +158,7 @@ The five scoring-related top-level keys (`scoring_policy`, `scoring_policy_versi
 | `total_time_seconds` | float | Wall-clock duration (bootstrap + tuning). |
 | `tuning_time_seconds` | float | Measurement-loop wall-clock only (excludes bootstrap). *added in timing-schema v1.0* |
 | `bootstrap_seconds` | float | Bootstrap wall-clock only. *added in timing-schema v1.0* |
-| `timing_schema_version` | str | `"1.0"` from 2026-06 onwards; absent in legacy sessions. |
+| `timing_schema_version` | str | `"1.1"` (current) from 2026-06 onwards; absent in legacy sessions. |
 | `timestamp` | str | `YYYYMMDD_HHMM`. |
 | `workload_features` | object | Workload feature vector (mirrored at top level). |
 
@@ -183,7 +183,7 @@ The five scoring-related top-level keys (`scoring_policy`, `scoring_policy_versi
 }
 ```
 
-`score` is in `[0, 1]` for v2 sessions, on `[0, 100]` for legacy `fixed_v1` sessions with the historical scaling factor. Always check `scoring_policy` before interpreting the magnitude.
+`score` is on `[0, 100]` for v2 sessions — `CompositeScorer.compute_breakdown()` multiplies the weighted-utility total by `100.0` ([`scorer.py`](../../src/utils/scoring/scorer.py)) — and in `[0, 1]` for legacy `fixed_v1` sessions written before that scaling. Always check `scoring_policy` before interpreting the magnitude.
 
 `knobs` keys are the post-`verify()` quantised values PostgreSQL actually ran with — not the optimiser's suggestion.
 
@@ -212,7 +212,7 @@ Older sessions may have an empty `workload_features: {}` — the loader falls ba
 
 ### `normalization_metadata`
 
-Snapshot of the `QuantileUtilityNormalizer` state at the end of the session, used by the post-hoc rescoring helper in [`src/tuners/utils/calibration.py`](../../src/tuners/utils/calibration.py).
+Snapshot of the `QuantileUtilityNormalizer` state at the end of the session, used by the post-hoc rescoring helper in [`src/utils/calibration.py`](../../src/utils/calibration.py).
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -335,8 +335,7 @@ Produced by `python -m src.evaluation`. The full schema:
   "tuned_knobs":           { ... },
   "default_runs":          [ RunResult, ... ],
   "tuned_runs":            [ RunResult, ... ],
-  "statistics":            { ... },
-  "power_warning":         "..." | null,
+  "statistics":            { ... },   // "power_warning" is nested INSIDE statistics
   "system_info":           { ... }
 }
 ```
@@ -351,9 +350,8 @@ Produced by `python -m src.evaluation`. The full schema:
 | `benchmark` | str | Sysbench / TPC-H. |
 | `repetitions` | int | Number of paired (default, tuned) runs. |
 | `pair_seed_base` | int | Repetition `i` uses `pair_seed_base + i - 1`. |
-| `evaluation_environment` | str | `"docker"` or `"bare-metal-fallback"`. |
+| `evaluation_environment` | str | `"docker"` or `"bare-metal"`. |
 | `resource_constraints` | object | Per-worker `ram_bytes`, `cpu_cores`, `disk_type`. |
-| `scoring_policy_override` | str \| null | If the user passed `--scoring-policy` to override the session's policy. |
 | `reproducibility` | object | `python_version`, `postgres_version`, `docker_image`, `python_package_versions`, `benchmark_binary_paths`. |
 
 ### `default_runs[]` and `tuned_runs[]`
@@ -362,12 +360,14 @@ Each element is a `RunResult` ([`src/evaluation/types.py`](../../src/evaluation/
 
 ```json
 {
-  "repetition": 0,
-  "seed": 50000,
+  "config_type": "tuned",
+  "run_number": 1,
+  "pair_seed": 50000,
+  "order_in_pair": 2,
   "metrics": { "latency_p50": ..., "latency_p95": ..., "throughput": ..., ... },
-  "score": 0.7821,
-  "wall_clock_seconds": 91.4,
-  "score_breakdown": { ... }
+  "score": 78.21,
+  "duration_seconds": 91.4,
+  "container_id": "..."
 }
 ```
 
@@ -380,14 +380,15 @@ The arrays are length-`repetitions`. Pair `i` of `default_runs[i]` and `tuned_ru
   "alpha": 0.05,
   "primary_endpoint": "score",
   "primary_significant": true,
-  "secondary_endpoints": ["latency_p95", "throughput", "memory_utilization"],
+  "secondary_endpoints": ["throughput", "latency_p99", "memory_pressure", "scan_efficiency"],
   "secondary_correction_method": "holm",
-  "metrics": {
-    "score": MetricComparison,
-    "latency_p95": MetricComparison,
-    "throughput": MetricComparison,
-    "memory_utilization": MetricComparison
-  }
+  "correction_method": "holm_secondary",
+  "n_pairs": 5,
+  "power_warning": "..." ,
+  "significant_metrics": ["score"],
+  "overall_improvement_pct": ...,
+  "overall_improvement_ci": [low, high],
+  "metrics": [ MetricComparison, MetricComparison, ... ]
 }
 ```
 
@@ -395,20 +396,22 @@ Each `MetricComparison`:
 
 ```json
 {
-  "default": { "mean": ..., "std": ..., "median": ..., "p25": ..., "p75": ..., "n": 5 },
-  "tuned":   { "mean": ..., "std": ..., "median": ..., "p25": ..., "p75": ..., "n": 5 },
-  "delta_mean": ...,
-  "delta_median": ...,
-  "pct_change": ...,
-  "wilcoxon_p": 0.0234,
-  "wilcoxon_p_corrected": 0.0468,
-  "bootstrap_ci_median": [low, high],
+  "metric_name": "score",
+  "default": { "mean": ..., "std": ..., "median": ..., "iqr_lower": ..., "iqr_upper": ..., "values": [...] },
+  "tuned":   { "mean": ..., "std": ..., "median": ..., "iqr_lower": ..., "iqr_upper": ..., "values": [...] },
+  "improvement_pct": ...,
+  "improvement_ci": [low, high],
+  "p_value": 0.0234,
+  "p_value_corrected": 0.0468,
   "cohens_d": 1.23,
-  "significant": true
+  "significant": true,
+  "higher_is_better": true,
+  "endpoint_role": "primary",
+  "correction_method": null
 }
 ```
 
-The primary endpoint's `wilcoxon_p` is uncorrected. Secondary endpoints' `wilcoxon_p_corrected` is Holm-adjusted across the secondary family. See [evaluation-suite §Statistical analysis](../architecture/evaluation-suite.md#statistical-analysis) for the methodology.
+The primary endpoint's `p_value` is uncorrected (its `p_value_corrected` equals `p_value`). Secondary endpoints' `p_value_corrected` is Holm-adjusted across the secondary family. See [evaluation-suite §Statistical analysis](../architecture/evaluation-suite.md#statistical-analysis) for the methodology.
 
 ### `scoring_metadata` vs `session_scoring_metadata`
 
@@ -492,7 +495,6 @@ There's no direct lineage field; lineage has to be reconstructed from `worker_co
 | `worker_resources` | hardware-aware-normalization | Absent in earliest sessions. |
 | `tuning_session.num_parallel_workers` | parallel-worker isolation | Absent in earliest sessions. |
 | `tuning_session.enable_snapshots` | snapshot lifecycle | Absent in earliest sessions. |
-| `comparison_metadata.scoring_policy_override` | scoring policy override flag | Absent in older comparisons. |
 | `comparison_metadata.reproducibility` | reproducibility checklist | Absent in older comparisons. |
 | `tuning_session.timing_schema_version` | timing-instrumentation v1.0 (current value `"1.1"`) | Absent in pre-2026-06 sessions; loader treats absence as `"0.0"`. |
 | `tuning_session.tuning_time_seconds`, `bootstrap_seconds` | timing-instrumentation v1.0 | Absent in pre-2026-06 sessions. |

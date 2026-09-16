@@ -79,35 +79,38 @@ The CLI auto-discovers plot modules: importing `src.visualization.plots` trigger
 
 **Location**: [src/visualization/registry.py](../../src/visualization/registry.py)
 
-The registry tracks every figure by a stable string ID along with its category, paper section, default loader, and renderer.
+The registry tracks every figure by a stable string ID along with its category, paper section, generator, and data requirements.
 
 ```python
 @dataclass
 class FigureSpec:
     fig_id: str
+    paper_label: str
     title: str
-    category: str
     section: str
-    loader: Callable[[Path], Any]
-    renderer: Callable[[Theme, Any, OutputDir], Path]
-    formats: list[ExportFormat]
-    venue_overrides: Optional[dict[str, Any]] = None
+    category: str
+    size_hint: str            # "single" or "double" column
+    generator: Callable       # produces AND exports the figure
+    data_requirements: list[str]  # e.g. ["session_json"]
+    description: str
 ```
 
 A plot module registers itself at import time:
 
 ```python
-from src.visualization.registry import REGISTRY
-from src.visualization.types import FigureSpec, ExportFormat
+from src.visualization.registry import register_figure
+from src.visualization.types import FigureSpec
 
-REGISTRY.register(FigureSpec(
+register_figure(FigureSpec(
     fig_id="knob_importance",
-    title="Per-knob fANOVA + TreeSHAP importance",
+    paper_label="fig:importance",
+    title="Knob importance overview",
+    section="analysis",
     category="importance",
-    section="results",
-    loader=load_importance_results,
-    renderer=render_knob_importance,
-    formats=[ExportFormat.PDF, ExportFormat.PNG],
+    size_hint="single",
+    generator=generate_knob_importance,
+    data_requirements=["session_json"],
+    description="fANOVA bars with SHAP beeswarm (top 10 knobs).",
 ))
 ```
 
@@ -147,22 +150,22 @@ class PBTuneTheme:
         "preview":  VenuePreset(name="preview",  ...),
     }
 
-    def figure(self, size: FigureSize, **kwargs) -> Figure: ...
-    def style_axes(self, ax: Axes, ...) -> None: ...
-    def colorblind_palette(self) -> list[str]: ...
+    def rc_params(self) -> dict[str, Any]: ...
+    def figure(self, size_hint: str = "single", aspect=None, **kwargs) -> tuple[Figure, Axes]: ...
+    def subplots(self, nrows, ncols, size_hint="single", aspect=None, **kwargs) -> tuple[Figure, Any]: ...
 
     @contextmanager
-    def temporary_overrides(self, **rcparams) -> Iterator[None]: ...
+    def apply(self) -> Iterator[None]: ...
 ```
 
 The theme owns:
 
-- **Figure sizing** — single-column / double-column widths are venue-specific and the renderer must request a `FigureSize` (one of `SINGLE_COL`, `DOUBLE_COL`, `SQUARE`, `WIDE_SHORT`).
+- **Figure sizing** — single-column / double-column widths are venue-specific. A generator requests a size by hint (`theme.figure(size_hint="single")` or `"double"`), which the theme resolves into a `FigureSize` — a frozen `width_in` / `height_in` dataclass built via `FigureSize.single_column(...)` / `FigureSize.double_column(...)`.
 - **Typography** — base font size + family. With `use_latex=True` the theme switches to LaTeX rendering for all text; the resulting PDFs embed Type 1 fonts compatible with PVLDB / Springer requirements.
-- **Color palette** — the colorblind-friendly palette from [src/visualization/colors.py](../../src/visualization/colors.py). Renderers should use `theme.colorblind_palette()` rather than picking colors directly.
+- **Color palette** — the colorblind-friendly palette from [src/visualization/colors.py](../../src/visualization/colors.py). Generators should pull colors from `colors.py` (e.g. `get_method_style()` / `METRIC_COLORS`) rather than picking colors directly.
 - **Axes styling** — uniform tick formatting, spine styles, grid behaviour.
 
-Renderers should never mutate `plt.rcParams` directly. `theme.temporary_overrides(...)` is the escape hatch for one-off tweaks.
+Generators should never mutate `plt.rcParams` directly. `with theme.apply():` installs the theme's rcParams for the plotting block and restores them on exit.
 
 ---
 
@@ -201,11 +204,11 @@ Convergence and Pareto plots for the PBT-vs-BO comparison are produced by [`src/
 
 ## Adding a new figure
 
-1. **Create a loader** under `src/visualization/loaders/`. Return a dataclass; do not pass raw dicts into renderers.
+1. **Create a loader** under `src/visualization/loaders/`. Return a dataclass; do not pass raw dicts into generators.
 2. **Create a plot module** under `src/visualization/plots/`. The module must:
-   - import `REGISTRY` and `FigureSpec`,
-   - define a `render_<your_figure>(theme, data, output_dir) -> Path` function that uses `theme.figure(size=...)` and `theme.style_axes(...)`,
-   - call `REGISTRY.register(FigureSpec(...))` at module top level.
+   - import `register_figure` and `FigureSpec`,
+   - define a `generate_<your_figure>(*, data_dir, output_dir, theme, formats) -> None` function that loads its data, opens a `with theme.apply():` block, sizes figures via `theme.figure(size_hint=...)` / `theme.subplots(...)`, and writes them with `export_figure(...)`,
+   - call `register_figure(FigureSpec(...))` at module top level.
 3. Run `python -m src.visualization --list` to confirm registration.
 4. Run `python -m src.visualization --figure <your_id> --venue preview` to iterate quickly without LaTeX.
 

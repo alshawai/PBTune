@@ -2,11 +2,12 @@
 name: knob-importance-analysis
 description: >
   Post-hoc knob importance analysis using fANOVA and TreeSHAP, data-driven tier
-  generation via Jenks Natural Breaks, and hardware-aware importance validation
-  across multiple physical machines. Use this skill when working on knob importance
-  analysis, fANOVA, SHAP values, tier generation, importance ranking, cross-hardware
-  validation, or designing the analysis pipeline for determining which PostgreSQL
-  knobs matter most for performance tuning.
+  generation via SCALPEL (group-permutation BORUTA + Benjamini-Hochberg FDR gate,
+  Lorenz coverage cuts, cluster-resampled stability), and hardware-aware importance
+  validation across multiple physical machines. Use this skill when working on knob
+  importance analysis, fANOVA, SHAP values, tier generation, importance ranking,
+  cross-hardware validation, or designing the analysis pipeline for determining which
+  PostgreSQL knobs matter most for performance tuning.
 ---
 
 # Knob Importance Analysis
@@ -70,18 +71,20 @@ Minimal (5) → Core (13) → Standard (43) → Extensive (170) with boundaries
 set by domain expertise. These serve as the default until data-driven tiers
 are validated.
 
-### Future State: Data-Driven Tiers
-1. Run fANOVA importance analysis → sorted importance scores
-2. Apply silhouette score across k = 2..6 to find the optimal number of tiers for scientific analysis reporting.
-3. Apply Jenks Natural Breaks with optimal k on the final importances for export.
-4. **Canonical Projection:** Regardless of optimal k, the final export projects the data-driven tiers onto the 4 canonical names (`minimal`, `core`, `standard`, `extensive`) expected by the tuner.
+### Data-Driven Tiers via SCALPEL
+1. Run fANOVA + TreeSHAP importance analysis → fused, sorted importance scores
+2. Confirm the signal-carrying knobs with a group-permutation BORUTA significance gate (Benjamini-Hochberg FDR, q = 0.10)
+3. Partition the confirmed knobs with Lorenz coverage cuts (50 % / 80 % of cumulative importance), validated by a cluster-resampled stability pass
+4. **Canonical Projection:** the export projects the resulting tiers onto the 4 canonical names (`minimal`, `core`, `standard`, `extensive`) expected by the tuner.
 5. Export to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json` via `--export-tiers [PATH]` option on the CLI.  Each workload writes to its own subdirectory, so runs for different workloads never overwrite each other.
+
+SCALPEL is implemented and live in `src/analysis/scalpel.py` (+ `scalpel_significance.py`, `scalpel_stability.py`); it superseded the earlier Jenks Natural Breaks + silhouette pipeline. Tier slugs carry the `@scalpel-v1` suffix. See [ADR-005](../../../docs/architecture/decisions/ADR-005-scalpel-tier-generation.md).
 
 
 ## Two-Dimensional Analysis Architecture
 
 ### Dimension 1: Workload DEFINES Tiers
-- Per-workload fANOVA ranking → Jenks clustering → tier definitions
+- Per-workload fANOVA ranking → SCALPEL tiering (BORUTA + BH-FDR gate → Lorenz coverage cuts → cluster-resampled stability) → tier definitions
 - OLTP and OLAP WILL produce different tier memberships
 - Example: `random_page_cost` may be critical for OLAP but irrelevant for OLTP
 

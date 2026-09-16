@@ -107,7 +107,10 @@ CLI args (src.tuners pbt → pbt/cli.py)
 | `data_loader.py` | Load/normalize PBT session results for analysis |
 | `importance.py` | fANOVA + TreeSHAP knob importance analysis |
 | `hardware_validator.py` | Cross-hardware importance stability checks |
-| `tier_generator.py` | Data-driven tier generation (Jenks Natural Breaks) |
+| `tier_generator.py` | Tier writer/adapter — `export_data_driven_tiers()`, delegates to SCALPEL with a Lorenz fallback |
+| `scalpel.py` | SCALPEL tiering pipeline entry point (superseded Jenks Natural Breaks) |
+| `scalpel_significance.py` | Group-permutation BORUTA + Benjamini-Hochberg FDR gate (q = 0.10) |
+| `scalpel_stability.py` | Lorenz coverage cuts + cluster-resampled stability pass |
 | `timing_breakdown.py` | Aggregates v1.1 timing records to LaTeX/CSV |
 
 ### `src/visualization/` — Publication Figures (entry: `python -m src.visualization`)
