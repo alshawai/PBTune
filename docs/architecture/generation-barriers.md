@@ -85,7 +85,7 @@ Internally this is a loop of `barrier.wait()` calls — it does not break the ba
 
 ### `abort()`
 
-Instantly breaks every barrier (raises `BrokenBarrierError` on all current and future waiters) and marks subsequent `wait()` calls as no-ops. Called from the population layer when a worker is confirmed dead/stuck (e.g. its `DatabaseEnvironment.is_alive()` returns `False`). Unlike `drain_remaining`, `abort()` does *not* try to honour the protocol — it tears down the whole synchronization mechanism for the generation.
+Instantly breaks every barrier (raises `BrokenBarrierError` on all current and future waiters) and marks subsequent `wait()` calls as no-ops. In the PBT path it is called from exactly one place: the `except` clause around `future.result()` in [`Population.evaluate_generation()`](../../src/tuners/pbt/population.py) — i.e. when a worker thread's evaluation *raises*. Unlike `drain_remaining`, `abort()` does *not* try to honour the protocol — it tears down the whole synchronization mechanism for the generation.
 
 ### `reset()`
 
@@ -140,9 +140,11 @@ except Exception:
 
 Now this worker has "arrived" at B7, B8, B9, …, B17 from the barrier's point of view. Peers can finish their generation; the failing worker propagates the exception up to the population layer, which logs it and lets `rescue_dead_workers()` handle the recovery on the next generation boundary.
 
-### Path 3 — true hang (`abort`)
+### Path 3 — raised exception reaches the population (`abort`)
 
-If a worker thread is stuck (e.g. PostgreSQL is unresponsive and even the failure path doesn't return), peers will block forever at the next barrier. The population layer's health checker — `DatabaseEnvironment.is_alive(worker_id)` — runs on its own thread; when it confirms a worker is dead, the population calls `barriers.abort()`. Every waiter immediately receives `BrokenBarrierError`, the orchestrator catches it, every per-worker thread exits its evaluation, and the generation ends with a `rescue_dead_workers()` call.
+When a worker's evaluation raises and the exception propagates out of `evaluate_worker` to the population's `future.result()`, the population calls `barriers.abort()`. Every waiter immediately receives `BrokenBarrierError`, the orchestrator catches it, every per-worker thread exits its evaluation, and the generation ends with a `rescue_dead_workers()` call.
+
+**Gap — a true hang is not covered.** There is no health-check thread and no `DatabaseEnvironment.is_alive()`; neither exists in the codebase. If a worker thread is stuck such that it never raises (PostgreSQL unresponsive and even the failure path doesn't return), nothing outside that thread can trip the abort, and its peers block at the next barrier indefinitely. Liveness probing exists only as the synchronous `environment.verify_instances()`, called during setup and recovery — never on a background poller. Bounding hang time would need either a per-barrier timeout (rejected, see below) or a genuine out-of-band liveness thread (not implemented).
 
 ---
 
@@ -190,7 +192,7 @@ Population.train_generation()
   │     │     │
   │     │     ├─► connect()
   │     │     ├─► barriers.wait("connected", worker_id)       # B1
-  │     │     ├─► apply_config()
+  │     │     ├─► apply_configuration()
   │     │     ├─► barriers.wait("config_applied", worker_id)  # B2
   │     │     ├─► maybe_restart()
   │     │     ├─► barriers.wait("restarted", worker_id)       # B3
@@ -201,15 +203,17 @@ Population.train_generation()
   │     │   barriers.drain_remaining(failed_sub_step, worker_id)
   │     │   re-raise
   │     │
-  │     │ population's health-check thread (separate):
-  │     │   if any environment.is_alive() == False:
-  │     │     barriers.abort()
+  │     │ population, on exception from future.result():
+  │     │   barriers.abort()          # the only abort call site
+  │     │   re-raise
   │
-  ├─► exploit_and_explore()
-  └─► record_generation() / rescue_dead_workers() / should_stop()
+  ├─► rescue_dead_workers()
+  ├─► update_metric_ranges_if_needed() / _finalize_scores()
+  ├─► record_generation()
+  └─► execute_exploit_explore() / env.clone_instances() / should_stop()
 ```
 
-The orchestrator owns the `try/except` + `drain_remaining` plumbing; the population owns `reset`, `abort`, and the health-check thread. The barrier object itself owns no state beyond the `threading.Barrier` instances and a single `_broken` flag.
+The orchestrator owns the `try/except` + `drain_remaining` plumbing; the population owns `reset` and `abort`. The barrier object itself owns no state beyond the `threading.Barrier` instances and a single `_broken` flag.
 
 ---
 
@@ -242,7 +246,7 @@ The barrier object only knows about `num_workers`, `BARRIER_NAMES`, and a `_brok
 - **[PBT Core Components](pbt-core.md)** — how the population drives the barriers each generation.
 - **[Workload Orchestrator](workload-orchestrator.md)** — the orchestrator's body and where each `wait()` call sits.
 - **[Performance Evaluation](performance-evaluation.md)** — the measurement window the barriers protect.
-- **[Environment Backends](environment-backends.md)** — the `is_alive()` health-check that informs `abort()`.
+- **[Environment Backends](environment-backends.md)** — `verify_instances()` and the `recover_instance` / `rebuild_worker_instance` recovery ladder.
 - **[ADR-003 — Lockstep generation barriers](decisions/ADR-003-lockstep-generation-barriers.md)** — the design decision record.
 
 ### File locations

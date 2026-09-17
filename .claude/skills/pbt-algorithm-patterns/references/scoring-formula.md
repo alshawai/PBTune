@@ -3,7 +3,7 @@
 > This file documents the legacy `fixed_v1` scoring math implemented in
 > `MetricConfig.compute_score()`. The current default for new runs is
 > `feature_driven_v2` — see the `scoring-pipeline` skill (canonical contract:
-> `S = 100 × G × Σ(w_i × u_i)`). `fixed_v1` is retained for compatibility with
+> `S = 100 × G × Σ(w_i × u_i) / (1 − w_error)`). `fixed_v1` is retained for compatibility with
 > legacy sessions.
 
 ## Core Computation (`MetricConfig.compute_score()`)
@@ -46,7 +46,7 @@ Located in `src/utils/metrics.py`.
 
 ### Fallback Ranges
 
-These are used ONLY until adaptive normalization kicks in (generation ≥ 2):
+These are used ONLY until adaptive normalization kicks in (once ≥ max(20, 5·population_size) valid samples have accrued — typically around generation 5, not a fixed generation index):
 
 | Preset | lat_min | lat_max | thr_min | thr_max |
 |--------|---------|---------|---------|---------|
@@ -56,7 +56,7 @@ These are used ONLY until adaptive normalization kicks in (generation ≥ 2):
 
 ## Adaptive Normalization (`update_ranges()`)
 
-Activates at generation ≥ 2 when at least 3 valid metrics exist.
+Activates once ≥ max(20, 5·population_size) valid samples have accrued across workers (`Population.update_metric_ranges_if_needed`), not at a fixed generation index. `MetricConfig.update_ranges()` additionally requires at least 3 samples before fitting.
 
 ```python
 # Uses 5th/95th percentiles (robust to outliers)
@@ -73,8 +73,10 @@ latency_max = lat_p95 + 0.2 * range
 Checks if normalized component ≥ 0.95. When detected:
 
 ```python
-expand_ranges_for_metrics(metrics_list, expansion_factor=0.5)
-# Expands range by 50% to restore discrimination power
+expand_ranges_for_metrics(metrics_list, expansion_factor=0.25)
+# PBT passes expansion_factor=0.25 (population.py). NOTE: this parameter is
+# retained for API compatibility but ignored — the normalizer widens each
+# saturated anchor by 20% of its current range via expand_metric_anchor().
 ```
 
 ## Edge Cases

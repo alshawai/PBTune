@@ -32,7 +32,7 @@ All file writes are atomic via `os.replace(<path>.tmp, <path>)`.
     "generated_at": "2026-06-18T20:01:41+00:00",
     "algorithm": "scalpel-v1",
     "scalpel_version": "1.0",
-    "source_results": "results_temp/oltp/oltp_read_write/pbt_runs/extensive/tuning_sessions",
+    "source_results": "results_temp/oltp_read_write/pbt/extensive/traces",
     "diagnostics": {
       "nuisance_dropped": ["array_nulls", "IntervalStyle", "..."],
       "oob_r2": 0.69,
@@ -266,7 +266,7 @@ Each entry has `knob`, `expert_tier`, and `data_tier`:
 
 The audit is **report-only** — SCALPEL never modifies its tier
 assignments based on the prior. See the rationale in
-[ADR-005](../architecture/decisions/ADR-005-scalpel-tier-generation.md#why-the-dba-prior-audit-is-report-only).
+[ADR-005 §Alternatives Considered, item 3](../architecture/decisions/ADR-005-scalpel-tier-generation.md#alternatives-considered).
 
 ## `importance_results.json` (the `tier_generation` block)
 

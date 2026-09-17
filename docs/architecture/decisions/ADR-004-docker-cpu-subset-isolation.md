@@ -64,7 +64,7 @@ Trade-offs:
 
 ## Migration Notes
 
-The factory continues to accept `use_docker=False` and `--no-docker` for users who explicitly opt out. Both paths log an isolation warning and tag the resulting comparison JSON's `evaluation_environment` field as `bare-metal-fallback`. The post-hoc evaluation suite's reproducibility checklist already surfaces this field — reviewers can filter on it.
+The factory continues to accept `use_docker=False` and `--no-docker` for users who explicitly opt out. Both paths log an isolation warning and tag the resulting comparison JSON's `evaluation_environment` field as `bare-metal`. The post-hoc evaluation suite's reproducibility checklist already surfaces this field — reviewers can filter on it.
 
 Sessions tuned before Docker isolation was available still load through the existing scoring-policy compatibility branch. Their session JSON does not record `worker_resources` per worker; the analysis pipeline treats them as host-resource sessions when computing data-driven tier importances. Hardware-validation results that mix Docker-isolated and bare-metal sessions should be interpreted carefully — the [hardware-aware Kendall's τ stability metric](../knob-importance-analysis.md) becomes harder to interpret when one of the "hardware profiles" is "no isolation at all."
 

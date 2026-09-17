@@ -68,14 +68,18 @@ pip install -r requirements-dev.txt
 - **pandas**: Data processing for knob retrieval
 - **python-dotenv**: Environment variable management
 
-**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](../architecture/performance-evaluation.md#system-monitoring-with-psutil) for details.
+**Note**: `psutil` is essential for the Performance Evaluation System to collect accurate CPU, memory, and I/O metrics. See [Performance Evaluation Documentation](../architecture/performance-evaluation.md#system-monitoring) for details.
 
 #### Sysbench (required for OLTP benchmarking)
 
-The tuner uses sysbench's native `--warmup-time` flag, which was introduced in **sysbench 1.1.0**. The prepackaged system version (typically 1.0.20) is **not sufficient** — you must build 1.1.0 from source.
+The tuner drives the native `sysbench` binary with `--time`, `--threads`, `--report-interval=1`, `--percentile=99` and `--histogram=on` — all supported by the packaged **sysbench 1.0.20**, which `./scripts/bootstrap.sh` installs for you.
+
+There is no warmup flag in the invocation: warmup is folded into the run duration (`--time={duration + warmup}`) and the output parser discards the first ~¼ of the `--report-interval` samples before computing steady-state statistics.
+
+Build from source only if your platform ships no sysbench package:
 
 ```bash
-# Clone and build sysbench 1.1.0 from source
+# Optional: build sysbench from source
 git clone --depth 1 https://github.com/akopytov/sysbench.git /tmp/sysbench-build
 cd /tmp/sysbench-build
 ./autogen.sh
@@ -84,14 +88,14 @@ make -j$(nproc)
 sudo make install
 
 # Verify
-sysbench --version  # should print: sysbench 1.1.0-...
+sysbench --version
 ```
 
 > **Platform notes:**
-> - **Arch/Manjaro**: Remove the packaged version first: `sudo pacman -R sysbench`
-> - **Ubuntu/Debian**: No packaged 1.1.0 yet — build from source as above. You may need `sudo apt install automake libtool libpq-dev` before running `./autogen.sh`.
-> - **Fedora/RHEL**: `sudo dnf remove sysbench`, then build from source. May need `sudo dnf install automake libtool postgresql-devel`.
-> - **macOS (Homebrew)**: `brew install automake libtool libpq`, then build from source with `./configure --with-pgsql --without-mysql --prefix=/usr/local`.
+> - **Arch/Manjaro**: `sudo pacman -S sysbench`
+> - **Ubuntu/Debian**: `sudo apt install sysbench` — `bootstrap.sh` first adds the upstream packagecloud repository. For a source build you may need `sudo apt install automake libtool libpq-dev` before running `./autogen.sh`.
+> - **Fedora/RHEL**: `sudo dnf install sysbench` (same packagecloud repository). Source builds may need `sudo dnf install automake libtool postgresql-devel`.
+> - **macOS (Homebrew)**: `brew install sysbench`, or `brew install automake libtool libpq` and build from source with `./configure --with-pgsql --without-mysql --prefix=/usr/local`.
 > - **Windows**: sysbench has no native Windows build. Use **WSL2** (Windows Subsystem for Linux) and follow the Ubuntu/Debian instructions above inside your WSL2 environment. See [Microsoft's WSL2 setup guide](https://learn.microsoft.com/en-us/windows/wsl/install) if you haven't installed it yet.
 
 ### 4. Important Security Notes

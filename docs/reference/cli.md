@@ -7,9 +7,9 @@ Consolidated reference for every command-line flag across all six user-facing en
 
 ```text
 python -m src.tuners pbt                 # tuning sessions (PBT)
-python -m src.tuners                      # LHS-design importance-sampling tuner
+python -m src.tuners lhs                 # LHS-design importance-sampling tuner
 python -m src.evaluation                 # post-hoc default-vs-tuned comparison
-python -m src.scripts.bo_baseline        # SMAC3 Bayesian-Optimisation baseline
+python -m src.tuners bo                  # SMAC3 Bayesian-Optimisation baseline
 python -m src.scripts.pbt_vs_bo_comarison  # cross-method comparison
 python -m src.visualization              # publication figure generation
 ```
@@ -23,7 +23,7 @@ For the canonical authority on any flag's exact semantics, run the entry point w
 1. [`src.tuners pbt` — PBT tuning](#srctuners-pbt--pbt-tuning)
 2. [`src.tuners` — LHS-design tuning](#srctuners--lhs-design-tuning)
 3. [`src.evaluation` — default-vs-tuned comparison](#srcevaluation--default-vs-tuned-comparison)
-4. [`src.scripts.bo_baseline` — Bayesian-Optimisation baseline](#srcscriptsbo_baseline--bayesian-optimisation-baseline)
+4. [`src.tuners bo` — Bayesian-Optimisation baseline](#srctuners-bo--bayesian-optimisation-baseline)
 5. [`src.scripts.pbt_vs_bo_comarison` — cross-method comparison](#srcscriptspbt_vs_bo_comarison--cross-method-comparison)
 6. [`src.visualization` — publication figures](#srcvisualization--publication-figures)
 7. [Common cross-tool flags](#common-cross-tool-flags)
@@ -38,7 +38,7 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--tier {minimal\|core\|standard\|extensive}` | `minimal` | Knob tier (~5 / 13 / 36 / 80+ knobs). See [adding-knobs](../guides/adding-knobs.md). |
+| `--tier {minimal\|core\|standard\|extensive}` | `minimal` | Knob tier (~5 / 13 / 43 / 170 knobs). See [adding-knobs](../guides/adding-knobs.md). |
 | `--knob-source {expert\|data_driven}` | `expert` | `expert` reads `data/expert_defined_knobs/`; `data_driven` reads `data/data_driven_knobs/{workload}/`. |
 | `--warm-start <path>` | none | Load `best_config.json` from a previous session for fractional warm-start. See [hardware-aware-normalization](../architecture/hardware-aware-normalization.md). |
 
@@ -189,7 +189,7 @@ Only `--design-size` is LHS-specific; every other group below is the shared stra
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--output-dir <path>` | `results` | Base results directory. Session JSON lands under `{output-dir}/{workload}/[{sysbench_workload}/]lhs_runs/{tier}/tuning_sessions/`. |
+| `--output-dir <path>` | `results` | Base results directory. Session JSON lands under `{output-dir}/sessions/{workload}/lhs/{tier}/traces/`. |
 | `--colocate-output` | off | Place results/logs under the data directory (`{data-root}/results`) instead of `./results/`. |
 | `--verbose {DEBUG\|INFO\|WARNING\|ERROR\|TRACE}` | `INFO` | Logging verbosity. |
 | `--no-color` | off | Disable ANSI colour in console output. |
@@ -224,7 +224,7 @@ Post-hoc evaluation suite. See [guides/evaluation-runbook](../guides/evaluation-
 
 ---
 
-## `src.scripts.bo_baseline` — Bayesian-Optimisation baseline
+## `src.tuners bo` — Bayesian-Optimisation baseline
 
 SMAC3-based BO runner. See [guides/bo-baseline](../guides/bo-baseline.md) for the full runbook.
 
@@ -250,7 +250,7 @@ SMAC3-based BO runner. See [guides/bo-baseline](../guides/bo-baseline.md) for th
 | `--seed <int>` | `42` | SMAC RNG seed. |
 | `--bo-surrogate {rf\|gp}` | `rf` | `rf` = Random Forest (HyperparameterOptimizationFacade); `gp` = Gaussian Process (BlackBoxFacade). |
 | `--range-update-interval <int>` | `10` | Pilot phase size: iterations before normalisation ranges freeze. |
-| `--batched-bo` | off | Parallel ask-tell mode using `ThreadPoolExecutor`. |
+| `--cotenancy-degree <int>` | from `--pbt-session` `num_parallel_workers`, else `1` | Concurrent instances (foreground BO trial + background load) sharing the host during each measurement window, so BO sees the same single-host contention a PBT generation does. `1` disables background load. |
 | `--resource-division <int>` | `1` (or `num_parallel_workers` from `--pbt-session`) | Denominator for dividing host resources across parallel BO workers. |
 | `--scoring-policy` | per-workload default | Same as PBT. |
 | `--enable-snapshots` | off | Periodic snapshot restoration. |

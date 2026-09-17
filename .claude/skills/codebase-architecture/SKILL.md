@@ -60,7 +60,7 @@ CLI args (src.tuners pbt → pbt/cli.py)
 ### `src/utils/scoring/` — Feature-Driven Scoring (v2)
 | File | Responsibility |
 |------|---------------|
-| `scorer.py` | `CompositeScorer`: G × Σ(w_i × u_i) |
+| `scorer.py` | `CompositeScorer`: 100 × G × Σ(w_i × u_i) / (1 − w_error) |
 | `normalization.py` | `QuantileUtilityNormalizer`: quantile anchoring, drift, saturation |
 | `weights.py` | `FeatureDrivenWeightModel`: floor-constrained softmax |
 | `policies.py` | `ScoringPolicySpec`, `fixed_v1`, `feature_driven_v2` definitions |
@@ -107,7 +107,10 @@ CLI args (src.tuners pbt → pbt/cli.py)
 | `data_loader.py` | Load/normalize PBT session results for analysis |
 | `importance.py` | fANOVA + TreeSHAP knob importance analysis |
 | `hardware_validator.py` | Cross-hardware importance stability checks |
-| `tier_generator.py` | Data-driven tier generation (Jenks Natural Breaks) |
+| `tier_generator.py` | Tier writer/adapter — `export_data_driven_tiers()`, delegates to SCALPEL with a Lorenz fallback |
+| `scalpel.py` | SCALPEL tiering pipeline entry point (superseded Jenks Natural Breaks) |
+| `scalpel_significance.py` | Group-permutation BORUTA + Benjamini-Hochberg FDR gate (q = 0.10) |
+| `scalpel_stability.py` | Lorenz coverage cuts + cluster-resampled stability pass |
 | `timing_breakdown.py` | Aggregates v1.1 timing records to LaTeX/CSV |
 
 ### `src/visualization/` — Publication Figures (entry: `python -m src.visualization`)
@@ -127,7 +130,7 @@ CLI args (src.tuners pbt → pbt/cli.py)
 | `src/database/` | PostgreSQL connection + management (`connection.py`, `data_loader.py`, `management.py`) |
 | `src/knobs/` | Knob metadata, retrieval, preprocessing, policy (`knob_metadata.py`, `retrieval.py`, `preprocess_knobs.py`, `policy.py`) |
 | `src/benchmarks/` | Benchmark executor interfaces (`executor.py`, `sysbench/`, `tpch/`) |
-| `src/scripts/` | Setup, cleanup, knob analysis, BO baseline (`bo_baseline/` subpackage), `pbt_vs_bo_comarison.py` (filename typo is intentional) |
+| `src/scripts/` | Setup, cleanup, knob analysis, `pbt_vs_bo_comarison.py` (filename typo is intentional) |
 | `src/config/` | Global database configuration |
 
 ## Key Data Types
@@ -137,7 +140,7 @@ CLI args (src.tuners pbt → pbt/cli.py)
 | `PerformanceMetrics` | `src/utils/metrics.py` | Raw metric record from evaluation |
 | `Worker` | `src/tuners/engine/worker.py` | Config + score + history |
 | `KnobDefinition` | `src/knobs/knob_space.py` | Knob metadata (type, bounds, context) |
-| `TunerConfig` | `src/tuners/pbt/config.py` | Session configuration |
+| `PBTConfig` | `src/tuners/pbt/config.py` | Session configuration |
 | `ScoringPolicySpec` | `src/utils/scoring/policies.py` | Policy definition |
 | `ComparisonConfig` | `src/evaluation/types.py` | Evaluation session config |
 | `TimingRecorder`, `TimingRecord` | `src/utils/timing.py` | Timing instrumentation primitives |
@@ -158,7 +161,7 @@ make fix-and-check  # auto-fix then re-run check-all
 ```bash
 python -m src.tuners pbt                # PBT tuning
 python -m src.evaluation                # Post-hoc default-vs-tuned comparison
-python -m src.scripts.bo_baseline       # SMAC3 BO baseline
+python -m src.tuners bo                 # SMAC3 BO baseline
 python -m src.scripts.pbt_vs_bo_comarison  # Cross-method comparison (filename typo is intentional)
 python -m src.visualization             # Publication figure generation
 ```
@@ -176,14 +179,13 @@ python -m src.scripts.analyze_knob_importance
 
 ```
 results/
-├── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/
-│   ├── pbt_runs/{tier}/{tuning_sessions, best_configs, ...}/
-│   ├── bo_runs/{tier}/
-│   ├── comparisons/{tier}/
-│   └── baselines/
-├── olap/
-│   └── (same structure for TPC-H)
-└── analysis/{workload}/
+├── sessions/{workload}/{pbt,bo,lhs}/{tier}/   # {workload} = one granular key (olap, oltp_read_write, ...)
+│   ├── traces/trace_{timestamp}.json          # per-run tuning trace (was tuning_sessions/*_results_*.json)
+│   ├── best_configs/best_{timestamp}.json     # best config for warm-start
+│   └── logs/session_{timestamp}.html
+├── comparisons/{workload}/{tier}/             # evaluation reports (comparisons BEFORE workload)
+│   └── comparison_{timestamp}.json
+└── analysis/importance/                        # fANOVA/SHAP/SCALPEL importance + tier outputs
 ```
 
 ## Documentation Index

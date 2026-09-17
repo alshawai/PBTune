@@ -237,7 +237,7 @@ class GenerationResult:
 | `setup_snapshots()` | Take the baseline snapshot used by `snapshot_restore_interval`. |
 | `evaluate_generation(orchestrator, parallel=True)` | Run all workers; the orchestrator drives the lockstep barriers internally. |
 | `train_generation(orchestrator, parallel=True)` | One full PBT generation: evaluate, exploit-explore, record, check convergence. |
-| `update_metric_ranges_if_needed()` | Triggered when the normaliser's drift detector fires; recomputes calibration anchors and rescores history for comparability. |
+| `update_metric_ranges_if_needed()` | Performs the one-time initial calibration once ≥ `max(20, 5·population_size)` non-failure samples have accrued (guarded by `_ranges_calibrated`, so it runs once — not a drift-triggered recalibration); fits the normalizer's anchors. The subsequent rescore is done by `_finalize_scores`. |
 | `rescue_dead_workers(...)` | Replace any worker whose environment has died with a freshly-resampled config and a fresh instance. |
 | `record_generation()` | Aggregate per-worker results into a `GenerationResult` and append to history. |
 | `should_stop()` | Combined check: max generations / early-stopping patience / convergence. |
@@ -246,7 +246,7 @@ class GenerationResult:
 
 ### Score finalisation
 
-`_finalize_scores()` runs once at session end and rescores every persisted `PerformanceMetrics` against the *final* normalisation anchors. This is what makes pre- and post-calibration generations comparable in the saved session JSON. The same rescoring helper is used by the post-hoc evaluation suite — see [src/tuners/utils/calibration.py](../../src/tuners/utils/calibration.py).
+`_finalize_scores()` runs **every generation** (inside `Population.train_generation()`), not once at session end. Before calibration it only tracks the overall best; on the just-calibrated generation — or when anchors expand or weights change — it calls `orchestrator.reload_scoring_engine()` and rescores the current workers plus the historical best against the current anchors, so pre- and post-calibration generations stay comparable. A separate global post-hoc rescore helper lives in [src/utils/calibration.py](../../src/utils/calibration.py) and is used by the evaluation suite.
 
 ---
 
@@ -284,18 +284,20 @@ Generation N
        B17 disconnect
                                │
                                ▼
-                Population.exploit_and_explore()
-                Population.record_generation()
-                Population.update_metric_ranges_if_needed()
                 Population.rescue_dead_workers()
+                Population.update_metric_ranges_if_needed()
+                Population._finalize_scores()
+                Population.record_generation()
+                execute_exploit_explore()   # module fn, evolution.py
+                environment.clone_instances()
 ```
 
 Two graceful-degradation paths handle stuck/crashed workers without deadlocking:
 
 1. `barrier.drain_remaining(start_from)` — a worker that catches an exception releases its slots in all barriers it hasn't reached yet.
-2. `barrier.abort()` — when the population layer confirms a worker is dead, it instantly breaks every barrier (`BrokenBarrierError` on all waiters).
+2. `barrier.abort()` — when a worker's exception reaches the population's `future.result()`, it instantly breaks every barrier (`BrokenBarrierError` on all waiters).
 
-There is **no per-barrier timeout** — legitimate workloads (e.g. 5-minute OLAP queries) need to wait indefinitely. The dead-worker case is the only thing barriers need to escape from, and `drain_remaining` / `abort` cover it.
+There is **no per-barrier timeout** — legitimate workloads (e.g. 5-minute OLAP queries) need to wait indefinitely. Both escape paths are driven by a *raised* exception, so a worker that hangs without raising still blocks its peers; see [generation-barriers §Path 3](generation-barriers.md) for that gap.
 
 Full barrier table and rationale: [GENERATION_BARRIERS.md](generation-barriers.md).
 
@@ -337,12 +339,14 @@ Booleans and enums are perturbed differently — booleans flip with a configurab
 
 ### Dead-worker rescue
 
-`Population.rescue_dead_workers()` runs after every generation. It checks each worker's environment health (`environment.is_alive()`), and for any dead worker:
+`Population.rescue_dead_workers()` runs inside `train_generation`, immediately after evaluation and before the normalization update. A worker counts as dead only when **both** hold: its metrics carry a `failure_type`, *and* its score is below `dead_config_threshold` (default `6.0`). A failure-tagged worker that still clears the threshold is not rescued, and neither is a low-scoring worker with no `failure_type`.
 
-1. tears down the broken instance,
-2. recreates a fresh PostgreSQL instance,
-3. resamples a configuration via `_choose_diverse_resample_config()` — which biases toward unexplored regions if the population has already converged on similar configs,
-4. resets the worker's `step_count` and lineage.
+Two branches follow:
+
+- **Alive donors exist** — rescue is deferred to `execute_exploit_explore`, which pairs each dead worker with a genuine elite and perturbs from there.
+- **No alive donors** — each dead worker is resampled from an LHS candidate pool via `_choose_diverse_resample_config()`, which picks the candidate maximising `_config_change_ratio()` against the worker's previous config subject to `resample_min_change_ratio`. The worker's score is reset to `0.0`, its metrics and score breakdown are cleared, and `force_restart_next_eval` is set.
+
+`step_count` is **not** reset in either branch — the ready interval keeps running so a rescued worker cannot immediately be re-ranked as poor.
 
 This avoids the failure mode where a single environment crash silently halves the population's effective diversity.
 
@@ -380,9 +384,9 @@ A pure knob-value clone is cheap but produces a "cold" inheritor whose first gen
 
 `WorkerResources` is computed once per session and passed into `KnobSpace.resolve_hardware_ranges()`. Every worker sees the *same* search space but bounded by *its* slice of host resources. This is what makes "8 parallel workers on one host" safe on memory.
 
-### 5. Score finalisation at session end
+### 5. Score finalisation every generation
 
-Adaptive normalisation means early-generation scores are anchored against narrower ranges than late-generation scores. Without finalisation, the saved session JSON would show artefactual generation-on-generation deltas. `_finalize_scores()` resolves this by rescoring every persisted metric against the final calibration anchors.
+Adaptive normalisation means early-generation scores are anchored against narrower ranges than late-generation scores. Without rescoring, the saved session JSON would show artefactual generation-on-generation deltas. `_finalize_scores()` runs each generation: before calibration it only tracks the overall best, and once calibration fires (or anchors expand / weights change) it reloads the scoring engine and rescores the current workers and historical best against the current anchors.
 
 ### 6. Dead-worker rescue, not session abort
 

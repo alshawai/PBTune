@@ -29,7 +29,7 @@ The older design used fixed, workload-specific weights. The current design keeps
 The runtime score is computed as:
 
 $$
-S = G \cdot \sum_{i=1}^{n} w_i \cdot u_i
+S = 100 \cdot G \cdot \frac{\sum_{i=1}^{n} w_i \cdot u_i}{1 - w_{\text{error}}}
 $$
 
 where:
@@ -39,7 +39,7 @@ where:
 - $u_i \in [0, 1]$ is the normalized utility for metric $i$.
 - The active weights produced by `FeatureDrivenWeightModel` sum to $1$ and each metric receives a configured floor.
 
-The score is therefore bounded by the gate and the normalized utilities rather than by an artificial $100$-point scaling factor.
+The final score is scaled by $100$ into the $[0, 100]$ range (`scorer.py`: `final_score = total * 100.0`). `error_rate` is excluded from the sum and its weight is divided out through the $1 - w_{\text{error}}$ denominator, so the reported score reflects only the non-error utilities gated by $G$.
 
 ## Workload Features
 
@@ -187,7 +187,7 @@ Calibrating the normalizer's quantile anchors against raw observations is sensit
 
 The filter returns a `(filtered_array, metadata_dict)` pair where the metadata records `n_removed`, `original_size`, the bounds used, and a `fallback_used` flag. When the input has fewer than 4 observations or `IQR == 0`, the filter falls back to the unfiltered values rather than producing degenerate bounds; both cases are surfaced in the metadata so post-hoc analysis can audit when calibration was unfiltered.
 
-The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/tuners/utils/calibration.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
+The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/utils/calibration.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
 
 ## Source References
 

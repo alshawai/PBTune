@@ -32,7 +32,7 @@ The design priorities, in order:
                                     │
                                     ▼
                  ┌──────────────────────────────────────────────┐
-                 │   TunerConfig + KnobSpace + WorkerResources  │
+                 │   PBTConfig + KnobSpace + WorkerResources    │
                  │   (CSV-tiered knobs, hardware-aware bounds)  │
                  └──────────────────┬───────────────────────────┘
                                     │
@@ -56,8 +56,8 @@ The design priorities, in order:
                        max gens      │
                                     ▼
                  ┌──────────────────────────────────────────────┐
-                 │   results/.../tuning_sessions/               │
-                 │     pbt_results_*.json                       │
+                 │   results/sessions/.../traces/               │
+                 │     trace_*.json                             │
                  │     (config, score breakdown, history,       │
                  │      reproducibility metadata)               │
                  └──────────────────┬───────────────────────────┘
@@ -80,8 +80,11 @@ The arrow from tuning to the three downstream consumers is one-directional: the 
 
 | Package | Role | Read first |
 | --- | --- | --- |
-| [`src/tuners/`](../../src/tuners/) | PBT engine (entry: `python -m src.tuners pbt`) — spans `base`, `engine`, `pbt` | [pbt-core](pbt-core.md) |
-| [`src/tuners/pbt/`](../../src/tuners/pbt/) | Population, PBTWorker, Evolution, PBTTuner, TunerConfig | [pbt-core](pbt-core.md), [generation-barriers](generation-barriers.md) |
+| [`src/tuners/`](../../src/tuners/) | Unified multi-strategy tuning framework — `BaseTuner` plus one subpackage per strategy (entry: `python -m src.tuners <strategy>`) | [pbt-core](pbt-core.md), [ADR-006](decisions/ADR-006-unified-tuners-package.md) |
+| [`src/tuners/pbt/`](../../src/tuners/pbt/) | Population, PBTWorker, Evolution, PBTTuner, PBTConfig | [pbt-core](pbt-core.md), [generation-barriers](generation-barriers.md) |
+| [`src/tuners/bo/`](../../src/tuners/bo/) | BOTuner (SMAC3 ask-tell baseline), BO search space, co-tenancy | [bo-baseline](bo-baseline.md) |
+| [`src/tuners/lhs_design/`](../../src/tuners/lhs_design/) | LHSDesignTuner — one-shot Latin-hypercube design | [ADR-006](decisions/ADR-006-unified-tuners-package.md) |
+| [`src/tuners/distributed/`](../../src/tuners/distributed/) | Multi-device execution: coordinator, device agents, RemoteEnvironment | [distributed-tuning](distributed-tuning.md) |
 | [`src/tuners/engine/`](../../src/tuners/engine/) | BaseWorker, GenerationBarrier, WorkloadOrchestrator, restart policy | [generation-barriers](generation-barriers.md), [workload-orchestrator](workload-orchestrator.md) |
 | [`src/knobs/`](../../src/knobs/) | KnobSpace, tier loading | [configuration-management](configuration-management.md) |
 | [`src/benchmarks/`](../../src/benchmarks/) | Workload templates, benchmark executors | [workload-orchestrator](workload-orchestrator.md) |
@@ -96,7 +99,7 @@ The arrow from tuning to the three downstream consumers is one-directional: the 
 | [`src/analysis/`](../../src/analysis/) | fANOVA + TreeSHAP + tier generation | [knob-importance-analysis](knob-importance-analysis.md) |
 | [`src/evaluation/`](../../src/evaluation/) | Post-hoc default-vs-tuned comparison suite | [evaluation-suite](evaluation-suite.md) |
 | [`src/visualization/`](../../src/visualization/) | Publication-figure generation | [visualization guide](../guides/visualization.md) |
-| [`src/scripts/`](../../src/scripts/) | CLI entry points (setup, cleanup, BO baseline, comparison) | [cli](../reference/cli.md) |
+| [`src/scripts/`](../../src/scripts/) | CLI entry points (setup, cleanup, knob analysis, cross-method comparison) | [cli](../reference/cli.md) |
 
 ---
 
@@ -128,7 +131,7 @@ Per-benchmark hardcoded weights conflate workload shape with benchmark name — 
 | [`Worker`](../../src/tuners/pbt/worker.py) | `src/tuners/pbt/worker.py` | Configuration + score + lineage + step count + environment handle (PBTWorker subclasses BaseWorker in `src/tuners/engine/worker.py`). |
 | [`KnobDefinition`](../../src/knobs/knob_space.py) | `src/knobs/knob_space.py` | Bounds + scale + type + restart context + hardware-relative flag. |
 | [`WorkerResources`](../../src/utils/hardware_info.py) | `src/utils/hardware_info.py` | Per-worker CPU / RAM / disk slice. |
-| [`TunerConfig`](../../src/tuners/pbt/config.py) | `src/tuners/pbt/config.py` | Session-level configuration derived from CLI args. |
+| [`PBTConfig`](../../src/tuners/pbt/config.py) | `src/tuners/pbt/config.py` | Session-level configuration derived from CLI args. |
 | [`ComparisonConfig`](../../src/evaluation/types.py) | `src/evaluation/types.py` | Post-hoc evaluation session config. |
 
 Every persisted artefact (session JSON, BO baseline JSON, comparison JSON) is built from these types. The schema is documented in [reference/session-json-schema](../reference/session-json-schema.md).
@@ -139,19 +142,19 @@ Every persisted artefact (session JSON, BO baseline JSON, comparison JSON) is bu
 
 ```text
 results/
-├── oltp/{sysbench_workload}/         # one of oltp_read_only / oltp_read_write / oltp_write_only
-│   ├── pbt_runs/{tier}/
-│   │   └── tuning_sessions/
-│   │       └── pbt_results_<timestamp>.json
-│   ├── bo_runs/{tier}/
-│   │   └── tuning_sessions/
-│   │       └── bo_results_<timestamp>.json
-│   ├── comparisons/{tier}/
-│   │   ├── comparison_<timestamp>.json
-│   │   └── logs/evaluation_<timestamp>.html
-│   └── baselines/
-│       └── default_<timestamp>.json
-├── olap/                             # same structure for TPC-H
+├── sessions/{workload}/                # workload: oltp_read_only / oltp_read_write / oltp_write_only / olap / mixed
+│   ├── pbt/{tier}/
+│   │   ├── traces/
+│   │   │   └── trace_<timestamp>.json
+│   │   ├── best_configs/
+│   │   │   └── best_<timestamp>.json
+│   │   └── logs/
+│   │       └── session_<timestamp>.html
+│   ├── bo/{tier}/                      # same traces/best_configs/logs layout
+│   └── lhs/{tier}/
+├── comparisons/{workload}/{tier}/
+│   ├── comparison_<timestamp>.json
+│   └── logs/evaluation_<timestamp>.html
 └── analysis/{workload_label}/
     ├── importance_results.json
     └── analysis_log.html

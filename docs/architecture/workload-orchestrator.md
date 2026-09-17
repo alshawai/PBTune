@@ -105,7 +105,7 @@ Field-by-field:
 | `db_config` | Base PostgreSQL credentials. The environment substitutes `host` / `port` per worker. |
 | `warmup_duration` | Seconds spent in B8 warmup before measurement. Default 30. |
 | `measurement_duration` | Seconds in the timed measurement window (B9). The only window that contributes to the score. Default 60. |
-| `cooldown_duration` | Quiescence period after `apply_config` and before warmup. Default 5. |
+| `cooldown_duration` | Quiescence period after `apply_configuration` and before warmup. Default 5. |
 | `tuning_mode` | `ONLINE` / `OFFLINE` / `ADAPTIVE` — see [Restart policy](#restart-policy-and-tuning-modes). |
 | `adaptive_restart_interval` | When `tuning_mode=ADAPTIVE`, restart every N generations even if no postmaster knob changed. |
 | `random_seed` | Propagated to the workload executor's RNG for deterministic query selection. |
@@ -190,7 +190,7 @@ The function is a pure decision — easy to unit-test in isolation and reused by
 | --- | --- | --- |
 | **`ONLINE`** | Never restart. Postmaster-context knobs are persisted via `ALTER SYSTEM SET` but their effect waits until a manual restart. | Production-style tuning where downtime is forbidden. The score reflects only the runtime-modifiable knobs' effect. |
 | **`OFFLINE`** | Restart whenever any postmaster knob changed. | Academic offline tuning — equivalent to a batch tuner that takes its time. The score reflects the full configuration. |
-| **`ADAPTIVE`** | Restart only when `generation % adaptive_restart_interval == 0`. CDBTune-inspired batching. | Default for PBT runs — amortises restart cost while still reflecting postmaster knobs every N generations. |
+| **`ADAPTIVE`** | Restart only when `generation % adaptive_restart_interval == 0`. CDBTune-inspired batching. | Recommended for long PBT runs — amortises restart cost while still reflecting postmaster knobs every N generations. (The shipped default is `OFFLINE`.) |
 
 `force=True` is used by post-recovery paths (after `recover_instance` or `rebuild_worker_instance`) to ensure the recovered process is in a known-clean state.
 
@@ -200,11 +200,11 @@ The function is a pure decision — easy to unit-test in isolation and reused by
 
 ## Workload executor selection
 
-The orchestrator accepts any object that satisfies a small contract — `prepare(db_config)`, `validate(db_config)`, `execute(db_config, duration, warmup) -> PerformanceMetrics`. Three implementations live in the codebase:
+The orchestrator accepts any object that satisfies the `BenchmarkExecutor` contract — `prepare(db_config)`, `validate(db_config)`, `execute(ctx: ExecutionContext) -> PerformanceMetrics`. Per-run parameters (duration, warmup, worker id, db config, …) travel inside `ExecutionContext`. Three implementations live in the codebase:
 
 | Executor | Where | Workloads | Notes |
 | --- | --- | --- | --- |
-| **`SysbenchExecutor`** | [src/benchmarks/sysbench/executor.py](../../src/benchmarks/sysbench/executor.py) | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | Wraps the `sysbench` C-binary (1.1.0+). The score's TPS/latency metrics come from sysbench's own output. |
+| **`SysbenchExecutor`** | [src/benchmarks/sysbench/executor.py](../../src/benchmarks/sysbench/executor.py) | `oltp_read_only`, `oltp_read_write`, `oltp_write_only` | Wraps the `sysbench` C-binary (1.0.20+). The score's TPS/latency metrics come from sysbench's own output. |
 | **`TPCHExecutor`** | [src/benchmarks/tpch/executor.py](../../src/benchmarks/tpch/executor.py) | TPC-H 22-query power test | Uses `dbgen` for data generation, `psycopg2.copy_expert()` for bulk load, raw psycopg2 for query execution. Scale factor configurable. |
 | **`WorkloadExecutor`** | [src/benchmarks/workload.py](../../src/benchmarks/workload.py) | Custom JSON/YAML templates | Pure Python multi-threaded SQL execution. Used for OLTP/OLAP/MIXED templates and arbitrary user workloads. |
 
@@ -261,7 +261,7 @@ The `schema` block is optional; without it the executor logs a warning and defau
 
 ### Real-database workloads
 
-For tuning against a real production replica (see [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot)), the workload file omits both the `schema` block and the placeholders — `WorkloadExecutor` natively supports raw unparameterised SQL. The orchestrator's apply / measure / score pipeline is unchanged; the schema is whatever `pg_basebackup` cloned from the source database.
+`WorkloadExecutor` natively supports raw unparameterised SQL, so a workload file may omit both the `schema` block and the placeholders, and the orchestrator's apply / measure / score pipeline is unchanged. Note that the tuner does **not** clone an external database into the workers — every worker instance is provisioned locally and its schema comes from the benchmark executor's `prepare()`. See [BENCHMARKING.md §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot) for the current limits.
 
 ---
 
@@ -271,15 +271,17 @@ Three classes of failure can interrupt an evaluation. The orchestrator handles e
 
 ### 1. PostgreSQL apply / restart errors
 
-Caught at B2–B4. The orchestrator marks the worker's metrics with a `failure_type` (`"apply_failed"`, `"restart_failed"`, `"reconnect_failed"`), drains the remaining barriers via [`barriers.drain_remaining`](generation-barriers.md#drain_remainingstart_from-worker_id), and propagates the exception. The reliability gate `G` collapses to 0, the population's score-finalisation logic records the failure in session JSON, and `rescue_dead_workers()` may pick up the worker on the next generation boundary.
+Caught by the orchestrator's top-level safety net. It drains the remaining barriers via [`barriers.drain_remaining`](generation-barriers.md#drain_remainingstart_from-worker_id) and **re-raises** — no orchestrator-level `failure_type` is set on this path. The PBT tuner classifies the propagated crash upstream as `"crash_dead"`, `"crash_timeout"`, `"crash_runtime"` or `"crash_unexpected"`. The reliability gate `G` collapses to 0, the population's score-finalisation logic records the failure in session JSON, and `rescue_dead_workers()` may pick up the worker on the next generation boundary.
 
 ### 2. Workload execution errors
 
-Caught at B7–B9. Same pattern: tag `failure_type`, drain remaining barriers, propagate. The metrics record whatever was captured (e.g. partial throughput before a crash) but `G = 0` makes them score-irrelevant.
+Caught by the inner workload-execution handler at B7–B9. It builds a zeroed `PerformanceMetrics` tagged `failure_type = "EXECUTION_CRASH"`, scores it, drains the remaining barriers and **returns** — it does not re-raise. `G = 0` makes the result score-irrelevant.
 
 ### 3. Dead-instance detection
 
-The population's separate health-check thread polls `environment.is_alive(worker_id)`. If a worker's PostgreSQL is unresponsive, the population calls [`barriers.abort()`](generation-barriers.md#abort) — the running orchestrator's next `wait()` raises `BrokenBarrierError`, every per-worker thread exits cleanly, and the recovery ladder runs (`recover_instance` → `rebuild_worker_instance` → dead-worker rescue).
+A dead instance surfaces as an exception from the worker's own evaluation (connection refused, `pg_ctl` failure, benchmark crash). When that exception reaches the population's `future.result()`, the population calls [`barriers.abort()`](generation-barriers.md#abort) — the running orchestrator's next `wait()` raises `BrokenBarrierError`, every per-worker thread exits cleanly, and the recovery ladder runs (`recover_instance` → `rebuild_worker_instance` → dead-worker rescue).
+
+There is no `environment.is_alive()` and no background health-check thread. A worker that hangs *without* raising therefore blocks its peers at the next barrier indefinitely — see [generation-barriers §Path 3](generation-barriers.md) for that gap.
 
 The orchestrator also surfaces the read-back values from `applicator.verify()` to the population layer regardless of whether the evaluation completed. This lets the BO baseline correctly attribute the actually-quantised configuration even to runs that crashed mid-measurement.
 
@@ -320,7 +322,7 @@ The retry loop knows about PostgreSQL-specific recovery messages (`"starting up"
 - **[Environment Backends](environment-backends.md)** — Docker / bare-metal lifecycle.
 - **[Configuration Management](configuration-management.md)** — `KnobApplicator.apply` / `verify`.
 - **[Feature-Driven Scoring](feature-driven-scoring.md)** — the scoring engine constructed at B16.
-- **[Benchmarking](../reference/benchmarking.md)** — dual-evaluation strategy and SchemaProvider protocol.
+- **[Benchmarking](../reference/benchmarking.md)** — dual-evaluation strategy and the `BenchmarkExecutor` ABC.
 - **[BO Baseline](../guides/bo-baseline.md)** — uses the same orchestrator with a different driver.
 
 ### File locations

@@ -221,7 +221,7 @@ grep '^jit_above_cost' data/expert_defined_knobs/standard_knobs.csv
 python -m src.tuners pbt --tier standard --config rapid --population 2 --generations 3
 ```
 
-Inspect the resulting `pbt_results_*.json` for `best_configuration.knobs.jit_above_cost`. Done.
+Inspect the resulting `trace_*.json` for `best_configuration.knobs.jit_above_cost`. Done.
 
 ---
 

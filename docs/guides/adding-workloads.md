@@ -144,7 +144,7 @@ Check that the extracted features match your intuition:
 ```bash
 python -c "
 import json
-data = json.load(open('results/.../tuning_sessions/pbt_results_<timestamp>.json'))
+data = json.load(open('results/.../traces/trace_<timestamp>.json'))
 print(json.dumps(data['workload_features'], indent=2))
 "
 ```
@@ -167,17 +167,13 @@ If the features look off (e.g. `olap_complexity` near 1 for a clearly OLTP workl
 
 ---
 
-## Variant: tuning against a real database snapshot
+## Variant: tuning against real production queries
 
-If you have a production replica with the actual schema and data, you don't need the `schema` block or the placeholders at all. The orchestrator uses `pg_basebackup` to clone the source database into each worker's PostgreSQL instance.
+> **Partly unimplemented.** The tuner cannot clone a production database into the workers. Every worker instance is provisioned locally and its schema is created by the benchmark executor's `prepare()`, so raw SQL against your own tables currently has no schema to run against. Only the query-and-weight half of this workflow works today. See [benchmarking §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot).
+
+A workload file may omit both the `schema` block and the placeholders — `WorkloadExecutor` natively supports raw unparameterised SQL:
 
 ```bash
-export DB_HOST=my-production-replica.internal
-export DB_PORT=5432
-export DB_USER=admin
-export DB_PASSWORD=...
-export DB_NAME=myapp
-
 python -m src.tuners pbt \
     --workload-file workloads/my_real_queries.json \
     --tier core \
@@ -196,7 +192,7 @@ Where `my_real_queries.json` is **without** placeholders or `schema`:
 }
 ```
 
-Each worker gets its own isolated clone of the source database; the source replica is read-only from `pg_basebackup`'s perspective. See [benchmarking §Tuning Against a Real Database Snapshot](../reference/benchmarking.md) for the full workflow including a `pg_stat_statements` capture script.
+Each worker gets its own isolated local instance. See [benchmarking §Tuning Against a Real Database Snapshot](../reference/benchmarking.md#tuning-against-a-real-database-snapshot) for the `pg_stat_statements` capture script that derives the query weights, and for what remains unimplemented.
 
 ---
 

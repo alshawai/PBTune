@@ -46,7 +46,7 @@ python -m src.tuners pbt --benchmark sysbench --sysbench-tables 4
 python -m src.tuners pbt --benchmark tpch --scale-factor 1.0
 
 # Warm-Starting (Transfer Learning across hardware boundaries)
-python -m src.tuners pbt --warm-start results/olap/pbt_runs/extensive/best_configs/best_config_YYYYMMDD_HHMM.json
+python -m src.tuners pbt --warm-start results/sessions/olap/pbt/extensive/best_configs/best_YYYYMMDD_HHMM.json
 ```
 
 ### Evaluation Commands
@@ -54,16 +54,16 @@ python -m src.tuners pbt --warm-start results/olap/pbt_runs/extensive/best_confi
 ```bash
 # Compare PBT-tuned config vs default PostgreSQL (Docker, 5 repetitions)
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json
 
 # More repetitions for tighter confidence intervals
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
     --repetitions 10
 
 # Bare-metal fallback (no Docker required — reduced isolation)
 python -m src.evaluation \
-    --session results/olap/pbt_runs/extensive/tuning_sessions/pbt_results_YYYYMMDD_HHMM.json \
+    --session results/sessions/olap/pbt/extensive/traces/trace_YYYYMMDD_HHMM.json \
     --no-docker
 ```
 
@@ -94,7 +94,7 @@ The system follows a layered architecture:
 6. **Restart Policy** (`src/tuners/engine/restart_policy.py`): TuningMode-driven restart decisions
 7. **Environment Factory** (`src/utils/environments/factory.py`): Docker / bare-metal lifecycle
 8. **Knob Space** (`src/knobs/knob_space.py`): Search space definition and LHS sampling
-9. **Composite Scorer** (`src/utils/scoring/`): Feature-driven score = G × Σ(wᵢ × uᵢ)
+9. **Composite Scorer** (`src/utils/scoring/`): Feature-driven score = 100 × G × Σ(wᵢ × uᵢ) / (1 − w_error)
 10. **Timing Recorder** (`src/utils/timing.py`, `src/utils/session_clock.py`): Monotonic-clock instrumentation (schema v1.1)
 
 ### Key Design Patterns
@@ -128,7 +128,19 @@ src/tuners/               # Unified tuner framework (BaseTuner + per-strategy su
 │   ├── config.py         # PBTConfig + profile constants
 │   ├── cli.py            # `python -m src.tuners.pbt ...`
 │   └── __main__.py
+├── bo/                   # Bayesian-optimisation baseline strategy
+│   ├── tuner.py          # BOTuner(BaseTuner) — SMAC3 ask-tell loop
+│   ├── search_space.py   # KnobSpace → ConfigSpace translation
+│   ├── objective.py      # Trial objective wrapper
+│   ├── cotenant.py       # Co-tenancy / resource-division controls
+│   ├── config.py, cli.py, __main__.py
 ├── lhs_design/           # LHS-sampling strategy (tuner, cli, __main__)
+├── distributed/          # Multi-device execution path
+│   ├── coordinator.py    # Fleet coordinator
+│   ├── remote_environment.py  # RemoteEnvironment(DatabaseEnvironment)
+│   ├── remote_orchestrator.py # Per-device orchestration
+│   ├── device_agent.py, agent_api.py, transport.py
+│   └── bootstrap.py, config.py, inventory.py
 └── utils/                # session_assembly, tuner_logging, session_writer, types, profiles, …
 
 src/utils/
@@ -152,12 +164,13 @@ src/evaluation/          # Post-hoc evaluation tools (independent of PBT loop)
 ├── exceptions.py        # Domain-specific exception hierarchy
 └── __main__.py          # CLI: python -m src.evaluation
 
-src/analysis/            # data_loader, importance, hardware_validator, tier_generator, timing_breakdown
+src/analysis/            # data_loader, importance, hardware_validator, tier_generator, timing_breakdown,
+                         # scalpel + scalpel_significance + scalpel_stability (SCALPEL tiering)
 src/database/            # connection, data_loader, management
 src/knobs/               # knob_space, knob_loader, knob_metadata, retrieval, preprocess_knobs, policy
 src/benchmarks/          # executor + sysbench/ + tpch/
 src/scripts/             # setup_database, cleanup_instances, analyze_knobs, analyze_knob_importance,
-                         # pbt_vs_bo_comarison (sic), bo_baseline/ subpackage
+                         # pbt_vs_bo_comarison (sic)
 src/visualization/       # plots, loaders, registry, theme, export, __main__
 docker/                  # Docker evaluation images
 ├── eval.Dockerfile      # PostgreSQL + sysbench + TPC-H dbgen
@@ -171,8 +184,8 @@ data/                    # Knob metadata, policy, tier CSVs
 └── data_driven_knobs/     # Workload-specific tiers from analysis pipeline
 docs/                    # Documentation (Diataxis: getting-started/guides/reference/architecture/research)
 results/                 # Optimization results
-├── olap/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
-└── oltp/{oltp_read_only,oltp_read_write,oltp_write_only}/{pbt_runs,bo_runs,comparisons,baselines}/{tier}/
+├── sessions/{workload}/{pbt,bo,lhs}/{tier}/{traces,best_configs,logs}/
+└── comparisons/{workload}/{tier}/    # {workload}: olap | oltp_read_only | oltp_read_write | oltp_write_only | mixed
 workloads/               # Workload definitions (oltp.json, olap.json, mixed.json, custom)
 tests/                   # Test suite (unit/ — analysis, benchmarks, config, evaluation, knobs, scoring, scripts, tuners/{engine,pbt}, utils)
 ```
@@ -227,7 +240,7 @@ python -m src.tuners pbt --tier core --config standard --verbose DEBUG
 - `src/tuners/engine/orchestrator.py` - WorkloadOrchestrator (apply → run → measure)
 - `src/knobs/knob_space.py` - Knob space management
 - `src/utils/environments/factory.py` - Environment backend selection and lifecycle
-- `src/utils/scoring/scorer.py` - CompositeScorer (S = G × Σ(wᵢ × uᵢ))
+- `src/utils/scoring/scorer.py` - CompositeScorer (S = 100 × G × Σ(wᵢ × uᵢ) / (1 − w_error))
 - `src/utils/timing.py` - Timing instrumentation primitives (schema v1.1)
 - `docs/architecture/feature-driven-scoring.md` - Canonical reference for the scoring-v2 architecture
 - `docs/architecture/overview.md` - Top-level system map

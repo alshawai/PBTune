@@ -18,7 +18,7 @@ signal for the PBT evolutionary loop.
 ## Scoring Contract
 
 ```
-S = 100 × G × Σ(w_i × u_i)
+S = 100 × G × Σ(w_i × u_i) / (1 − w_error)
 ```
 
 Where:
@@ -26,6 +26,7 @@ Where:
 - **w_i** — metric weight from the active policy (Σw_i = 1)
 - **u_i** ∈ [0, 1] — normalized utility from the quantile normalizer
 - **S** ∈ [0, 100] — final bounded score
+- **w_error** — the `error_rate` weight; `error_rate` is excluded from Σ and dividing by `(1 − w_error)` renormalizes the remaining weights to sum to 1 (reliability is already captured by G)
 
 ## Two Scoring Policies
 
@@ -45,7 +46,7 @@ Where:
 3. **Temperature-scaled softmax** (numerically stable)
 4. **Floor constraint**: `W_i = α_i + (1 - Σα) × S_i` — guarantees minimum weight for critical metrics
 
-V2 floors: latency_p95=0.10, throughput=0.10, error_rate=0.05, latency_p99=0.05 (total=0.30)
+V2 floors (`V2_FLOORS` in `policies.py`): latency_p95=0.08, throughput=0.08, latency_p99=0.02, error_rate=0.02 (total=0.20)
 
 ## Normalization (QuantileUtilityNormalizer)
 
@@ -63,14 +64,26 @@ Uses robust p05/p95 quantile anchors (NOT min/max) to prevent single-outlier sco
 
 ### Calibration Flow in Population
 ```
-Generation 0: Evaluate all workers → raw metrics collected
-              fit() normalizer with metric_whitelist = policy metrics
-              Calibration complete → is_calibrated = True
+Gens 1..N:    Evaluate workers → raw PerformanceMetrics accrue in each
+              worker's performance_history. While uncalibrated, utilities come
+              from the OLTP/OLAP fallback anchors (OLTP_FALLBACK_ANCHORS /
+              OLAP_FALLBACK_ANCHORS in normalization.py, chosen by workload_type).
 
-Generation 1+: score_vector() produces utilities
-               update() tracks history + out-of-support counts
-               needs_recalibration() → if True, rebuild dataset + refit
-               detect_metric_saturation() → if saturated, expand_metric_anchor()
+Calibration: one-time, in Population.update_metric_ranges_if_needed() and
+              guarded by _ranges_calibrated. Fires once ≥ max(20, 5·population_size)
+              non-failure samples have accrued (≈ gen 5, NOT a fixed generation
+              index) → fit() with metric_whitelist = policy metrics.
+
+_finalize_scores() (every generation, after evaluation):
+              • uncalibrated → only tracks overall best (no rescore)
+              • on the just-calibrated generation, or when anchors expand /
+                weights change → orchestrator.reload_scoring_engine() rebuilds
+                the engine and every worker + historical best is rescored
+                against current anchors (this is how calibration is reflected
+                in scores)
+              • expand_ranges_for_metrics(..., expansion_factor=0.25) widens
+                saturated anchors; score_metric()/score_metrics() produce the
+                utilities (there is no score_vector())
 ```
 
 ## Reliability Gate
@@ -118,6 +131,6 @@ Extractors: `extract_sysbench_features()`, `extract_tpch_features()`, `extract_t
 
 1. **Don't add non-scoring fields to normalizer calibration** — always pass `metric_whitelist` matching the active policy's `metrics` list to `fit()`
 2. **Don't use raw min/max** — the normalizer intentionally clips at quantile anchors to prevent outlier collapse
-3. **Check `is_calibrated` before scoring** — Generation 0 falls back to `fallback_utilities` (typically legacy scoring) before calibration completes
+3. **Check `is_calibrated` before scoring** — until calibration (≈ gen 5, once ≥ max(20, 5·population) non-failure samples accrue) the normalizer scores against the OLTP/OLAP fallback anchors (`OLTP_FALLBACK_ANCHORS` / `OLAP_FALLBACK_ANCHORS`), not "legacy scoring"
 4. **Weight floors must sum to < 1.0** — the remaining mass is distributed by softmax
 5. **Scorer caches weights at construction** — if features change, create a new `CompositeScorer` instance

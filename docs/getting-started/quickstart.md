@@ -15,7 +15,7 @@ This guide walks you through your first PBT tuning session and explains what's h
 
 You have:
 
-- Run [setup](setup.md) successfully (`.venv` active, `.env` configured, sysbench 1.1.0 in `PATH`).
+- Run [setup](setup.md) successfully (`.venv` active, `.env` configured, sysbench in `PATH`).
 - Either Docker running (recommended) or a local PostgreSQL 14+ accepting connections.
 
 Verify:
@@ -77,8 +77,8 @@ When the run finishes (or hits convergence), the CLI prints the output paths:
 
 ```text
 ✓ Session complete — best score 0.842 (Worker 1, generation 4)
-  JSON:  results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260607_1842.json
-  HTML:  results/oltp/oltp_read_write/pbt_runs/minimal/logs/pbt_session_20260607_1842.html
+  JSON:  results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260607_1842.json
+  HTML:  results/sessions/oltp_read_write/pbt/minimal/logs/session_20260607_1842.html
 ```
 
 The HTML log is the easiest way to inspect what happened — it's the same colour-coded transcript you saw on the terminal, but persistent and shareable.
@@ -86,7 +86,7 @@ The HTML log is the easiest way to inspect what happened — it's the same colou
 The JSON is the canonical artefact. Open it in any JSON viewer:
 
 ```bash
-python -m json.tool results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_*.json | less
+python -m json.tool results/sessions/oltp_read_write/pbt/minimal/traces/trace_*.json | less
 ```
 
 Look for these top-level keys:
@@ -108,11 +108,11 @@ A tuning session by itself only tells you which configurations PBT explored — 
 
 ```bash
 python -m src.evaluation \
-    --session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_<timestamp>.json \
+    --session results/sessions/oltp_read_write/pbt/minimal/traces/trace_<timestamp>.json \
     --repetitions 5
 ```
 
-This runs the default and tuned configurations against the same workload with paired seeds, then computes Wilcoxon, bootstrap CI, and Cohen's d on the differences. The output JSON in `results/oltp/oltp_read_write/comparisons/minimal/` is what you'd cite in a paper or pull request.
+This runs the default and tuned configurations against the same workload with paired seeds, then computes Wilcoxon, bootstrap CI, and Cohen's d on the differences. The output JSON in `results/comparisons/oltp_read_write/minimal/` is what you'd cite in a paper or pull request.
 
 For the runbook including all flags, scoring-policy overrides, and reproducibility checklist, see [guides/evaluation-runbook](../guides/evaluation-runbook.md).
 
@@ -123,7 +123,7 @@ For the runbook including all flags, scoring-policy overrides, and reproducibili
 | `Docker unavailable, falling back to Bare Metal` warning | Docker daemon not running or not reachable. | Start Docker, or accept reduced isolation (fine for development; not for publication). |
 | `connection refused` on port 5440 | A previous session left an instance behind. | `python -m src.scripts.cleanup_instances` |
 | `DB_PASSWORD environment variable is required` | `.env` not loaded or missing the variable. | Re-check [setup §3](setup.md#3-install-dependencies); confirm the `.env` exists in the project root. |
-| `sysbench: command not found` | sysbench 1.1.0 not installed (the prepackaged 1.0.20 is **not sufficient**). | Follow [setup §Sysbench](setup.md). |
+| `sysbench: command not found` | sysbench not installed or not on `PATH`. | Follow [setup §Sysbench](setup.md). |
 | First generation takes far longer than later ones | TPC-H `dbgen` is compiling and generating data the first time. | Expected — only happens once per scale factor. |
 
 ## Where to go next

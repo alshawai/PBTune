@@ -19,14 +19,14 @@ different hardware, all hardware-relative knobs are stored as fractions.
 Fraction (stored in population)
     → HardwareInfo.detect() captures RAM, cores
     → KnobSpace.resolve_to_absolute(fraction, hardware)
-    → Absolute value (written to postgresql.conf)
+    → Absolute value (applied via ALTER SYSTEM SET)
 ```
 
 Example:
 ```python
 # Stored: shared_buffers = 0.25
 # Hardware: 16GB RAM
-# Resolved: shared_buffers = 4GB (written to postgresql.conf as "4096MB")
+# Resolved: shared_buffers = 4GB (applied via ALTER SYSTEM SET as "4096MB")
 
 # Same config on 64GB machine:
 # Resolved: shared_buffers = 16GB

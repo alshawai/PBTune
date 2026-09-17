@@ -37,9 +37,9 @@ We introduce explicit Sysbench workload mode handling end-to-end:
 
 1. Output partitioning:
 
-- PBT: `results/oltp/{sysbench_workload}/pbt_runs/{tier}/...`
-- BO: `results/oltp/{sysbench_workload}/bo_runs/{tier}/...`
-- Evaluation: `results/oltp/{sysbench_workload}/comparisons/{tier}/...`
+- PBT: `results/sessions/{sysbench_workload}/pbt/{tier}/...`
+- BO: `results/sessions/{sysbench_workload}/bo/{tier}/...`
+- Evaluation: `results/comparisons/{sysbench_workload}/{tier}/...`
 
 1. Executor behavior:
 

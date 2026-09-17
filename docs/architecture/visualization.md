@@ -27,7 +27,7 @@ The contrast is with monolithic plot scripts (one function reads JSON and render
 
 ### 3. Theme owns sizing, not the renderer
 
-Renderers ask the theme for a `FigureSize` enum value (`SINGLE_COL`, `DOUBLE_COL`, `SQUARE`, `WIDE_SHORT`); the theme converts that to inches given the active venue. A figure rendered with `--venue pvldb` and `FigureSize.SINGLE_COL` is 3.33 inches wide; the same figure rendered with `--venue springer` is 3.39 inches wide. Renderers never see the inch values.
+Generators ask the theme for a size by *hint* — `theme.figure(size_hint="single")` or `"double"` — and the theme resolves it against the active venue into a `FigureSize`, a frozen `width_in`/`height_in` dataclass built by `FigureSize.single_column()` / `double_column()`. `size_hint="single"` is 3.33 inches wide under `--venue pvldb` and 3.39 inches under `--venue springer`. Generators never hard-code the inch values.
 
 This is what makes the figure set retargetable across venues. The earlier, pre-framework one-off plot scripts had inch values hard-coded inside each script — switching venues required editing every file. With the theme as the single source of truth, the same figure module produces venue-correct output for any registered venue.
 
@@ -35,7 +35,7 @@ This is what makes the figure set retargetable across venues. The earlier, pre-f
 
 The palette in [colors.py](../../src/visualization/colors.py) is ordered so the first 4–5 series are distinguishable both in colour and in monochrome print. The default applies before any renderer code runs.
 
-Renderers that need more series than the palette supports must also set distinct line styles or markers — colour alone is not sufficient for accessibility. The palette helper is `theme.colorblind_palette()`; renderers should call it rather than hard-coding hex values.
+Generators that need more series than the palette supports must also set distinct line styles or markers — colour alone is not sufficient for accessibility. The palette helpers live in [colors.py](../../src/visualization/colors.py) (`get_method_style()`, `METRIC_COLORS`); generators should call those rather than hard-coding hex values.
 
 ### 5. Independent of `src/tuners/`
 
@@ -46,7 +46,7 @@ The visualization package never imports from the tuning engine. The dependency g
 
 ### 6. Output formats per figure
 
-`FigureSpec.formats` is a list — typically `[PDF, PNG]`. PDFs go into papers; PNGs go into slide decks and previews. The registry honours each figure's preferred formats by default; the CLI's `--format` flag can override.
+`FigureSpec` carries no format field. Formats are chosen at export time: each generator receives a `formats` keyword and passes it to `export_figure(fig, output_dir, fig_id, formats=...)`, which defaults to `[ExportFormat.PDF, ExportFormat.PNG]` at 300 DPI. PDFs go into papers; PNGs go into slide decks and previews. The CLI's `--format` flag selects the list.
 
 The split between vector and raster is intentional: line plots and bar charts go to vector PDFs (small file size, infinite resolution); densely-sampled heatmaps and SHAP dependence plots use raster PNGs at 300 DPI (avoids huge PDF files with millions of vector points). Each plot module decides which is appropriate for its content.
 

@@ -365,11 +365,11 @@ def create_adapter(dbms: str, **kwargs) -> DatabaseAdapter:
     | `src/database/management.py` | `pg_database`, `pg_terminate_backend()` | Wrapped by adapter; consumer code calls `adapter.create_database()` etc. |
     | `src/benchmarks/sysbench/executor.py` | `--db-driver=pgsql`, `VACUUM ANALYZE` | Accept `DatabaseAdapter`, call `adapter.vacuum_equivalent()`, build flags from adapter |
     | `src/benchmarks/tpch/executor.py` | `psycopg2.copy_expert()`, `VACUUM ANALYZE` | Accept `DatabaseAdapter`, call `adapter.bulk_load()`, `adapter.vacuum_equivalent()` |
-    | `src/tuners/pbt/tuner.py` | `PostgresInstanceManager`, hardcoded port `5440` | Accept DBMS config, use `adapter_factory.create_adapter()` |
-    | `src/tuners/pbt/population.py` | References `PostgresInstanceManager` | Use generic `InstanceManager` (rename or interface) |
+    | `src/tuners/pbt/tuner.py` | `DatabaseEnvironment` backend, hardcoded port `5440` | Accept DBMS config, use `adapter_factory.create_adapter()` |
+    | `src/tuners/pbt/population.py` | Consumes `InstanceConfig` records from the environment backend | Keep the backend abstraction; add a DBMS-agnostic adapter behind it |
 
 5. **Rename PostgreSQL-branded classes** to generic names (or keep PG-branded as the adapter implementation):
-    - `PostgresInstanceManager` → keep internally, but consumers use adapter
+    - `DockerEnvironment` / `BareMetalEnvironment` → keep internally, but consumers use adapter
     - `PostgresRestartManager` → keep internally, but consumers use adapter
     - `PostgresInstance` → keep internally, but consumers use adapter
     - `PostgreSQLKnobRetriever` → keep internally, but consumers use adapter
@@ -1374,7 +1374,7 @@ parser.add_argument(
 
 **Current** (L203-210):
 ```python
-self.instance_manager = PostgresInstanceManager(
+self.environment = EnvironmentFactory.create(
     base_dir=Path(f'./pg_instances/{self.benchmark_name}'),
     base_port=5440,
     ...
@@ -1506,7 +1506,7 @@ tests/integration/test_cross_dbms.py
 2. Configure `local_infile=ON` for TPC-H data loading
 3. Create PBT user and database
 4. Set environment variables (`PBT_DBMS=mysql`, `DB_PORT=3306`, etc.)
-5. Run knob preprocessing pipeline: `python -m src.knobs --dbms mysql`
+5. Run knob preprocessing pipeline: `python -m src.knobs.preprocess_knobs --dbms mysql` (the `--dbms` flag is part of this proposal; today the module takes a CSV path)
 6. Run PBT: `python -m src.tuner --dbms mysql --workload sysbench`
 
 ---
@@ -1597,7 +1597,7 @@ tests/integration/test_cross_dbms.py
 | 16 | `src/benchmarks/sysbench/executor.py` | Get driver flags from adapter; use `adapter.vacuum_equivalent()` | R1, R6 |
 | 17 | `src/benchmarks/tpch/executor.py` | Use `adapter.bulk_load()`, `adapter.vacuum_equivalent()`; DBMS-specific query dir | R1, R6 |
 | 18 | `src/knobs/knob_loader.py` | DBMS-aware CSV path; MySQL type mapping | R3 |
-| 19 | `src/tuners/pbt/population.py` | Use generic interface instead of `PostgresInstanceManager` | R1 |
+| 19 | `src/tuners/pbt/population.py` | Route instance access through a DBMS-agnostic adapter behind `DatabaseEnvironment` | R1 |
 | 20 | `src/tuners/pbt/cli.py` | Accept `--dbms`, use adapter factory, DBMS-aware paths | R9 |
 | 21 | `src/scripts/setup_database.py` | Use adapter for DDL | R9 |
 | 22 | `src/scripts/cleanup_instances.py` | Use adapter | R9 |

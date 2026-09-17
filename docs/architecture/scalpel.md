@@ -250,7 +250,7 @@ would make neither.
 
 ### Why per-workload seeds
 
-`--all-workloads` discovers every `tuning_sessions/` directory under
+`--all-workloads` discovers every `traces/` directory under
 a results root and runs SCALPEL on each. With a global seed, every
 workload would inherit the **same** RF / BORUTA shadow draws, which
 inflates apparent inter-workload tier agreement and produces a
@@ -268,8 +268,8 @@ raises "Knob set mismatch detected" mid-load.
 
 For `--knob-source data_driven`, the tuner and BO baseline now
 suffix the tier slug with `@scalpel-v1` so post-SCALPEL artifacts
-land at `results/<workload>/pbt_runs/core@scalpel-v1/` while
-legacy ones stay at `results/<workload>/pbt_runs/core/`. Expert-
+land at `results/sessions/<workload>/pbt/core@scalpel-v1/` while
+legacy ones stay at `results/sessions/<workload>/pbt/core/`. Expert-
 source paths are unchanged. The version slug propagates naturally
 when SCALPEL bumps to v2 in the future.
 
@@ -313,7 +313,7 @@ A budget-constrained smoke run can drop `boruta_iter` to ~30 and
     "generated_at": "2026-06-18T20:01:41+00:00",
     "algorithm": "scalpel-v1",
     "scalpel_version": "1.0",
-    "source_results": "results_temp/.../tuning_sessions",
+    "source_results": "results_temp/.../traces",
     "diagnostics": {
       "nuisance_dropped": ["array_nulls", "IntervalStyle", "..."],
       "oob_r2": 0.69,
@@ -351,8 +351,8 @@ for the field-by-field schema.
 ## Data flow
 
 ```text
-results/<workload>/pbt_runs/<tier>/tuning_sessions/
-    pbt_results_*.json
+results/sessions/<workload>/pbt/<tier>/traces/
+    trace_*.json
                 │
                 ▼  data_loader.load_pbt_results
                 │  • parse session JSON, rescore globally,
@@ -389,8 +389,8 @@ results/<workload>/pbt_runs/<tier>/tuning_sessions/
                 │  • output paths suffixed with @scalpel-v1 when
                 │    knob_source == "data_driven"
                 ▼
-        results/<workload>/pbt_runs/<tier>@scalpel-v1/
-        results/<workload>/bo_runs/<tier>@scalpel-v1/
+        results/sessions/<workload>/pbt/<tier>@scalpel-v1/
+        results/sessions/<workload>/bo/<tier>@scalpel-v1/
 ```
 
 ## v1.1 — q-sensitivity sweep

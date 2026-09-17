@@ -4,18 +4,19 @@
 
 This document describes the knob importance analysis workflow used to derive
 stable, hardware-aware tuning tiers. The approach combines fANOVA variance
-attribution with TreeSHAP explanations and uses Jenks Natural Breaks to
-translate continuous importance into discrete tiers.
+attribution with TreeSHAP explanations and uses SCALPEL (a BORUTA +
+BH-FDR significance gate, Lorenz coverage cuts, and cluster-resampled
+stability) to translate continuous importance into discrete tiers.
 
 > See also: [Documentation Index](../README.md), [Configuration Management](configuration-management.md), [Visualization](../guides/visualization.md).
 
 ## Data Flow
 
 ```text
-results/{workload}/pbt_runs/extensive/tuning_sessions/
-    pbt_results_*.json
+results/sessions/{workload}/pbt/extensive/traces/
+    trace_*.json
                 │
-                ▼  data_loader.load_sessions(...)
+                ▼  data_loader.load_pbt_results(...)
                 │  • parse session JSON (fixed_v1 + feature_driven_v2)
                 │  • rescore raw PerformanceMetrics with global anchors
                 │  • encode categorical knobs
@@ -24,27 +25,27 @@ results/{workload}/pbt_runs/extensive/tuning_sessions/
         (X, y)  ←  X: per-evaluation knob configurations (fractional or absolute)
                     y: rescored composite scores
                 │
-                ▼  importance.fit_random_forest(X, y)
-                │  • Random Forest surrogate (default 256 trees)
+                ▼  importance.analyze_knob_importance(loaded_data)
+                │  • Random Forest surrogate (default 400 trees)
                 │  • report R²
                 ▼
         forest, X, y
                 │
-                ├──► importance.run_fanova(forest, X, y)
+                ├──► fANOVA marginals + interactions (internal to the call above)
                 │       • per-knob variance attribution
                 │       • pairwise interaction terms
                 │
-                ├──► importance.run_treeshap(forest, X)
+                ├──► TreeSHAP global + dependence (internal to the call above)
                 │       • global SHAP importance (mean |φ_i|)
                 │       • SHAP dependence values for plotting
                 │
-                ├──► importance.fanova_shap_rank_correlation(...)
+                ├──► fANOVA<->SHAP rank correlation (internal to the call above)
                 │       • Spearman ρ as a method-agreement diagnostic
                 │
                 ▼
-        ImportanceReport (per workload)
+        ImportanceResult (per workload)
                 │
-                ├──► hardware_validator.compute_kendall_tau(reports_per_hardware)
+                ├──► hardware_validator.validate_hardware_importance(profile_results)
                 │       • per-knob ranking stability across machines
                 │       • combined RF with hardware features (ram_bytes, cpu_cores, disk_type)
                 │
@@ -124,14 +125,26 @@ follows is preserved on disk, and SCALPEL adds new ones under
     "shared_buffers": { "fanova": 0.214, "shap": 0.198, "rank": 1 },
     ...
   },
-  "tier_breaks": {
-    "method": "jenks",
-    "k_selected": 4,
-    "silhouette": 0.41,
-    "fallback": null
+  "tier_generation": {
+    "metadata": {
+      "algorithm": "scalpel-v1",
+      "scalpel_version": "1.0",
+      "diagnostics": { "...": "BORUTA / BH-FDR / stability diagnostics" }
+    },
+    "optimal_k": 4,
+    "silhouette_scores": {},
+    "jenks_breaks": [0.5, 0.8],
+    "tier_assignments": { "shared_buffers": "minimal" },
+    "workload_label": "oltp_read_write"
   }
 }
 ```
+
+`optimal_k`, `silhouette_scores` and `jenks_breaks` are retained only for JSON
+schema compatibility: under SCALPEL, `optimal_k` is always `4` (or `1` in the
+degenerate path), `silhouette_scores` is always `{}`, and `jenks_breaks` now
+carries the Lorenz cutoffs `[coverage_minimal, coverage_core]`. See
+[scalpel-diagnostics](../reference/scalpel-diagnostics.md) for the full block.
 
 The `agreement_with_expert` block reports the fraction of expert-tier members that survived into the data-driven tier of the same name. Low agreement on a tier is a signal that the expert categorisation may benefit from review for that workload — not that the data-driven tier is automatically correct. The conservative hardware safety rule is applied before this comparison.
 
@@ -204,10 +217,18 @@ anchors so importance estimates are comparable across workers and sessions.
 
 ## Tier Boundary Derivation
 
-Jenks Natural Breaks is applied as a one-dimensional optimization over the
-importance distribution to produce discrete tier boundaries. The silhouette
-score selects the best number of tiers for scientific analysis and reporting.
-However, to ensure compatibility with the tuner's canonical 4-tier system (`minimal`, `core`, `standard`, `extensive`), the exported `data_driven_tiers.json` is generated using a second Jenks pass that projects the importances onto canonical tiers and saves them to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json`. If the silhouette or data splits are weak, expert-defined tiers remain the fallback.
+SCALPEL derives tier boundaries in three layers over the confirmed-knob
+subset. A group-permutation BORUTA significance gate with a
+Benjamini-Hochberg FDR correction (q = 0.10) first confirms which knobs
+carry real signal. Lorenz coverage cuts (cumulative-importance
+breakpoints at 50 % / 80 %) then partition the confirmed knobs into the
+tuner's canonical 4-tier system (`minimal`, `core`, `standard`,
+`extensive`), and a group-clustered stability pass re-runs BORUTA per
+subsample to flag unstable assignments. The result is written to
+`data/data_driven_knobs/{workload_type}/data_driven_tiers.json`. When
+SCALPEL confirms nothing for a tier its CSV is skipped and callers fall
+back to the next broader tier; if the data is too weak overall,
+expert-defined tiers remain the fallback.
 
 ## Conservative Hardware Safety Rule
 
@@ -234,7 +255,7 @@ importance changes with these features.
 2. Knobs are fractional-normalized to a common scale.
 3. The aggregated dataset trains a Random Forest surrogate.
 4. fANOVA and TreeSHAP compute global importance.
-5. Jenks Natural Breaks converts importance to tiers (optimal k for analysis).
+5. SCALPEL converts importance to tiers (BORUTA + BH-FDR gate -> Lorenz coverage cuts -> cluster-resampled stability).
 6. A second pass projects the importances onto canonical tiers and exports them to `data/data_driven_knobs/{workload_type}/data_driven_tiers.json` via `--export-tiers`.
 
 ## References

@@ -1,6 +1,6 @@
 # Run the Bayesian Optimization baseline
 
-See also: [reference/cli](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline), [architecture/bo-baseline](../architecture/bo-baseline.md), [pbt-vs-bo-comparison](pbt-vs-bo-comparison.md)
+See also: [reference/cli](../reference/cli.md#srctuners-bo--bayesian-optimisation-baseline), [architecture/bo-baseline](../architecture/bo-baseline.md), [pbt-vs-bo-comparison](pbt-vs-bo-comparison.md)
 
 This guide is for someone who wants to **run** the BO baseline. For the architecture and design rationale of the baseline, read [architecture/bo-baseline](../architecture/bo-baseline.md).
 
@@ -32,8 +32,8 @@ If Docker isn't reachable, every command on this page accepts `--no-docker` to f
 The single most useful command — runs BO with all comparable settings copied from a PBT session, ensuring a fair head-to-head:
 
 ```bash
-python -m src.scripts.bo_baseline \
-    --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
+python -m src.tuners bo \
+    --pbt-session results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1825.json \
     --seed 42
 ```
 
@@ -53,7 +53,7 @@ Without a reference session you must specify the search space and runtime parame
 
 ```bash
 # Smallest possible smoke test
-python -m src.scripts.bo_baseline \
+python -m src.tuners bo \
     --tier minimal \
     --iterations 3 \
     --benchmark sysbench \
@@ -61,7 +61,7 @@ python -m src.scripts.bo_baseline \
     --warmup 5
 
 # Standard BO run (50 iterations, OLTP)
-python -m src.scripts.bo_baseline \
+python -m src.tuners bo \
     --tier core \
     --iterations 50 \
     --benchmark sysbench \
@@ -69,7 +69,7 @@ python -m src.scripts.bo_baseline \
     --sysbench-workload oltp_read_write
 
 # Comprehensive BO run (100 iterations, TPC-H)
-python -m src.scripts.bo_baseline \
+python -m src.tuners bo \
     --tier standard \
     --iterations 100 \
     --benchmark tpch \
@@ -80,8 +80,8 @@ python -m src.scripts.bo_baseline \
 
 ```bash
 for seed in 42 123 456 789 1024; do
-    python -m src.scripts.bo_baseline \
-        --pbt-session results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_20260504_1825.json \
+    python -m src.tuners bo \
+        --pbt-session results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260504_1825.json \
         --seed $seed
 done
 ```
@@ -89,7 +89,7 @@ done
 Then run the post-hoc evaluation suite against each output:
 
 ```bash
-for f in results/oltp/oltp_read_write/bo_runs/minimal/tuning_sessions/bo_results_*.json; do
+for f in results/sessions/oltp_read_write/bo/minimal/traces/trace_*.json; do
     python -m src.evaluation --session "$f" --repetitions 5
 done
 ```
@@ -98,8 +98,8 @@ Or feed all of them to the cross-method comparison script for aggregated converg
 
 ```bash
 python -m src.scripts.pbt_vs_bo_comarison \
-    --pbt results/oltp/oltp_read_write/pbt_runs/minimal/tuning_sessions/pbt_results_*.json \
-    --bo  results/oltp/oltp_read_write/bo_runs/minimal/tuning_sessions/bo_results_*.json \
+    --pbt results/sessions/oltp_read_write/pbt/minimal/traces/trace_*.json \
+    --bo  results/sessions/oltp_read_write/bo/minimal/traces/trace_*.json \
     --output-dir analysis/oltp-rw-minimal
 ```
 
@@ -110,36 +110,36 @@ See [pbt-vs-bo-comparison](pbt-vs-bo-comparison.md).
 Random Forest (default) is robust across tier sizes:
 
 ```bash
-python -m src.scripts.bo_baseline --tier core --bo-surrogate rf --iterations 50
+python -m src.tuners bo --tier core --bo-surrogate rf --iterations 50
 ```
 
 Gaussian Process is stronger on low-dimensional, smooth spaces — recommended for `minimal` tier only:
 
 ```bash
-python -m src.scripts.bo_baseline --tier minimal --bo-surrogate gp --iterations 30
+python -m src.tuners bo --tier minimal --bo-surrogate gp --iterations 30
 ```
 
 For why these defaults exist, see [architecture/bo-baseline §Facade selection](../architecture/bo-baseline.md#facade-selection).
 
-## 5. Run BO in parallel
+## 5. Run BO under PBT-matched contention
 
 ```bash
-python -m src.scripts.bo_baseline \
+python -m src.tuners bo \
     --tier core \
     --iterations 50 \
-    --batched-bo \
+    --cotenancy-degree 4 \
     --resource-division 4
 ```
 
-`--batched-bo` enables ask-tell parallel evaluation; `--resource-division` slices host RAM/CPU across the parallel workers (same role as `num_parallel_workers` for PBT). When `--pbt-session` is provided, the resource division is inherited from the reference session — you don't need to specify it manually.
+`--cotenancy-degree N` reproduces PBT's single-host contention: each BO measurement window runs `N` concurrent instances (the foreground trial plus `N − 1` background-load instances), so BO is measured under the same load a PBT generation of `N` workers would create. `--resource-division` slices host RAM/CPU per instance (same role as `num_parallel_workers` for PBT). When `--pbt-session` is provided, both are inherited from the reference session — you don't need to specify them manually. BO itself still evaluates one trial at a time (single-worker ask-tell); it is not run as parallel BO trials.
 
 ## 6. Override scoring
 
 Re-evaluate under a different scoring policy without changing the search space:
 
 ```bash
-python -m src.scripts.bo_baseline \
-    --pbt-session results/.../pbt_results_<timestamp>.json \
+python -m src.tuners bo \
+    --pbt-session results/.../traces/trace_<timestamp>.json \
     --scoring-policy feature_driven_v2 \
     --seed 42
 ```
@@ -150,7 +150,7 @@ Available policies: `fixed_v1` (legacy static weights), `feature_driven_v2` (wor
 
 ## Parameter reference (most-used flags)
 
-For the **complete** flag set, see [reference/cli §src.scripts.bo_baseline](../reference/cli.md#srcscriptsbo_baseline--bayesian-optimisation-baseline).
+For the **complete** flag set, see [reference/cli §src.tuners bo](../reference/cli.md#srctuners-bo--bayesian-optimisation-baseline).
 
 | Flag | Default | When to use |
 | --- | --- | --- |
@@ -159,7 +159,7 @@ For the **complete** flag set, see [reference/cli §src.scripts.bo_baseline](../
 | `--iterations N` | `50`, or `population_size × total_generations` from `--pbt-session` | Evaluation budget. |
 | `--seed INT` | `42` | Master seed; recorded in output JSON. |
 | `--bo-surrogate {rf\|gp}` | `rf` | RF for high-dim/mixed; GP for low-dim/smooth. |
-| `--batched-bo` | off | Parallel ask-tell mode. |
+| `--cotenancy-degree N` | `1`, or PBT `num_parallel_workers` | Concurrent instances (foreground trial + background load) per measurement window, matching PBT contention. |
 | `--resource-division N` | `1`, or PBT `num_parallel_workers` | Denominator for slicing host resources. |
 | `--scoring-policy {fixed_v1\|feature_driven_v2}` | per-workload default | Override the active scoring policy. |
 | `--enable-snapshots` | off, or PBT `enable_snapshots` | Periodic snapshot restoration to combat data drift. |
@@ -174,7 +174,7 @@ For the **complete** flag set, see [reference/cli §src.scripts.bo_baseline](../
 Results are written to:
 
 ```text
-{output_dir}/{workload_type}/bo_runs/{tier}/tuning_sessions/bo_results_{timestamp}.json
+{output_dir}/sessions/{workload_type}/bo/{tier}/traces/trace_{timestamp}.json
 ```
 
 The schema is identical to the PBT session schema with one optimiser-specific addition (`optimizer: "bo_smac3"`, `bo_surrogate`, etc.). Full schema in [reference/session-json-schema §BO session schema](../reference/session-json-schema.md#bo-session-schema).
@@ -217,16 +217,16 @@ Reduce in this order:
 
 ### Long runtimes
 
-Verify the iteration budget is reasonable for the tier (see [architecture/bo-baseline](../architecture/bo-baseline.md) on why high-dim spaces need more iterations to converge). For wall-clock comparisons, prefer `--batched-bo` over sequential when the host has spare cores.
+Verify the iteration budget is reasonable for the tier (see [architecture/bo-baseline](../architecture/bo-baseline.md) on why high-dim spaces need more iterations to converge). For comparisons that must match a PBT run's host contention, set `--cotenancy-degree` (or pass `--pbt-session` to inherit it).
 
 ### Tests
 
 ```bash
-python -m pytest tests/test_bo_baseline.py -v
+python -m pytest tests/unit/tuners/bo/ -v
 ```
 
 Targeted tests:
 
 ```bash
-python -m pytest tests/test_bo_baseline.py::TestSearchSpaceTranslation -v
+python -m pytest tests/unit/tuners/bo/test_bo_config_and_search.py::TestSearchSpaceTranslation -v
 ```

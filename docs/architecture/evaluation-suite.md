@@ -32,8 +32,8 @@ The runbook commands and reproducibility checklist live in [EVALUATION_RUNBOOK.m
 ```text
                        ┌─────────────────────────────────┐
                        │  Tuning session JSON            │
-                       │  results/.../pbt_results_*.json │
-                       │  results/.../bo_results_*.json  │
+                       │  results/sessions/{wl}/{strat}/ │
+                       │  {tier}/traces/trace_{ts}.json  │
                        └────────────────┬────────────────┘
                                         │
                                         ▼
@@ -80,35 +80,42 @@ The runner reuses three components from the tuning side:
 | [`runner.py`](../../src/evaluation/runner.py) | `ComparisonRunner` — orchestrates default-vs-tuned evaluations, multi-arm comparisons, JSON serialisation. |
 | [`statistics.py`](../../src/evaluation/statistics.py) | Wilcoxon signed-rank, paired bootstrap CIs, paired Cohen's d, Holm correction for the secondary endpoint family. |
 | [`loader.py`](../../src/evaluation/loader.py) | `load_tuning_session(path)` — parses session JSON across schema versions, normalises tuning config, extracts scoring metadata. |
-| [`types.py`](../../src/evaluation/types.py) | Frozen dataclasses: `ComparisonConfig`, `TuningSessionData`, `RunResult`, `MetricComparison`, `ComparisonResult`, `PairwiseResult`, `MultiArmComparisonResult`. |
-| [`exceptions.py`](../../src/evaluation/exceptions.py) | Domain-specific exception hierarchy (`SessionLoadError`, `EvaluationSetupError`, `RunFailureError`). |
+| [`types.py`](../../src/evaluation/types.py) | Dataclasses (none are frozen): `ComparisonConfig`, `TuningSessionData`, `RunResult`, `MetricComparison`, `ComparisonResult`, `PairwiseResult`, `MultiArmComparisonResult`. |
+| [`exceptions.py`](../../src/evaluation/exceptions.py) | Domain-specific exception hierarchy: `EvaluationError` base, plus `TuningSessionLoadError`, `ScoringMetadataSchemaError`, `DockerEnvironmentError`, `BenchmarkExecutionError`, `KnobApplicationError`. |
 
-The package surfaces a small public API in `__init__.py` — `ComparisonRunner`, `ComparisonConfig`, `load_tuning_session`, plus the result types used by downstream scripts and the visualization comparison loader.
+`__init__.py` is a WIP placeholder — it re-exports nothing (`__all__: list[str] = []`). Consumers import directly from the submodules: `from src.evaluation.runner import ComparisonRunner`, `from src.evaluation.loader import load_tuning_session`, `from src.evaluation.types import ComparisonConfig`.
 
 ---
 
 ## `ComparisonConfig`
 
 ```python
-@dataclass(frozen=True)
+@dataclass
 class ComparisonConfig:
-    session_path: Path
+    tuning_session_path: Path
+    benchmark: Optional[str] = None
     repetitions: int = 5
-    seed: int = 50000
+    scale_factor: Optional[float] = None
+    sysbench_duration: Optional[int] = None
+    sysbench_tables: Optional[int] = None
+    sysbench_table_size: Optional[int] = None
+    sysbench_workload: Optional[str] = None
+    sysbench_warmup_seconds: Optional[int] = None
+    tpch_warmup_passes: Optional[int] = None
+    pair_seed: int = 50_000
     use_docker: bool = True
-    docker_image: Optional[str] = None
+    docker_image: str = "pbt-eval"
     output_dir: Optional[Path] = None
     scoring_policy: Optional[str] = None
     scoring_policy_version: Optional[str] = None
-    sysbench_overrides: SysbenchOverrides = ...
-    tpch_overrides: TPCHOverrides = ...
-    multi_arm_sessions: list[Path] = ()
-    # ... see source
+    metric_reference_version: Optional[str] = None
+    bo_session_path: Optional[Path] = None
+    # ... plus data_dir, colocate_output, force_recreate_baseline — see source
 ```
 
-The CLI in `__main__.py` builds this dataclass; the runner consumes it. The frozen dataclass means a runner instance cannot mutate its config mid-run, which keeps the reproducibility metadata in the output JSON honest.
+The CLI in `__main__.py` builds this dataclass; the runner consumes it. `ComparisonConfig` is a plain (non-frozen) dataclass; the runner treats it as read-only after construction, which keeps the reproducibility metadata in the output JSON honest.
 
-Runtime overrides (Sysbench tables / table size / duration / warmup, TPC-H scale factor / warmup passes) are grouped into nested dataclasses so the override field set is auditable; the runner falls back to session-recorded values when an override is unset.
+Runtime overrides (Sysbench tables / table size / duration / warmup, TPC-H scale factor / warmup passes) are flat `Optional` fields directly on `ComparisonConfig` so the override field set is auditable; the runner falls back to session-recorded values when an override is unset.
 
 ---
 
@@ -139,7 +146,7 @@ Notable choices:
 - **Identical paired seeds.** Repetition `i` uses `base_seed + i - 1` for *both* the default and the tuned run. The two configurations face the same workload sequence, so paired statistical tests (Wilcoxon, paired bootstrap CI, paired Cohen's d) are valid.
 - **Default knobs come from `KnobSpace.get_default_config()`.** They are not the cluster's current knobs; they are the PostgreSQL defaults captured by the same KnobSpace that produced the tuned config. This is the only way the paired test is fair on knobs the tuner explored.
 - **Tuned knobs come from `session.best_configuration.knobs`.** When the session JSON stores fractional values (hardware-relative knobs), `_resolve_tuned_knobs` calls `KnobSpace.fractions_to_config(...)` against the *evaluation* host's resources, not the original tuning host's. This is what makes "tune on a 16-GB host, evaluate on a 32-GB host" sound — the fractional encoding is the transfer medium.
-- **Output partitioning by tier and workload.** `_resolve_output_dir` writes to `results/{workload_kind}/comparisons/{tier}/` derived from `session.tuning_session.knob_tier`, with a fallback to the session path's `pbt_runs/{tier}/` segment. This keeps the results tree navigable even when the session metadata is partial.
+- **Output partitioning by tier and workload.** `_resolve_output_dir` writes to `results/comparisons/{workload_kind}/{tier}/` derived from `session.tuning_session.knob_tier`, with a fallback to the tier segment following the session path's `{strategy}/` (or legacy `{strategy}_runs/`) directory. This keeps the results tree navigable even when the session metadata is partial.
 
 ---
 
@@ -149,7 +156,7 @@ Notable choices:
 
 `load_tuning_session(path)` parses both PBT and BO session JSONs into a single `TuningSessionData` shape. The loader is deliberately permissive about historical schema variations:
 
-- **Scoring policy default.** Sessions without a `scoring_policy` field are treated as `fixed_v1` with policy version `1.0` and metric reference version `v1` (the constants in [src/utils/scoring/constants.py](../../src/utils/scoring/constants.py)). Runs from before scoring-v2 still load and compare correctly.
+- **Scoring policy default.** Sessions without a `scoring_policy` field fall back to the default constants in [src/utils/scoring/constants.py](../../src/utils/scoring/constants.py) — `feature_driven_v2`, policy version `2.0`, metric reference version `v2`. Runs from before scoring-v2 still load and compare correctly.
 - **Tuning-config normalisation.** `_normalize_tuning_config()` coerces numeric fields (`population_size`, `total_generations`, `sysbench_table_size`, `tpch_scale_factor`, etc.) from strings or floats into the right types, since older runs sometimes wrote durations as strings.
 - **Benchmark / workload inference.** When a session JSON omits `benchmark_name` or `workload_type`, `_infer_benchmark_and_workload()` derives them from the session path (`results/oltp/oltp_read_write/...` → sysbench OLTP; `results/olap/...` → TPC-H OLAP).
 - **Version compatibility check.** `_check_version_compatibility` warns (does not block) on metric-reference-version mismatches between sessions in a multi-arm comparison. The user can override the active scoring policy via `--scoring-policy` to force re-evaluation under newer weights — at which point the comparison JSON records both the original session policies and the active comparison policy.
@@ -169,21 +176,19 @@ The statistical layer is paired-design throughout. Given `default_runs` and `tun
 def compute_comparison_statistics(
     default_runs: list[RunResult],
     tuned_runs: list[RunResult],
-    primary_endpoint: str = "score",
-    secondary_endpoint_family: list[str] = (...),
+    benchmark: str,
     alpha: float = 0.05,
-    bootstrap_resamples: int = 10000,
-    rng_seed: int = 42,
 ) -> ComparisonStatistics: ...
+# primary endpoint ('score'), the 8-endpoint secondary family, the 10,000
+# resamples and the RNG seed (42) are module constants / hard-coded, not params.
 ```
 
 ### Endpoints
 
 - **Primary endpoint: `score`** — the composite score from the active scoring policy. Tested at α = 0.05 with no family correction.
-- **Secondary endpoint family** — benchmark latency endpoint + throughput + memory utilization.
-  - Sysbench secondary latency endpoint: `latency_p95`.
-  - TPC-H secondary latency endpoint: `latency_p99`.
+- **Secondary endpoint family (4 endpoints)** — `throughput`, `latency_p99`, `memory_pressure`, `scan_efficiency` (`_SECONDARY_ENDPOINTS`). The family is fixed and does **not** vary by benchmark; it is deliberately curated to metrics that are genuinely measured and are not monotone restatements of one another.
   - Secondary p-values are corrected with **Holm's step-down procedure** (see `_holm_adjusted_pvalues`).
+- **Reported endpoints (5, never hypothesis-tested)** — `latency_p95`, `latency_p50`, `error_rate`, `tail_amplification`, `latency_variance` (`_REPORTED_ENDPOINTS`). These appear in the summary table and the JSON with `endpoint_role="reported"`, carrying no p-value of record: they are near-constant on healthy runs, highly correlated with a tested endpoint, or niche restatements.
 
 The asymmetry — primary endpoint uncorrected, secondary family corrected — is intentional: the primary endpoint is what the optimisation actually targets; the secondary family is for understanding the *direction* of the win, not for additional confirmatory testing.
 
@@ -193,16 +198,16 @@ For each endpoint, the statistics module produces a `MetricComparison` with:
 
 | Field | Computation |
 | --- | --- |
-| `default` / `tuned` | `StatSummary` (mean, std, median, p25, p75, n) |
-| `delta_mean`, `delta_median`, `pct_change` | Tuned − default summaries. |
-| `wilcoxon_p` | Wilcoxon signed-rank test on per-pair differences. Falls back to `1.0` when all differences are exactly zero (degenerate case for short reps). |
-| `bootstrap_ci_median` | Bias-corrected accelerated bootstrap CI on the median difference. RNG seed pinned to `42` for deterministic CI computation. |
+| `default` / `tuned` | `StatSummary` (mean, std, median, iqr_lower, iqr_upper, values) |
+| `improvement_pct`, `improvement_ci` | Median-based percent improvement and its bootstrap 95% CI (`p_value_corrected` and `endpoint_role` also present). |
+| `p_value` | Wilcoxon signed-rank test on per-pair differences. Falls back to `1.0` when all differences are exactly zero (degenerate case for short reps). |
+| `improvement_ci` | Plain **percentile** bootstrap CI (10,000 resamples) on the median difference. RNG seed pinned to `42` for deterministic CI computation. |
 | `cohens_d` | Paired Cohen's d on the difference vector. |
 | `significant` | `p < α` (with Holm correction applied to the secondary family). |
 
 ### Power warning
 
-`_build_power_warning(n_pairs)` returns a string like `"Statistical power is limited with n=3 paired observations; consider --repetitions 10"` when fewer than 5 repetitions were used. It is surfaced into the comparison JSON so reviewers can see it without re-reading the runbook.
+`_build_power_warning(n_pairs)` returns a string like `"Low statistical power at N=5: minimum possible two-sided Wilcoxon p-value is 0.0625, so p<0.05 cannot be reached even before correction."` when fewer than 8 paired observations were used (it returns `None` at n ≥ 8). It is surfaced into the comparison JSON — nested under `statistics` — so reviewers can see it without re-reading the runbook.
 
 ### Determinism
 
@@ -217,34 +222,36 @@ A comparison JSON is structured as follows (truncated):
 ```json
 {
   "comparison_metadata": {
-    "session_path": "...",
+    "timestamp": "...",
+    "tuning_session_path": "...",
+    "evaluation_log_path": "...",
+    "benchmark": "sysbench",
     "repetitions": 5,
-    "seed": 50000,
+    "pair_seed_base": 50000,
+    "benchmark_parameters": { ... },
     "evaluation_environment": "docker",
-    "resource_constraints": { "ram_bytes": ..., "cpu_cores": ... },
-    "scoring_policy": "feature_driven_v2",
-    "scoring_policy_version": "2.0",
-    "metric_reference_version": "v2",
-    "workload_features": { ... },
-    "normalization_metadata": { ... },
-    "score_breakdown": { ... },
+    "resource_constraints": { "ram_bytes": ..., "cpu_cores": ..., "disk_type": "..." },
     "reproducibility": {
       "python_version": "3.11.x",
       "postgres_version": "16.x",
-      "docker_image": "postgres:16",
+      "docker_image": "pbt-eval",
       "python_package_versions": { ... },
       "benchmark_binary_paths": { ... }
     }
   },
+  "tuned_knobs":    { ... },
   "default_runs":   [ RunResult, RunResult, ... ],
   "tuned_runs":     [ RunResult, RunResult, ... ],
   "statistics": {
-    "score":              MetricComparison,
-    "latency_p95":        MetricComparison,
-    "throughput":         MetricComparison,
-    "memory_utilization": MetricComparison
+    "metrics": [ MetricComparison, MetricComparison, ... ],   // JSON LIST, one per endpoint
+    "power_warning": "..." | null,
+    "primary_endpoint": "score",
+    "secondary_endpoints": ["throughput", "latency_p99", "memory_pressure", "scan_efficiency"]
   },
-  "power_warning": "..."  // optional
+  "scoring_metadata":         { ... },   // policy used by THIS evaluation
+  "session_info":             { "scoring_policy": ..., "scoring_policy_version": ..., "metric_reference_version": ... },
+  "session_scoring_metadata": { "workload_features": {...}, "normalization_metadata": {...}, "score_breakdown": {...} },
+  "system_info":              { ... }
 }
 ```
 
@@ -258,9 +265,9 @@ Every field listed in the [reproducibility checklist of the runbook](../guides/e
 
 ```bash
 python -m src.evaluation \
-  --session results/.../pbt_results_seed42.json \
-  --session results/.../pbt_results_seed123.json \
-  --session results/.../bo_results_seed42.json \
+  --session results/.../trace_seed42.json \
+  --session results/.../trace_seed123.json \
+  --session results/.../trace_seed42.json \
   --repetitions 8
 ```
 
@@ -299,7 +306,7 @@ A reviewer reading a publication-facing comparison shouldn't have to wonder whet
 
 ### 6. Output partitioning by `(workload, tier)`
 
-Running comparisons across many sessions generates many JSONs. The path layout `results/{workload_kind}/comparisons/{tier}/` keeps related artefacts adjacent, and downstream scripts can glob over a tier directory to assemble multi-arm plots without parsing every file.
+Running comparisons across many sessions generates many JSONs. The path layout `results/comparisons/{workload_kind}/{tier}/` keeps related artefacts adjacent, and downstream scripts can glob over a tier directory to assemble multi-arm plots without parsing every file.
 
 ### 7. Loader tolerates schema drift
 
