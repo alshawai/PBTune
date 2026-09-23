@@ -15,6 +15,12 @@ from .hardware_validator import (
     train_combined_importance,
     validate_hardware_importance,
 )
+from .pbt_invariants import (
+    Finding,
+    SessionTrace,
+    check_all,
+    violations,
+)
 
 __all__ = [
     "load_pbt_results",
@@ -25,4 +31,8 @@ __all__ = [
     "group_importances_by_hardware",
     "train_combined_importance",
     "validate_hardware_importance",
+    "Finding",
+    "SessionTrace",
+    "check_all",
+    "violations",
 ]
