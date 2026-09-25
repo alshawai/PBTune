@@ -98,6 +98,30 @@ The normalizer:
 
 This is what keeps the scoring signal stable across generations while preserving discrimination between candidate configurations.
 
+### Asymmetric, Direction-Aware Anchoring
+
+Calibration (`QuantileUtilityNormalizer.fit()`) anchors each metric with an
+explicit *good* end and *bad* end rather than trimming both tails symmetrically.
+The bad tail is still trimmed robustly (a one-sided `iqr_filter` pass followed by
+the `p05`/`p95` quantile), so a pathological-but-not-failed measurement cannot
+distort the range. The good tail is never discarded: the good-end anchor is
+placed strictly at/beyond the best non-failed observation, with headroom.
+
+- `HIGHER_IS_BETTER`: good end = `q_high`, set to `max(observed) + headroom`;
+  bad end = `q_low`, the robust low quantile.
+- `LOWER_IS_BETTER` / `ZERO_IS_BEST`: good end = `q_low`, set to
+  `min(observed) − headroom`; bad end = `q_high`, the robust high quantile.
+
+Symmetric trimming (the pre-fix behaviour) discarded the single best (elite)
+observation, so the elite sat permanently outside the range and clamped at
+maximum utility — the scorer went blind to any further improvement past it (bug
+B9). Anchoring the good end beyond the best observation guarantees the current
+champion scores just under `1.0` with room to grow. The headroom may extend the
+good-end anchor slightly past the metric's physical range (for example just
+below `0` for a non-negative metric); this is intentional and only ensures the
+best observation stays strictly interior. See
+[ADR-010](decisions/ADR-010-asymmetric-normalizer-anchoring.md).
+
 ### Saturation Detection and Anchor Expansion
 
 When several workers clamp a metric to the same anchor, they collapse to an identical utility and their configurations tie in the composite score even when they are genuinely different. `detect_metric_saturation()` counts, per metric, how many workers pin the upper utility bound (utility ≈ 1.0) and how many pin the lower bound (utility ≈ 0.0), and `expand_ranges_for_metrics()` widens the saturated anchors so ranking is restored.
@@ -198,7 +222,7 @@ Calibrating the normalizer's quantile anchors against raw observations is sensit
 
 The filter returns a `(filtered_array, metadata_dict)` pair where the metadata records `n_removed`, `original_size`, the bounds used, and a `fallback_used` flag. When the input has fewer than 4 observations or `IQR == 0`, the filter falls back to the unfiltered values rather than producing degenerate bounds; both cases are surfaced in the metadata so post-hoc analysis can audit when calibration was unfiltered.
 
-The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/utils/calibration.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
+The filter is applied inside `QuantileUtilityNormalizer.expand_ranges_for_metrics()` immediately before quantile estimation, and inside the global rescoring helper [`rescore_metrics_globally()`](../../src/utils/calibration.py) used by the [PBT vs BO comparison script](../guides/pbt-vs-bo-comparison.md). Inside `QuantileUtilityNormalizer.fit()` the same filter is applied **one-sided, to the bad tail only** — the good tail is preserved so the best observation always survives to anchor the good end (see [ADR-010](decisions/ADR-010-asymmetric-normalizer-anchoring.md)). The filter is __not__ applied at scoring time — only at calibration time — because individual scoring calls must remain monotonic in their inputs.
 
 ## Source References
 

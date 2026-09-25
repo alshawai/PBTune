@@ -23,7 +23,17 @@ def test_normalizer_initialization():
 
 
 def test_normalizer_fit():
-    """Test fitting the normalizer with observations."""
+    """Test fitting the normalizer with observations.
+
+    Ticket #170 (bug B9): anchoring is now asymmetric and direction-aware. The
+    BAD end still anchors at the observed extreme (min for a HIGHER metric, max
+    for a LOWER one), but the GOOD end is placed strictly *beyond* the best
+    observation with headroom, so the best worker is no longer pinned at utility
+    1.0 and further improvement stays visible. The assertions below that used to
+    read ``best -> 1.0`` and ``midpoint -> 0.5`` encoded the old symmetric-both-
+    ends mapping (and thereby the bug); they are replaced with the corrected
+    contract (good end covers the best; scoring is monotone).
+    """
     normalizer = QuantileUtilityNormalizer(lower_quantile=0.0, upper_quantile=1.0)
 
     # Create metrics with simple uniform distribution
@@ -39,17 +49,34 @@ def test_normalizer_fit():
 
     assert normalizer.is_calibrated
 
-    # throughput is 'higher_is_better' (heuristic: contains "throughput")
-    # 0 -> 0.0 utility, 10 -> 1.0 utility
+    # throughput is 'higher_is_better' (heuristic: contains "throughput").
+    # Bad (low) end still anchors at the worst observation: 0 -> 0.0 utility.
     assert np.isclose(normalizer.score_metric("throughput", 0.0), 0.0)
-    assert np.isclose(normalizer.score_metric("throughput", 10.0), 1.0)
-    assert np.isclose(normalizer.score_metric("throughput", 5.0), 0.5)
+    # Good (high) anchor now strictly exceeds the best observation, so the best
+    # worker scores just under 1.0 rather than being clamped at it (B9 fix).
+    _, _, tp_high = normalizer.anchors["throughput"]
+    assert tp_high > 10.0
+    assert normalizer.score_metric("throughput", 10.0) < 1.0
+    # Scoring stays monotone increasing across the observed range.
+    assert (
+        normalizer.score_metric("throughput", 0.0)
+        < normalizer.score_metric("throughput", 5.0)
+        < normalizer.score_metric("throughput", 10.0)
+    )
 
-    # latency is 'lower_is_better' (heuristic: contains "latency")
-    # 10 -> 1.0 utility (best), 50 -> 0.0 utility (worst)
-    assert np.isclose(normalizer.score_metric("latency_p95", 10.0), 1.0)
+    # latency is 'lower_is_better' (heuristic: contains "latency").
+    # Bad (high) end still anchors at the worst observation: 50 -> 0.0 utility.
     assert np.isclose(normalizer.score_metric("latency_p95", 50.0), 0.0)
-    assert np.isclose(normalizer.score_metric("latency_p95", 30.0), 0.5)
+    # Good (low) anchor now strictly undercuts the best observation.
+    _, lat_low, _ = normalizer.anchors["latency_p95"]
+    assert lat_low < 10.0
+    assert normalizer.score_metric("latency_p95", 10.0) < 1.0
+    # Monotone decreasing utility as latency rises.
+    assert (
+        normalizer.score_metric("latency_p95", 10.0)
+        > normalizer.score_metric("latency_p95", 30.0)
+        > normalizer.score_metric("latency_p95", 50.0)
+    )
 
 
 def test_normalizer_clipping():
@@ -122,7 +149,16 @@ def test_normalizer_state_serialization():
     new_normalizer.import_state(state)
 
     assert new_normalizer.is_calibrated
-    assert np.isclose(new_normalizer.score_metric("throughput", 5.0), 0.5)
+    # Round-trip fidelity: the imported normalizer must score identically to the
+    # original across the range. (Previously this asserted a fixed 0.5 midpoint,
+    # which encoded the old symmetric-both-ends mapping; ticket #170 makes
+    # anchoring asymmetric, so the midpoint value shifts. Comparing the two
+    # normalizers directly is a stronger, mapping-agnostic round-trip check.)
+    for value in (0.0, 2.5, 5.0, 7.5, 10.0):
+        assert np.isclose(
+            new_normalizer.score_metric("throughput", value),
+            normalizer.score_metric("throughput", value),
+        )
 
 
 def test_normalizer_score_vector():
@@ -140,8 +176,13 @@ def test_normalizer_score_vector():
     assert "throughput" in scores
     assert "latency_p95" in scores
     assert "error_rate" in scores
-    assert np.isclose(scores["throughput"], 0.5)
-    assert np.isclose(scores["latency_p95"], 0.5)
+    # Ticket #170: asymmetric anchoring places the good-end anchor just beyond
+    # the best observation, so a mid-range reading lands just *below* 0.5 rather
+    # than exactly on it. Assert that tight "discriminating interior, pulled
+    # slightly below midpoint" band — meaningfully stronger than a bare 0<u<1,
+    # which would pass for almost any monotone mapping and catch no drift.
+    assert 0.4 < scores["throughput"] < 0.5
+    assert 0.4 < scores["latency_p95"] < 0.5
 
 
 def test_expand_anchor_lower_is_better_upper_utility_saturation_lowers_q_low():

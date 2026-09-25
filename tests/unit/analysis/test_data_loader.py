@@ -216,10 +216,14 @@ def test_load_pbt_results_global_rescoring(mock_pbt_directory):
     assert len(dataset.scores) == 3
     assert len(dataset.metadata) == 2  # 2 files
 
-    # Verify bounds were updated via the normalizer
-    # Latencies: 15.0, 10.0, 25.0 -> min ~10.0, max ~25.0 (without padding logic)
-    # Throughput: 1000, 1500, 800 -> min ~820, max ~1450
-    # The normalizer anchors are now the source of truth
+    # Verify bounds were updated via the normalizer.
+    # Latencies: 15.0, 10.0, 25.0 -> bad-end (high) anchor ~24.0.
+    # Throughput: 1000, 1500, 800 -> bad-end (low) anchor ~820; the good-end
+    # (high) anchor now sits 5% ABOVE the best observation (1500 -> 1575) rather
+    # than at the old symmetric p95 (~1450), which clamped the best worker at max
+    # utility. This is the ticket #170 (bug B9) asymmetric-anchoring fix: the
+    # champion is covered by the range with headroom, not pinned at 1.0.
+    # The normalizer anchors are now the source of truth.
     if (
         dataset.metric_config._normalizer
         and dataset.metric_config._normalizer.is_calibrated
@@ -227,7 +231,7 @@ def test_load_pbt_results_global_rescoring(mock_pbt_directory):
         _, thr_low, thr_high = dataset.metric_config._normalizer.anchors.get(
             "throughput", (1, 0, 0)
         )
-        assert thr_high == 1450.0
+        assert thr_high == 1575.0
         assert thr_low == 820.0
 
     # We should have bounds for our mocked variables (shared_buffers, enable_indexscan, wal_sync_method)
