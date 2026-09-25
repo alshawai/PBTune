@@ -175,7 +175,8 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
         enumvals = parse_enumvals(row.get("enumvals"))
         integer_step = _infer_integer_step(row, knob_type)
 
-        default = row.get("boot_val") or row.get("value")
+        boot_val = row.get("boot_val")
+        default = boot_val if pd.notna(boot_val) else row.get("value")
         if knob_type == KnobType.INTEGER and default is not None:
             try:
                 default = int(default)
@@ -188,6 +189,14 @@ def load_knob_space_from_csv(csv_path: str) -> KnobSpace:
                 default = None
         elif knob_type == KnobType.BOOLEAN and default is not None:
             default = str(default).lower() in ["on", "true", "yes", "1"]
+        elif knob_type == KnobType.ENUM:
+            # An empty pg boot value reads back as NaN; fall back to the first
+            # enum member (its canonical "" / no-op value) so the default is a
+            # valid domain member rather than a non-finite NaN (ticket #171).
+            if default is None or (
+                isinstance(default, float) and pd.isna(default)
+            ):
+                default = enumvals[0] if enumvals else None
 
         knob_def = KnobDefinition(
             name=row["name"],
