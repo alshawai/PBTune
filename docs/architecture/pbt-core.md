@@ -109,7 +109,7 @@ class Worker:
 | Method | Purpose |
 | --- | --- |
 | `is_ready()` | `step_count >= ready_interval`. Workers below this count are not eligible for exploit/explore. |
-| `clone_from(other, generation, environment=None)` | Exploit step. Copies the elite's `knob_config`, sets `parent_id`, resets `step_count`. When `environment` is provided, the elite's data directory is also physically cloned (see below). |
+| `clone_from(other, generation, environment=None)` | Exploit step. Copies the elite's `knob_config`, sets `parent_id`, and **resets `step_count` to 0** so the readiness cooldown re-arms: the adopting worker must complete a full `ready_interval` of fresh evaluations before it is eligible to exploit again (ticket #164). When `environment` is provided, the elite's data directory is also physically cloned (see below). |
 | `perturb(factors)` | Explore step. Calls `KnobSpace.perturb_config()` and applies dependency repair (memory-budget enforcement). |
 | `update_metrics(metrics, score, breakdown)` | Records evaluation results, increments `step_count`. |
 | `get_config_copy()` | Defensive copy for serialisation. |
@@ -118,7 +118,7 @@ class Worker:
 
 ### Why "ready interval" matters
 
-PBT's ready interval prevents premature exploitation: a worker that just exploited an elite needs at least one full evaluation under its new configuration before it can be ranked as poor again. Without this, a single noisy measurement could trigger a cascade of exploitations within one generation. Typical values: `1` (aggressive, fast convergence), `3` (balanced default), `5` (conservative, more diversity).
+PBT's ready interval prevents premature exploitation: a worker that just exploited an elite needs a full `ready_interval` of evaluations under its new configuration before it can be ranked as poor again. `clone_from` enforces this by resetting the worker's readiness counter (`step_count → 0`) on adoption, so the interval is measured *since the member last became ready* — the recurring cooldown from Jaderberg et al. (2017), §4.1. Without it, a worker stayed permanently ready once warmed up and a single noisy measurement could trigger a cascade of exploitations generation after generation (bug B1). Typical values: `1` (aggressive, fast convergence), `3` (balanced default), `5` (conservative, more diversity).
 
 ### Physical instance cloning during exploit
 
@@ -346,7 +346,7 @@ Two branches follow:
 - **Alive donors exist** — rescue is deferred to `execute_exploit_explore`, which pairs each dead worker with a genuine elite and perturbs from there.
 - **No alive donors** — each dead worker is resampled from an LHS candidate pool via `_choose_diverse_resample_config()`, which picks the candidate maximising `_config_change_ratio()` against the worker's previous config subject to `resample_min_change_ratio`. The worker's score is reset to `0.0`, its metrics and score breakdown are cleared, and `force_restart_next_eval` is set.
 
-`step_count` is **not** reset in either branch — the ready interval keeps running so a rescued worker cannot immediately be re-ranked as poor.
+When a rescued worker adopts a new configuration through `clone_from` (the alive-donor branch, via `execute_exploit_explore`), its `step_count` is reset to 0 — the readiness cooldown re-arms, so the worker cannot be re-ranked as poor until it has served a full `ready_interval` again (ticket #164). The no-alive-donor resample branch clears the worker's score, metrics, and score breakdown but leaves `step_count` untouched; that branch runs only when *every* worker has failed, where dead workers are rescued regardless of readiness, so the counter is moot there.
 
 This avoids the failure mode where a single environment crash silently halves the population's effective diversity.
 
