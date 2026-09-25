@@ -190,6 +190,7 @@ def _make_tuner(tmp_path, *, generation_history) -> PBTTuner:
         perturbation_factors=(0.8, 1.2),
         ready_interval=1,
         dead_config_threshold=3,
+        resample_probability=0.1,
     )
     tuner.benchmark_config = SimpleNamespace(
         scale_factor=0.1,
@@ -354,6 +355,8 @@ def test_assemble_strategy_params_and_scoring_block(tuner_with_history):
     assert ts["strategy_params"]["population_size"] == 2
     assert ts["strategy_params"]["generations"] == 2
     assert ts["strategy_params"]["exploit_quantile"] == 0.25
+    # #166: the effective resample_probability is persisted in strategy_params.
+    assert ts["strategy_params"]["resample_probability"] == 0.1
     assert "scoring" in ts
     assert ts["scoring"]["scoring_policy"] == "feature_driven_v2"
 
