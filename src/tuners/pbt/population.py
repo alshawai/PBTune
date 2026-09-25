@@ -38,6 +38,7 @@ from src.config.database import DatabaseConfig
 from src.tuners.pbt.worker import PBTWorker
 from src.tuners.pbt.evolution import (
     execute_exploit_explore,
+    compute_exploit_cohort,
     get_best_worker,
     get_population_statistics,
     check_convergence,
@@ -123,6 +124,16 @@ class GenerationResult:
     # Each entry: {"elite_worker_id": elite, "poor_worker_id": poor}.
     # Empty when no exploit occurred (e.g. warmup or a converged population).
     exploitations: List[Dict[str, int]] = field(default_factory=list)
+    # Exploit-cohort accounting for this generation (bug B2, ticket #165):
+    # {"intended": N, "achieved": M, "shortfall": max(0, N - M)}. ``intended``
+    # is the quantile cohort ``max(1, int(population_size * exploit_quantile))``;
+    # ``achieved`` is how many ready-pool workers filled that quantile — dead-
+    # config rescues are excluded (they are counted by ``num_exploited``), so a
+    # generation that rescues crashed workers without a ready-pool exploit still
+    # reports a positive shortfall. A positive shortfall states plainly that the
+    # readiness cooldown (#164) left the quantile unfilled. Empty until
+    # train_generation populates it.
+    exploit_cohort: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert GenerationResult to a dictionary for logging or serialization."""
@@ -136,6 +147,7 @@ class GenerationResult:
             "best_config": self.best_config,
             "converged": self.converged,
             "exploitations": self.exploitations,
+            "exploit_cohort": self.exploit_cohort,
         }
 
 
@@ -1050,6 +1062,11 @@ class Population:
         result = self.record_generation()
 
         LOGGER.info("Performing evolution step...")
+        # Snapshot pre-exploit scores so exploit-cohort accounting can separate
+        # ready-pool quantile fills from dead-config rescues (bug B2, #165): a
+        # worker below dead_config_threshold that exploits was a rescue, not a
+        # ready-pool fill, and must not mask a shortfall.
+        pre_exploit_scores = [w.performance_score for w in self.workers]
         with self.generation_timing.span("evolve"):
             pairs_exploited = execute_exploit_explore(
                 workers=self.workers,
@@ -1080,6 +1097,27 @@ class Population:
                     self.env.clone_instances(source_id, target_ids)
 
         result.num_exploited = len(pairs_exploited)
+        # Exploit-cohort accounting (bug B2, ticket #165): record the intended
+        # quantile cohort and how much of it the READY POOL filled, so the
+        # persisted trace states plainly when the ready pool could not fill the
+        # quantile. Dead-config rescues (poor worker below dead_config_threshold)
+        # are excluded from ``achieved`` — they are a separate rescue mechanism
+        # counted by num_exploited — so rescues cannot mask a ready-pool
+        # shortfall. The warning itself is emitted at the selection seam inside
+        # truncation_selection(); this mirrors the same accounting for the
+        # recorded field without threading a new return value up through
+        # execute_exploit_explore's contract.
+        dead_threshold = self.config.dead_config_threshold
+        achieved_ready = sum(
+            1
+            for poor_idx, _ in pairs_exploited
+            if pre_exploit_scores[poor_idx] >= dead_threshold
+        )
+        result.exploit_cohort = compute_exploit_cohort(
+            num_workers=len(self.workers),
+            exploit_quantile=self.config.exploit_quantile,
+            achieved=achieved_ready,
+        )
         # Record the exploit graph (poor worker -> adopted elite) by worker_id
         # so the session trace states who cloned whom this generation.
         result.exploitations = [

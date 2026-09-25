@@ -255,6 +255,7 @@ One element per generation. Each is:
   "timestamp": "2026-03-26T00:46:48.849150",
   "wall_clock_seconds": 287.3,
   "generation_elapsed_seconds": 287.3,
+  "exploit_cohort": { "intended": 2, "achieved": 0, "shortfall": 2 },
   "worker_scores": [
     { "worker_id": 0, "score": 0.71, "metrics": { ... } },
     { "worker_id": 1, "score": 0.79, "metrics": { ... } }
@@ -267,6 +268,8 @@ One element per generation. Each is:
 ```
 
 `worker_scores[].metrics` is a `PerformanceMetrics.to_dict()`. `worker_configs[].config` is the post-verify quantised configuration for that worker at that generation. `restart_count` records how many workers triggered PostgreSQL restarts in the generation (a function of the tuning mode + the postmaster-context knobs touched).
+
+`num_exploited` is the number of poor workers that adopted an elite this generation (ready-pool exploits **and** dead-config rescues); `exploit_cohort` (bug B2, ticket #165) breaks that count against intent: `intended` is the quantile cohort `max(1, int(population_size × exploit_quantile))`, `achieved` is how many **ready-pool** workers filled that quantile — dead-config rescues are excluded, so `achieved ≤ num_exploited` — and `shortfall = max(0, intended − achieved)`. A positive `shortfall` means the ready pool could not fill the quantile — the expected steady state under the #164 readiness cooldown, which re-arms a worker's ready gate whenever it adopts a new configuration; the same condition also emits a WARNING at the selection seam. The sibling `exploitations` array records the `{ "elite_worker_id", "poor_worker_id" }` pairs behind `num_exploited`.
 
 ### `convergence`
 

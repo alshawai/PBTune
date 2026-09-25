@@ -29,12 +29,12 @@ Explore Function:
             w_i.knobs[k] ← w_i.knobs[k] × U(0.8, 1.2)
 
 Where:
-- α = exploit_quantile (typically 0.2, meaning bottom/top 20%)
+- α = exploit_quantile (typically 0.25, meaning bottom/top 25%)
 - U(a, b) = uniform random distribution between a and b
 
 """
 
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 import numpy as np
 
 from src.tuners.pbt.worker import PBTWorker
@@ -42,6 +42,45 @@ from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("Evolution")
 COLORS = get_color_context()
+
+
+def compute_exploit_cohort(
+    num_workers: int, exploit_quantile: float, achieved: int
+) -> Dict[str, int]:
+    """
+    Report the intended, achieved, and unfilled exploit cohort for a generation.
+
+    The intended cohort mirrors :attr:`PBTConfig.num_workers_per_quantile`:
+    ``max(1, int(num_workers * exploit_quantile))`` with integer flooring, so a
+    ``population_size=8`` run at ``exploit_quantile=0.25`` intends two exploit
+    pairs. ``achieved`` is the number of READY-POOL workers that filled the
+    quantile this generation; dead-config rescue pairs are deliberately NOT
+    counted (they are a separate rescue mechanism, tracked by ``num_exploited``),
+    so a generation that rescues crashed workers without a ready-pool exploit
+    still reports a positive shortfall. The shortfall is the non-negative gap
+    between the two — positive when the ready pool could not fill the quantile.
+
+    Parameters
+    ----------
+    num_workers : int
+        Population size the quantile is computed against.
+    exploit_quantile : float
+        Fraction of the population defining the bottom/top quantile bands.
+    achieved : int
+        Number of exploit pairs produced this generation.
+
+    Returns
+    -------
+    Dict[str, int]
+        ``{"intended": N, "achieved": M, "shortfall": max(0, N - M)}``.
+    """
+    intended = max(1, int(num_workers * exploit_quantile))
+    achieved = max(0, achieved)
+    return {
+        "intended": intended,
+        "achieved": achieved,
+        "shortfall": max(0, intended - achieved),
+    }
 
 
 def truncation_selection(
@@ -116,68 +155,95 @@ def truncation_selection(
     else:
         ready_non_dead = non_dead_workers
 
-    # Nothing to do if there's neither a dead worker to rescue nor a ready
-    # candidate to enter the bottom quantile.
-    if not dead_workers and not ready_non_dead:
-        return []
+    pairs: List[Tuple[int, int]] = []
 
-    # Paper-aligned basis: rank against the WHOLE population, not the ready
-    # subset. Jaderberg et al. (2017), §4.1.1: "rank all agents in the
-    # population ... bottom 20% ... top 20%". The ready gate is a per-member
-    # eligibility filter on the poor side, not a basis-resizing knob.
-    quantile_size = max(1, int(len(workers) * exploit_quantile))
+    # Only attempt pairing when there is a dead worker to rescue or a ready
+    # candidate to enter the bottom quantile. When neither holds the cohort is
+    # empty and the single tail below records the unfilled quantile.
+    if dead_workers or ready_non_dead:
+        # Paper-aligned basis: rank against the WHOLE population, not the ready
+        # subset. Jaderberg et al. (2017), §4.1.1: "rank all agents in the
+        # population ... bottom 20% ... top 20%". The ready gate is a per-member
+        # eligibility filter on the poor side, not a basis-resizing knob.
+        quantile_size = max(1, int(len(workers) * exploit_quantile))
 
-    # Top quantile: drawn from any non-dead worker, regardless of readiness.
-    # The paper picks elites from the whole-population ranking; with a dead
-    # threshold added on top, we exclude crashed workers so we never copy
-    # from a broken donor.
-    sorted_non_dead_desc = sorted(
-        non_dead_workers, key=lambda w: w.performance_score, reverse=True
-    )
-    elite_workers = sorted_non_dead_desc[: min(quantile_size, len(sorted_non_dead_desc))]
-
-    # Bottom quantile: rank ALL workers ascending and take the bottom
-    # quantile_size. A worker is eligible to exploit only if it is also
-    # ready and non-dead (paper requires ``ready`` per-member eligibility).
-    # Dead workers are always rescued regardless of where they rank.
-    sorted_all_asc = sorted(workers, key=lambda w: w.performance_score)
-    bottom_quantile_ids = {w.worker_id for w in sorted_all_asc[:quantile_size]}
-    poor_normal = [
-        w for w in ready_non_dead if w.worker_id in bottom_quantile_ids
-    ]
-
-    elite_worker_ids = {w.worker_id for w in elite_workers}
-    poor_workers: List[PBTWorker] = []
-    seen_worker_ids: set = set()
-
-    for worker in list(dead_workers) + poor_normal:
-        if worker.worker_id in seen_worker_ids:
-            continue
-        if worker.worker_id in elite_worker_ids:
-            continue
-        poor_workers.append(worker)
-        seen_worker_ids.add(worker.worker_id)
-
-    if not poor_workers:
-        return []
-
-    if dead_workers:
-        LOGGER.info(
-            "Dead-config rescue candidates this generation: %d workers (threshold=%.2f)",
-            len(dead_workers),
-            dead_config_threshold,
+        # Top quantile: drawn from any non-dead worker, regardless of readiness.
+        # The paper picks elites from the whole-population ranking; with a dead
+        # threshold added on top, we exclude crashed workers so we never copy
+        # from a broken donor.
+        sorted_non_dead_desc = sorted(
+            non_dead_workers, key=lambda w: w.performance_score, reverse=True
         )
+        elite_workers = sorted_non_dead_desc[
+            : min(quantile_size, len(sorted_non_dead_desc))
+        ]
 
-    worker_to_idx = {w.worker_id: i for i, w in enumerate(workers)}
-    pairs = []
+        # Bottom quantile: rank ALL workers ascending and take the bottom
+        # quantile_size. A worker is eligible to exploit only if it is also
+        # ready and non-dead (paper requires ``ready`` per-member eligibility).
+        # Dead workers are always rescued regardless of where they rank.
+        sorted_all_asc = sorted(workers, key=lambda w: w.performance_score)
+        bottom_quantile_ids = {w.worker_id for w in sorted_all_asc[:quantile_size]}
+        poor_normal = [
+            w for w in ready_non_dead if w.worker_id in bottom_quantile_ids
+        ]
 
-    for poor_worker in poor_workers:
-        elite_worker = poor_worker.rng.choice(elite_workers)  # type: ignore
+        elite_worker_ids = {w.worker_id for w in elite_workers}
+        poor_workers: List[PBTWorker] = []
+        seen_worker_ids: set = set()
 
-        poor_idx = worker_to_idx[poor_worker.worker_id]
-        elite_idx = worker_to_idx[elite_worker.worker_id]
+        for worker in list(dead_workers) + poor_normal:
+            if worker.worker_id in seen_worker_ids:
+                continue
+            if worker.worker_id in elite_worker_ids:
+                continue
+            poor_workers.append(worker)
+            seen_worker_ids.add(worker.worker_id)
 
-        pairs.append((poor_idx, elite_idx))
+        if poor_workers:
+            if dead_workers:
+                LOGGER.info(
+                    "Dead-config rescue candidates this generation: %d workers "
+                    "(threshold=%.2f)",
+                    len(dead_workers),
+                    dead_config_threshold,
+                )
+
+            worker_to_idx = {w.worker_id: i for i, w in enumerate(workers)}
+            for poor_worker in poor_workers:
+                elite_worker = poor_worker.rng.choice(elite_workers)  # type: ignore
+
+                poor_idx = worker_to_idx[poor_worker.worker_id]
+                elite_idx = worker_to_idx[elite_worker.worker_id]
+
+                pairs.append((poor_idx, elite_idx))
+
+    # Single exit: surface an unfilled quantile so a run states plainly that the
+    # ready pool could not supply the full exploit cohort.
+    # This is the expected steady state under the readiness cooldown, which
+    # re-arms a worker's ready gate whenever it adopts a new configuration.
+    #
+    # ``achieved`` counts only ready-pool exploiters that filled the quantile;
+    # dead-config rescue pairs are EXCLUDED (score < dead_config_threshold), so a
+    # generation that rescues crashed workers but exploits nobody from the ready
+    # pool still reports the shortfall rather than letting rescues mask it.
+    achieved_ready = sum(
+        1
+        for poor_idx, _ in pairs
+        if workers[poor_idx].performance_score >= dead_config_threshold
+    )
+    cohort = compute_exploit_cohort(len(workers), exploit_quantile, achieved_ready)
+    if cohort["shortfall"] > 0:
+        LOGGER.warning(
+            "Exploit cohort shortfall: intended %d worker(s) at quantile %.2f of "
+            "%d, but only %d ready worker(s) exploited (shortfall %d); the ready "
+            "pool could not fill the quantile.",
+            cohort["intended"],
+            exploit_quantile,
+            len(workers),
+            cohort["achieved"],
+            cohort["shortfall"],
+        )
 
     return pairs
 

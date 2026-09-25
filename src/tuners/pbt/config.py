@@ -13,7 +13,7 @@ Key PBT Hyperparameters:
 -----------------------
 - population_size: Number of workers (configs being evaluated in parallel)
 - num_generations: How many evolution cycles to run
-- exploit_quantile: What fraction of population to replace (default: 0.2 = 20%)
+- exploit_quantile: What fraction of population to replace (default: 0.25 = 25%)
 - ready_interval: How many evaluations before a worker is eligible for exploit/explore
 - perturbation_factors: Range for perturbing numerical knobs
 """
@@ -52,7 +52,10 @@ class PBTConfig:
     exploit_quantile : float
         Fraction of population to exploit/explore. Bottom exploit_quantile will
         copy from top exploit_quantile.
-        Default: 0.2 (20% - from DeepMind original paper)
+        Default: 0.25. The DeepMind paper uses 0.2, but with integer flooring
+        ``int(population_size * 0.2)`` collapses to a single elite at
+        ``population_size=8`` (``int(1.6) == 1``), degenerating donor sampling
+        to a deterministic argmax.
 
     ready_interval : int
         Number of evaluations a worker must complete before being eligible for
@@ -126,7 +129,7 @@ class PBTConfig:
 
     population_size: int = 4
     num_generations: int = 20
-    exploit_quantile: float = 0.2
+    exploit_quantile: float = 0.25
     ready_interval: int = 1
     perturbation_factors: Tuple[float, float] = (0.8, 1.2)
     num_parallel_workers: int = 4
@@ -277,7 +280,7 @@ RAPID_CONFIG = PBTConfig(
 STANDARD_CONFIG = PBTConfig(
     population_size=4,
     num_generations=20,
-    exploit_quantile=0.2,
+    exploit_quantile=0.25,
     ready_interval=2,
     num_parallel_workers=4,
     benchmark_config=clone_benchmark_config(STANDARD_BENCHMARK_CONFIG),
@@ -288,7 +291,7 @@ STANDARD_CONFIG = PBTConfig(
 THOROUGH_CONFIG = PBTConfig(
     population_size=8,
     num_generations=50,
-    exploit_quantile=0.2,
+    exploit_quantile=0.25,
     ready_interval=3,
     num_parallel_workers=8,
     benchmark_config=clone_benchmark_config(THOROUGH_BENCHMARK_CONFIG),
