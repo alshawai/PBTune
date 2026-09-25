@@ -30,6 +30,7 @@ Predefined Knob Sets:
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union, Tuple
 from enum import Enum
+import math
 import numpy as np
 
 from src.utils.hardware_info import WorkerResources
@@ -37,6 +38,12 @@ from src.utils.logger import get_logger, get_color_context
 
 LOGGER = get_logger("KnobSpace")
 COLORS = get_color_context()
+
+# Fraction of a real knob's [min, max] span used as its grid quantum when no
+# explicit ``step`` is defined. Only the degenerate near-zero regime is
+# affected: for ordinary magnitudes the multiplicative delta dwarfs this floor,
+# so perturbation stays behaviour-preserving (see ADR-009 / ticket #167).
+REAL_MIN_STEP_FRACTION = 1e-3
 
 # Hardware-relative specifications for converting fractions to absolute values
 HARDWARE_RELATIVE_SPECS = {
@@ -134,8 +141,13 @@ class KnobDefinition:
     resource_type: Optional[str] = None  # "ram", "cpu", or "disk_type"
 
     def _normalize_integer(self, value: Any) -> int:
-        """Clamp and align integer values to the valid discrete grid."""
-        normalized = int(value)
+        """Clamp and align integer values to the valid discrete grid.
+
+        Rounds to the nearest integer rather than truncating toward zero:
+        truncation biases every perturbation downward (see ticket #167 / B5),
+        because ``int(v * 1.2)`` discards the fractional gain on the way up.
+        """
+        normalized = int(round(float(value)))
 
         if self.min_value is not None:
             normalized = max(normalized, int(self.min_value))
@@ -299,9 +311,38 @@ class KnobSpace:
         ----------
         knob_definitions : List[KnobDefinition]
             List of knob definitions
+
+        Raises
+        ------
+        ValueError
+            If any knob carries a non-finite (NaN or infinite) numeric value in
+            its ``min_value``, ``max_value`` or ``default``. Such a value would
+            reach PostgreSQL as the literal ``'nan'`` and, because
+            ``NaN != NaN``, would register as a spurious configuration change on
+            every generation (see ticket #171 / B10).
         """
+        for knob in knob_definitions:
+            self._reject_non_finite(knob)
         self.knobs = {knob.name: knob for knob in knob_definitions}
         self.worker_resources: Optional[WorkerResources] = None
+
+    @staticmethod
+    def _reject_non_finite(knob: KnobDefinition) -> None:
+        """Reject a knob carrying a non-finite numeric field.
+
+        Only genuine floating-point ``NaN``/``inf`` values are rejected; ints,
+        strings, booleans and ``None`` are all valid domain values.
+        """
+        for field_name in ("min_value", "max_value", "default"):
+            value = getattr(knob, field_name)
+            if isinstance(value, (float, np.floating)) and not math.isfinite(value):
+                raise ValueError(
+                    f"Knob '{knob.name}' has a non-finite {field_name}: {value!r}. "
+                    "Non-finite values reach PostgreSQL as literal 'nan' and, "
+                    "because NaN != NaN, register as spurious per-generation "
+                    "configuration changes. Fix the knob source or exclude it "
+                    "from the tier."
+                )
 
     @property
     def non_zero_knobs(self) -> set[str]:
@@ -1056,6 +1097,54 @@ class KnobSpace:
 
         return configs
 
+    def _grid_step(self, knob_def: "KnobDefinition") -> float:
+        """Return the grid quantum used to guarantee a minimum perturbation move.
+
+        Integers move on a unit grid (or their aligned ``step`` when defined).
+        Reals are continuous, so their quantum is a tiny fraction of the span —
+        large enough to nudge a degenerate near-zero value off the floor, small
+        enough that ordinary multiplicative deltas stay behaviour-preserving.
+        """
+        if knob_def.knob_type == KnobType.INTEGER:
+            if knob_def.step and knob_def.step > 1:
+                return float(knob_def.step)
+            return 1.0
+
+        # REAL
+        if knob_def.step and knob_def.step > 0:
+            return float(knob_def.step)
+        lo, hi = knob_def.min_value, knob_def.max_value
+        if lo is not None and hi is not None and hi > lo:
+            return (float(hi) - float(lo)) * REAL_MIN_STEP_FRACTION
+        return REAL_MIN_STEP_FRACTION
+
+    def _perturb_numeric_value(
+        self,
+        knob_def: "KnobDefinition",
+        value: Union[int, float],
+        perturbation_factor: Tuple[float, float],
+        rng: np.random.Generator,
+    ) -> Any:
+        """Perturb one numeric knob by at least one grid step (ticket #167).
+
+        Draws a *discrete* factor from the configured pair, applies the
+        multiplicative delta, and — when that delta is too small to clear the
+        grid quantum (the degenerate small/zero-value regime) — forces a move of
+        exactly one grid step in the factor's direction. ``normalize_value``
+        then rounds (integers) and clamps to the knob's bounds.
+
+        Multiplicative and additive form coincide in the ordinary regime
+        (``value + value*(factor-1) == value*factor``), so log- and linear-scale
+        knobs alike keep their geometric, symmetric perturbation intent while
+        also escaping the absorbing zero.
+        """
+        factor = float(rng.choice(np.asarray(perturbation_factor, dtype=float)))
+        delta = value * (factor - 1.0)
+        step = self._grid_step(knob_def)
+        if abs(delta) < step:
+            delta = math.copysign(step, factor - 1.0)
+        return knob_def.normalize_value(value + delta)
+
     def perturb_config(
         self,
         config: Dict[str, Any],
@@ -1068,7 +1157,8 @@ class KnobSpace:
         """
         Perturb a configuration (PBT exploration step).
 
-        For numerical knobs: Multiply by random factor from perturbation_factor range
+        For numerical knobs: apply a discrete multiplicative factor with a
+        guaranteed one-grid-step minimum move (see :meth:`_perturb_numeric_value`)
         For categorical knobs: Randomly resample with some probability
 
         Parameters
@@ -1114,36 +1204,10 @@ class KnobSpace:
                 perturbed[knob_name] = knob_def.sample_random_value(rng)
                 continue
 
-            if knob_def.knob_type == KnobType.INTEGER:
-                if knob_def.scale == KnobScale.LOG and value > 0:
-                    log_factor = rng.uniform(
-                        np.log(perturbation_factor[0]),
-                        np.log(perturbation_factor[1]),
-                    )
-                    new_value = np.exp(np.log(value) + log_factor)
-                else:
-                    factor = rng.uniform(perturbation_factor[0], perturbation_factor[1])
-                    new_value = value * factor
-
-                perturbed[knob_name] = knob_def.normalize_value(new_value)
-
-            elif knob_def.knob_type == KnobType.REAL:
-                if knob_def.scale == KnobScale.LOG and value > 0:
-                    log_factor = rng.uniform(
-                        np.log(perturbation_factor[0]),
-                        np.log(perturbation_factor[1]),
-                    )
-                    new_value = np.exp(np.log(value) + log_factor)
-                else:
-                    factor = rng.uniform(perturbation_factor[0], perturbation_factor[1])
-                    new_value = value * factor
-
-                if knob_def.min_value is not None:
-                    new_value = max(new_value, knob_def.min_value)
-                if knob_def.max_value is not None:
-                    new_value = min(new_value, knob_def.max_value)
-
-                perturbed[knob_name] = knob_def.normalize_value(new_value)
+            if knob_def.knob_type in (KnobType.INTEGER, KnobType.REAL):
+                perturbed[knob_name] = self._perturb_numeric_value(
+                    knob_def, value, perturbation_factor, rng
+                )
 
             elif knob_def.knob_type == KnobType.BOOLEAN:
                 # For boolean: higher probability (30%) since only 2 values

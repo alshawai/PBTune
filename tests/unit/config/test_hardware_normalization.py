@@ -219,11 +219,13 @@ def test_memory_budget_repair_exceeds_budget(mock_knob_space):
 
     scale = budget / (1184 * 1024 * 1024)
 
-    # They should be scaled down proportionally
-    assert repaired["shared_buffers"] == int(32768 * scale)
-    assert repaired["work_mem"] == int(4096 * scale)
-    assert repaired["maintenance_work_mem"] == int(131072 * scale)
-    assert repaired["max_connections"] == int(200 * scale)
+    # They should be scaled down proportionally. Integer knobs are aligned to
+    # the grid by rounding to nearest (not truncating) since #167/B5, so the
+    # expected value applies round() to the proportional target.
+    assert repaired["shared_buffers"] == round(32768 * scale)
+    assert repaired["work_mem"] == round(4096 * scale)
+    assert repaired["maintenance_work_mem"] == round(131072 * scale)
+    assert repaired["max_connections"] == round(200 * scale)
 
     # Check total memory is now <= budget
     total_repaired = (
