@@ -75,8 +75,10 @@ class PBTWorker(BaseWorker):
         Every measurement this worker has produced, in evaluation order.
 
     step_count : int
-        Number of times this worker has been evaluated (drives the ready
-        mechanism).
+        Evaluations completed *since this worker last adopted a configuration*
+        (drives the ready mechanism). Incremented by :meth:`update_metrics` and
+        reset to 0 by :meth:`clone_from`, so it measures the readiness cooldown
+        rather than the worker's lifetime evaluation count.
 
     parent_id : Optional[int]
         Worker ID this configuration was copied from (set during exploit).
@@ -115,9 +117,11 @@ class PBTWorker(BaseWorker):
         """
         Check if worker is ready for exploit/explore operations.
 
-        Workers must complete at least ``ready_interval`` evaluations before
-        they can participate in exploit/explore. This is the "ready mechanism"
-        from the PBT paper.
+        Workers must complete at least ``ready_interval`` evaluations since they
+        last became ready before they can participate in exploit/explore. This
+        is the "ready mechanism" from the PBT paper. Because :meth:`clone_from`
+        resets ``step_count``, a worker that just exploited must serve the full
+        interval again (the recurring cooldown, ticket #164).
 
         Returns
         -------
@@ -151,7 +155,15 @@ class PBTWorker(BaseWorker):
         -----
         What gets copied: ``knob_config`` (excluding ``exclude_knobs``).
         What does NOT: ``performance_score``/``metrics`` (remeasured),
-        ``step_count`` (maintained), ``worker_id`` (identity preserved).
+        ``worker_id`` (identity preserved).
+
+        Readiness cooldown (bug B1 / ticket #164): adopting a new configuration
+        resets ``step_count`` to 0, re-arming the ready mechanism. Jaderberg
+        et al. (2017) measure the ready criterion as the steps elapsed *since
+        the member last became ready*; a worker that just exploited must
+        therefore serve a full ``ready_interval`` again before it is eligible
+        to exploit once more. Without this reset a worker stayed permanently
+        ready and re-exploited every generation. See ADR-008.
         """
         if exclude_knobs:
             if other.knob_config:
@@ -161,6 +173,10 @@ class PBTWorker(BaseWorker):
                             self.knob_config[knob_name] = copy.deepcopy(value)
         else:
             self.knob_config = copy.deepcopy(other.knob_config)
+
+        # Re-arm the ready cooldown: the adopting worker must complete
+        # ``ready_interval`` fresh evaluations before it can exploit again.
+        self.step_count = 0
 
         self.parent_id = other.worker_id
         self.generation_created = current_generation

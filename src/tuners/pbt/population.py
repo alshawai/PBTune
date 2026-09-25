@@ -1125,11 +1125,36 @@ class Population:
         return False
 
     def _determine_overall_best(self, best_current: PBTWorker) -> None:
-        if best_current.performance_score >= self.best_overall_score:
-            self.best_overall_score = best_current.performance_score
+        # Only a STRICT improvement clears the stagnation counter (bug B13,
+        # ticket #168). The comparison used to be ``>=``, which treated an exact
+        # tie as progress and reset ``generations_without_improvement`` to 0 on
+        # every flat generation — so a population that had genuinely stopped
+        # improving never reached ``early_stopping_patience`` and never early-
+        # stopped. Readiness/stagnation must be gated on real forward progress.
+        #
+        # ``strictly_improved`` is computed against the incumbent BEFORE it is
+        # overwritten below. The comparison is exact (no epsilon tolerance):
+        # scores are already bounded to [0, 100] and a per-run improvement
+        # margin would need a new config field, which is out of scope here.
+        #
+        # Accepted, documented limitation (noise-latching): the historical-best
+        # *record* still latches on ``>=``, so the recorded incumbent tracks the
+        # running max — including a single lucky (noisy) draw. Smoothing that
+        # record (e.g. a replay/median-of-repeats buffer) would change the
+        # selection contract and add a config knob, so it is deferred rather
+        # than mitigated. "Improvement" therefore means beating the best draw
+        # seen so far; the strict gate above at least stops a tie from masking
+        # stagnation.
+        score = best_current.performance_score
+        strictly_improved = score > self.best_overall_score
+
+        if score >= self.best_overall_score:
+            self.best_overall_score = score
             self.best_overall_metrics = best_current.metrics
             self.best_overall_score_breakdown = best_current.score_breakdown
             self.best_overall_config = best_current.get_config_copy()
+
+        if strictly_improved:
             self.generations_without_improvement = 0
         else:
             self.generations_without_improvement += 1
