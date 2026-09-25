@@ -173,16 +173,21 @@ class QuantileUtilityNormalizer:
         metrics_list: List[PerformanceMetrics],
         saturation_epsilon: float = 0.01,
         min_saturated_workers: int = 2,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, List[str]]:
         """Detect per-metric saturation across multiple workers.
 
-        Returns dict of metric_name -> "upper" | "lower" for saturated metrics.
-        A metric is saturated when >= min_saturated_workers hit the same bound.
+        Returns dict of ``metric_name -> list of saturated utility bounds``,
+        where each bound is ``"upper"`` (>= ``min_saturated_workers`` clustered
+        at utility ~1.0) or ``"lower"`` (clustered at utility ~0.0). A metric
+        clamped at BOTH ends reports both bounds (``["upper", "lower"]``) so
+        that expanding one end never silently discards saturation at the other
+        (ticket #169 / bug B8). A metric is saturated on a bound when
+        >= ``min_saturated_workers`` hit it.
         """
         if not self._is_calibrated:
             return {}
 
-        saturated: Dict[str, str] = {}
+        saturated: Dict[str, List[str]] = {}
 
         for metric_name in self.anchors:
             upper_count = 0
@@ -202,10 +207,13 @@ class QuantileUtilityNormalizer:
                 elif utility <= saturation_epsilon:
                     lower_count += 1
 
+            bounds: List[str] = []
             if upper_count >= min_saturated_workers:
-                saturated[metric_name] = "upper"
-            elif lower_count >= min_saturated_workers:
-                saturated[metric_name] = "lower"
+                bounds.append("upper")
+            if lower_count >= min_saturated_workers:
+                bounds.append("lower")
+            if bounds:
+                saturated[metric_name] = bounds
 
         return saturated
 
@@ -228,7 +236,7 @@ class QuantileUtilityNormalizer:
         if metric_name not in self._history or metric_name not in self.anchors:
             return False
 
-        direction, _, _ = self.anchors[metric_name]
+        direction, cur_low, cur_high = self.anchors[metric_name]
 
         # We need the NEVER_ZERO_METRICS defined in fit() logic
         NEVER_ZERO_METRICS = {
@@ -264,15 +272,21 @@ class QuantileUtilityNormalizer:
             # so utility-"upper" saturation lives at raw q_low and vice versa.
             raw_bound = "lower" if bound == "upper" else "upper"
 
+        # Move ONLY the saturated raw end and preserve the opposite anchor as it
+        # currently stands. A both-ends-saturated metric (ticket #169 / bug B8)
+        # calls this method once per saturated end; recomputing both anchors
+        # from history each call would let the second call overwrite the first
+        # call's expansion, silently discarding one end's relief.
+        result_low, result_high = cur_low, cur_high
         if raw_bound == "upper":
-            new_high = new_high + rng * 0.2
+            result_high = new_high + rng * 0.2
         elif raw_bound == "lower":
-            new_low = max(0.0, new_low - rng * 0.2)
+            result_low = max(0.0, new_low - rng * 0.2)
 
-        if new_low == new_high:
+        if result_low == result_high:
             return False
 
-        self.anchors[metric_name] = (direction, new_low, new_high)
+        self.anchors[metric_name] = (direction, result_low, result_high)
         return True
 
     def _get_metric_direction(self, metric_name: str) -> int:

@@ -98,6 +98,17 @@ The normalizer:
 
 This is what keeps the scoring signal stable across generations while preserving discrimination between candidate configurations.
 
+### Saturation Detection and Anchor Expansion
+
+When several workers clamp a metric to the same anchor, they collapse to an identical utility and their configurations tie in the composite score even when they are genuinely different. `detect_metric_saturation()` counts, per metric, how many workers pin the upper utility bound (utility ≈ 1.0) and how many pin the lower bound (utility ≈ 0.0), and `expand_ranges_for_metrics()` widens the saturated anchors so ranking is restored.
+
+Two rules govern this:
+
+- __Quorum of 2__ (`SATURATION_QUORUM` in `src/utils/metrics.py`). A metric is treated as saturated on a bound as soon as __two__ workers clamp to it. Two is the principled threshold: two workers clamped to the same bound already produce identical utility, so two distinct configurations tie — the smallest count at which a saturation-induced ranking tie can exist. The earlier half-population quorum (`max(2, n // 2)`) hid real ties whenever fewer than half the population clamped.
+- __Both ends expand.__ A metric clamped at __both__ ends simultaneously (a dominant elite pinned at utility 1.0 and a crippled worker pinned at utility 0.0 on the same metric) reports __both__ bounds. `detect_metric_saturation()` returns a list of saturated bounds per metric, and the consumer calls `expand_metric_anchor()` once for each end. Expanding one end never silently discards the other: `expand_metric_anchor()` moves only the saturated raw anchor and preserves the opposite anchor, so a second per-end call cannot overwrite the first's expansion.
+
+Direction-aware anchoring maps utility-space saturation to the correct raw anchor (`HIGHER_IS_BETTER`: utility 1 ↔ `q_high`; `LOWER_IS_BETTER`/`ZERO_IS_BEST`: utility 1 ↔ `q_low`), so a `LOWER_IS_BETTER` metric clamped at utility 1.0 relaxes `q_low` rather than pushing `q_high` further away.
+
 ## Reliability Gate
 
 The reliability gate prevents unstable runs from dominating ranking.
