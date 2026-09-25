@@ -52,6 +52,21 @@ OLAP_FALLBACK_ANCHORS: Dict[str, Tuple[int, float, float]] = {
 }
 
 
+# --- Asymmetric direction-aware anchoring ---
+#
+# Reserved beyond the best observation so the population's current champion never
+# sits exactly at maximum utility and further improvement stays visible. Applied
+# as a fraction of the observed span AND of |best| (whichever is larger), with an
+# absolute floor for metrics whose best value is ~0.
+GOOD_END_HEADROOM_FRACTION = 0.05
+MIN_GOOD_END_HEADROOM = 1e-6
+
+# IQR multiplier for the ONE-SIDED bad-tail trim. Matches ``iqr_filter``'s
+# default so the bad-end anchor keeps the same robustness it always had; only
+# the good tail is now spared from trimming.
+BAD_TAIL_IQR_K = 2.5
+
+
 class QuantileUtilityNormalizer:
     """
     Robust normalizer that maps raw metrics to [0, 1] utility scores.
@@ -308,6 +323,76 @@ class QuantileUtilityNormalizer:
             return MetricDirection.HIGHER_IS_BETTER
         return MetricDirection.LOWER_IS_BETTER  # default safe assumption
 
+    def _fit_metric_anchor(
+        self, values: List[float], direction: int
+    ) -> Tuple[float, float]:
+        """Compute ``(q_low, q_high)`` anchors with asymmetric, direction-aware
+        support (ticket #170 / bug B9).
+
+        The optimization has a GOOD end and a BAD end. Trimming both tails — as
+        the old symmetric IQR + p05/p95 fit did — discards the single best
+        observation, so the elite clamps at maximum utility and the scorer goes
+        blind to further improvement. Instead:
+
+        * The BAD tail is trimmed robustly (one-sided IQR, then the p05/p95
+          quantile) exactly as before, so a pathological-but-not-failed reading
+          cannot distort the range.
+        * The GOOD tail is never discarded: the good-end anchor is placed
+          strictly at/beyond the best non-failed observation, with headroom, so
+          the current champion scores just under 1.0 and any improvement past it
+          keeps rising.
+
+        Direction decides which numeric end is "good":
+
+        * ``HIGHER_IS_BETTER``: good end = ``q_high`` (must exceed the max);
+          bad end = ``q_low`` (robust low quantile).
+        * ``LOWER_IS_BETTER`` / ``ZERO_IS_BEST``: good end = ``q_low`` (must
+          undercut the min); bad end = ``q_high`` (robust high quantile).
+        """
+        from src.utils.scoring.outlier_filtering import iqr_filter
+
+        arr = np.asarray(values, dtype=float)
+        good_is_high = direction == MetricDirection.HIGHER_IS_BETTER
+
+        # One-sided robust trim on the BAD tail only; the good tail is retained
+        # in full so the best observation always survives to anchor the range.
+        _, meta = iqr_filter(arr, k=BAD_TAIL_IQR_K)
+        lower_bound = meta.get("lower_bound")
+        upper_bound = meta.get("upper_bound")
+        if good_is_high:
+            trimmed = arr[arr >= lower_bound] if lower_bound is not None else arr
+        else:
+            trimmed = arr[arr <= upper_bound] if upper_bound is not None else arr
+        if trimmed.size < 3:
+            trimmed = arr
+
+        if good_is_high:
+            bad_anchor = float(np.percentile(trimmed, self.lower_quantile * 100))
+            best = float(arr.max())
+        else:
+            bad_anchor = float(np.percentile(trimmed, self.upper_quantile * 100))
+            best = float(arr.min())
+
+        span = abs(best - bad_anchor)
+
+        # Degenerate (near-)constant metric: no spread to discriminate. Fall
+        # back to the legacy neutral window so a uniform population scores ~0.5
+        # rather than being pinned at an arbitrary extreme.
+        if span <= max(abs(best), 1.0) * 1e-9:
+            if best == 0.0:
+                return 0.0, MIN_GOOD_END_HEADROOM
+            lo, hi = best * 0.9, best * 1.1
+            return (lo, hi) if lo <= hi else (hi, lo)
+
+        headroom = max(
+            GOOD_END_HEADROOM_FRACTION * span,
+            GOOD_END_HEADROOM_FRACTION * abs(best),
+            MIN_GOOD_END_HEADROOM,
+        )
+        if good_is_high:
+            return bad_anchor, best + headroom
+        return best - headroom, bad_anchor
+
     def fit(
         self,
         metrics_list: List[PerformanceMetrics],
@@ -327,8 +412,6 @@ class QuantileUtilityNormalizer:
             ``io_read_mb``) from producing zero-anchored noise in the
             normalizer and the "Missing utilities" debug messages in the scorer.
         """
-        from src.utils.scoring.outlier_filtering import iqr_filter
-
         if not metrics_list:
             self.logger.debug(
                 "  %s➤ fit() called with empty metrics list, skipping%s",
@@ -369,26 +452,11 @@ class QuantileUtilityNormalizer:
                 continue
 
             direction = self._get_metric_direction(key)
-            arr = np.array(values)
 
-            arr_filtered, filter_meta = iqr_filter(arr, k=2.5)
-            if len(arr_filtered) >= 3:
-                arr = arr_filtered
-                if filter_meta["n_removed"] > 0:
-                    self.logger.debug(
-                        "  %sIQR filter for %s: removed %d/%d outliers (bounds: [%.4f, %.4f])%s",
-                        COLORS.italic,
-                        key,
-                        filter_meta["n_removed"],
-                        filter_meta["original_size"],
-                        filter_meta["lower_bound"],
-                        filter_meta["upper_bound"],
-                        COLORS.reset,
-                    )
-
-            # For latency/error, if all are 0, make it slightly non-zero to avoid div by zero
-            q_low = float(np.percentile(arr, self.lower_quantile * 100))
-            q_high = float(np.percentile(arr, self.upper_quantile * 100))
+            # Asymmetric, direction-aware anchoring:
+            # trim only the BAD tail and let the good-end anchor cover the best
+            # observation with headroom. See ``_fit_metric_anchor``.
+            q_low, q_high = self._fit_metric_anchor(values, direction)
 
             if q_low == q_high:
                 if q_low == 0.0:
