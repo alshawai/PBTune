@@ -32,6 +32,16 @@ LOGGER = get_logger("Metrics")
 COLORS = get_color_context()
 
 
+# Minimum number of workers that must clamp a metric's bound before we treat it
+# as saturated and expand that anchor. Two is the *principled* threshold: two
+# workers clamped to the same bound already produce identical utility on that
+# metric, so two genuinely different configurations tie in the composite score.
+# Two is therefore the smallest count at which a saturation-induced ranking tie
+# can exist. A half-population quorum (the previous ``max(2, n // 2)``) hid
+# real ties whenever fewer than half the population clamped (ticket #169 / B7).
+SATURATION_QUORUM = 2
+
+
 class WorkloadType(Enum):
     """Type of database workload"""
 
@@ -458,27 +468,29 @@ class MetricConfig:
             for m in metrics_list:
                 self._normalizer.update(m)
 
-            min_saturated = max(2, len(metrics_list) // 2)
             saturated = self._normalizer.detect_metric_saturation(
                 metrics_list,
-                min_saturated_workers=min_saturated,
+                min_saturated_workers=SATURATION_QUORUM,
             )
 
             expanded = False
             lat_metric = f"latency_{self.latency_metric}"
 
             if saturated:
-                for metric_name, bound in saturated.items():
-                    if self._normalizer.expand_metric_anchor(metric_name, bound):
-                        LOGGER.debug(
-                            "  %sExpanded %s anchor (%s bound saturated by ≥%d workers)%s",
-                            COLORS.italic,
-                            metric_name,
-                            bound,
-                            min_saturated,
-                            COLORS.reset,
-                        )
-                        expanded = True
+                for metric_name, bounds in saturated.items():
+                    # A metric saturated at BOTH ends reports both bounds; expand
+                    # each so neither end's relief is silently discarded (#169/B8).
+                    for bound in bounds:
+                        if self._normalizer.expand_metric_anchor(metric_name, bound):
+                            LOGGER.debug(
+                                "  %sExpanded %s anchor (%s bound saturated by ≥%d workers)%s",
+                                COLORS.italic,
+                                metric_name,
+                                bound,
+                                SATURATION_QUORUM,
+                                COLORS.reset,
+                            )
+                            expanded = True
                 return expanded
 
             if not self._normalizer.needs_recalibration():
