@@ -806,6 +806,7 @@ class PBTTuner(BaseTuner):
             "exploit_quantile": self.pbt_config.exploit_quantile,
             "perturbation_factors": list(self.pbt_config.perturbation_factors),
             "ready_interval": self.pbt_config.ready_interval,
+            "resample_probability": self.pbt_config.resample_probability,
             "dead_config_threshold": self.pbt_config.dead_config_threshold,
             "adaptive_restart_interval": self.lifecycle.adaptive_restart_interval,
             "enable_snapshots": self.enable_snapshots,

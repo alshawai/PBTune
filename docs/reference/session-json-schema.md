@@ -154,6 +154,7 @@ The five scoring-related top-level keys (`scoring_policy`, `scoring_policy_versi
 | `total_generations` | int | Generations actually run (may be < `max_generations` due to early stopping). |
 | `num_parallel_workers` | int | Workers run concurrently. *added in v2* |
 | `enable_snapshots`, `snapshot_restore_interval` | bool, int | Baseline-snapshot policy. *added in v2* |
+| `resample_probability` | float | PBT explore step: per-knob probability of a full resample from the prior instead of a local perturbation. Single source of truth is the `PBTConfig`/preset default (`0.1`); recorded under `tuning_session.strategy_params` so a completed run states the value it used. *added in v2* |
 | `seed` | int | Master random seed. |
 | `total_time_seconds` | float | Wall-clock duration (bootstrap + tuning). |
 | `tuning_time_seconds` | float | Measurement-loop wall-clock only (excludes bootstrap). *added in timing-schema v1.0* |

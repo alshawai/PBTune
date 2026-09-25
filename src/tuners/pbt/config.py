@@ -144,7 +144,7 @@ class PBTConfig:
     metric_reference_version: Optional[str] = None
     scoring_calibration_evals: int = 5
     synchronize_workers: bool = True
-    resample_probability: float = 0.0
+    resample_probability: float = 0.1
 
     def __post_init__(self):
         """Validate configuration after initialization"""

@@ -223,7 +223,7 @@ def build_pbt_config(args: argparse.Namespace) -> PBTConfig:
         resample_probability=(
             args.resample_probability
             if args.resample_probability is not None
-            else 0.1  # Legacy default (preset default is 0.0)
+            else base.resample_probability  # single source of truth: PBTConfig/preset
         ),
     )
 
