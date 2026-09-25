@@ -584,7 +584,10 @@ class PBTTuner(BaseTuner):
                 std_score=result.std_score,
                 num_exploited=result.num_exploited,
                 overhead_seconds=_evolve_seconds(gen_timing),
-                extra={"exploitations": result.exploitations},
+                extra={
+                    "exploitations": result.exploitations,
+                    "exploit_cohort": result.exploit_cohort,
+                },
             )
         )
 
