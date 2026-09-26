@@ -11,6 +11,11 @@
   (`_verify_and_capture_config`, read-only for this decision).
 - Tickets: #167 (grid-step fidelity, bugs B4/B5/B6), #171 (non-finite rejection,
   bug B10), and the B12 read-back-merge settle.
+- Cross-links:
+  [ADR-002](ADR-002-feature-driven-scoring-v2.md),
+  [ADR-008](ADR-008-pbt-readiness-cooldown.md),
+  [ADR-010](ADR-010-asymmetric-normalizer-anchoring.md),
+  [ADR-011](ADR-011-postfix-invariant-corrections.md) (epic #162 siblings).
 
 ## Context
 

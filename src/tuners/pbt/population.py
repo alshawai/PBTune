@@ -233,6 +233,13 @@ class Population:
         self.best_overall_config: Dict[str, Any] = {}
         self.best_overall_score_breakdown: Optional[ScoreBreakdown] = None
         self.generations_without_improvement: int = 0
+        # Whether the most recent generation produced a STRICT, same-ruler
+        # improvement of the overall best (set by _determine_overall_best). The
+        # tuner surfaces this as the "new best" signal instead of comparing a
+        # pre-step best against a post-recalibration best, which straddles two
+        # different normalizer rulers and announces phantom bests (bug B14,
+        # ticket #172). See _determine_overall_best / _finalize_scores.
+        self.last_generation_strictly_improved: bool = False
         # Reason the last should_stop() decided to halt (surfaced by the tuner
         # as the round-summary Status line); None until a stop fires.
         self.stop_reason: Optional[str] = None
@@ -1185,6 +1192,11 @@ class Population:
         # stagnation.
         score = best_current.performance_score
         strictly_improved = score > self.best_overall_score
+        # Surface the strict, same-ruler improvement decision for the tuner's
+        # "new best" announcement (bug B14): the incumbent has already been
+        # rescored onto the current ruler before this comparison, so this is a
+        # genuine forward-progress signal, unlike a cross-ruler best delta.
+        self.last_generation_strictly_improved = strictly_improved
 
         if score >= self.best_overall_score:
             self.best_overall_score = score

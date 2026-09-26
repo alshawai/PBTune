@@ -22,9 +22,12 @@ from src.analysis.pbt_invariants import (
     check_all,
     check_donor_diversity,
     check_exploit_cadence,
+    check_exploit_cadence_per_worker,
     check_exploit_recovery,
+    check_exploit_recovery_median,
     check_normalizer_support,
     check_perturbation_locality,
+    check_perturbation_magnitude,
     check_readback_fidelity,
     check_score_metric_coupling,
     check_score_rank_agreement,
@@ -520,3 +523,143 @@ def test_finding_renders_bug_ids_for_a_violation() -> None:
     assert "VIOLATED" in rendered
     assert "B1" in rendered
     assert "exploit_cadence" in rendered
+
+
+# ------------------------------------------ corrected invariants (ticket #172)
+
+
+def test_per_worker_cadence_holds_where_population_cadence_would_fire() -> None:
+    """Workers 0 and 2 each exploit every third generation but offset, so the
+    POPULATION exploits at gens 0,1,3,4,6 (gaps of 1) while every WORKER honours
+    the interval. The corrected per-worker check holds where the original fires."""
+    history = []
+    for g in range(7):
+        exps = []
+        if g in (0, 3, 6):
+            exps.append({"elite_worker_id": 1, "poor_worker_id": 0})
+        if g in (1, 4):
+            exps.append({"elite_worker_id": 1, "poor_worker_id": 2})
+        history.append(
+            _generation(g, scores={0: 10.0, 1: 20.0, 2: 15.0}, exploitations=exps)
+        )
+    trace = _trace(history, ready_interval=3)
+    assert check_exploit_cadence_per_worker(trace).holds
+    assert not check_exploit_cadence(trace).holds  # original fires on the same run
+
+
+def test_per_worker_cadence_violated_when_a_worker_re_exploits_too_soon() -> None:
+    """A single worker exploiting on back-to-back generations breaks its cooldown."""
+    history = [
+        _generation(
+            g,
+            scores={0: 10.0, 1: 20.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 0}]
+            if g in (0, 1)
+            else [],
+        )
+        for g in range(4)
+    ]
+    finding = check_exploit_cadence_per_worker(_trace(history, ready_interval=3))
+    assert not finding.holds
+    assert finding.observed["short_gaps"] == 1
+
+
+def test_perturbation_magnitude_holds_for_bounded_moves() -> None:
+    """A bounded +/-20% move per knob is a local step: magnitude check holds."""
+    history = [
+        _generation(
+            0,
+            scores={0: 10.0, 1: 20.0},
+            configs={1: {"a": 100.0, "b": 10.0}},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 0}],
+        ),
+        _generation(1, scores={0: 12.0, 1: 20.0}, configs={0: {"a": 120.0, "b": 12.0}}),
+    ]
+    finding = check_perturbation_magnitude(_trace(history))
+    assert finding.holds
+    assert finding.observed["median_relative_move"] == pytest.approx(0.2)
+
+
+def test_perturbation_magnitude_flags_fresh_draws() -> None:
+    """Knobs jumping orders of magnitude are fresh draws, not neighbours."""
+    history = [
+        _generation(
+            0,
+            scores={0: 10.0, 1: 20.0},
+            configs={1: {"a": 100.0, "b": 10.0}},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 0}],
+        ),
+        _generation(
+            1, scores={0: 12.0, 1: 20.0}, configs={0: {"a": 100000.0, "b": 50000.0}}
+        ),
+    ]
+    finding = check_perturbation_magnitude(_trace(history))
+    assert not finding.holds
+
+
+def test_recovery_median_tolerates_a_single_bad_child() -> None:
+    """Explore may produce a worse neighbour; the MEDIAN child still recovers,
+    so honest exploration is not flagged (unlike a per-child floor)."""
+    donor = 1000.0
+    history = [
+        _generation(
+            0,
+            scores={0: 5.0, 1: 20.0, 2: 5.0, 3: 5.0},
+            throughputs={0: 1.0, 1: donor, 2: 1.0, 3: 1.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 0}],
+        ),
+        _generation(
+            1,
+            scores={0: 18.0, 1: 20.0, 2: 5.0, 3: 5.0},
+            throughputs={0: 950.0, 1: donor, 2: 1.0, 3: 1.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 2}],
+        ),
+        _generation(
+            2,
+            scores={0: 18.0, 1: 20.0, 2: 17.0, 3: 5.0},
+            throughputs={0: 950.0, 1: donor, 2: 900.0, 3: 1.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 3}],
+        ),
+        _generation(
+            3,
+            scores={0: 18.0, 1: 20.0, 2: 17.0, 3: 6.0},
+            throughputs={0: 950.0, 1: donor, 2: 900.0, 3: 300.0},
+        ),
+    ]
+    finding = check_exploit_recovery_median(_trace(history))
+    assert finding.holds  # ratios 0.95, 0.90, 0.30 -> median 0.90 >= 0.75
+    assert finding.observed["median_recovery"] == pytest.approx(0.90)
+    assert finding.observed["below_floor"] == 1  # the lone bad child, tolerated
+
+
+def test_recovery_median_violated_on_systematic_collapse() -> None:
+    """When the TYPICAL child lands far below its donor, explore is drawing
+    fresh configurations, and the median check fires."""
+    donor = 1000.0
+    history = [
+        _generation(
+            0,
+            scores={0: 5.0, 1: 20.0, 2: 5.0, 3: 5.0},
+            throughputs={0: 1.0, 1: donor, 2: 1.0, 3: 1.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 0}],
+        ),
+        _generation(
+            1,
+            scores={0: 10.0, 1: 20.0, 2: 5.0, 3: 5.0},
+            throughputs={0: 500.0, 1: donor, 2: 1.0, 3: 1.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 2}],
+        ),
+        _generation(
+            2,
+            scores={0: 10.0, 1: 20.0, 2: 10.0, 3: 5.0},
+            throughputs={0: 500.0, 1: donor, 2: 550.0, 3: 1.0},
+            exploitations=[{"elite_worker_id": 1, "poor_worker_id": 3}],
+        ),
+        _generation(
+            3,
+            scores={0: 10.0, 1: 20.0, 2: 10.0, 3: 11.0},
+            throughputs={0: 500.0, 1: donor, 2: 550.0, 3: 600.0},
+        ),
+    ]
+    finding = check_exploit_recovery_median(_trace(history))
+    assert not finding.holds  # ratios 0.50, 0.55, 0.60 -> median 0.55 < 0.75

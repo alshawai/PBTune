@@ -595,6 +595,7 @@ class PBTTuner(BaseTuner):
             index=generation,
             best_score_this_generation=result.best_score,
             converged=result.converged,
+            strictly_improved=self.population.last_generation_strictly_improved,
             payload={
                 "restart_count": self.restart_count,
                 "mean_score": result.mean_score,

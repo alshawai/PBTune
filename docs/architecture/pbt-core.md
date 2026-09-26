@@ -225,6 +225,8 @@ class GenerationResult:
     best_worker_id: int
     best_config: Dict[str, Any]
     converged: bool
+    exploitations: List[Dict[str, int]]   # elite→poor pairs applied this gen (#165)
+    exploit_cohort: Dict[str, int]        # {intended, achieved, shortfall} (#165)
     # ... plus per-worker breakdowns and timing
 ```
 
@@ -325,13 +327,16 @@ After generation N evaluations:
 
   Explore step (Worker.perturb):
     For each numeric knob k in W0.knob_config:
-      k *= U(0.8, 1.2), clamped to bounds
+      k *= discrete factor drawn from {0.8, 1.2}; when the multiplicative move is
+           smaller than one grid step, move exactly one grid step instead (so a
+           knob is never frozen and zero is not absorbing); integers round rather
+           than truncate, then clamp to bounds        # ADR-009 / #167
     Memory budget repaired (KnobSpace.repair_config_dependencies)
 
   Generation N+1: evaluate with the new configs
 ```
 
-Booleans and enums are perturbed differently — booleans flip with a configurable probability, enums probabilistically jump to a neighbour. Numeric knobs on a log scale are perturbed in log space. See [CONFIGURATION_MANAGEMENT.md](configuration-management.md#sampling-perturbation-and-dependency-repair).
+Booleans and enums are perturbed differently — booleans flip with a configurable probability, enums probabilistically jump to a neighbour. Numeric knobs use a discrete multiplicative factor with a guaranteed ≥ 1 grid-step move (ADR-009); the earlier special-cased log-space branch is subsumed, because a discrete factor is geometry-preserving for log- and linear-scale knobs alike. See [CONFIGURATION_MANAGEMENT.md](configuration-management.md#sampling-perturbation-and-dependency-repair).
 
 ---
 

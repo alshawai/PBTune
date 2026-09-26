@@ -6,7 +6,10 @@
   [`src/utils/scoring/normalization.py`](../../../src/utils/scoring/normalization.py)
   (`QuantileUtilityNormalizer.fit`, `QuantileUtilityNormalizer._fit_metric_anchor`).
 - Cross-links: [ADR-002 — Feature-Driven Scoring v2](ADR-002-feature-driven-scoring-v2.md)
-  (the scoring-v2 stack whose normalizer this decision corrects).
+  (the scoring-v2 stack whose normalizer this decision corrects);
+  [ADR-008](ADR-008-pbt-readiness-cooldown.md),
+  [ADR-009](ADR-009-perturbation-grid-step-fidelity.md),
+  [ADR-011](ADR-011-postfix-invariant-corrections.md) (epic #162 siblings).
 - Tickets: #170 (bug B9), epic #162. Builds on the direction-aware anchor
   mapping introduced for #169 (bug B8) in `expand_metric_anchor`.
 

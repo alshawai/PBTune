@@ -824,6 +824,7 @@ class BaseTuner(ABC):
             outcome_payload=outcome.payload,
             prev_best=prev_best,
             current_best=self._safe_best_score(),
+            improved=outcome.strictly_improved,
             elapsed_seconds=time.time() - (self.tuning_start_time or self.start_time),
             emits_stop_status=self.emits_stop_status,
             stopped=stopped,

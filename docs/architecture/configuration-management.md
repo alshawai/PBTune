@@ -191,7 +191,7 @@ Details and the list of all hardware-relative knobs: [HARDWARE_AWARE_NORMALIZATI
 
 ### Perturbation (explore)
 
-`perturb_config(config, factors=(0.8, 1.2))` is the explore step from the PBT paper. For numeric knobs it multiplies by `U(factors[0], factors[1])` and clamps to bounds. Booleans flip with a configurable probability. Enums probabilistically jump to a neighbour. The implementation correctly handles log-scale knobs (perturbation in log space, not linear space) so a `+20%` move on `shared_buffers` does what you expect.
+`perturb_config(config, factors=(0.8, 1.2))` is the explore step from the PBT paper. For numeric knobs it draws a **discrete** factor from `{factors[0], factors[1]}` (per Jaderberg et al., not a continuous `U(·)`), applies the multiplicative move, and — when that move is smaller than one grid step — forces a move of exactly one grid step in the factor's direction, so a knob is never frozen and a zero value is not absorbing (ADR-009 / #167). Integers round rather than truncate. Booleans flip with a configurable probability; enums probabilistically jump to a neighbour. A discrete factor is geometry-preserving, so log- and linear-scale knobs share one path (the earlier special-cased log-space branch is subsumed): a `±20%` move on `shared_buffers` does what you expect, and clamping to bounds still applies.
 
 ### Memory-budget repair
 
