@@ -94,6 +94,7 @@ def log_round_end(
     outcome_payload: Optional[Dict[str, Any]],
     prev_best: float,
     current_best: float,
+    improved: Optional[bool] = None,
     elapsed_seconds: float,
     emits_stop_status: bool,
     stopped: bool,
@@ -101,7 +102,13 @@ def log_round_end(
     round_label: str,
 ) -> None:
     """Announce a new best and log the generation summary."""
-    if current_best > prev_best:
+    # Gate the announcement on a genuine, single-ruler improvement when the
+    # strategy supplies one (``improved``). Falling back to ``current_best >
+    # prev_best`` straddles a pre-step ruler and a post-recalibration ruler,
+    # which announces phantom "NEW BEST" lines on recalibration generations for
+    # unchanged configs (bug B14, ticket #172).
+    is_new_best = improved if improved is not None else (current_best > prev_best)
+    if is_new_best:
         LOGGER.info(
             "%s🔺 NEW BEST SCORE: %s%.4f%s",
             COLORS.bold,

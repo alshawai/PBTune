@@ -94,6 +94,11 @@ class GenerationOutcome:
     index: int
     best_score_this_generation: float = 0.0
     converged: bool = False
+    #: Whether this generation strictly improved the overall best on a single,
+    #: consistent normalizer ruler. ``None`` for strategies that do not supply
+    #: the signal, in which case the caller falls back to a best-delta compare.
+    #: Used to gate the "new best" announcement without straddling rulers (B14).
+    strictly_improved: Optional[bool] = None
     payload: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:

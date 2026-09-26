@@ -85,15 +85,20 @@ __all__ = [
     "Exploitation",
     "SessionTrace",
     "check_all",
+    "check_corrected",
     "check_donor_diversity",
     "check_exploit_cadence",
+    "check_exploit_cadence_per_worker",
     "check_exploit_recovery",
+    "check_exploit_recovery_median",
     "check_normalizer_support",
     "check_perturbation_locality",
+    "check_perturbation_magnitude",
     "check_readback_fidelity",
     "check_score_metric_coupling",
     "check_score_rank_agreement",
     "check_search_efficiency",
+    "gating_violations",
     "main",
     "violations",
 ]
@@ -790,6 +795,175 @@ def check_score_rank_agreement(
     return Finding("score_rank_agreement", (), holds, summary, observed)
 
 
+# --------------------------------------------------------------------------
+# Corrected invariants (ticket #172)
+#
+# Three of the invariants above are calibrated against the PRE-fix trace and are
+# pinned verbatim by the immutable characterization suite
+# (tests/unit/tuners/pbt/test_trace_regression.py), so they cannot change in
+# place. The corrected forms below are what a POST-fix trace is audited against
+# (via check_corrected); the originals remain as the historical diagnosis. See
+# ADR-011 for the rationale of each correction.
+# --------------------------------------------------------------------------
+
+#: Reported but excluded from the pass/fail gate: a bare composite-vs-throughput
+#: rank check inverts naturally (the composite score is not throughput), so it
+#: is informational, not a defect signal.
+INFORMATIONAL_INVARIANTS = frozenset({"score_rank_agreement"})
+
+
+def check_exploit_cadence_per_worker(trace: SessionTrace) -> Finding:
+    """Each worker serves a full ``ready_interval`` between its OWN exploits.
+
+    Corrects ``check_exploit_cadence`` (ticket #172). The readiness cooldown is
+    a per-member property: after a worker adopts a configuration its clock
+    restarts. The original measured POPULATION cadence (any worker exploiting
+    each generation), which for a staggered population shows gaps of 1 even when
+    every member honours the interval — a false positive. This measures each
+    recipient's own inter-exploit gaps.
+    """
+    interval = trace.ready_interval
+    by_worker: Dict[int, List[int]] = {}
+    for event in trace.exploitations:
+        by_worker.setdefault(event.poor_worker_id, []).append(int(event.generation))
+    per_worker_gaps: Dict[int, List[int]] = {}
+    short = 0
+    total = 0
+    for wid, gens in by_worker.items():
+        ordered = sorted(gens)
+        gaps = [b - a for a, b in zip(ordered, ordered[1:], strict=False)]
+        per_worker_gaps[wid] = gaps
+        total += len(gaps)
+        if interval:
+            short += sum(1 for g in gaps if g < interval)
+    observed = {
+        "ready_interval": interval,
+        "per_worker_exploit_generations": {w: sorted(g) for w, g in by_worker.items()},
+        "per_worker_gaps": per_worker_gaps,
+        "short_gaps": short,
+        "total_gaps": total,
+    }
+    if interval is None or total == 0:
+        return Finding(
+            "exploit_cadence_per_worker", ("B1",), True,
+            "no per-worker cadence to assess", observed,
+        )
+    holds = short == 0
+    summary = (
+        f"every worker's own exploit gaps respect ready_interval={interval}"
+        if holds
+        else f"{short}/{total} per-worker gaps shorter than ready_interval={interval}"
+    )
+    return Finding("exploit_cadence_per_worker", ("B1",), holds, summary, observed)
+
+
+def check_perturbation_magnitude(trace: SessionTrace, cap: float = 0.5) -> Finding:
+    """Explore is a LOCAL step: the typical perturbed knob moves a bounded amount.
+
+    Corrects ``check_perturbation_locality`` (ticket #172). Locality is per-knob
+    MAGNITUDE, not the count of knobs changed. Perturbing every dimension by a
+    bounded factor is faithful PBT (Jaderberg et al. 2017) and needs no per-knob
+    knowledge; what would break the hill climb is a knob jumping far from the
+    parent. This gates on the median per-knob relative move: a systematic
+    fresh-draw regression drives it well past the bounded band, while honest
+    +/-factor perturbation keeps it small.
+    """
+    moves: List[float] = []
+    for event in trace.exploitations:
+        parent = trace.intended_config(event.generation, event.elite_worker_id)
+        child = trace.intended_config(event.generation + 1, event.poor_worker_id)
+        if not parent or not child:
+            continue
+        for knob in set(parent) & set(child):
+            a, b = parent[knob], child[knob]
+            if isinstance(a, bool) or isinstance(b, bool):
+                continue
+            if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+                continue
+            if a == b:
+                continue
+            moves.append(abs(b - a) / max(abs(a), 1e-9))
+    ordered = sorted(moves)
+    observed = {
+        "cap": cap,
+        "n_moves": len(moves),
+        "median_relative_move": statistics.median(moves) if moves else None,
+        "p90_relative_move": ordered[min(int(0.9 * len(ordered)), len(ordered) - 1)]
+        if ordered
+        else None,
+        "fraction_beyond_cap": sum(1 for m in moves if m > cap) / len(moves)
+        if moves
+        else None,
+    }
+    if not moves:
+        return Finding(
+            "perturbation_magnitude", ("B4", "B5", "B6"), True,
+            "no comparable perturbations", observed,
+        )
+    median = statistics.median(moves)
+    holds = median <= cap
+    summary = (
+        f"typical per-knob move {median:.0%} stays within the local band "
+        f"(cap {cap:.0%})"
+        if holds
+        else (
+            f"typical per-knob move {median:.0%} exceeds the local band "
+            f"(cap {cap:.0%}); explore is drawing fresh configurations"
+        )
+    )
+    return Finding(
+        "perturbation_magnitude", ("B4", "B5", "B6"), holds, summary, observed
+    )
+
+
+def check_exploit_recovery_median(
+    trace: SessionTrace, floor: float = 0.75, metric: str = "throughput"
+) -> Finding:
+    """The TYPICAL exploited child lands near its donor's performance.
+
+    Corrects ``check_exploit_recovery`` (ticket #172). Explore legitimately
+    produces some worse neighbours — selection culls them — so a per-child floor
+    mislabels honest exploration as a defect. The pre-fix run showed a
+    SYSTEMATIC collapse (median recovery ~0.68, every child far below its
+    donor); the corrected form gates on the MEDIAN recovery instead, so the
+    signal is "the typical child is a neighbour" rather than "no child is ever
+    worse".
+    """
+    ratios: List[float] = []
+    for event in trace.exploitations:
+        donor = trace.metric(event.generation, event.elite_worker_id, metric)
+        child = trace.metric(event.generation + 1, event.poor_worker_id, metric)
+        if donor is None or child is None or donor == 0:
+            continue
+        ratios.append(child / donor)
+    observed = {
+        "metric": metric,
+        "floor": floor,
+        "n": len(ratios),
+        "median_recovery": statistics.median(ratios) if ratios else None,
+        "min_recovery": min(ratios) if ratios else None,
+        "below_floor": sum(1 for r in ratios if r < floor),
+    }
+    if not ratios:
+        return Finding(
+            "exploit_recovery_median", ("B4", "B5", "B6"), True,
+            "no comparable exploit transitions", observed,
+        )
+    median = statistics.median(ratios)
+    holds = median >= floor
+    summary = (
+        f"typical child recovered {median:.0%} of donor {metric} (>= {floor:.0%})"
+        if holds
+        else (
+            f"typical child recovered only {median:.0%} of donor {metric} "
+            f"(< {floor:.0%}); explore is producing fresh draws, not neighbours"
+        )
+    )
+    return Finding(
+        "exploit_recovery_median", ("B4", "B5", "B6"), holds, summary, observed
+    )
+
+
 #: Every invariant, in reporting order.
 CHECKS: Tuple[Callable[[SessionTrace], Finding], ...] = (
     check_exploit_cadence,
@@ -812,6 +986,36 @@ def check_all(trace: SessionTrace) -> List[Finding]:
 def violations(findings: Sequence[Finding]) -> List[Finding]:
     """Filter ``findings`` down to the violated invariants."""
     return [f for f in findings if not f.holds]
+
+
+#: The corrected invariant set (ticket #172): per-worker cadence, per-knob
+#: magnitude locality, and median recovery replace their pre-fix originals; the
+#: unchanged invariants are shared. A POST-fix trace is audited against these.
+CORRECTED_CHECKS: Tuple[Callable[[SessionTrace], Finding], ...] = (
+    check_exploit_cadence_per_worker,
+    check_donor_diversity,
+    check_exploit_recovery_median,
+    check_perturbation_magnitude,
+    check_score_metric_coupling,
+    check_normalizer_support,
+    check_readback_fidelity,
+    check_search_efficiency,
+    check_score_rank_agreement,
+)
+
+
+def check_corrected(trace: SessionTrace) -> List[Finding]:
+    """Run the corrected invariant set (ticket #172) against ``trace``."""
+    return [check(trace) for check in CORRECTED_CHECKS]
+
+
+def gating_violations(findings: Sequence[Finding]) -> List[Finding]:
+    """Violated invariants that count as defects (excludes informational ones)."""
+    return [
+        f
+        for f in findings
+        if not f.holds and f.invariant not in INFORMATIONAL_INVARIANTS
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -840,6 +1044,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit non-zero when any invariant is violated.",
     )
+    p.add_argument(
+        "--corrected",
+        action="store_true",
+        help=(
+            "Audit against the corrected invariant set (ticket #172: per-worker "
+            "cadence, per-knob magnitude locality, median recovery) instead of "
+            "the pre-fix originals. Informational invariants do not gate --strict."
+        ),
+    )
     return p
 
 
@@ -855,8 +1068,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     for path in args.traces:
         trace = SessionTrace.from_path(path)
-        findings = check_all(trace)
-        broken += len(violations(findings))
+        findings = check_corrected(trace) if args.corrected else check_all(trace)
+        counted = (
+            gating_violations(findings) if args.corrected else violations(findings)
+        )
+        broken += len(counted)
         if args.format == "json":
             report[str(path)] = [
                 {

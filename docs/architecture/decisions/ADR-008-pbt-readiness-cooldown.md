@@ -2,6 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-09-24
+- Cross-links:
+  [ADR-002](ADR-002-feature-driven-scoring-v2.md),
+  [ADR-009](ADR-009-perturbation-grid-step-fidelity.md),
+  [ADR-010](ADR-010-asymmetric-normalizer-anchoring.md),
+  [ADR-011](ADR-011-postfix-invariant-corrections.md) (epic #162 siblings).
 
 ## Context
 

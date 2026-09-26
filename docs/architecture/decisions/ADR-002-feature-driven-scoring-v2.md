@@ -2,6 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-04-28
+- See also: [ADR-010](ADR-010-asymmetric-normalizer-anchoring.md) and
+  [ADR-011](ADR-011-postfix-invariant-corrections.md) — epic #162 corrected this
+  stack's normalizer anchoring (the symmetric both-tail fit that clamped the
+  elite) and the invariants that audit it.
 
 ## Context
 
