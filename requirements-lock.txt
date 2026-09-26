@@ -75,7 +75,7 @@ podman-compose==1.6.0
 prompt_toolkit==3.0.52
 psutil==7.2.2
 ptyprocess==0.7.0
-pure_eval==0.2.3
+pure_eval==0.2.4
 pyasn1==0.6.3
 pycairo==1.29.0
 pycparser==3.0
