@@ -7,7 +7,7 @@ See also: [Documentation Index](../README.md)
 > **Date created:** March 2026  
 > **Status:** Future work — deferred from current scope. This document captures ALL required changes, research, and implementation steps so that the work can be picked up at any time with full context.
 >
-> ⚠️ **Stale layout warning (added 2026-07-17):** This guide was written in March 2026 against the pre-refactor codebase, before the tuners unification (ADR-006). Its File-by-File Change Map and phase sections still reference the old `src/tuner/` package — including modules that no longer exist as separate files (e.g. `src/tuner/utils/instance_manager.py`, `snapshot_manager.py`, `restart_manager.py`, `postgres_instance.py`, `src/tuner/evaluator/evaluator.py`). The current layout is: PBT strategy under `src/tuners/pbt/`, the shared eval engine (orchestrator, barriers, restart_policy, worker) under `src/tuners/engine/`, environment/instance lifecycle under `src/utils/environments/`, knob code under `src/knobs/`, and workload code under `src/benchmarks/`. Before picking up this work, re-derive every target path against the current tree; the architecture is unchanged in intent but the file boundaries have moved.
+> **Layout note (re-derived 2026-09-27):** The File-by-File Change Map, the PostgreSQL adapter mapping, and the phase sections below were re-derived against the current post-ADR-006 tree. Every reference to *existing* PostgreSQL code points to a module that exists today: the knob applicator at `src/utils/applicator.py` (`KnobApplicator`), instance/snapshot lifecycle under `src/utils/environments/` (`base.py`, `docker.py`, `bare_metal.py`, `factory.py`), per-worker measurement under `src/tuners/engine/` (`orchestrator.py`, `worker_metrics.py`, `maintenance.py`), knob code under `src/knobs/`, and workload code under `src/benchmarks/`. The old `src/tuner/` package (`instance_manager.py`, `snapshot_manager.py`, `restart_manager.py`, `postgres_instance.py`, `evaluator/evaluator.py`) no longer exists; its responsibilities have moved as noted per row. New-file paths (`src/database/adapter.py`, `mysql_adapter.py`, etc.) are the proposed additions and do not exist yet. The architecture is unchanged in intent; only the file boundaries have moved.
 
 ---
 
@@ -251,42 +251,42 @@ Create `src/database/postgresql_adapter.py` — refactor existing code into a `P
 
 | Adapter Method | Current Code Location |
 |---|---|
-| `connect()` | `src/database/connection.py:get_connection()` (L64) |
-| `get_sqlalchemy_url()` | `src/config/database.py:DatabaseConfig.get_sqlalchemy_url()` (L106) |
-| `get_admin_connection()` | `src/database/management.py:create_database()` (L37) — connect to `postgres` DB |
-| `database_exists()` | `src/database/management.py` (L43) — `SELECT 1 FROM pg_database WHERE datname = %s` |
-| `create_database()` | `src/database/management.py` (L48) — `CREATE DATABASE "{dbname}"` |
-| `drop_database()` | `src/database/management.py` (L85-93) — `pg_terminate_backend()` + `DROP DATABASE` |
-| `get_all_knob_metadata()` | `src/knobs/retrieval.py` (L181-196) — `SELECT ... FROM pg_settings` |
-| `get_knob_metadata()` | `src/knobs/retrieval.py` (L300-314) — `SELECT ... FROM pg_settings WHERE name = %s` |
-| `normalize_knob_value()` | `src/knobs/retrieval.py:normalize_value()` (L349-380) — PG unit handling |
-| `apply_knob_persistent()` | `src/tuner/utils/applicator.py` (L417-432) — `ALTER SYSTEM SET` |
-| `apply_knob_runtime()` | `src/tuner/utils/applicator.py` (L436) — `SET {name} = %s` |
-| `reset_knob()` | `src/tuner/utils/applicator.py` (L670) — `ALTER SYSTEM RESET {name}` |
-| `reload_config()` | `src/tuner/utils/applicator.py` (L453) — `SELECT pg_reload_conf()` |
-| `get_current_knob_value()` | `src/tuner/utils/applicator.py` (L638-648) — `SELECT ... FROM pg_settings` |
-| `reset_stats()` | `src/tuner/evaluator/evaluator.py` (L907) — `SELECT pg_stat_reset()` |
-| `get_cache_hit_ratio()` | `src/tuner/evaluator/evaluator.py` (L1253-1258) — `pg_stat_database` |
-| `get_io_stats()` | `src/tuner/evaluator/evaluator.py` (L1398-1440) — `pg_stat_database` |
-| `get_backend_pid()` | `src/tuner/evaluator/evaluator.py` (L1037) — `SELECT pg_backend_pid()` |
-| `vacuum_equivalent()` | Multiple files — `VACUUM ANALYZE {table}` |
-| `bulk_load()` | `src/benchmarks/tpch/executor.py` (L115-118) — `psycopg2.copy_expert()` |
-| `initialize_data_directory()` | `src/tuner/utils/instance_manager.py` (L267) — `initdb -D ...` |
-| `write_config_file()` | `src/tuner/utils/instance_manager.py` (L557) — write `postgresql.conf` |
-| `start_instance()` | `src/tuner/utils/instance_manager.py` (L579) — `pg_ctl start` |
-| `stop_instance()` | `src/tuner/utils/instance_manager.py` (L700-730) — `pg_ctl stop` |
-| `is_instance_running()` | `src/tuner/utils/instance_manager.py` (L172-195) — check `postmaster.pid` |
-| `validate_data_directory()` | `src/tuner/utils/instance_manager.py` (L145-170) — check PG-specific files |
-| `get_excluded_snapshot_files()` | `src/tuner/utils/snapshot_manager.py` (L131-138): return PG config file list |
-| `get_process_name()` | Returns `"postgres"` |
-| `detect_data_directory()` | `src/tuner/utils/restart_manager.py` (L229) — `SHOW data_directory` |
-| `find_binaries()` | `src/tuner/utils/instance_manager.py` (L104) — search for `pg_ctl`, `initdb`, etc. |
-| `user_exists()` | `src/tuner/utils/instance_manager.py` (L527) — `SELECT 1 FROM pg_roles` |
-| `create_user()` | `src/tuner/utils/instance_manager.py` (L527) — `CREATE USER ... WITH SUPERUSER` |
-| `default_port()` | Returns `5432` |
+| `connect()` | `src/database/connection.py:get_connection()` — wraps `psycopg2.connect()` |
+| `get_sqlalchemy_url()` | `src/config/database.py:DatabaseConfig.get_sqlalchemy_url()` |
+| `get_admin_connection()` | `src/database/management.py:create_database()` — `get_connection(config, dbname="postgres")` |
+| `database_exists()` | `src/database/management.py:create_database()` — `SELECT 1 FROM pg_database WHERE datname = %s` (also `DatabaseEnvironment._ensure_database_exists()` in `src/utils/environments/base.py`) |
+| `create_database()` | `src/database/management.py:create_database()` — `CREATE DATABASE "{dbname}"` |
+| `drop_database()` | `src/database/management.py:drop_database()` — `pg_terminate_backend()` + `DROP DATABASE` |
+| `get_all_knob_metadata()` | `src/knobs/retrieval.py:PostgreSQLKnobRetriever.get_all_parameters()` — `SELECT ... FROM pg_settings` |
+| `get_knob_metadata()` | `src/knobs/retrieval.py:PostgreSQLKnobRetriever.get_knob_details()` — `SELECT ... FROM pg_settings WHERE name = %s` |
+| `normalize_knob_value()` | `src/knobs/retrieval.py:PostgreSQLKnobRetriever.normalize_value()` — PG unit handling |
+| `apply_knob_persistent()` | `src/utils/applicator.py:KnobApplicator._apply_parameter()` — `ALTER SYSTEM SET` (public entry `apply_only()` / `apply()`) |
+| `apply_knob_runtime()` | `src/utils/applicator.py:KnobApplicator._apply_parameter()` — `SET {name} = %s` branch |
+| `reset_knob()` | `src/utils/applicator.py:KnobApplicator.reset_parameter()` — `ALTER SYSTEM RESET {name}` |
+| `reload_config()` | `src/utils/applicator.py:KnobApplicator._reload_configuration()` — `SELECT pg_reload_conf()` |
+| `get_current_knob_value()` | `src/utils/applicator.py:KnobApplicator.get_current_values()` — `SELECT ... FROM pg_settings` |
+| `reset_stats()` | `src/utils/environments/base.py:DatabaseEnvironment.reset_statistics()` — `SELECT pg_stat_reset()` |
+| `get_cache_hit_ratio()` | `src/utils/environments/base.py:DatabaseEnvironment.collect_cache_hit_ratio()` — `pg_stat_database` |
+| `get_io_stats()` | `src/tuners/engine/worker_metrics.py:fetch_pg_stat_database_snapshot()` + `compute_io_metrics()` — `pg_stat_database` deltas |
+| `get_backend_pid()` | `SELECT pg_backend_pid()` used inline in `src/database/management.py:drop_database()`; connection PID also read in `src/utils/environments/bare_metal.py:BareMetalEnvironment.collect_memory_utilization()` (no standalone method) |
+| `vacuum_equivalent()` | `src/tuners/engine/maintenance.py:vacuum_after_dml()`; also `SysbenchExecutor.prepare()` and `TPCHExecutor.prepare()` — `VACUUM ANALYZE {table}` |
+| `bulk_load()` | `src/benchmarks/tpch/executor.py:TPCHExecutor.prepare()` — `psycopg2` `copy_expert()` |
+| `initialize_data_directory()` | `src/utils/environments/bare_metal.py:BareMetalEnvironment.setup_instances()` — `initdb -D ...` |
+| `write_config_file()` | `src/utils/environments/bare_metal.py:BareMetalEnvironment.setup_instances()` — appends port/socket/`listen_addresses` to `postgresql.conf` (Docker backend uses image-baked config) |
+| `start_instance()` | `src/utils/environments/bare_metal.py:BareMetalEnvironment.start_instance()` — `pg_ctl start` (abstract on `DatabaseEnvironment.start_instance()`; Docker backend starts containers) |
+| `stop_instance()` | `src/utils/environments/bare_metal.py:BareMetalEnvironment.stop_instance()` — `pg_ctl stop -m {mode}` |
+| `is_instance_running()` | No standalone method — `BareMetalEnvironment` inspects `postmaster.pid` inside `setup_instances()` and runs `pg_ctl status` inside `verify_instances()` (`restart_instance()` holds no liveness check; it delegates to `stop_instance()` / `start_instance()` / `reset_statistics()`) |
+| `validate_data_directory()` | `src/utils/environments/bare_metal.py:BareMetalEnvironment.setup_instances()` — checks for the `PG_VERSION` file |
+| `get_excluded_snapshot_files()` | `src/utils/environments/bare_metal.py:BareMetalEnvironment.create_snapshot()` — rsync `--exclude` of `postgresql.conf`, `postmaster.pid`, `postgresql.auto.conf` |
+| `get_process_name()` | Returns `"postgres"` (no dedicated helper today) |
+| `detect_data_directory()` | **No longer exists** — the data directory is tracked in-process via `InstanceConfig.data_dir` (`src/utils/environments/base.py`); it is not queried with `SHOW data_directory` |
+| `find_binaries()` | **No dedicated discovery function** — `BareMetalEnvironment` invokes `initdb` / `pg_ctl` from `PATH` directly in `setup_instances()` / `start_instance()` |
+| `user_exists()` | **No longer exists** — the tree contains no `pg_roles` lookup |
+| `create_user()` | **No standalone op** — the superuser role is created by `initdb --username={user}` in `BareMetalEnvironment.setup_instances()` |
+| `default_port()` | Returns `5432` (worker instances start at `5440`; see `src/tuners/base.py:BaseTuner._create_environment()`) |
 | `default_admin_user()` | Returns `"postgres"` |
 | `identifier_quote()` | Returns `'"'` |
-| `is_in_recovery()` | `src/tuner/utils/restart_manager.py` (L700) — `SELECT pg_is_in_recovery()` |
+| `is_in_recovery()` | **No longer exists** — no `pg_is_in_recovery()` call remains; `src/database/connection.py:connect_with_retry()` detects recovery via connection-error strings instead |
 
 ### 2.3 MySQL Adapter
 
@@ -355,12 +355,12 @@ def create_adapter(dbms: str, **kwargs) -> DatabaseAdapter:
 
     | File | Current PG-Specific Code | Change To |
     |---|---|---|
-    | `src/tuner/evaluator/evaluator.py` | Imports `psycopg2`, uses PG SQL directly | Accept `DatabaseAdapter`, call `adapter.get_cache_hit_ratio()`, `adapter.reset_stats()`, etc. |
-    | `src/tuner/utils/applicator.py` | `ALTER SYSTEM SET`, queries `pg_settings` | Accept `DatabaseAdapter`, call `adapter.apply_knob_persistent()`, `adapter.get_knob_metadata()` |
-    | `src/tuner/utils/restart_manager.py` | `pg_ctl`, `SHOW data_directory` | Accept `DatabaseAdapter`, call `adapter.stop_instance()`, `adapter.start_instance()`, `adapter.detect_data_directory()` |
-    | `src/tuner/utils/instance_manager.py` | `initdb`, `pg_ctl`, writes `postgresql.conf` | Accept `DatabaseAdapter`, call `adapter.initialize_data_directory()`, `adapter.write_config_file()`, etc. |
-    | `src/tuner/utils/postgres_instance.py` | Queries `pg_settings` for context | Accept `DatabaseAdapter`, call `adapter.get_knob_metadata()` |
-    | `src/tuner/utils/snapshot_manager.py` | Hardcoded PG excluded files | Accept `DatabaseAdapter`, call `adapter.get_excluded_snapshot_files()` |
+    | `src/tuners/engine/orchestrator.py` (`WorkloadOrchestrator`), `src/tuners/engine/worker_metrics.py`, and `src/utils/environments/base.py` | Imports `psycopg2`, uses PG SQL directly (measurement, stats, cache-hit) | Accept `DatabaseAdapter`, call `adapter.get_cache_hit_ratio()`, `adapter.reset_stats()`, `adapter.get_io_stats()`, etc. |
+    | `src/utils/applicator.py` (`KnobApplicator`) | `ALTER SYSTEM SET`, queries `pg_settings` | Accept `DatabaseAdapter`, call `adapter.apply_knob_persistent()`, `adapter.get_knob_metadata()` |
+    | `src/tuners/engine/restart_policy.py` (`should_restart()`) + environment `restart_instance()` | `pg_ctl` restart (no `SHOW data_directory` remains) | Accept `DatabaseAdapter`, call `adapter.stop_instance()`, `adapter.start_instance()` |
+    | `src/utils/environments/bare_metal.py` / `docker.py` (via `EnvironmentFactory`) | `initdb`, `pg_ctl`, writes `postgresql.conf` | Accept `DatabaseAdapter`, call `adapter.initialize_data_directory()`, `adapter.write_config_file()`, etc. |
+    | `src/utils/environments/base.py` + `src/knobs/retrieval.py` (the old `postgres_instance.py` merged into the environment backends) | Queries `pg_settings` for context | Accept `DatabaseAdapter`, call `adapter.get_knob_metadata()` |
+    | `src/utils/environments/bare_metal.py:create_snapshot()` (and the Docker backend's snapshot methods) | Hardcoded PG excluded files | Accept `DatabaseAdapter`, call `adapter.get_excluded_snapshot_files()` |
     | `src/knobs/retrieval.py` | `SELECT ... FROM pg_settings` | Accept `DatabaseAdapter`, call `adapter.get_all_knob_metadata()` |
     | `src/database/management.py` | `pg_database`, `pg_terminate_backend()` | Wrapped by adapter; consumer code calls `adapter.create_database()` etc. |
     | `src/benchmarks/sysbench/executor.py` | `--db-driver=pgsql`, `VACUUM ANALYZE` | Accept `DatabaseAdapter`, call `adapter.vacuum_equivalent()`, build flags from adapter |
@@ -369,10 +369,10 @@ def create_adapter(dbms: str, **kwargs) -> DatabaseAdapter:
     | `src/tuners/pbt/population.py` | Consumes `InstanceConfig` records from the environment backend | Keep the backend abstraction; add a DBMS-agnostic adapter behind it |
 
 5. **Rename PostgreSQL-branded classes** to generic names (or keep PG-branded as the adapter implementation):
-    - `DockerEnvironment` / `BareMetalEnvironment` → keep internally, but consumers use adapter
-    - `PostgresRestartManager` → keep internally, but consumers use adapter
-    - `PostgresInstance` → keep internally, but consumers use adapter
-    - `PostgreSQLKnobRetriever` → keep internally, but consumers use adapter
+    - `DockerEnvironment` / `BareMetalEnvironment` (`src/utils/environments/`) → keep internally, but consumers use adapter
+    - Restart handling is now `src/tuners/engine/restart_policy.py:should_restart()` plus the environment backends' `restart_instance()` (the old `PostgresRestartManager` class is gone) → keep internally, but consumers use adapter
+    - The old `PostgresInstance` has been absorbed into the environment backends (`DatabaseEnvironment` and its `InstanceConfig`) → keep internally, but consumers use adapter
+    - `PostgreSQLKnobRetriever` (`src/knobs/retrieval.py`) → keep internally, but consumers use adapter
 
 6. **Update `src/knobs/__init__.py`** — export `DatabaseAdapter` and factory instead of PG-branded names.
 
@@ -676,7 +676,7 @@ Create `src/knobs/mysql_preprocess_knobs.py` or extend `preprocess_knobs.py` to 
 - `add_tuning_metadata()` — use `MYSQL_KNOB_TUNING_METADATA` instead of `KNOB_TUNING_METADATA`
 - `filter_tunable_knobs()` — MySQL-specific: filter by InnoDB + session vars; exclude read-only
 - `create_tier_dataframes()` — use `MYSQL_IMPACT_TIERS`
-- Output: `data/tuner_knobs/mysql/` subdirectory with tier CSVs
+- Output: `data/expert_defined_knobs/mysql/` subdirectory with tier CSVs (mirrors the current `data/expert_defined_knobs/` layout used by `preprocess_and_save_knobs()`)
 
 ### 6.6 MySQL Knob Loader Updates
 
@@ -693,7 +693,7 @@ Create `src/knobs/mysql_preprocess_knobs.py` or extend `preprocess_knobs.py` to 
 
 **MySQL equivalent:** `requires_restart` comes from `performance_schema.variables_info` or hardcoded metadata.
 
-**CSV path:** Currently loads from `data/tuner_knobs/`. Need to load from `data/tuner_knobs/postgresql/` or `data/tuner_knobs/mysql/` based on DBMS.
+**CSV path:** Today `src/knobs/knob_loader.py` loads expert tiers from `data/expert_defined_knobs/` (`EXPERT_KNOBS_DIR`) and data-driven tiers from `data/data_driven_knobs/{workload_type}/`. For MySQL, load from a DBMS-scoped variant (e.g. `data/expert_defined_knobs/mysql/`) selected by DBMS.
 
 ---
 
@@ -876,10 +876,10 @@ class MySQLAdapter(DatabaseAdapter):
 
 | Current | MySQL Equivalent | Change |
 |---------|-----------------|--------|
-| `pg_instances/` | `db_instances/postgresql/` and `db_instances/mysql/` | Rename and restructure |
-| `pg_snapshots/` | `db_snapshots/postgresql/` and `db_snapshots/mysql/` | Rename and restructure |
+| Worker data dirs: `{data_root}/{benchmark}/worker_{id}` (base dir defaults to `./.instances`; benchmark subpath from `DatabaseEnvironment._get_instance_subpath()`, e.g. `sysbench/t10_s100000`) | Add a `{dbms}` segment, e.g. `{data_root}/mysql/{benchmark}/worker_{id}` | Parameterize the base path by DBMS |
+| Bare-metal snapshots: `{base_dir}/pg_snapshots/{run_id}` (`BareMetalEnvironment._resolve_snapshot_path()`); the Docker backend uses image-based snapshots (no directory) | `{base_dir}/db_snapshots/{dbms}/{run_id}` | Rename `pg_snapshots` and add a `{dbms}` segment |
 
-**Note:** This directory rename is a breaking change — existing paths in configs and scripts must be updated.
+**Note:** Parameterizing these paths by DBMS is a breaking change — the `base_dir`/`base_port` wiring in `src/tuners/base.py:BaseTuner._create_environment()` and the snapshot-path helpers in `src/utils/environments/` must be updated together.
 
 ---
 
@@ -1008,7 +1008,7 @@ class MySQLAdapter(DatabaseAdapter):
         ]
 ```
 
-**Current PG flags in `SysbenchExecutor._build_base_cmd()` (L133-145):**
+**Current PG flags in `SysbenchExecutor._build_base_cmd()` (`src/benchmarks/sysbench/executor.py`):**
 ```python
 "--db-driver=pgsql",
 f"--pgsql-host={db_config.host}",
@@ -1198,9 +1198,9 @@ class MySQLAdapter(DatabaseAdapter):
 
 ### 10.5 Process Detection
 
-Current code in `evaluator.py` (L1075-1090) checks for `'postgres' in proc_name.lower()` to find the postmaster PID. MySQL equivalent: `'mysqld' in proc_name.lower()`.
+The old `evaluator.py` process-name string match (`'postgres' in proc_name.lower()`) no longer exists. Per-instance memory / PID resolution now lives in the environment backends: `src/utils/environments/bare_metal.py:BareMetalEnvironment.collect_memory_utilization()` resolves the connection's backend PID with `SELECT pg_backend_pid()`, walks up to the postmaster via `psutil` (`backend_process.parent()`), and sums the process-tree RSS; the Docker backend (`src/utils/environments/docker.py:DockerEnvironment.collect_memory_utilization()`) reads container-level stats instead. There is no free-standing process-name scan to port.
 
-The adapter's `get_process_name()` returns `'mysqld'`, so the evaluator uses `adapter.get_process_name()` for process detection.
+For MySQL, the adapter's `get_process_name()` would return `'mysqld'`, and the bare-metal path would resolve the connection PID via `CONNECTION_ID()` rather than `pg_backend_pid()`. Both are encapsulated behind the adapter so `collect_memory_utilization()` stays DBMS-agnostic.
 
 ### 10.6 Block Size Conversion
 
@@ -1214,7 +1214,7 @@ MySQL's `Innodb_data_read` is already in **bytes**:
 io_mb = bytes_read_delta / (1024.0 * 1024.0)  # bytes → MB
 ```
 
-This conversion logic must be in the adapter, not in the evaluator.
+This conversion currently lives in `src/tuners/engine/worker_metrics.py:compute_io_metrics()` (`io_read_mb = (blocks_read_delta * 8) / 1024.0`); under the adapter model it must move behind `adapter.get_io_stats()` so the engine no longer assumes an 8kB block size.
 
 ---
 
@@ -1358,10 +1358,10 @@ A file `src/knobs/mysql_knob_metadata.py` with:
 
 ### 12.1 CLI Changes
 
-Add `--dbms` flag to the main CLI entry point:
+Add `--dbms` flag to the CLI entry point (shared groups in `src/tuners/cli.py`; per-strategy parser in `src/tuners/pbt/cli.py`):
 
 ```python
-# In argument parser (main.py or CLI module)
+# In the argument parser (src/tuners/cli.py / src/tuners/pbt/cli.py)
 parser.add_argument(
     '--dbms', 
     choices=['postgresql', 'mysql'],
@@ -1370,27 +1370,36 @@ parser.add_argument(
 )
 ```
 
-### 12.2 Orchestrator Changes (`src/tuners/pbt/tuner.py`)
+### 12.2 Environment Creation Changes (`src/tuners/base.py:BaseTuner._create_environment()`; PBT override in `src/tuners/pbt/tuner.py:PBTTuner._create_environment()`)
 
-**Current** (L203-210):
+**Current** — `BaseTuner._create_environment()` builds the backend and the `WorkloadOrchestrator`:
 ```python
-self.environment = EnvironmentFactory.create(
-    base_dir=Path(f'./pg_instances/{self.benchmark_name}'),
+self.env = EnvironmentFactory.create(
+    schema_provider=self._workload_executor,
+    use_docker=self.lifecycle.use_docker,
+    base_dir=self.data_root,       # not a hardcoded pg_instances/ path
     base_port=5440,
-    ...
+    db_config=db_config,
+    worker_resources=self.worker_resources,
+    run_id=self.snapshot_identifier,
+    image_name=self.lifecycle.docker_image,
+    force_recreate_baseline=self.lifecycle.force_recreate_baseline,
 )
+# ... then constructs WorkloadOrchestrator(orchestrator_config, executor, self.env)
 ```
 
 **After refactoring:**
 ```python
 from src.database.adapter_factory import create_adapter
 
-# In __init__:
+# In _create_environment():
 self.adapter = create_adapter(self.config.dbms)
-self.instance_manager = GenericInstanceManager(
+self.env = EnvironmentFactory.create(
     adapter=self.adapter,
-    base_dir=Path(f'./db_instances/{self.config.dbms}/{self.benchmark_name}'),
-    base_port=self.adapter.default_port() + 8,  # Offset to avoid conflict with system instance
+    schema_provider=self._workload_executor,
+    use_docker=self.lifecycle.use_docker,
+    base_dir=self.data_root,            # already DBMS-parameterizable via config.data_root
+    base_port=self.adapter.default_port() + 8,  # 5440 for PG; offset from the DBMS default
     ...
 )
 ```
@@ -1421,17 +1430,21 @@ Add `"dbms": "postgresql"` or `"dbms": "mysql"` to the results JSON output. This
 
 ### 12.5 Knob Loader — DBMS-Aware CSV Path
 
+Today `src/knobs/knob_loader.py:load_knob_space_for_tier()` resolves tier CSVs via `_resolve_tier_csv_path()` against `EXPERT_KNOBS_DIR = "data/expert_defined_knobs"` (data-driven tiers under `data/data_driven_knobs/{workload_type}/`). Thread a `dbms` argument through so the base directory gains a `{dbms}` segment:
+
 ```python
-# In knob_loader.py
-def load_knobs_for_tier(tier: str, dbms: str = "postgresql"):
-    csv_dir = Path(f"data/tuner_knobs/{dbms}")
-    csv_path = csv_dir / f"{tier}_knobs.csv"
+# In knob_loader.py — load_knob_space_for_tier() / _resolve_tier_csv_path()
+EXPERT_KNOBS_DIR = "data/expert_defined_knobs"
+
+def _resolve_tier_csv_path(tier: str, dbms: str = "postgresql") -> Path:
+    csv_dir = Path(EXPERT_KNOBS_DIR) / dbms
+    return csv_dir / f"{tier}_knobs.csv"
     ...
 ```
 
-**Data directory restructure:**
+**Data directory restructure** (from the current flat `data/expert_defined_knobs/`):
 ```
-data/tuner_knobs/
+data/expert_defined_knobs/
   postgresql/
     minimal_knobs.csv
     core_knobs.csv
@@ -1507,7 +1520,7 @@ tests/integration/test_cross_dbms.py
 3. Create PBT user and database
 4. Set environment variables (`PBT_DBMS=mysql`, `DB_PORT=3306`, etc.)
 5. Run knob preprocessing pipeline: `python -m src.knobs.preprocess_knobs --dbms mysql` (the `--dbms` flag is part of this proposal; today the module takes a CSV path)
-6. Run PBT: `python -m src.tuner --dbms mysql --workload sysbench`
+6. Run PBT: `python -m src.tuners pbt --dbms mysql --benchmark sysbench` (the `--dbms` flag is part of this proposal)
 
 ---
 
@@ -1571,7 +1584,7 @@ tests/integration/test_cross_dbms.py
 | 5 | `src/knobs/mysql_knob_metadata.py` | MySQL knob tuning metadata (~100 entries) | R3, R8 |
 | 6 | `src/benchmarks/tpch/queries/mysql/` (dir) | MySQL-dialect TPC-H queries (22 files) | R6 |
 | 7 | `docs/MYSQL_SETUP.md` | MySQL setup documentation | R11 |
-| 8 | `data/tuner_knobs/mysql/*.csv` | MySQL tier CSV files (4 files) | R3 |
+| 8 | `data/expert_defined_knobs/mysql/*.csv` | MySQL tier CSV files (4 files) | R3 |
 | 9 | `tests/unit/database/test_mysql_adapter.py` | MySQL adapter unit tests | R10 |
 | 10 | `tests/unit/knobs/test_mysql_knob_metadata.py` | MySQL metadata tests | R10 |
 
@@ -1588,12 +1601,12 @@ tests/integration/test_cross_dbms.py
 | 7 | `src/knobs/knob_metadata.py` | No change (stays PG-specific, adapter selects correct module) | — |
 | 8 | `src/knobs/preprocess_knobs.py` | Accept `--dbms` flag, use correct metadata module | R3 |
 | 9 | `src/knobs/__init__.py` | Export DBMS-agnostic interface | R1 |
-| 10 | `src/tuner/utils/applicator.py` | Use adapter for `apply_knob_*`, `get_knob_metadata` | R1, R5 |
-| 11 | `src/tuner/utils/restart_manager.py` | Use adapter for `stop/start_instance`, `detect_data_directory` | R1, R4 |
-| 12 | `src/tuner/utils/instance_manager.py` | Use adapter for `initialize_data_directory`, `write_config_file`, binaries | R1, R4 |
-| 13 | `src/tuner/utils/postgres_instance.py` | Use adapter; possibly rename to `db_instance.py` | R1 |
-| 14 | `src/tuner/utils/snapshot_manager.py` | Use `adapter.get_excluded_snapshot_files()` | R1 |
-| 15 | `src/tuner/evaluator/evaluator.py` | Use adapter for stats, VACUUM, cache hit, process detection | R1, R7 |
+| 10 | `src/utils/applicator.py` (`KnobApplicator`) | Use adapter for `apply_knob_*`, `get_knob_metadata` | R1, R5 |
+| 11 | `src/tuners/engine/restart_policy.py` (`should_restart()`) + environment `restart_instance()` | Use adapter for `stop/start_instance` (the old `SHOW data_directory` path is gone) | R1, R4 |
+| 12 | `src/utils/environments/bare_metal.py` / `docker.py` (via `factory.py`) | Use adapter for `initialize_data_directory`, `write_config_file`, binaries | R1, R4 |
+| 13 | `src/utils/environments/base.py` (`DatabaseEnvironment` / `InstanceConfig`, which absorbed the old `postgres_instance.py`) | Use adapter; instance identity is DBMS-agnostic | R1 |
+| 14 | `src/utils/environments/bare_metal.py:create_snapshot()` (+ Docker backend snapshot methods) | Use `adapter.get_excluded_snapshot_files()` | R1 |
+| 15 | `src/tuners/engine/orchestrator.py` (`WorkloadOrchestrator`) + `src/tuners/engine/worker_metrics.py` + `src/utils/environments/base.py` | Use adapter for stats, VACUUM, cache hit, process detection | R1, R7 |
 | 16 | `src/benchmarks/sysbench/executor.py` | Get driver flags from adapter; use `adapter.vacuum_equivalent()` | R1, R6 |
 | 17 | `src/benchmarks/tpch/executor.py` | Use `adapter.bulk_load()`, `adapter.vacuum_equivalent()`; DBMS-specific query dir | R1, R6 |
 | 18 | `src/knobs/knob_loader.py` | DBMS-aware CSV path; MySQL type mapping | R3 |
@@ -1610,9 +1623,9 @@ tests/integration/test_cross_dbms.py
 
 | Current | Change | Phase |
 |---------|--------|-------|
-| `data/tuner_knobs/*.csv` | Move to `data/tuner_knobs/postgresql/*.csv` | R3 |
-| `pg_instances/` | Rename to `db_instances/postgresql/` (or make DBMS-parameterized) | R4 |
-| `pg_snapshots/` | Rename to `db_snapshots/postgresql/` (or make DBMS-parameterized) | R4 |
+| `data/expert_defined_knobs/*.csv` (and `data/data_driven_knobs/{workload}/`) | Add a `{dbms}` segment, e.g. `data/expert_defined_knobs/postgresql/*.csv` | R3 |
+| Worker data dirs under `{data_root}/{benchmark}/worker_{id}` (base defaults to `./.instances`) | Add a `{dbms}` segment to the base path (no literal `pg_instances/` exists today) | R4 |
+| Bare-metal snapshots at `{base_dir}/pg_snapshots/{run_id}` | Rename to `{base_dir}/db_snapshots/{dbms}/` (or make DBMS-parameterized) | R4 |
 | `src/benchmarks/tpch/queries/*.sql` | Keep as-is (PG-compatible); add `mysql/` subdirectory | R6 |
 
 ---
