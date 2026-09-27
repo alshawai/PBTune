@@ -1,6 +1,6 @@
 # ADR-003: Lockstep Generation Barriers for Measurement Fairness
 
-- Status: Accepted (partially corrected — see [Addendum 2026-09-15](#addendum-2026-09-15-the-out-of-band-liveness-detector-was-never-built))
+- Status: Accepted (partially corrected — see [Addendum 2026-09-15](#addendum-2026-09-15-the-out-of-band-liveness-detector-was-documented-but-never-built))
 - Date: 2026-05-30
 
 ## Context
@@ -27,7 +27,7 @@ Introduce a `GenerationBarrier` object that holds one `threading.Barrier` per su
 Three secondary decisions follow:
 
 1. **No per-barrier timeout.** Legitimate operations span seconds to many minutes (TPC-H Q21, dbgen data loads, postmaster restarts on slow disks). Any timeout small enough to detect a true hang false-positives on these.
-2. **Two graceful-degradation paths.** A worker that catches a clean exception calls `drain_remaining(start_from, worker_id)` to release its remaining barrier slots so peers do not deadlock. A worker confirmed dead by the population's health-check thread triggers `abort()`, which instantly breaks every barrier on every waiter.
+2. **Two exception-driven graceful-degradation paths.** A worker that catches its own exception calls `drain_remaining(start_from, worker_id)` to release its remaining barrier slots so peers do not deadlock. If instead the exception propagates out of the worker to the population's `future.result()`, `Population.evaluate_generation()` calls `abort()` — the single PBT call site — which instantly breaks every barrier on every waiter. Both paths are driven by a *raised* exception: there is no background health-check thread and no `DatabaseEnvironment.is_alive()`.
 3. **Sequential mode is `enabled=False`.** A no-op `GenerationBarrier` lets the same orchestrator body run under `--population 1` and in unit tests without branching on synchronisation.
 
 ## Consequences
@@ -42,14 +42,14 @@ Positive:
 Trade-offs:
 
 - The slowest worker dictates the generation's wall-clock time at every barrier. Stragglers cost peers idle wait time.
-- The orchestrator and population layers must cooperate on liveness detection (via `DatabaseEnvironment.is_alive`) because the barrier itself cannot distinguish "PostgreSQL is busy" from "PostgreSQL is dead."
-- A truly hung worker holds the generation until the health-check thread calls `abort()`. The bound on hang time is the health-check interval, not the barrier itself.
+- The barrier cannot itself tell "PostgreSQL is busy" from "PostgreSQL is dead," so liveness is surfaced *out of band* by the synchronous layers around it: benchmark-level bounds (TPC-H's failsafe `statement_timeout`, sysbench's subprocess `communicate(timeout=…)`, the bounded B15 `VACUUM ANALYZE`) and the environment lifecycle operations (`verify_instances`, `_wait_until_connectable`, `recover_instance` / `rebuild_worker_instance`, `connect_timeout` on connection attempts, Docker's SDK-level operation timeouts). Each turns a dead or unreachable instance into an *exception*, which then trips `drain_remaining` or `abort()`.
+- A worker that fails by *raising* unblocks its peers immediately. A worker that hangs *without* raising — a blocking call that neither returns nor raises and is bounded by no timeout — is the residual case the barrier does not cover; it is a deliberately accepted trade-off, detailed in the [Addendum](#addendum-2026-09-15-the-out-of-band-liveness-detector-was-documented-but-never-built).
 
 ## Alternatives Considered
 
-1. **Per-barrier timeout instead of out-of-band liveness detection.**
+1. **Per-barrier timeout to bound hangs.**
 
-   Rejected because any timeout short enough to detect hangs would false-positive on legitimately long queries, converting "everything is fine, just slow" into a broken-barrier event that loses the generation.
+   Rejected because any timeout short enough to detect hangs would false-positive on legitimately long queries, converting "everything is fine, just slow" into a broken-barrier event that loses the generation. Liveness is instead surfaced by the synchronous timeouts already present in the benchmark and environment layers (see *Consequences*), which raise on a dead instance without penalising a slow one.
 
 2. **Coarser barriers (e.g. one barrier each before and after the measurement window).**
 
@@ -67,30 +67,53 @@ The session JSON now records, per generation, the wall-clock duration of each ba
 
 ---
 
-## Addendum (2026-09-15): the out-of-band liveness detector was never built
+## Addendum (2026-09-15): the out-of-band liveness detector was documented but never built
 
-The decision above assumed an out-of-band liveness detector as the counterpart to
-rejecting per-barrier timeouts. **That detector does not exist in the codebase.** There is
-no `DatabaseEnvironment.is_alive()` method and no health-check thread; the two references
-to them in *Decision* item 2 and in the *Consequences* trade-offs describe an intended
-mechanism, not a shipped one. The rest of the ADR — the B1–B17 barrier set, the no-timeout
-rationale, `drain_remaining`, and the `enabled=False` sequential mode — is accurate.
+The originally-accepted decision named an out-of-band liveness detector — a
+`DatabaseEnvironment.is_alive()` method polled by a population-level health-check thread —
+as the counterpart to rejecting per-barrier timeouts. **That detector was never built.** A
+pickaxe over the whole history (`git log -S is_alive --all -- 'src'`) returns no source
+commit that ever added it, and no health-check thread, watchdog, or liveness poller has
+ever existed under `src/`; the references were documentation-only, describing an intended
+mechanism as if it had shipped. They were removed from the companion docs, and this ADR was
+given the present addendum, in **#138** (`6f7f4b8`, "docs: remove fictional PBT liveness and
+lifecycle methods"). The rest of the ADR — the B1–B17 barrier set, the no-timeout rationale,
+`drain_remaining`, and the `enabled=False` sequential mode — was accurate throughout and
+remains current.
 
-What actually ships:
+> **History note.** This addendum says *documented but never built* rather than *built and
+> later removed as redundant*: the pickaxe shows no source commit ever added the detector,
+> so what #138 removed was fictional documentation, not a working mechanism retired for
+> redundancy. The `is_alive` string appears only in `docs/` history (introduced by the
+> early architecture-doc commits, removed by `6f7f4b8`), never in `src/`.
+
+What actually ships (all verified against current source):
 
 - `barriers.abort()` has exactly one PBT call site: the `except` clause around
   `future.result()` in `Population.evaluate_generation()`
   ([src/tuners/pbt/population.py](../../../src/tuners/pbt/population.py)). It fires only
   when a worker's evaluation **raises**.
-- `drain_remaining(start_from, worker_id)` is unchanged and still the graceful path for a
-  worker that catches its own exception.
-- Liveness probing is the synchronous `environment.verify_instances()`, called at setup
-  and inside the recovery ladder — not from a poller.
+- `drain_remaining(start_from, worker_id)` is the graceful path for a worker that catches
+  its own exception, contributing its missing arrivals so peers are not deadlocked.
+- Liveness is surfaced synchronously by the layers *around* the barrier, never by a poller:
+  benchmark-level bounds (TPC-H `statement_timeout`, sysbench subprocess `communicate`
+  timeout, the bounded B15 `VACUUM ANALYZE`) and the environment lifecycle operations
+  (`verify_instances`, `_wait_until_connectable`, `recover_instance` /
+  `rebuild_worker_instance`, `connect_timeout`, Docker SDK operation timeouts). Each turns a
+  dead or unreachable instance into an exception that then trips `drain_remaining` or
+  `abort()`.
 
-**Consequence — the hang bound stated above does not hold.** "A truly hung worker holds
-the generation until the health-check thread calls `abort()`" is wrong; a worker that
-hangs without raising blocks its peers at the next barrier *indefinitely*, because nothing
-outside that thread can trip the abort. The no-timeout decision therefore currently trades
-false-positive hang detection for an unbounded real one. Closing the gap needs a genuine
-out-of-band liveness thread (calling `verify_instances()` on an interval and aborting on
-confirmed death), which remains unimplemented.
+**What this does and does not cover.** Because both escape paths are exception-driven, the
+design covers every failure that *raises* — crashes, refused or dropped connections, the
+external benchmarks' own bounded query/subprocess timeouts, unresponsive containers. It does
+**not** cover a genuinely silent hang: a synchronous call on a worker's main thread that
+blocks forever while neither returning nor raising, bounded by no timeout — for example a
+query on an already-established connection to a server wedged at the socket-read level, where
+`connect_timeout` (which bounds only the initial handshake) does not apply and no
+`statement_timeout` is set (the internal `WorkloadExecutor` sets none on its measurement
+queries). Such a worker holds its peers at the next barrier indefinitely. This is a
+**deliberately accepted residual**, not an oversight: a per-barrier timeout small enough to
+catch it would false-positive on legitimately long operations and lose whole generations
+(see *Alternatives*), so the no-timeout decision stands. Closing the residual would need a
+genuine out-of-band liveness thread (calling `verify_instances()` on an interval and
+aborting on confirmed death), which remains unimplemented.

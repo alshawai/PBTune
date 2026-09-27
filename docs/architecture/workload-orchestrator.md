@@ -281,7 +281,7 @@ Caught by the inner workload-execution handler at B7–B9. It builds a zeroed `P
 
 A dead instance surfaces as an exception from the worker's own evaluation (connection refused, `pg_ctl` failure, benchmark crash). When that exception reaches the population's `future.result()`, the population calls [`barriers.abort()`](generation-barriers.md#abort) — the running orchestrator's next `wait()` raises `BrokenBarrierError`, every per-worker thread exits cleanly, and the recovery ladder runs (`recover_instance` → `rebuild_worker_instance` → dead-worker rescue).
 
-There is no `environment.is_alive()` and no background health-check thread. A worker that hangs *without* raising therefore blocks its peers at the next barrier indefinitely — see [generation-barriers §Path 3](generation-barriers.md) for that gap.
+There is no `environment.is_alive()` and no background health-check thread — a dead instance surfaces as an *exception*, not via a poller. A worker that hangs *without* raising is the one case this exception-driven design does not reach: it blocks its peers at the next barrier indefinitely, a deliberately accepted residual — see [generation-barriers §Path 3](generation-barriers.md).
 
 The orchestrator also surfaces the read-back values from `applicator.verify()` to the population layer regardless of whether the evaluation completed. This lets the BO baseline correctly attribute the actually-quantised configuration even to runs that crashed mid-measurement.
 
