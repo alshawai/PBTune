@@ -14,14 +14,14 @@ python -m src.scripts.pbt_vs_bo_comarison  # cross-method comparison
 python -m src.visualization              # publication figure generation
 ```
 
-For the canonical authority on any flag's exact semantics, run the entry point with `--help`. This page reflects the flag set as of 2026-06-22.
+For the canonical authority on any flag's exact semantics, run the entry point with `--help`. This page reflects the flag set as of 2026-09-27.
 
 ---
 
 ## Table of contents
 
 1. [`src.tuners pbt` — PBT tuning](#srctuners-pbt--pbt-tuning)
-2. [`src.tuners` — LHS-design tuning](#srctuners--lhs-design-tuning)
+2. [`src.tuners lhs` — LHS-design tuning](#srctuners-lhs--lhs-design-tuning)
 3. [`src.evaluation` — default-vs-tuned comparison](#srcevaluation--default-vs-tuned-comparison)
 4. [`src.tuners bo` — Bayesian-Optimisation baseline](#srctuners-bo--bayesian-optimisation-baseline)
 5. [`src.scripts.pbt_vs_bo_comarison` — cross-method comparison](#srcscriptspbt_vs_bo_comarison--cross-method-comparison)
@@ -46,7 +46,7 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--config {rapid\|standard\|thorough\|research\|extreme}` | `standard` | Pre-configured `PBTConfig` profile bundling population/generations/durations. |
+| `--config {rapid\|standard\|thorough\|research}` | `standard` | Pre-configured `PBTConfig` profile bundling population/generations/durations. (No `extreme`; that profile exists only on `src.tuners bo`.) |
 | `--random-seed <int>` | `42` | Master seed for population init, LHS, perturbation. |
 | `--population <int>` | from profile | Override the profile's worker count. |
 | `--generations <int>` | from profile | Override the profile's generation count. |
@@ -65,17 +65,16 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 | `--scoring-policy {fixed_v1\|feature_driven_v2}` | falls back to PBT config (`feature_driven_v2` for new runs) | Score formula. See [feature-driven-scoring](../architecture/feature-driven-scoring.md). |
 | `--scoring-policy-version <str>` | from policy | Pinned policy version recorded in session JSON. |
 | `--metric-reference-version <str>` | from policy | Metric semantics version recorded in session JSON. |
-| `--scoring-calibration-evals <int>` | `5` | Evaluations before the quantile normaliser's first calibration. |
 
 ### Workload
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--workload {oltp\|olap\|mixed}` | `oltp` | Built-in workload type when neither `--benchmark` nor `--workload-file` is given. |
+| `--workload {oltp\|olap\|mixed}` | `oltp` | Workload type for custom (`--workload-file`) workloads and scoring/feature tags. |
 | `--workload-file <path>` | none | Custom JSON/YAML workload template. See [adding-workloads](../guides/adding-workloads.md). |
-| `--benchmark {sysbench\|tpch}` | none | External C-binary benchmark. See [benchmarking](benchmarking.md). |
+| `--benchmark {sysbench\|tpch}` | `sysbench` | External C-binary benchmark driver. See [benchmarking](benchmarking.md). |
 | `--duration <float>` | `30.0` | Measurement window seconds. |
-| `--warmup <float>` | `10.0` | Warmup window seconds before measurement. |
+| `--warmup <float>` | `30.0` | Warmup window seconds before measurement. |
 
 #### Sysbench-specific
 
@@ -89,7 +88,7 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
-| `--scale-factor <float>` | `1.0` | TPC-H scale factor (SF=1 → ~1 GB, ~6M lineitem rows). |
+| `--scale-factor <float>` | `0.1` | TPC-H scale factor (SF=1 → ~1 GB, ~6M lineitem rows). |
 
 ### Instance management
 
@@ -100,7 +99,6 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 | `--docker-image <image>` | auto | Override the auto-resolved PostgreSQL image. |
 | `--force-recreate-instances` | off | Tear down and recreate worker instances before starting. |
 | `--cleanup-instances` | off | Remove all worker instances and exit (no tuning). Same as `python -m src.scripts.cleanup_instances`. |
-| `--skip-schema-init` | off | Skip schema initialisation (assumes data already loaded). |
 | `--force-recreate-baseline` | off | Tear down and recreate the baseline snapshot before starting. |
 
 ### Output
@@ -116,9 +114,9 @@ The primary entry point. Two equivalent invocations: the routed form `python -m 
 
 ---
 
-## `src.tuners` — LHS-design tuning
+## `src.tuners lhs` — LHS-design tuning
 
-The strategy-unified tuner package. `python -m src.tuners` and `python -m src.tuners.lhs_design` are aliases for the same entry point: a fixed Latin Hypercube Sampling (LHS) *importance-design* sweep over the knob space, swept once with no evolution. The session JSON it writes (`tuning_strategy: "lhs"`, plus a `design_records` array) is the substrate the SCALPEL importance pipeline consumes. See [scalpel](../architecture/scalpel.md), [guides/scalpel-rollout](../guides/scalpel-rollout.md), and [ADR-006](../architecture/decisions/ADR-006-unified-tuners-package.md).
+The strategy-unified tuner package. The routed forms `python -m src.tuners lhs` and `python -m src.tuners lhs_design` both reach this entry point, as does the direct door `python -m src.tuners.lhs_design`. Bare `python -m src.tuners` (no strategy token) does **not** run LHS — the router (`src/tuners/__main__.py`) takes the strategy as a required positional (`{bo,lhs,lhs_design,pbt}`), so the bare form exits with an argparse usage error. All three working forms run a fixed Latin Hypercube Sampling (LHS) *importance-design* sweep over the knob space, swept once with no evolution. The session JSON it writes (`tuning_strategy: "lhs"`, plus a `design_records` array) is the substrate the SCALPEL importance pipeline consumes. See [scalpel](../architecture/scalpel.md), [guides/scalpel-rollout](../guides/scalpel-rollout.md), and [ADR-006](../architecture/decisions/ADR-006-unified-tuners-package.md).
 
 Only `--design-size` is LHS-specific; every other group below is the shared strategy-agnostic surface (`src/tuners/cli.py`) that future strategies reuse.
 
@@ -207,7 +205,7 @@ Post-hoc evaluation suite. See [guides/evaluation-runbook](../guides/evaluation-
 | `--session <path>` | required | PBT (or BO) session JSON to evaluate. |
 | `--bo-session <path>` | none | BO session JSON for 3-way Default vs BO vs PBT comparison alongside `--session`. |
 | `--benchmark {sysbench\|tpch}` | from session | Override the benchmark recorded in the session. |
-| `--repetitions <int>` | `5` | Number of paired (default, tuned) runs. |
+| `--repetitions <int>` | `10` | Number of paired (default, tuned) runs. |
 | `--seed <int>` | `50000` | Base seed; repetition `i` uses `seed + i - 1` for both default and tuned. |
 | `--sysbench-workload` | from session | Override the Sysbench mode. |
 | `--sysbench-tables`, `--sysbench-table-size`, `--sysbench-duration`, `--sysbench-warmup-seconds` | from session | Override Sysbench runtime parameters. |
@@ -240,7 +238,7 @@ SMAC3-based BO runner. See [guides/bo-baseline](../guides/bo-baseline.md) for th
 | --- | --- | --- |
 | `--tier` | required if no `--pbt-session` | Knob tier. |
 | `--knob-source {expert\|data_driven}` | `expert` | Same semantics as PBT. |
-| `--config <profile>` | none | Same as PBT's `--config`; mainly carries timing defaults. |
+| `--config {rapid\|standard\|thorough\|research\|extreme}` | `standard` | BO preset bundling timing defaults (same profile names as PBT, plus `extreme`). |
 
 ### BO control
 
@@ -265,7 +263,7 @@ SMAC3-based BO runner. See [guides/bo-baseline](../guides/bo-baseline.md) for th
 | `--duration <float>` | `30` | Measurement window seconds. |
 | `--warmup <float>` | `10` | Warmup seconds. |
 | `--sysbench-workload`, `--sysbench-tables`, `--sysbench-table-size`, `--scale-factor`, `--tpch-warmup-passes` | same defaults as PBT | Per-benchmark overrides. |
-| `--benchmark-config <path>` | none | YAML override for benchmark-specific defaults. |
+| `--benchmark-config {rapid\|standard\|thorough\|research\|extreme}` | from `--config` | Benchmark/workload preset override; defaults to the preset embedded in `--config`. |
 
 ### Instance management
 
@@ -308,11 +306,11 @@ Figure generation against a result tree. See [guides/visualization](../guides/vi
 | `--category <name>` | none | Generate all figures in a category. |
 | `--venue {pvldb\|springer\|preview}` | `pvldb` | Sizing + typography preset. |
 | `--data-dir <path>` | `results` | Result tree root. |
-| `--output-dir <path>` | `figures` | Output directory for generated artefacts. |
-| `--format {pdf\|png\|svg}` | per-figure preference | Override the registered output format. |
-| `--importance-top-k <int>` | `20` | Top-K knobs in the importance plot. |
-| `--dependence-top-k <int>` | `8` | Top-K knobs in the SHAP dependence plot grid. |
-| `--interaction-top-k <int>` | `12` | Top-K knobs in the pairwise interaction heatmap. |
+| `--output-dir <path>` | `papers/pbtune-pvldb/figures` | Output directory for generated artefacts. |
+| `--format {pdf\|png\|svg}` | `pdf png` | Output format(s) to export; accepts one or more. |
+| `--importance-top-k <int>` | `10` | Top-K knobs in the importance plot. |
+| `--dependence-top-k <int>` | `4` | Top-K knobs in the SHAP dependence plot grid. |
+| `--interaction-top-k <int>` | all pairs | Top-K knobs in the pairwise interaction heatmap (uncapped — all pairwise knobs — when unset). |
 
 ---
 
