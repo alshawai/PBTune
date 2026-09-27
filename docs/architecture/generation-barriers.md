@@ -99,29 +99,28 @@ Returns the name of the barrier immediately after `current`, or `None` if `curre
 
 ## Graceful degradation
 
-A live worker thread that crashes mid-evaluation must not deadlock the other threads at the next barrier. Three safeguards make this work.
+A live worker thread that crashes mid-evaluation must not deadlock the other threads at the next barrier. Two exception-driven safeguards make this work; a worker that hangs *without* raising is the one case they cannot reach.
 
 ```text
-                       ┌──────────────────────────────────┐
-                       │   Worker thread runs evaluation  │
-                       └──────────────┬───────────────────┘
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    │                 │                 │
-              succeeded            crashed         truly hung
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-            wait() through      drain_remaining     population
-            B1..B17 normally    (start_from = next  layer detects
-                                barrier after the   via env health
-                                failed sub-step)    check, calls
-                                                    abort()
-                    │                 │                 │
-                    └─────────────────┼─────────────────┘
-                                      ▼
-                       Peers proceed past every barrier
-                       (either through real arrivals
-                       or through drained / aborted ones).
+                  ┌────────────────────────────────────┐
+                  │    Worker thread runs evaluation    │
+                  └──────────────────┬─────────────────┘
+                                     │
+     ┌──────────────┬────────────────┼─────────────────┬────────────────────┐
+     │              │                │                 │                    │
+ succeeded    raises, caught    raises, reaches    hangs without raising
+     │        in the worker     the population     (no timeout fires)
+     │              │           future.result()          │
+     ▼              ▼                │                    ▼
+ wait() through drain_remaining      ▼              nothing can trip
+ B1..B17        (next barrier   population calls     abort(); peers
+ normally       after failure), barriers.abort()     block at the next
+                then re-raises  → breaks every        barrier forever
+     │              │           barrier                     │
+     └──────────────┴────────────────┘              deliberately accepted
+                    ▼                                residual — see
+     Peers proceed past every barrier                "Why no timeout"
+     (real arrivals, or drained / aborted).
 ```
 
 ### Path 1 — clean completion
@@ -144,7 +143,9 @@ Now this worker has "arrived" at B7, B8, B9, …, B17 from the barrier's point o
 
 When a worker's evaluation raises and the exception propagates out of `evaluate_worker` to the population's `future.result()`, the population calls `barriers.abort()`. Every waiter immediately receives `BrokenBarrierError`, the orchestrator catches it, every per-worker thread exits its evaluation, and the generation ends with a `rescue_dead_workers()` call.
 
-**Gap — a true hang is not covered.** There is no health-check thread and no `DatabaseEnvironment.is_alive()`; neither exists in the codebase. If a worker thread is stuck such that it never raises (PostgreSQL unresponsive and even the failure path doesn't return), nothing outside that thread can trip the abort, and its peers block at the next barrier indefinitely. Liveness probing exists only as the synchronous `environment.verify_instances()`, called during setup and recovery — never on a background poller. Bounding hang time would need either a per-barrier timeout (rejected, see below) or a genuine out-of-band liveness thread (not implemented).
+**Exception-driven by design — and what that leaves uncovered.** Both escape paths fire only on a *raised* exception, and that is deliberate. The layers **around** the barrier already convert the failures that matter into exceptions: connection attempts are bounded by `connect_timeout`, the external benchmarks bound their own work (TPC-H sets a failsafe `statement_timeout`; sysbench runs under a subprocess `communicate(timeout=…)`), B15's `VACUUM ANALYZE` is bounded by `vacuum_analyze_timeout_seconds`, and the environment lifecycle operations (`verify_instances`, `_wait_until_connectable`, `recover_instance` / `rebuild_worker_instance`, Docker's SDK operation timeouts) either return or raise rather than block forever. A crashed, refused, dropped, or unresponsive instance therefore surfaces as an exception that trips `drain_remaining` (Path 2) or `abort()` (Path 3). Liveness is *not* polled on a background thread — there is no health-check thread and no `DatabaseEnvironment.is_alive()`, and neither has ever existed in the codebase.
+
+The one case neither path reaches is a worker that hangs *without* raising: a synchronous call on its main thread that neither returns nor raises and is bounded by no timeout — for example a query on an already-established connection to a server wedged at the socket-read level, where `connect_timeout` bounds only the initial handshake and no `statement_timeout` is set (the internal `WorkloadExecutor` sets none on its measurement queries). Nothing outside that thread can trip the abort, so its peers block at the next barrier indefinitely. This residual is accepted on purpose: the only ways to bound it are a per-barrier timeout (rejected — see [Why no timeout](#why-no-timeout)) or a genuine out-of-band liveness thread (not implemented). It is a bounded, understood trade-off, not an unnoticed hole.
 
 ---
 
@@ -160,9 +161,9 @@ When a worker's evaluation raises and the exception propagates out of `evaluate_
 
 Any timeout small enough to be useful for hangs is small enough to false-positive on these. False positives convert "everything is fine, just slow" into a broken-barrier event that triggers `rescue_dead_workers()` for *all* workers — losing the generation.
 
-**The solution.** Wait indefinitely; detect liveness through a different channel (env health), which knows the difference between "PostgreSQL is busy" and "PostgreSQL is dead." When the health channel confirms death, call `abort()`. The barriers themselves never time out.
+**The solution.** Wait indefinitely and let liveness surface as an *exception* from the layers around the barrier. Connection attempts (`connect_timeout`), the external benchmarks (TPC-H's failsafe `statement_timeout`, sysbench's subprocess `communicate(timeout=…)`), the bounded B15 `VACUUM ANALYZE`, and the environment lifecycle operations (`verify_instances`, `_wait_until_connectable`, `recover_instance` / `rebuild_worker_instance`, Docker's SDK operation timeouts) each bound their own work and raise on a dead or unreachable instance — telling "PostgreSQL is busy" (a slow call that eventually returns) apart from "PostgreSQL is dead" (a call that errors). A raised exception then trips `drain_remaining` or `abort()`; the barriers themselves never time out.
 
-The trade-off — a truly hung evaluation could in principle hold the generation forever — is bounded by the env-level health check, which doesn't depend on the barriers' progress.
+These probes are **synchronous**, not a background poller: they surface a failure only at a call that actually returns or raises. A worker wedged in a call that does neither — the residual described under [Graceful degradation](#graceful-degradation) — is not bounded by them. Accepting that narrow residual is the price of never false-positiving on a legitimately slow generation.
 
 ---
 
@@ -229,7 +230,7 @@ We could coarsen to 3–4 barriers (e.g. `apply_done`, `measurement_done`, `scor
 
 ### 3. No timeout
 
-See [Why no timeout](#why-no-timeout). The cost of a false positive (lost generation) is high; the cost of a true hang (bounded by the env health check) is low.
+See [Why no timeout](#why-no-timeout). The cost of a false positive (a lost generation) is high and certain; the cost of the uncovered case (a worker that hangs without ever raising) is a rare, deliberately accepted residual, because every failure that *raises* is already caught by the exception-driven `drain_remaining` / `abort()` paths.
 
 ### 4. Graceful degradation has two paths, not one
 

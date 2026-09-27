@@ -109,7 +109,7 @@ class Worker:
 | Method | Purpose |
 | --- | --- |
 | `is_ready()` | `step_count >= ready_interval`. Workers below this count are not eligible for exploit/explore. |
-| `clone_from(other, generation, environment=None)` | Exploit step. Copies the elite's `knob_config`, sets `parent_id`, and **resets `step_count` to 0** so the readiness cooldown re-arms: the adopting worker must complete a full `ready_interval` of fresh evaluations before it is eligible to exploit again (ticket #164). When `environment` is provided, the elite's data directory is also physically cloned (see below). |
+| `clone_from(other, current_generation, exclude_knobs=None)` | Exploit step. Copies the elite's `knob_config` (skipping any `exclude_knobs`), sets `parent_id`, records the exploit in `config_history`, and **resets `step_count` to 0** so the readiness cooldown re-arms: the adopting worker must complete a full `ready_interval` of fresh evaluations before it is eligible to exploit again (ticket #164). Knob values only — it takes no `environment` argument and performs no I/O; the elite's data directory is cloned separately by the population (see [Physical instance cloning during exploit](#physical-instance-cloning-during-exploit)). |
 | `perturb(factors)` | Explore step. Calls `KnobSpace.perturb_config()` and applies dependency repair (memory-budget enforcement). |
 | `update_metrics(metrics, score, breakdown)` | Records evaluation results, increments `step_count`. |
 | `get_config_copy()` | Defensive copy for serialisation. |
@@ -122,14 +122,16 @@ PBT's ready interval prevents premature exploitation: a worker that just exploit
 
 ### Physical instance cloning during exploit
 
-Since commit `4165ceb`, `Worker.clone_from(other, generation, environment=...)` does more than copy knob values. When the calling code passes the population's `DatabaseEnvironment` handle, the worker's underlying PostgreSQL data directory is **physically replaced** with a snapshot of the elite's data directory.
+`clone_from` copies knob values only — it takes **no `environment` argument and performs no I/O**. The physical data-directory clone is a separate step driven by the **population**, not by the worker.
+
+Since commit `4165ceb`, exploit no longer inherits just the elite's knob values. After `execute_exploit_explore` returns its `(poor_idx, elite_idx)` pairs, `Population.train_generation()` groups them by the elite's `worker_id` and calls `environment.clone_instances(source_worker_id, target_worker_ids)` once per source, copying the elite's PostgreSQL data directory into every worker that exploited it.
 
 Why this matters:
 
 - A copied configuration without the underlying database state is "cold" — its buffer cache, page cache, and OS-level state are all empty. The next evaluation includes a long warmup tail that has nothing to do with knob quality.
 - With cloning, the exploit inherits the elite's warmed-up state and its first measured generation reflects the configuration honestly.
 
-The clone path is implemented per environment backend — see [`bare_metal.py`](../../src/utils/environments/bare_metal.py) and [`docker.py`](../../src/utils/environments/docker.py).
+The clone path is implemented per environment backend — see [`bare_metal.py`](../../src/utils/environments/bare_metal.py) and [`docker.py`](../../src/utils/environments/docker.py). For the full orchestration and grouping semantics see [Environment Backends → Instance cloning during exploit](environment-backends.md#instance-cloning-during-exploit).
 
 ---
 
@@ -142,9 +144,11 @@ A module of stateless functions implementing the algorithmic core of PBT. Keepin
 ### Public functions
 
 ```python
-truncation_selection(workers, exploit_quantile, require_ready=True) -> list[tuple[int, int]]
-execute_exploit_explore(workers, config, environment=None,
-                         require_ready=True, verbose=False) -> int
+truncation_selection(workers, exploit_quantile=0.2, require_ready=True,
+                     dead_config_threshold=6.0) -> list[tuple[int, int]]
+execute_exploit_explore(workers, exploit_quantile=0.2, perturbation_factors=(0.8, 1.2),
+                        current_generation=0, require_ready=True, dead_config_threshold=6.0,
+                        exclude_knobs=None, resample_probability=0.0) -> list[tuple[int, int]]
 get_elite_workers(workers, quantile=0.2) -> list[Worker]
 get_poor_workers(workers, quantile=0.2) -> list[Worker]
 get_best_worker(workers) -> Worker
@@ -165,14 +169,14 @@ The elite pairing is uniform-random (not best-elite always) to prevent the popul
 
 ### `execute_exploit_explore`
 
-The main entry point called once per generation by `Population.train_generation()`. Returns the count of workers that exploited.
+The main entry point called once per generation by `Population.train_generation()`. Returns the `(poor_idx, elite_idx)` pairs it exploited; the population uses them both to count exploitations and to drive the physical data-directory clone.
 
 ```text
 1. pairs = truncation_selection(workers, config.exploit_quantile)
 2. for (poor_idx, elite_idx) in pairs:
-     workers[poor_idx].clone_from(workers[elite_idx], generation, environment)
+     workers[poor_idx].clone_from(workers[elite_idx], generation)   # knob values only; no I/O
      workers[poor_idx].perturb(config.perturbation_factors)
-3. return len(pairs)
+3. return pairs   # (poor_idx, elite_idx) pairs; the population then drives the physical clone
 ```
 
 ### Convergence
@@ -297,7 +301,7 @@ Two graceful-degradation paths handle stuck/crashed workers without deadlocking:
 1. `barrier.drain_remaining(start_from)` — a worker that catches an exception releases its slots in all barriers it hasn't reached yet.
 2. `barrier.abort()` — when a worker's exception reaches the population's `future.result()`, it instantly breaks every barrier (`BrokenBarrierError` on all waiters).
 
-There is **no per-barrier timeout** — legitimate workloads (e.g. 5-minute OLAP queries) need to wait indefinitely. Both escape paths are driven by a *raised* exception, so a worker that hangs without raising still blocks its peers; see [generation-barriers §Path 3](generation-barriers.md) for that gap.
+There is **no per-barrier timeout** — legitimate workloads (e.g. 5-minute OLAP queries) need to wait indefinitely. Both escape paths are driven by a *raised* exception, so a worker that hangs without raising still blocks its peers — a deliberately accepted residual detailed in [generation-barriers §Path 3](generation-barriers.md).
 
 Full barrier table and rationale: [GENERATION_BARRIERS.md](generation-barriers.md).
 
@@ -317,16 +321,20 @@ After generation N evaluations:
     W0 → exploit W3
     W6 → exploit W1
 
-  Exploit step (Worker.clone_from):
+  Exploit step (Worker.clone_from — knob values only, no I/O):
     W0.knob_config = deepcopy(W3.knob_config)
     W0.parent_id   = 3
     W0.step_count  = 0
-    + physical data-directory clone via the environment backend
 
   Explore step (Worker.perturb):
     For each numeric knob k in W0.knob_config:
       k *= U(0.8, 1.2), clamped to bounds
     Memory budget repaired (KnobSpace.repair_config_dependencies)
+
+  Physical clone (Population.train_generation, after execute_exploit_explore returns):
+    group the exploit pairs by elite worker_id, then once per source elite:
+      environment.clone_instances(source=W3, targets=[W0, ...])  # PGDATA copy, driven by
+                                                                 # the population, not clone_from
 
   Generation N+1: evaluate with the new configs
 ```
