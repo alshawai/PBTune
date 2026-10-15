@@ -5,8 +5,9 @@ Spins up a real DeviceAgent HTTP server backed by a FakeBackend, issues a
 ``POST /run_eval`` and then ``GET /logs``, and asserts that:
 
 * The endpoint returns a valid LogsResponse.
-* Lines emitted by the DeviceAgent logger hierarchy during the eval appear
-  in the buffer.
+* Lines emitted by any logger during the eval (the real apply / restart /
+  verify loggers are top-level, not DeviceAgent children) appear in the
+  buffer, including DEBUG lines when the agent runs at INFO.
 * The buffer is cleared before each eval (so two successive evals do not
   accumulate lines from the first).
 """
@@ -56,6 +57,11 @@ class LoggingFakeBackend(EvaluationBackend):
         # Mirror the logger used by the real apply / restart / verify path.
         logging.getLogger("KnobApplicator").info(
             "sentinel-eval-line worker=%d call=%d", self.worker_id, self.eval_calls
+        )
+        # DEBUG detail (e.g. "Reconnected after restart") must be captured
+        # even when the agent console runs at INFO.
+        logging.getLogger("WorkloadOrchestrator").debug(
+            "sentinel-debug-line worker=%d call=%d", self.worker_id, self.eval_calls
         )
         return (
             {
@@ -117,6 +123,26 @@ def test_logs_endpoint_captures_eval_lines(agent_and_client):
     assert resp.worker_id == 7
     assert any("sentinel-eval-line" in line for line in resp.lines), (
         f"Expected sentinel line in logs, got: {resp.lines}"
+    )
+
+
+def test_logs_endpoint_captures_debug_lines_at_info_level(agent_and_client):
+    """DEBUG lines are buffered even when the root logger is at INFO."""
+    _, client, _ = agent_and_client
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        req = RunEvalRequest(knob_config={"shared_buffers": 1}, generation=0)
+        client.post(ROUTES["run_eval"], req.to_dict())
+        # The eval-scoped DEBUG override must not outlive the evaluation.
+        assert root_logger.level == logging.INFO
+    finally:
+        root_logger.setLevel(previous_level)
+
+    resp = LogsResponse.from_dict(client.get(ROUTES["logs"]))
+    assert any("sentinel-debug-line" in line for line in resp.lines), (
+        f"Expected DEBUG sentinel line in logs, got: {resp.lines}"
     )
 
 

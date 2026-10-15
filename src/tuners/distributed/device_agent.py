@@ -111,8 +111,13 @@ class EvaluationBackend(ABC):
 
 # Maximum number of log lines buffered per evaluation.  Old lines are silently
 # dropped (deque's maxlen behaviour) once the cap is reached, keeping memory
-# usage bounded even for very long restart-retry sequences.
-_MAX_LOG_LINES = 500
+# usage bounded even for very long restart-retry sequences.  Sized for DEBUG
+# capture, which is far more verbose than INFO.
+_MAX_LOG_LINES = 5000
+
+# Third-party loggers whose DEBUG output would flood the per-eval buffer
+# (e.g. one urllib3 line per Docker API call) without adding tuning insight.
+_NOISY_LOGGERS = ("urllib3", "docker", "psycopg2")
 
 
 class _EvalLogHandler(logging.Handler):
@@ -254,6 +259,11 @@ class _AgentHandler(BaseHTTPRequestHandler):
             with state.lock:
                 state.eval_log_buffer.clear()
                 root_logger = logging.getLogger()
+                # Lower the root level for the eval so DEBUG records reach the
+                # buffer regardless of the agent's --log-level; console output
+                # stays at --log-level via its handler's own level (see main).
+                previous_level = root_logger.level
+                root_logger.setLevel(logging.DEBUG)
                 root_logger.addHandler(state._log_handler)
                 try:
                     metrics, restart_occurred, actual_cfg, timing = (
@@ -261,6 +271,7 @@ class _AgentHandler(BaseHTTPRequestHandler):
                     )
                 finally:
                     root_logger.removeHandler(state._log_handler)
+                    root_logger.setLevel(previous_level)
             write_json(
                 self,
                 200,
@@ -713,10 +724,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    console_level = getattr(logging, args.log_level)
     logging.basicConfig(
-        level=getattr(logging, args.log_level),
+        level=console_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # basicConfig is a no-op when importing src.knobs has already installed a
+    # console handler via setup_logging(), so apply --log-level explicitly.
+    # The handler level also pins the console: /run_eval lowers the root logger
+    # to DEBUG for the eval-log buffer, which would otherwise leak DEBUG lines
+    # onto the agent's console.
+    root_logger = logging.getLogger()
+    root_logger.setLevel(console_level)
+    for handler in root_logger.handlers:
+        handler.setLevel(console_level)
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     backend = LocalDeviceBackend(
         global_worker_id=args.worker_id,
