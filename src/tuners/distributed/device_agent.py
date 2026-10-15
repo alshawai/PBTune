@@ -111,16 +111,21 @@ class EvaluationBackend(ABC):
 
 # Maximum number of log lines buffered per evaluation.  Old lines are silently
 # dropped (deque's maxlen behaviour) once the cap is reached, keeping memory
-# usage bounded even for very long restart-retry sequences.
-_MAX_LOG_LINES = 500
+# usage bounded even for very long restart-retry sequences.  Sized for DEBUG
+# capture, which is far more verbose than INFO.
+_MAX_LOG_LINES = 5000
+
+# Third-party loggers whose DEBUG output would flood the per-eval buffer
+# (e.g. one urllib3 line per Docker API call) without adding tuning insight.
+_NOISY_LOGGERS = ("urllib3", "docker", "psycopg2")
 
 
 class _EvalLogHandler(logging.Handler):
     """A ``logging.Handler`` that appends formatted records to a deque.
 
-    Attached to the ``"DeviceAgent"`` logger hierarchy before each evaluation
-    so that apply / restart / verify messages are captured into the per-eval
-    buffer and can be fetched by the coordinator via ``GET /logs``.
+    Attached to the root logger for the duration of each evaluation so records
+    from the worker, applicator, environment, and orchestrator are captured in
+    the per-eval buffer and can be fetched via ``GET /logs``.
     """
 
     def __init__(self, buffer: deque) -> None:
@@ -152,10 +157,6 @@ class AgentState:
         # and exposed (read-only) via GET /logs so the coordinator can drain it.
         self.eval_log_buffer: deque = deque(maxlen=_MAX_LOG_LINES)
         self._log_handler = _EvalLogHandler(self.eval_log_buffer)
-        # Capture everything the DeviceAgent logger hierarchy emits.  This
-        # includes the WorkloadOrchestrator and env sub-loggers that run
-        # locally on the device during the evaluation.
-        logging.getLogger("DeviceAgent").addHandler(self._log_handler)
 
     def health(self) -> HealthResponse:
         try:
@@ -253,14 +254,24 @@ class _AgentHandler(BaseHTTPRequestHandler):
 
         elif path == ROUTES["run_eval"]:
             eval_req = RunEvalRequest.from_dict(body)
-            # Clear the per-eval log buffer before running so GET /logs after
-            # the response reflects only the lines from *this* evaluation.
-            self.state.eval_log_buffer.clear()
-            # run_eval holds the lock: one evaluation at a time per device.
+            # Keep buffer ownership inside the evaluation lock so concurrent
+            # requests cannot clear or detach another evaluation's handler.
             with state.lock:
-                metrics, restart_occurred, actual_cfg, timing = state.backend.run_eval(
-                    eval_req
-                )
+                state.eval_log_buffer.clear()
+                root_logger = logging.getLogger()
+                # Lower the root level for the eval so DEBUG records reach the
+                # buffer regardless of the agent's --log-level; console output
+                # stays at --log-level via its handler's own level (see main).
+                previous_level = root_logger.level
+                root_logger.setLevel(logging.DEBUG)
+                root_logger.addHandler(state._log_handler)
+                try:
+                    metrics, restart_occurred, actual_cfg, timing = (
+                        state.backend.run_eval(eval_req)
+                    )
+                finally:
+                    root_logger.removeHandler(state._log_handler)
+                    root_logger.setLevel(previous_level)
             write_json(
                 self,
                 200,
@@ -713,10 +724,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    console_level = getattr(logging, args.log_level)
     logging.basicConfig(
-        level=getattr(logging, args.log_level),
+        level=console_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # basicConfig is a no-op when importing src.knobs has already installed a
+    # console handler via setup_logging(), so apply --log-level explicitly.
+    # The handler level also pins the console: /run_eval lowers the root logger
+    # to DEBUG for the eval-log buffer, which would otherwise leak DEBUG lines
+    # onto the agent's console.
+    root_logger = logging.getLogger()
+    root_logger.setLevel(console_level)
+    for handler in root_logger.handlers:
+        handler.setLevel(console_level)
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     backend = LocalDeviceBackend(
         global_worker_id=args.worker_id,

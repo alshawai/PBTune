@@ -187,6 +187,6 @@ class RemoteWorkloadOrchestrator(WorkloadOrchestrator):
                 remote_logger.info("[device] %s", line)
         except Exception as exc:  # noqa: BLE001 — telemetry only
             import logging as _l
-            _l.getLogger(__name__).debug(
+            _l.getLogger(__name__).warning(
                 "Failed to fetch logs from worker %d: %s", worker_id, exc
             )
