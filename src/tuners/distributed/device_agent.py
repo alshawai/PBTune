@@ -118,9 +118,9 @@ _MAX_LOG_LINES = 500
 class _EvalLogHandler(logging.Handler):
     """A ``logging.Handler`` that appends formatted records to a deque.
 
-    Attached to the ``"DeviceAgent"`` logger hierarchy before each evaluation
-    so that apply / restart / verify messages are captured into the per-eval
-    buffer and can be fetched by the coordinator via ``GET /logs``.
+    Attached to the root logger for the duration of each evaluation so records
+    from the worker, applicator, environment, and orchestrator are captured in
+    the per-eval buffer and can be fetched via ``GET /logs``.
     """
 
     def __init__(self, buffer: deque) -> None:
@@ -152,10 +152,6 @@ class AgentState:
         # and exposed (read-only) via GET /logs so the coordinator can drain it.
         self.eval_log_buffer: deque = deque(maxlen=_MAX_LOG_LINES)
         self._log_handler = _EvalLogHandler(self.eval_log_buffer)
-        # Capture everything the DeviceAgent logger hierarchy emits.  This
-        # includes the WorkloadOrchestrator and env sub-loggers that run
-        # locally on the device during the evaluation.
-        logging.getLogger("DeviceAgent").addHandler(self._log_handler)
 
     def health(self) -> HealthResponse:
         try:
@@ -253,14 +249,18 @@ class _AgentHandler(BaseHTTPRequestHandler):
 
         elif path == ROUTES["run_eval"]:
             eval_req = RunEvalRequest.from_dict(body)
-            # Clear the per-eval log buffer before running so GET /logs after
-            # the response reflects only the lines from *this* evaluation.
-            self.state.eval_log_buffer.clear()
-            # run_eval holds the lock: one evaluation at a time per device.
+            # Keep buffer ownership inside the evaluation lock so concurrent
+            # requests cannot clear or detach another evaluation's handler.
             with state.lock:
-                metrics, restart_occurred, actual_cfg, timing = state.backend.run_eval(
-                    eval_req
-                )
+                state.eval_log_buffer.clear()
+                root_logger = logging.getLogger()
+                root_logger.addHandler(state._log_handler)
+                try:
+                    metrics, restart_occurred, actual_cfg, timing = (
+                        state.backend.run_eval(eval_req)
+                    )
+                finally:
+                    root_logger.removeHandler(state._log_handler)
             write_json(
                 self,
                 200,

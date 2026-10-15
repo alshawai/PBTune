@@ -53,9 +53,8 @@ class LoggingFakeBackend(EvaluationBackend):
         self, req: RunEvalRequest
     ) -> Tuple[Dict[str, Any], bool, Dict[str, Any], Optional[Dict[str, Any]]]:
         self.eval_calls += 1
-        # Emit a recognisable line through the DeviceAgent logger so the
-        # buffer handler captures it.
-        logging.getLogger("DeviceAgent").info(
+        # Mirror the logger used by the real apply / restart / verify path.
+        logging.getLogger("KnobApplicator").info(
             "sentinel-eval-line worker=%d call=%d", self.worker_id, self.eval_calls
         )
         return (
