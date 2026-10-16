@@ -97,7 +97,7 @@ pyzmq==27.1.0
 requests==2.34.2
 rsa==4.9.1
 ruff==0.15.12
-s3transfer==0.16.0
+s3transfer==0.19.2
 scour==0.38.2
 sentry-sdk==2.63.0
 setuptools==82.0.1
