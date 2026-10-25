@@ -415,14 +415,14 @@ class BaseTuner(ABC):
         self.full_knob_space = self.knob_space
 
     def _resolve_resources(self) -> None:
-        """Detect hardware and resolve knob ranges against worker resources."""
+        """Detect local worker resources and adopt them for the knob spaces."""
         LOGGER.info(
             "Detecting hardware resources for %s%d%s parallel workers...",
             COLORS.bold,
             self.lifecycle.num_parallel_workers,
             COLORS.reset,
         )
-        self.worker_resources = resolve_worker_resources(
+        resources = resolve_worker_resources(
             num_workers=self.lifecycle.num_parallel_workers,
             data_path=self.data_root,
             worker_ram=self.lifecycle.worker_ram,
@@ -437,8 +437,30 @@ class BaseTuner(ABC):
             "Resolving hardware-relative knob ranges based on detected worker "
             "resources..."
         )
-        self.full_knob_space.resolve_hardware_ranges(self.worker_resources)
-        self.knob_space.worker_resources = self.worker_resources
+        self._adopt_worker_resources(resources)
+
+    def _adopt_worker_resources(self, resources: WorkerResources) -> None:
+        """Make ``resources`` the worker profile the knob spaces are sized for.
+
+        The shared tail of :meth:`_resolve_resources`: resolves hardware-relative
+        knob ranges on ``full_knob_space`` (which also attaches the profile) and
+        rebuilds ``knob_space`` as its tuning-mode view. Local detection (base)
+        and the solo-BO session envelope (``BOTuner``) both feed it; an override
+        decides only where ``resources`` come from.
+
+        Setup-phase only: it must run before :meth:`_create_environment`. The
+        orchestrator copies the RAM budget once, and the rebuilt ``knob_space``
+        would discard runtime pruning and any strategy filter applied later.
+        PBT's distributed fleet promotion runs after bring-up, so it updates
+        resources in place instead of calling this.
+        """
+        if self.orchestrator is not None:
+            raise RuntimeError(
+                "_adopt_worker_resources must run before the environment and "
+                "orchestrator are created."
+            )
+        self.worker_resources = resources
+        self.full_knob_space.resolve_hardware_ranges(resources)
 
         # ONLINE knob-view: keep full_knob_space complete, narrow knob_space
         # to the restart-free view the loop refines.

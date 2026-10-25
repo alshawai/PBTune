@@ -1,12 +1,15 @@
 """Tests for the BaseTuner lifecycle ABC using a fake in-memory strategy."""
 
+import dataclasses
 import importlib
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import Mock, patch
 
 import pytest
 
+from src.knobs import get_knob_space
 from src.tuners.base import BaseTuner
 from src.tuners.utils.session_schema import (
     HISTORY_KEYS,
@@ -23,6 +26,7 @@ from src.tuners.utils.types import (
     WorkerEvalResult,
 )
 from src.utils.hardware_info import WorkerResources
+from src.utils.types import TuningMode
 
 _FIXTURE_TRACES = Path(__file__).parents[2] / "fixtures" / "traces"
 
@@ -264,6 +268,60 @@ class TestBestConfigFractions:
         tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
         tuner.full_knob_space = _FakeKnobSpace() if has_space else None
         assert tuner.best_config_fractions(best_config) == {}
+
+
+class TestAdoptWorkerResources:
+    """The shared setup-phase tail of every ``_resolve_resources`` path."""
+
+    _RESOURCES = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="SSD")
+
+    def _tuner(self, lifecycle, tmp_path, tuning_mode):
+        tuner = _FakeTuner(
+            dataclasses.replace(lifecycle, tuning_mode=tuning_mode),
+            timestamp="t",
+            output_root=tmp_path,
+        )
+        # State right after ``_load_knob_space``.
+        tuner.full_knob_space = get_knob_space("minimal")
+        tuner.knob_space = tuner.full_knob_space
+        return tuner
+
+    def test_offline_tunes_full_space_sized_for_profile(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.OFFLINE)
+
+        tuner._adopt_worker_resources(self._RESOURCES)
+
+        assert tuner.worker_resources == self._RESOURCES
+        assert tuner.knob_space is tuner.full_knob_space
+        assert tuner.knob_space.worker_resources == self._RESOURCES
+
+    def test_online_tunes_restart_free_view(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.ONLINE)
+
+        tuner._adopt_worker_resources(self._RESOURCES)
+
+        assert tuner.knob_space.worker_resources == self._RESOURCES
+        assert "shared_buffers" in tuner.full_knob_space.knobs
+        assert "shared_buffers" not in tuner.knob_space.knobs
+
+    def test_local_resolution_adopts_detected_resources(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.ONLINE)
+        with patch(
+            "src.tuners.base.resolve_worker_resources",
+            return_value=self._RESOURCES,
+        ):
+            tuner._resolve_resources()
+
+        assert tuner.worker_resources == self._RESOURCES
+        assert tuner.knob_space.worker_resources == self._RESOURCES
+        assert "shared_buffers" not in tuner.knob_space.knobs
+
+    def test_refuses_once_environment_exists(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.OFFLINE)
+        tuner.orchestrator = Mock()
+
+        with pytest.raises(RuntimeError, match="before the environment"):
+            tuner._adopt_worker_resources(self._RESOURCES)
 
 
 class TestBaseTunerLogging:

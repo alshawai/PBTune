@@ -49,7 +49,6 @@ from src.config.database import get_db_config
 from src.tuners.base import BaseTuner
 from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import WorkloadOrchestrator
-from src.tuners.utils.knob_filter import apply_tuning_mode_filter
 from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.session_writer import build_scoring_block, convert_numpy_types
 from src.tuners.utils.types import (
@@ -247,12 +246,7 @@ class BOTuner(BaseTuner):
                 "PBT session worker_resources must contain positive RAM and CPU values"
             )
 
-        self.worker_resources = resources
-        self.full_knob_space.resolve_hardware_ranges(resources)
-        self.knob_space.worker_resources = resources
-        self.knob_space = apply_tuning_mode_filter(
-            self.full_knob_space, self.lifecycle.tuning_mode
-        )
+        self._adopt_worker_resources(resources)
         LOGGER.info(
             "Using authoritative distributed PBT worker resources at full "
             "dedicated-device capacity (RAM=%.1f GB, CPU=%d cores, disk=%s).",
