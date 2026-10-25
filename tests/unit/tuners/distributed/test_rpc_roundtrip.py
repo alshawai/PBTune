@@ -332,7 +332,8 @@ def test_rpc_failure_marks_worker_dead(fleet):
 def test_actual_config_persisted_into_generation_record(fleet):
     """actual_config from the device flows into worker_scores in the trace."""
     from src.tuners.utils.session_assembly import build_generation_record
-    from src.tuners.utils.types import WorkerEvalResult
+    from src.tuners.utils.session_schema import history_keys_for
+    from src.tuners.utils.types import TuningStrategy, WorkerEvalResult
 
     coordinator, backends = fleet
     coordinator.wait_for_agents()
@@ -365,6 +366,7 @@ def test_actual_config_persisted_into_generation_record(fleet):
         timing=timing,
         actual_config=actual_cfg,
     )
+    keys = history_keys_for(TuningStrategy.PBT)
     now = time.time()
     record = build_generation_record(
         generation=0,
@@ -373,6 +375,9 @@ def test_actual_config_persisted_into_generation_record(fleet):
         generation_elapsed_seconds=1.0,
         tuning_start_time=now,
         start_time=now,
+        round_index_key=keys.round_index,
+        elapsed_key=keys.elapsed,
+        overhead_key=keys.overhead,
     )
 
     ws = record["worker_scores"]

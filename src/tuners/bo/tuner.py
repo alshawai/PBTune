@@ -677,6 +677,7 @@ class BOTuner(BaseTuner):
         ``worker_configs``, strategy-specific fields under ``strategy_params``)
         so a BO trace loads through the same analysis path.
         """
+        keys = self.history_keys
         history: List[Dict[str, Any]] = []
         best_score_so_far = -float("inf")
         for i, iteration in enumerate(self.iteration_log):
@@ -704,15 +705,15 @@ class BOTuner(BaseTuner):
 
             history.append(
                 {
-                    "iteration": i,
+                    keys.round_index: i,
                     "best_score": best_score_so_far,
                     "restart_count": 1 if iteration.get("restarted", False) else 0,
                     "timestamp": datetime.fromtimestamp(
                         iteration.get("timestamp", 0.0)
                     ).isoformat(),
                     "wall_clock_seconds": wall_clock,
-                    "iteration_elapsed_seconds": generation_elapsed,
-                    "bo_overhead_seconds": bo_overhead,
+                    keys.elapsed: generation_elapsed,
+                    keys.overhead: bo_overhead,
                     # BO's bootstrap/ask-tell phase is a flat per-record field
                     # (not PBT-shaped ``strategy_params``); ``num_exploited`` /
                     # ``mean_score`` / ``std_score`` / ``best_worker_id`` /

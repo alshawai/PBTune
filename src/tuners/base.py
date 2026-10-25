@@ -72,6 +72,7 @@ from src.tuners.utils.session_writer import (
     write_session_json,
 )
 from src.tuners.utils.exceptions import KnobSpaceEmptyError
+from src.tuners.utils.session_schema import HistoryKeys, history_keys_for
 from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
@@ -119,6 +120,9 @@ class BaseTuner(ABC):
     ) -> None:
         self.lifecycle = lifecycle
         self.strategy: TuningStrategy = lifecycle.strategy
+        # Fail at construction, not at first write, if the strategy has no
+        # registered persisted history keys.
+        history_keys_for(self.strategy)
         self.timestamp = timestamp
         self.output_root = Path(output_root)
 
@@ -289,11 +293,20 @@ class BaseTuner(ABC):
         fixed design), BO → ``"Iteration"`` (one sequential propose-evaluate
         step).
 
-        This governs only user-facing log strings ("GENERATION 3", "Generation
-        3 Summary"); the on-disk ``generation_history`` / ``generation`` JSON
-        keys are the fixed analysis-loader schema and are intentionally *not*
-        renamed.
+        Display-only: it governs user-facing log strings ("GENERATION 3",
+        "Generation 3 Summary") and nothing persisted. The on-disk ``history``
+        record keys come from :attr:`history_keys`, so relabelling a round
+        never changes the session schema.
         """
+
+    @property
+    def history_keys(self) -> HistoryKeys:
+        """Persisted per-record ``history`` keys (index, elapsed, overhead).
+
+        Declared per strategy in ``session_schema.HISTORY_KEYS``, the same
+        registry the session reader derives its key aliases from.
+        """
+        return history_keys_for(self.strategy)
 
     @property
     def num_instances(self) -> int:
@@ -634,10 +647,8 @@ class BaseTuner(ABC):
     ) -> Dict[str, Any]:
         """Assemble one uniform ``history`` entry for any strategy.
 
-        The per-round index key and the flat overhead key both speak this
-        strategy's vocabulary: ``round_label`` (``Generation`` / ``Batch`` /
-        ``Iteration``) drives the index key (lower-cased) and the
-        ``<strategy>_overhead_seconds`` name.
+        The per-round index, elapsed, and overhead keys are the strategy's
+        registered :attr:`history_keys`.
         """
         scorer = (
             self.orchestrator.scorer if self.orchestrator is not None else None
@@ -649,9 +660,9 @@ class BaseTuner(ABC):
             generation_elapsed_seconds=generation_elapsed_seconds,
             tuning_start_time=self.tuning_start_time,
             start_time=self.start_time,
-            round_index_key=self.round_label.lower(),
-            elapsed_key=f"{self.round_label.lower()}_elapsed_seconds",
-            overhead_key=f"{self.strategy.value}_overhead_seconds",
+            round_index_key=self.history_keys.round_index,
+            elapsed_key=self.history_keys.elapsed,
+            overhead_key=self.history_keys.overhead,
             overhead_seconds=overhead_seconds,
             scorer=scorer,
             restart_count=restart_count,

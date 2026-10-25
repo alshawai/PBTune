@@ -19,26 +19,67 @@ on-disk traces load identically — new key first, legacy key as fallback.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
+
+from src.tuners.utils.types import TuningStrategy
+
+
+class HistoryKeys(NamedTuple):
+    """Persisted per-record ``history`` keys one strategy writes."""
+
+    round_index: str
+    elapsed: str
+    overhead: str
+
+
+# Single source of truth for the per-record keys each strategy persists. Each
+# strategy speaks its own vocabulary; the keys are part of the on-disk schema
+# and are independent of the strategy's display ``round_label``. The reader key
+# tuples below are derived from this registry, so a writer key is always one
+# the reader recognises. Entry order sets reader lookup priority.
+HISTORY_KEYS: Dict[TuningStrategy, HistoryKeys] = {
+    TuningStrategy.BO: HistoryKeys(
+        round_index="iteration",
+        elapsed="iteration_elapsed_seconds",
+        overhead="bo_overhead_seconds",
+    ),
+    TuningStrategy.PBT: HistoryKeys(
+        round_index="generation",
+        elapsed="generation_elapsed_seconds",
+        overhead="pbt_overhead_seconds",
+    ),
+    TuningStrategy.LHS: HistoryKeys(
+        round_index="batch",
+        elapsed="batch_elapsed_seconds",
+        overhead="lhs_overhead_seconds",
+    ),
+}
+
+
+def history_keys_for(strategy: TuningStrategy) -> HistoryKeys:
+    """Return the persisted ``history`` keys for ``strategy``.
+
+    Raises ``KeyError`` for a strategy with no registered keys, so a new
+    strategy fails loudly instead of writing keys the reader cannot find.
+    """
+    try:
+        return HISTORY_KEYS[TuningStrategy(strategy)]
+    except (KeyError, ValueError):
+        raise KeyError(
+            f"No persisted history keys registered for strategy {strategy!r}; "
+            "add an entry to session_schema.HISTORY_KEYS."
+        ) from None
+
 
 # Ordered (new, *legacy) key aliases. First present key wins.
 _HISTORY_KEYS = ("history", "generation_history", "evaluation_history")
-# Per-record round-index key. Each strategy speaks its own vocabulary
-# (PBT ``generation``, BO ``iteration``, LHS ``batch``); ``generation`` is also
-# the legacy key. Any present key wins.
-_ITERATION_KEYS = ("iteration", "generation", "batch", "round")
-_ELAPSED_KEYS = (
-    "generation_elapsed_seconds",
-    "iteration_elapsed_seconds",
-    "batch_elapsed_seconds",
-)
-# Per-record strategy overhead. The flat key now speaks each strategy's name
-# (``pbt_overhead_seconds`` / ``bo_overhead_seconds`` / ``lhs_overhead_seconds``);
-# ``strategy_overhead_seconds`` is the prior generic name kept for legacy traces.
-_OVERHEAD_KEYS = (
-    "pbt_overhead_seconds",
-    "bo_overhead_seconds",
-    "lhs_overhead_seconds",
+# Per-record round-index key: every registered strategy's key, then the legacy
+# generic ``round``. Any present key wins.
+_ITERATION_KEYS = tuple(keys.round_index for keys in HISTORY_KEYS.values()) + ("round",)
+_ELAPSED_KEYS = tuple(keys.elapsed for keys in HISTORY_KEYS.values())
+# Per-record strategy overhead; ``strategy_overhead_seconds`` is the prior
+# generic name kept for legacy traces.
+_OVERHEAD_KEYS = tuple(keys.overhead for keys in HISTORY_KEYS.values()) + (
     "strategy_overhead_seconds",
 )
 

@@ -1,10 +1,21 @@
 """Tests for the BaseTuner lifecycle ABC using a fake in-memory strategy."""
 
+import importlib
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
 from src.tuners.base import BaseTuner
+from src.tuners.utils.session_schema import (
+    HISTORY_KEYS,
+    get_history,
+    get_iteration_elapsed,
+    get_iteration_index,
+    get_strategy_overhead,
+    history_keys_for,
+)
 from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
@@ -12,6 +23,8 @@ from src.tuners.utils.types import (
     WorkerEvalResult,
 )
 from src.utils.hardware_info import WorkerResources
+
+_FIXTURE_TRACES = Path(__file__).parents[2] / "fixtures" / "traces"
 
 
 class _FakeMetrics:
@@ -195,6 +208,13 @@ _MANDATORY_HOOKS = (
 )
 
 
+_STRATEGY_CLASSES = [
+    ("src.tuners.pbt.tuner", "PBTTuner"),
+    ("src.tuners.bo.tuner", "BOTuner"),
+    ("src.tuners.lhs_design.tuner", "LHSDesignTuner"),
+]
+
+
 class TestMandatoryHooks:
     def test_hooks_are_abstract_on_base(self):
         assert set(_MANDATORY_HOOKS) <= BaseTuner.__abstractmethods__
@@ -213,17 +233,8 @@ class TestMandatoryHooks:
         with pytest.raises(TypeError, match=hook):
             incomplete(lifecycle, timestamp="t", output_root=tmp_path)
 
-    @pytest.mark.parametrize(
-        "path, cls_name",
-        [
-            ("src.tuners.pbt.tuner", "PBTTuner"),
-            ("src.tuners.bo.tuner", "BOTuner"),
-            ("src.tuners.lhs_design.tuner", "LHSDesignTuner"),
-        ],
-    )
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
     def test_concrete_strategies_implement_every_hook(self, path, cls_name):
-        import importlib
-
         cls = getattr(importlib.import_module(path), cls_name)
         assert not cls.__abstractmethods__
 
@@ -342,20 +353,20 @@ class TestBuildGenerationRecord:
             generation_elapsed_seconds=2.0,
             restart_count=1,
         )
-        # Shared axes present regardless of strategy. The round-index key speaks
-        # the strategy's vocabulary (_FakeTuner uses the generic "Round" label).
+        # Shared axes present regardless of strategy. The round-index and
+        # elapsed keys are the strategy's declared history keys.
         for key in (
-            "round",
+            "batch",
             "best_score",
             "restart_count",
             "timestamp",
             "wall_clock_seconds",
-            "round_elapsed_seconds",
+            "batch_elapsed_seconds",
             "worker_scores",
             "worker_configs",
         ):
             assert key in record
-        assert record["round"] == 3
+        assert record["batch"] == 3
         assert record["restart_count"] == 1
         # Per-record ``converged`` is dropped (top-level tuning_session.converged
         # is authoritative); no record-level ``timing`` block anymore.
@@ -428,6 +439,89 @@ class TestBuildGenerationRecord:
         assert ws["score_breakdown"] is None
         # The config is still recorded even for a failed evaluation.
         assert record["worker_configs"][0]["config"] == {"k": 1}
+
+
+class TestPersistedHistoryKeys:
+    """Persisted history keys come from the registry, never from round_label."""
+
+    def _record(self, tuner) -> Dict[str, Any]:
+        tuner.tuning_start_time = 0.0
+        tuner.start_time = 0.0
+        return tuner._build_generation_record(
+            generation=4,
+            best_score_this_round=1.0,
+            worker_results=[],
+            generation_elapsed_seconds=2.5,
+            overhead_seconds=0.5,
+        )
+
+    def test_relabelling_round_does_not_change_persisted_keys(
+        self, lifecycle, tmp_path
+    ):
+        class _Relabelled(_FakeTuner):
+            @property
+            def round_label(self) -> str:
+                return "Sweep"
+
+        baseline = self._record(
+            _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        )
+        relabelled = self._record(
+            _Relabelled(lifecycle, timestamp="t", output_root=tmp_path)
+        )
+        assert relabelled.keys() == baseline.keys()
+        assert not any(key.startswith("sweep") for key in relabelled)
+
+    def test_built_record_reads_back_through_session_reader(
+        self, lifecycle, tmp_path
+    ):
+        record = self._record(
+            _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        )
+        assert get_iteration_index(record) == 4
+        assert get_iteration_elapsed(record) == 2.5
+        assert get_strategy_overhead(record) == 0.5
+
+    @pytest.mark.parametrize("strategy", list(TuningStrategy))
+    def test_every_strategy_keys_read_back_through_session_reader(
+        self, strategy
+    ):
+        keys = history_keys_for(strategy)
+        record = {keys.round_index: 3, keys.elapsed: 7.0, keys.overhead: 0.25}
+        assert get_iteration_index(record) == 3
+        assert get_iteration_elapsed(record) == 7.0
+        assert get_strategy_overhead(record) == 0.25
+
+    @pytest.mark.parametrize(
+        "strategy, round_index, elapsed, overhead",
+        [
+            (TuningStrategy.PBT, "generation", "generation_elapsed_seconds", "pbt_overhead_seconds"),
+            (TuningStrategy.BO, "iteration", "iteration_elapsed_seconds", "bo_overhead_seconds"),
+            (TuningStrategy.LHS, "batch", "batch_elapsed_seconds", "lhs_overhead_seconds"),
+        ],
+    )
+    def test_strategy_keys_match_on_disk_schema(
+        self, strategy, round_index, elapsed, overhead
+    ):
+        # Existing traces were written with these keys; they must not drift.
+        assert history_keys_for(strategy) == (round_index, elapsed, overhead)
+
+    def test_unregistered_strategy_fails_at_construction(
+        self, lifecycle, tmp_path, monkeypatch
+    ):
+        monkeypatch.delitem(HISTORY_KEYS, TuningStrategy.LHS)
+        with pytest.raises(KeyError, match="HISTORY_KEYS"):
+            _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+
+    @pytest.mark.parametrize(
+        "trace", sorted(_FIXTURE_TRACES.glob("*.json")), ids=lambda p: p.name
+    )
+    def test_existing_traces_read_through_session_reader(self, trace):
+        history = get_history(json.loads(trace.read_text()))
+        assert history
+        for record in history:
+            assert get_iteration_index(record) is not None
+            assert get_iteration_elapsed(record) > 0.0
 
 
 class TestAggregateSessionTiming:

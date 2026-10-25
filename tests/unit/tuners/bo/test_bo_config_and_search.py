@@ -629,6 +629,22 @@ class TestSessionPayload:
         assert gen_hist[1]["iteration"] == 1
         assert gen_hist[1]["best_score"] == 0.6
 
+    def test_generation_history_reads_back_through_session_reader(self, tmp_path):
+        from src.tuners.utils.session_schema import (
+            get_iteration_elapsed,
+            get_iteration_index,
+            get_strategy_overhead,
+        )
+
+        tuner = self._make_tuner(
+            tmp_path, iteration_log=self._iteration_log(), n_iterations=2
+        )
+        record = self._assemble(tuner)["history"][1]
+        assert get_iteration_index(record) == 1
+        # Elapsed = 30 s wall clock + 1 s BO overhead.
+        assert get_iteration_elapsed(record) == 31.0
+        assert get_strategy_overhead(record) == 1.0
+
     def test_roundtrip_through_writer_and_loader(self, tmp_path):
         from src.tuners.utils.session_writer import write_session_json
 
