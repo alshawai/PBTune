@@ -54,7 +54,8 @@ Introduce a new top-level package, [`src/tuners`](../../../src/tuners), that hol
   loop, the teardown guard, and result assembly, and delegates the
   strategy-specific decisions to abstract hooks: `setup`,
   `propose_initial_configs`, `step`, `should_stop`, `collect_best`,
-  `build_session_payload`, `teardown`.
+  `build_session_payload`, `teardown`. *(Superseded: the hook list is now
+  the one in the 2026-10-26 addendum.)*
 - **`src/tuners/utils/`** — the shared scaffolding extracted from PBT and BO:
   - `types.py` — `TuningStrategy` enum (`pbt` / `bo` / `lhs`),
     `GenerationOutcome`, `TunerLifecycleConfig`.
@@ -124,7 +125,8 @@ field and fall back to a path heuristic (`/pbt_runs/`, `/bo_runs/`,
   scaffold exists in three places (PBT inline, BO inline, `src/tuners/utils`).
   This is a deliberate, time-boxed cost taken to de-risk the paper's incumbents.
 - The `BaseTuner` API is provisional: it is validated only against LHS in this
-  change, so its hook surface may shift before PBT/BO adopt it.
+  change, so its hook surface may shift before PBT/BO adopt it. *(Resolved:
+  the provisional phase ends with the 2026-10-26 addendum.)*
 
 ## Alternatives considered
 
