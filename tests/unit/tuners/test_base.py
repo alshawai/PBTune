@@ -33,10 +33,13 @@ class _FakeMetrics:
 
 
 class _FakeKnobSpace:
-    """Knob space whose fraction encoding is the identity."""
+    """Knob space whose fraction encoding divides every value by ``scale``."""
+
+    def __init__(self, scale: float = 1.0) -> None:
+        self.scale = scale
 
     def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        return dict(config)
+        return {name: value / self.scale for name, value in config.items()}
 
 
 class _FakeTuner(BaseTuner):
@@ -243,21 +246,23 @@ class TestMandatoryHooks:
 class TestBestConfigFractions:
     """The shared encoder serializes the best config as knob-space fractions."""
 
-    class _KnobSpace:
-        def config_to_fractions(self, config):
-            return {name: value / 100 for name, value in config.items()}
-
     def test_encodes_against_full_knob_space(self, lifecycle, tmp_path):
         tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
-        tuner.full_knob_space = self._KnobSpace()
+        tuner.full_knob_space = _FakeKnobSpace(scale=100)
         assert tuner.best_config_fractions({"work_mem": 25}) == {"work_mem": 0.25}
 
-    @pytest.mark.parametrize("best_config, has_space", [({}, True), ({"k": 1}, False)])
+    @pytest.mark.parametrize(
+        "best_config, has_space",
+        [
+            pytest.param({}, True, id="no-best-config"),
+            pytest.param({"k": 1}, False, id="no-knob-space"),
+        ],
+    )
     def test_empty_without_config_or_knob_space(
         self, best_config, has_space, lifecycle, tmp_path
     ):
         tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
-        tuner.full_knob_space = self._KnobSpace() if has_space else None
+        tuner.full_knob_space = _FakeKnobSpace() if has_space else None
         assert tuner.best_config_fractions(best_config) == {}
 
 
@@ -508,6 +513,8 @@ class TestPersistedHistoryKeys:
     def test_every_strategy_keys_read_back_through_session_reader(
         self, strategy
     ):
+        # Holds by construction (reader aliases derive from the registry); it
+        # pins that contract. The on-disk guard is the literal-key test below.
         keys = history_keys_for(strategy)
         record = {keys.round_index: 3, keys.elapsed: 7.0, keys.overhead: 0.25}
         assert get_iteration_index(record) == 3
@@ -517,9 +524,24 @@ class TestPersistedHistoryKeys:
     @pytest.mark.parametrize(
         "strategy, round_index, elapsed, overhead",
         [
-            (TuningStrategy.PBT, "generation", "generation_elapsed_seconds", "pbt_overhead_seconds"),
-            (TuningStrategy.BO, "iteration", "iteration_elapsed_seconds", "bo_overhead_seconds"),
-            (TuningStrategy.LHS, "batch", "batch_elapsed_seconds", "lhs_overhead_seconds"),
+            (
+                TuningStrategy.PBT,
+                "generation",
+                "generation_elapsed_seconds",
+                "pbt_overhead_seconds",
+            ),
+            (
+                TuningStrategy.BO,
+                "iteration",
+                "iteration_elapsed_seconds",
+                "bo_overhead_seconds",
+            ),
+            (
+                TuningStrategy.LHS,
+                "batch",
+                "batch_elapsed_seconds",
+                "lhs_overhead_seconds",
+            ),
         ],
     )
     def test_strategy_keys_match_on_disk_schema(

@@ -271,10 +271,7 @@ class LHSDesignTuner(BaseTuner):
         outcome = GenerationOutcome(
             index=generation,
             best_score_this_generation=best_this_batch,
-            payload={
-                "evaluated": evaluated_indices,
-                self.history_keys.elapsed: time.time() - gen_start,
-            },
+            payload={"evaluated": evaluated_indices},
         )
         return outcome
 

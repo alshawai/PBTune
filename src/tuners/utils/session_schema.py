@@ -36,17 +36,17 @@ class HistoryKeys(NamedTuple):
 # strategy speaks its own vocabulary; the keys are part of the on-disk schema
 # and are independent of the strategy's display ``round_label``. The reader key
 # tuples below are derived from this registry, so a writer key is always one
-# the reader recognises. Entry order sets reader lookup priority.
+# the reader recognises.
 HISTORY_KEYS: Dict[TuningStrategy, HistoryKeys] = {
-    TuningStrategy.BO: HistoryKeys(
-        round_index="iteration",
-        elapsed="iteration_elapsed_seconds",
-        overhead="bo_overhead_seconds",
-    ),
     TuningStrategy.PBT: HistoryKeys(
         round_index="generation",
         elapsed="generation_elapsed_seconds",
         overhead="pbt_overhead_seconds",
+    ),
+    TuningStrategy.BO: HistoryKeys(
+        round_index="iteration",
+        elapsed="iteration_elapsed_seconds",
+        overhead="bo_overhead_seconds",
     ),
     TuningStrategy.LHS: HistoryKeys(
         round_index="batch",
@@ -63,22 +63,22 @@ def history_keys_for(strategy: TuningStrategy) -> HistoryKeys:
     strategy fails loudly instead of writing keys the reader cannot find.
     """
     try:
-        return HISTORY_KEYS[TuningStrategy(strategy)]
-    except (KeyError, ValueError):
+        return HISTORY_KEYS[strategy]
+    except KeyError as exc:
         raise KeyError(
             f"No persisted history keys registered for strategy {strategy!r}; "
             "add an entry to session_schema.HISTORY_KEYS."
-        ) from None
+        ) from exc
 
 
-# Ordered (new, *legacy) key aliases. First present key wins.
-_HISTORY_KEYS = ("history", "generation_history", "evaluation_history")
-# Per-record round-index key: every registered strategy's key, then the legacy
-# generic ``round``. Any present key wins.
+# Ordered (new, *legacy) top-level history-block aliases. First present wins.
+_HISTORY_BLOCK_KEYS = ("history", "generation_history", "evaluation_history")
+# Per-record key aliases: every registered strategy's key, then legacy generic
+# names. A record carries exactly one key per group (each writer emits only its
+# own strategy's key), so the order among registry entries never matters.
 _ITERATION_KEYS = tuple(keys.round_index for keys in HISTORY_KEYS.values()) + ("round",)
 _ELAPSED_KEYS = tuple(keys.elapsed for keys in HISTORY_KEYS.values())
-# Per-record strategy overhead; ``strategy_overhead_seconds`` is the prior
-# generic name kept for legacy traces.
+# ``strategy_overhead_seconds`` is the prior generic overhead name.
 _OVERHEAD_KEYS = tuple(keys.overhead for keys in HISTORY_KEYS.values()) + (
     "strategy_overhead_seconds",
 )
@@ -86,7 +86,7 @@ _OVERHEAD_KEYS = tuple(keys.overhead for keys in HISTORY_KEYS.values()) + (
 
 def get_history(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Return the per-round history list, tolerating legacy top-level keys."""
-    for key in _HISTORY_KEYS:
+    for key in _HISTORY_BLOCK_KEYS:
         value = data.get(key)
         if value is not None:
             return value
@@ -95,7 +95,7 @@ def get_history(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def has_history(data: Dict[str, Any]) -> bool:
     """True if any recognized history key is present (new or legacy)."""
-    return any(key in data for key in _HISTORY_KEYS)
+    return any(key in data for key in _HISTORY_BLOCK_KEYS)
 
 
 def _first(record: Dict[str, Any], keys: tuple, default: Any) -> Any:

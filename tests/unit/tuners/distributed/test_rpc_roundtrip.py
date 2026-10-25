@@ -366,7 +366,6 @@ def test_actual_config_persisted_into_generation_record(fleet):
         timing=timing,
         actual_config=actual_cfg,
     )
-    keys = history_keys_for(TuningStrategy.PBT)
     now = time.time()
     record = build_generation_record(
         generation=0,
@@ -375,9 +374,7 @@ def test_actual_config_persisted_into_generation_record(fleet):
         generation_elapsed_seconds=1.0,
         tuning_start_time=now,
         start_time=now,
-        round_index_key=keys.round_index,
-        elapsed_key=keys.elapsed,
-        overhead_key=keys.overhead,
+        history_keys=history_keys_for(TuningStrategy.PBT),
     )
 
     ws = record["worker_scores"]

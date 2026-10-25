@@ -625,13 +625,14 @@ class PBTTuner(BaseTuner):
     def strategy_overhead_seconds(self) -> float:
         """Total PBT machinery time: the ``evolve`` (exploit/explore) phase.
 
-        Summed from each generation record's flat ``pbt_overhead_seconds``
-        field so the top-level ``tuning_session.strategy_overhead_seconds``
-        reflects PBT's real non-evaluation cost instead of ``0.0``.
+        Summed from each generation record's flat overhead field so the
+        top-level ``tuning_session.strategy_overhead_seconds`` reflects PBT's
+        real non-evaluation cost instead of ``0.0``.
         """
+        overhead_key = self.history_keys.overhead
         return float(
             sum(
-                rec.get("pbt_overhead_seconds", 0.0) or 0.0
+                rec.get(overhead_key, 0.0) or 0.0
                 for rec in self.generation_history
             )
         )
