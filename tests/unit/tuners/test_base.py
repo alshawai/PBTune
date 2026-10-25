@@ -1,8 +1,10 @@
 """Tests for the BaseTuner lifecycle ABC using a fake in-memory strategy."""
 
+import contextlib
 import dataclasses
 import importlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import Mock, patch
@@ -245,6 +247,106 @@ class TestMandatoryHooks:
     def test_concrete_strategies_implement_every_hook(self, path, cls_name):
         cls = getattr(importlib.import_module(path), cls_name)
         assert not cls.__abstractmethods__
+
+
+# Strategy names as the base module docstring writes them in owner brackets.
+_STRATEGY_LABELS = {
+    "PBTTuner": "PBT",
+    "BOTuner": "BO",
+    "LHSDesignTuner": "LHS",
+}
+# A docstring row: ``name``, an optional "(property)" tag, then the
+# [overriding strategies] bracket.
+_ROW = re.compile(
+    r"^\s+(?:- |\d\. )``(\w+)``(?: \(property\))?(?: \[([^\]]*)\])?",
+    re.MULTILINE,
+)
+
+
+def _doc_section(start: str, end: str) -> str:
+    """Return the base module docstring between two section headings."""
+    doc = importlib.import_module(BaseTuner.__module__).__doc__ or ""
+    for heading in (start, end):
+        if heading not in doc:
+            pytest.fail(f"base module docstring has no {heading!r} section")
+    return doc[doc.index(start) : doc.index(end)]
+
+
+def _documented_owners(start: str, end: str) -> Dict[str, set]:
+    """Map each name in a docstring section to its documented overriders."""
+    return {
+        name: {owner.strip() for owner in owners.split(",") if owner.strip()}
+        for name, owners in _ROW.findall(_doc_section(start, end))
+    }
+
+
+def _optional_hooks() -> Dict[str, set]:
+    return _documented_owners("Optional hooks", "Shared, not hooks")
+
+
+def _setup_phases() -> Dict[str, set]:
+    return _documented_owners("Setup phases", "Every ``_resolve_resources``")
+
+
+class TestDocumentedOverrideMatrix:
+    """The base module docstring's hook and phase tables match the code."""
+
+    def test_documented_mandatory_hooks_are_the_abstract_set(self):
+        mandatory = _documented_owners("Mandatory hooks", "Optional hooks")
+        assert set(mandatory) == BaseTuner.__abstractmethods__
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_optional_hook_owners_match_overrides(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        label = _STRATEGY_LABELS[cls_name]
+        for name, owners in _optional_hooks().items():
+            assert (label in owners) == (name in vars(cls)), name
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_setup_phase_owners_match_overrides(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        label = _STRATEGY_LABELS[cls_name]
+        for name, owners in _setup_phases().items():
+            assert (label in owners) == (name in vars(cls)), name
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_every_base_override_is_documented(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        documented = (
+            set(BaseTuner.__abstractmethods__)
+            | set(_optional_hooks())
+            | set(_setup_phases())
+        )
+        overrides = {
+            name
+            for name in vars(cls)
+            if hasattr(BaseTuner, name)
+            and not name.startswith("__")
+            and name != "_abc_impl"
+        }
+        assert overrides <= documented
+
+    def test_setup_runs_numbered_phases_in_documented_order(
+        self, lifecycle, tmp_path
+    ):
+        documented = re.findall(
+            r"^\s+\d\. ``(\w+)``",
+            _doc_section("Setup phases", "Every ``_resolve_resources``"),
+            re.MULTILINE,
+        )
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        calls: List[str] = []
+        with contextlib.ExitStack() as stack:
+            for name in documented:
+                stack.enter_context(
+                    patch.object(
+                        tuner,
+                        name,
+                        side_effect=lambda name=name: calls.append(name),
+                    )
+                )
+            BaseTuner.setup(tuner)
+        assert calls == documented
 
 
 class TestBestConfigFractions:

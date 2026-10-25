@@ -1,35 +1,73 @@
 """
 ``BaseTuner`` — the shared lifecycle ABC for all tuning strategies.
 
-The three strategies (PBT, BO, LHS-design) differ only in *how they propose
-configurations* and *when they stop*. Everything around that — resource
-resolution, workload/executor construction, environment + orchestrator wiring,
-instance bring-up, runtime knob pruning, the generation loop, instance
-teardown, optional global recalibration, and session serialization — is
-identical. This ABC encodes that invariant lifecycle as a concrete ``run()``
-template method (Template Method pattern) plus a concrete ``setup()`` that
-drives the shared bring-up, delegating the strategy-specific decisions to
-abstract hooks.
+The three strategies — ``PBTTuner`` (``pbt/tuner.py``), ``BOTuner``
+(``bo/tuner.py``) and ``LHSDesignTuner`` (``lhs_design/tuner.py``) — share one
+lifecycle: a concrete ``run()`` template method (Template Method pattern) that
+drives ``setup()`` → the round loop (``step`` / ``should_stop``) →
+``teardown()`` → session serialization. Strategies plug in through the hooks
+below; ADR-006 records the migration history.
 
-Concrete subclasses implement:
-  - ``propose_initial_configs``  — draw the configurations to evaluate
-  - ``step``                     — run one generation and report its outcome
-  - ``should_stop``              — decide whether to halt after a generation
-  - ``collect_best``             — surface the best (config, score, metrics)
-  - ``build_session_payload``    — assemble the strategy-specific JSON sections
-plus the strategy-description hooks ``max_rounds``, ``seeded_config_count``,
-``round_label``, ``config_summary_lines``, ``total_evaluations`` and
-``converged``.
+Each hook and setup phase below is listed as ``name`` [overriding strategies].
 
-Subclasses set a handful of strategy inputs on ``self`` before ``run()``
-(``benchmark``, ``benchmark_config``, ``workload_file``, ``data_root``); the
-concrete ``setup()`` reads those to build the shared environment and populates
-``self.knob_space`` / ``self.full_knob_space`` / ``self.orchestrator`` /
-``self.worker_resources`` for the strategy hooks to use.
+Mandatory hooks (abstract; a strategy that omits one fails at construction):
+  - ``propose_initial_configs`` — draw the configurations to evaluate
+  - ``step`` — run one round and report its outcome
+  - ``should_stop`` — decide whether to halt after a round
+  - ``collect_best`` — surface the best (config, score, metrics)
+  - ``build_session_payload`` — assemble the strategy-specific JSON sections
+  - ``max_rounds`` (property) — planned ceiling on rounds (loop budget)
+  - ``seeded_config_count`` (property) — configs seeded, known before the draw
+  - ``round_label`` (property) — display-only noun for one round
+  - ``config_summary_lines`` — startup-summary budget rows
+  - ``total_evaluations`` — configurations actually benchmarked
+  - ``converged`` — whether the planned terminal state was hit
 
-All three strategies now subclass this ABC: ``PBTTuner`` (``pbt/tuner.py``),
-``BOTuner`` (``bo/tuner.py``) and ``LHSDesignTuner`` (``lhs_design/tuner.py``).
-See ADR-006 for the migration history.
+Optional hooks, with the base default. The strategies with an optimizer core
+(PBT, BO) override all five; LHS overrides none.
+  - ``build_optimizer`` [PBT, BO] — no-op. PBT builds the population, BO the
+    surrogate.
+  - ``num_instances`` [PBT, BO] — ``num_parallel_workers``. PBT returns the
+    population size, BO the co-tenancy degree.
+  - ``emits_stop_status`` [PBT, BO] — ``False``. A strategy that returns
+    ``True`` must set ``self.stop_reason`` in ``should_stop`` on the terminal
+    round.
+  - ``strategy_overhead_seconds`` [PBT, BO] — ``0.0``. PBT reports its evolve
+    time, BO its ask/tell time.
+  - ``teardown`` [PBT, BO] — stop instances, then optional cleanup. PBT also
+    shuts the fleet down in distributed mode; BO stops its co-tenant pool
+    first. Both call ``super()``.
+
+Shared, not hooks: ``best_config_fractions`` (encodes against
+``full_knob_space``) and ``history_keys`` (the persisted per-record keys,
+declared per strategy in ``session_schema.HISTORY_KEYS``).
+
+Setup phases, run in this order by ``setup()``:
+  1. ``_load_knob_space`` []
+  2. ``_resolve_resources`` [PBT, BO] — BO adopts a PBT session's
+     ``worker_resources`` when given one with ``--no-cotenant``, and otherwise
+     uses local detection. PBT logs, in distributed mode, that local detection
+     is provisional.
+  3. ``_build_workload_and_metrics`` []
+  4. ``_create_environment`` [PBT] — PBT builds a remote environment in
+     distributed mode.
+  5. ``_bring_up_instances`` [PBT] — PBT brings up the fleet in distributed
+     mode and skips the runtime knob prune.
+     - ``_prune_unsupported_runtime_knobs`` [BO] — called from phase 5. BO
+       then applies the reference-PBT knob filter.
+  6. ``_seed_initial_configs`` [] — calls ``propose_initial_configs``, then
+     ``build_optimizer``.
+
+Every ``_resolve_resources`` path ends in ``_adopt_worker_resources``, the
+setup-phase seam that sizes the knob spaces for a resource profile.
+
+Distributed mode is PBT-only by design (see the ADR-006 addendum). Outside
+distributed mode, each PBT setup-phase override delegates to ``super()``.
+
+Subclasses set strategy inputs on ``self`` before ``run()`` (``benchmark``,
+``benchmark_config``, ``workload_file``, ``data_root``); ``setup()`` reads them
+and populates ``knob_space`` / ``full_knob_space`` / ``orchestrator`` /
+``worker_resources`` for the hooks to use.
 """
 
 from __future__ import annotations
@@ -108,10 +146,10 @@ class BaseTuner(ABC):
     """
     Abstract base class encoding the shared tuner lifecycle.
 
-    Subclasses provide strategy-specific behavior through the abstract hooks;
-    the concrete ``run()`` and ``setup()`` methods drive the invariant
-    lifecycle and own the timing instrumentation, instance lifecycle, and
-    result serialization.
+    Subclasses provide strategy-specific behavior through the hooks listed in
+    the module docstring; the concrete ``run()`` and ``setup()`` methods drive
+    the shared lifecycle and own the timing instrumentation, instance
+    lifecycle, and result serialization.
     """
 
     def __init__(
