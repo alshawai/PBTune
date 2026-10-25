@@ -35,6 +35,23 @@ class _FakeTuner(BaseTuner):
         return 10
 
     @property
+    def seeded_config_count(self) -> int:
+        return 1
+
+    @property
+    def round_label(self) -> str:
+        return "Round"
+
+    def config_summary_lines(self) -> List[Tuple[str, str]]:
+        return [("Max Rounds:", str(self.max_rounds))]
+
+    def total_evaluations(self) -> int:
+        return self.steps_run
+
+    def converged(self) -> bool:
+        return False
+
+    @property
     def num_knobs(self) -> int:
         return 5
 
@@ -164,6 +181,51 @@ class TestBaseTunerLifecycle:
     def test_cannot_instantiate_abstract_base(self, lifecycle, tmp_path):
         with pytest.raises(TypeError):
             BaseTuner(lifecycle, timestamp="t", output_root=tmp_path)
+
+
+# Hooks every concrete strategy must supply; the base carries no default body.
+_MANDATORY_HOOKS = (
+    "max_rounds",
+    "seeded_config_count",
+    "round_label",
+    "config_summary_lines",
+    "best_config_fractions",
+    "total_evaluations",
+    "converged",
+)
+
+
+class TestMandatoryHooks:
+    def test_hooks_are_abstract_on_base(self):
+        assert set(_MANDATORY_HOOKS) <= BaseTuner.__abstractmethods__
+
+    @pytest.mark.parametrize("hook", _MANDATORY_HOOKS)
+    def test_strategy_omitting_hook_fails_at_construction(
+        self, hook, lifecycle, tmp_path
+    ):
+        # A strategy implementing every abstract member except ``hook``.
+        namespace = {
+            name: _FakeTuner.__dict__[name]
+            for name in BaseTuner.__abstractmethods__
+            if name != hook
+        }
+        incomplete = type("_Incomplete", (BaseTuner,), namespace)
+        with pytest.raises(TypeError, match=hook):
+            incomplete(lifecycle, timestamp="t", output_root=tmp_path)
+
+    @pytest.mark.parametrize(
+        "path, cls_name",
+        [
+            ("src.tuners.pbt.tuner", "PBTTuner"),
+            ("src.tuners.bo.tuner", "BOTuner"),
+            ("src.tuners.lhs_design.tuner", "LHSDesignTuner"),
+        ],
+    )
+    def test_concrete_strategies_implement_every_hook(self, path, cls_name):
+        import importlib
+
+        cls = getattr(importlib.import_module(path), cls_name)
+        assert not cls.__abstractmethods__
 
 
 class TestBaseTunerLogging:

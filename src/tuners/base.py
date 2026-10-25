@@ -202,26 +202,25 @@ class BaseTuner(ABC):
         (generation history, score breakdown, provenance, ...).
         """
 
+    @abstractmethod
     def total_evaluations(self) -> int:
         """Number of configurations actually benchmarked across the run.
 
         This is the fair cross-strategy *budget* axis (PBT evaluates
         population×generations, BO one config per iteration, LHS one per design
         point), serialized as ``tuning_session.total_evaluations``. Distinct
-        from ``num_rounds`` (the count of ``step()`` calls). The base default
-        returns 0; every concrete strategy overrides it.
+        from ``num_rounds`` (the count of ``step()`` calls).
         """
-        return 0
 
+    @abstractmethod
     def converged(self) -> bool:
         """Whether the strategy reached its planned terminal state.
 
         Serialized as the shared ``tuning_session.converged`` flag. Each
-        strategy defines convergence in its own terms (PBT: early-stop on no
-        improvement; LHS: the full design was swept). The base default is
-        ``False`` so a strategy that never converges needs no override.
+        strategy defines convergence in its own terms (PBT: the last generation
+        reported population convergence; BO: early-stop fired or the iteration
+        budget was consumed; LHS: the full design was swept).
         """
-        return False
 
     def strategy_overhead_seconds(self) -> float:
         """Wall-time the strategy spent on its own machinery, not evaluation.
@@ -268,33 +267,33 @@ class BaseTuner(ABC):
         return None
 
     @property
+    @abstractmethod
     def max_rounds(self) -> int:
         """Upper bound on generation rounds (the ``run()`` loop budget).
 
         Named to parallel the serialized ``tuning_session.num_rounds`` (the
         count of rounds that *actually ran*, which is lower when early-stopping
         fires): ``max_rounds`` is the planned ceiling, ``num_rounds`` the
-        realized count. Override for finite-budget strategies.
+        realized count.
         """
-        return 1
 
     @property
+    @abstractmethod
     def round_label(self) -> str:
         """Human-facing noun for one iteration of the ``run()`` loop.
 
         The loop is strategy-neutral (``num_rounds`` is the serialized count),
         but each strategy has its own natural vocabulary for one pass, and the
-        *display* logs should speak it. The default is the generic ``"Round"``;
-        concrete strategies override: PBT → ``"Generation"`` (an EA breeds a new
-        generation each pass), LHS → ``"Batch"`` (one parallel slice of a fixed
-        design), BO → ``"Iteration"`` (one sequential propose-evaluate step).
+        *display* logs should speak it: PBT → ``"Generation"`` (an EA breeds a
+        new generation each pass), LHS → ``"Batch"`` (one parallel slice of a
+        fixed design), BO → ``"Iteration"`` (one sequential propose-evaluate
+        step).
 
         This governs only user-facing log strings ("GENERATION 3", "Generation
         3 Summary"); the on-disk ``generation_history`` / ``generation`` JSON
         keys are the fixed analysis-loader schema and are intentionally *not*
         renamed.
         """
-        return "Round"
 
     @property
     def num_instances(self) -> int:
@@ -329,16 +328,15 @@ class BaseTuner(ABC):
         """
         return self._benchmark_name
 
+    @abstractmethod
     def config_summary_lines(self) -> List[Tuple[str, str]]:
         """
         Strategy-specific ``(label, value)`` rows for the startup summary.
 
         Rendered in ``run()``'s initialization block (bold label, cyan value),
-        matching PBT's banner. The base returns the generic round budget;
-        concrete tuners override to name their own budget line (PBT:
+        matching PBT's banner. Each strategy names its own budget line (PBT:
         "Population Size", BO: "Iterations", LHS: "Design Size").
         """
-        return [("Max Rounds:", str(self.max_rounds))]
 
     def session_filename(self) -> str:
         """Filename for the session trace JSON (``trace_{ts}.json``).
@@ -354,14 +352,14 @@ class BaseTuner(ABC):
         """Filename for the best-config JSON (``best_{ts}.json``)."""
         return f"best_{self.timestamp}.json"
 
+    @abstractmethod
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert a best-config dict to hardware-relative fractions.
 
-        Default is identity; concrete tuners with a ``KnobSpace`` override
-        this to serialize cross-host-portable fractions.
+        Serialized as both ``best_configuration.knobs`` and the best-config
+        JSON, so the persisted values stay portable across hosts.
         """
-        return best_config
 
     def setup(self) -> None:
         """
@@ -557,17 +555,18 @@ class BaseTuner(ABC):
         )
 
     @property
+    @abstractmethod
     def seeded_config_count(self) -> int:
         """
         Number of configurations seeded for ``session_environment``.
 
-        Defaults to the count of initial configs drawn (parallel-workers if
-        not yet drawn). Override when the design size is known up front. This
-        is the in-code analogue of PBT's "population size"; it is serialized
-        under ``strategy_params`` by strategies that carry the notion, never as
-        a shared header field.
+        Read by ``_seed_initial_configs()`` *before*
+        ``propose_initial_configs()`` runs, so it must be known up front
+        (PBT: population size, BO: 1, LHS: design size). This is the in-code
+        analogue of PBT's "population size"; it is serialized under
+        ``strategy_params`` by strategies that carry the notion, never as a
+        shared header field.
         """
-        return len(self.initial_configs) or self.lifecycle.num_parallel_workers
 
     def _resolve_granular_workload_type(self) -> str:
         """Map the benchmark selector to the granular knob-space workload type."""
