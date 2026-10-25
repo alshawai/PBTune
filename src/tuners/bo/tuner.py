@@ -268,11 +268,6 @@ class BOTuner(BaseTuner):
             ("Pilot Size:", str(self.requested_pilot_size or self.bo_config.range_update_interval)),
         ]
 
-    def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
-        if not best_config or self.full_knob_space is None:
-            return {}
-        return self.full_knob_space.config_to_fractions(best_config)
-
     def _prune_unsupported_runtime_knobs(self) -> None:
         """Prune runtime-unsupported knobs, then apply the reference-PBT filter."""
         super()._prune_unsupported_runtime_knobs()

@@ -32,6 +32,13 @@ class _FakeMetrics:
         return {"throughput": 100.0}
 
 
+class _FakeKnobSpace:
+    """Knob space whose fraction encoding is the identity."""
+
+    def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return dict(config)
+
+
 class _FakeTuner(BaseTuner):
     """Minimal concrete tuner that runs entirely in memory (no DB/instances)."""
 
@@ -84,6 +91,7 @@ class _FakeTuner(BaseTuner):
         self.worker_resources = WorkerResources(
             ram_bytes=2048, cpu_cores=2, disk_type="SSD"
         )
+        self.full_knob_space = _FakeKnobSpace()
         self.initial_configs = self.propose_initial_configs()
 
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
@@ -114,9 +122,6 @@ class _FakeTuner(BaseTuner):
 
     def teardown(self) -> None:
         self.teardown_called = True
-
-    def best_config_fractions(self, best_config):
-        return best_config
 
 
 @pytest.fixture
@@ -202,7 +207,6 @@ _MANDATORY_HOOKS = (
     "seeded_config_count",
     "round_label",
     "config_summary_lines",
-    "best_config_fractions",
     "total_evaluations",
     "converged",
 )
@@ -216,9 +220,6 @@ _STRATEGY_CLASSES = [
 
 
 class TestMandatoryHooks:
-    def test_hooks_are_abstract_on_base(self):
-        assert set(_MANDATORY_HOOKS) <= BaseTuner.__abstractmethods__
-
     @pytest.mark.parametrize("hook", _MANDATORY_HOOKS)
     def test_strategy_omitting_hook_fails_at_construction(
         self, hook, lifecycle, tmp_path
@@ -237,6 +238,27 @@ class TestMandatoryHooks:
     def test_concrete_strategies_implement_every_hook(self, path, cls_name):
         cls = getattr(importlib.import_module(path), cls_name)
         assert not cls.__abstractmethods__
+
+
+class TestBestConfigFractions:
+    """The shared encoder serializes the best config as knob-space fractions."""
+
+    class _KnobSpace:
+        def config_to_fractions(self, config):
+            return {name: value / 100 for name, value in config.items()}
+
+    def test_encodes_against_full_knob_space(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        tuner.full_knob_space = self._KnobSpace()
+        assert tuner.best_config_fractions({"work_mem": 25}) == {"work_mem": 0.25}
+
+    @pytest.mark.parametrize("best_config, has_space", [({}, True), ({"k": 1}, False)])
+    def test_empty_without_config_or_knob_space(
+        self, best_config, has_space, lifecycle, tmp_path
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        tuner.full_knob_space = self._KnobSpace() if has_space else None
+        assert tuner.best_config_fractions(best_config) == {}
 
 
 class TestBaseTunerLogging:

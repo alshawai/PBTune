@@ -8,7 +8,7 @@ instance bring-up, runtime knob pruning, the generation loop, instance
 teardown, optional global recalibration, and session serialization — is
 identical. This ABC encodes that invariant lifecycle as a concrete ``run()``
 template method (Template Method pattern) plus a concrete ``setup()`` that
-drives the shared bring-up, delegating the strategy-specific decisions to a few
+drives the shared bring-up, delegating the strategy-specific decisions to
 abstract hooks.
 
 Concrete subclasses implement:
@@ -17,6 +17,9 @@ Concrete subclasses implement:
   - ``should_stop``              — decide whether to halt after a generation
   - ``collect_best``             — surface the best (config, score, metrics)
   - ``build_session_payload``    — assemble the strategy-specific JSON sections
+plus the strategy-description hooks ``max_rounds``, ``seeded_config_count``,
+``round_label``, ``config_summary_lines``, ``total_evaluations`` and
+``converged``.
 
 Subclasses set a handful of strategy inputs on ``self`` before ``run()``
 (``benchmark``, ``benchmark_config``, ``workload_file``, ``data_root``); the
@@ -365,14 +368,18 @@ class BaseTuner(ABC):
         """Filename for the best-config JSON (``best_{ts}.json``)."""
         return f"best_{self.timestamp}.json"
 
-    @abstractmethod
     def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert a best-config dict to hardware-relative fractions.
 
         Serialized as both ``best_configuration.knobs`` and the best-config
-        JSON, so the persisted values stay portable across hosts.
+        JSON, so the persisted values stay portable across hosts. Shared by
+        every strategy: all of them encode against ``self.full_knob_space``.
+        Returns ``{}`` when there is no best config or no knob space yet.
         """
+        if not best_config or self.full_knob_space is None:
+            return {}
+        return self.full_knob_space.config_to_fractions(best_config)
 
     def setup(self) -> None:
         """
