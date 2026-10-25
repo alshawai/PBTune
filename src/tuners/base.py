@@ -61,8 +61,9 @@ Setup phases, run in this order by ``setup()``:
 Every ``_resolve_resources`` path ends in ``_adopt_worker_resources``, the
 setup-phase seam that sizes the knob spaces for a resource profile.
 
-Distributed mode is PBT-only by design (see the ADR-006 addendum). Outside
-distributed mode, each PBT setup-phase override delegates to ``super()``.
+Distributed mode is PBT-only by design (see the ADR-006 2026-10-26 addendum).
+Outside distributed mode, each PBT setup-phase override delegates to
+``super()``.
 
 Subclasses set strategy inputs on ``self`` before ``run()`` (``benchmark``,
 ``benchmark_config``, ``workload_file``, ``data_root``); ``setup()`` reads them

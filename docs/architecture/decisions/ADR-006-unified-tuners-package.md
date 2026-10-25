@@ -1,6 +1,6 @@
 # ADR-006: Unified `src/tuners` Package and `BaseTuner` Lifecycle
 
-- Status: Accepted — copy-not-refactor invariant later superseded (see 2026-07-17 addendum)
+- Status: Accepted — copy-not-refactor invariant later superseded (see 2026-07-17 addendum); hook surface finalized (see [Addendum 2026-10-26](#addendum-2026-10-26-basetuner-hook-surface-finalized))
 - Date: 2026-06-19
 - Relates to:
   `src/tuner` (PBT) and `src/scripts/bo_baseline` (BO) — both since deleted,
@@ -288,3 +288,100 @@ as `BOTuner(BaseTuner)` and is invoked through the unified router
 Per `src/tuners/utils/types.py`, PBT, LHS-design, and BO have all been migrated
 onto this framework. The historical body above records the point-in-time state
 before this migration and is left intact.
+
+## Addendum (2026-10-26): `BaseTuner` hook surface finalized
+
+The original decision called the `BaseTuner` API *provisional*: it had only
+been validated against LHS, so "its hook surface may shift before PBT/BO adopt
+it". All three strategies now run on it, and the epic
+[#193](https://github.com/alshawai/PBTune/issues/193) closes the provisional
+phase. This addendum records what was fixed and why. The historical body above
+is left intact. Its hook list (which named `setup` and `teardown` as abstract
+hooks) is superseded by the contract below. `setup()` is a concrete phase
+sequence, and `teardown()` is a concrete default that strategies may extend.
+
+The living reference for the contract is the module docstring of
+[`src/tuners/base.py`](../../../src/tuners/base.py). Tests in
+`tests/unit/tuners/test_base.py` parse that docstring and check it against
+each strategy's overrides, so the reference cannot drift from the code
+silently.
+
+### Mandatory hooks ([#194](https://github.com/alshawai/PBTune/issues/194))
+
+Eleven members are abstract, so a strategy that omits one fails at
+construction instead of inheriting a placeholder:
+`propose_initial_configs`, `step`, `should_stop`, `collect_best`,
+`build_session_payload`, `config_summary_lines`, `total_evaluations`,
+`converged`, and the properties `max_rounds`, `seeded_config_count` and
+`round_label`. The first five were abstract from the start. #194 made the
+other six abstract: all three strategies already overrode them, so their base
+defaults were dead code that would only have hidden an omission.
+
+`best_config_fractions` went the other way. All three strategies overrode it
+with the same body, so it became one concrete shared method that encodes
+against `full_knob_space` (a maintainer decision during the review of #194).
+
+### Persisted history keys ([#195](https://github.com/alshawai/PBTune/issues/195))
+
+The per-record `history` keys (round index, elapsed seconds, overhead
+seconds) used to be derived from the display noun `round_label`, so renaming
+a label silently changed the on-disk schema. They are now declared explicitly
+per strategy in `HISTORY_KEYS` in
+[`src/tuners/utils/session_schema.py`](../../../src/tuners/utils/session_schema.py),
+the same module that holds the session readers. The reader alias tuples are
+derived from that registry, so every key a writer emits is one the reader
+recognises. A strategy with no registered keys fails at construction.
+`round_label` is now display-only.
+
+### Shared resource-adoption seam ([#196](https://github.com/alshawai/PBTune/issues/196))
+
+Solo BO used to re-implement the tail of `_resolve_resources` (store the
+profile, resolve hardware ranges, apply the tuning-mode filter). That tail is
+now `BaseTuner._adopt_worker_resources`, and every `_resolve_resources` path
+ends in it. The seam is setup-phase only: it refuses to run once the
+orchestrator exists, because a later caller would also have to update the
+environment and orchestrator built from the old profile.
+
+### Distributed mode stays a PBT-only override
+
+Distributed bring-up remains a set of PBT overrides of the setup phases
+`_resolve_resources`, `_create_environment` and `_bring_up_instances`, plus a
+PBT `teardown` that shuts the fleet down. It was deliberately not lifted into
+`BaseTuner` (a maintainer decision, recorded as out of scope in #193).
+
+Rationale:
+
+- **Only PBT runs across a device fleet.** PBT is the strategy whose
+  population maps one worker to one device. BO is sequential, and LHS is the
+  SCALPEL design sweep; neither has a fleet run to support.
+- **BO reproduces one fleet device instead.** For the matched PBT-vs-BO
+  comparison, solo BO (`--no-cotenant`) adopts the `worker_resources` that a
+  distributed PBT session serialized, through the shared
+  `_adopt_worker_resources` seam. This gives BO the same per-device envelope
+  without BO running distributed itself.
+- **A base-level abstraction would be speculative.** With one implementer, a
+  generic distributed hook would only move the PBT code into the base and
+  widen the contract every strategy must reason about.
+
+One point marks where the shared seam ends. After fleet bring-up, PBT replaces
+the coordinator's provisional resources with the device resources the agents
+report. That promotion runs after the environment and orchestrator exist, so
+it updates the knob spaces and the orchestrator's memory budget in place and
+deliberately does not call `_adopt_worker_resources`. The fleet mechanics
+(bootstrap, handshake, skipped knob prune) are described in
+[Distributed tuning](../distributed-tuning.md). Outside distributed mode, each
+of these distributed overrides delegates to `super()`.
+
+### Closing tickets
+
+- [#193](https://github.com/alshawai/PBTune/issues/193) — Finalize the
+  `BaseTuner` hook surface (epic)
+- [#194](https://github.com/alshawai/PBTune/issues/194) — Make always-overridden
+  hooks abstract
+- [#195](https://github.com/alshawai/PBTune/issues/195) — Decouple persisted
+  history keys from the round label
+- [#196](https://github.com/alshawai/PBTune/issues/196) — Move BO's resource
+  adoption onto a shared base seam
+- [#197](https://github.com/alshawai/PBTune/issues/197) — Rewrite the base
+  docstring and hook contract to match the code
+- [#198](https://github.com/alshawai/PBTune/issues/198) — This addendum

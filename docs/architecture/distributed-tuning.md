@@ -143,8 +143,8 @@ path (resample / config-clone). Recovery re-runs `/setup` on the device.
   coordinator itself can be any light machine: agents report their detected
   `WorkerResources` from `/setup` and the coordinator resolves hardware-aware
   knob ranges against **device** hardware (see `_resolve_device_hardware_ranges`
-  in `src/tuners/pbt/tuner.py`), not its own. `--worker-ram`/`--worker-cpus` remain a manual
-  override if no device reports resources.
+  in `src/tuners/pbt/tuner.py`), not its own. If no device reports resources,
+  setup fails rather than falling back to coordinator hardware.
 - **Version-based knob pruning is skipped** in distributed mode (the coordinator
   has no direct TCP path to remote instances); it relies on the identical-fleet
   assumption that every device runs the same PostgreSQL.
