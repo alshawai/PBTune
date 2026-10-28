@@ -10,6 +10,7 @@ Orchestrator wiring exactly as a real fleet would.
 """
 
 import threading
+import socket
 from typing import Any, Dict, Optional, Tuple
 from unittest.mock import MagicMock
 import urllib.error
@@ -26,6 +27,7 @@ from src.tuners.distributed.config import DistributedConfig
 from src.tuners.distributed.coordinator import Coordinator
 from src.tuners.distributed.device_agent import DeviceAgent, EvaluationBackend
 from src.tuners.distributed.inventory import parse_inventory
+from src.tuners.distributed import transport
 from src.tuners.distributed.transport import AgentClient, AgentRPCError
 from src.tuners.pbt.worker import PBTWorker as Worker
 from src.tuners.engine.orchestrator import WorkloadOrchestratorConfig
@@ -201,16 +203,23 @@ def test_http_error_includes_agent_detail(monkeypatch):
         {},
         MagicMock(read=MagicMock(return_value=body)),
     )
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        MagicMock(side_effect=http_error),
-    )
+    client = AgentClient("http://worker:8770")
+    monkeypatch.setattr(client._opener, "open", MagicMock(side_effect=http_error))
 
     with pytest.raises(
         AgentRPCError,
         match="HTTP 500: agent handler error: disk full",
     ):
-        AgentClient("http://worker:8770").post("/setup", {})
+        client.post("/setup", {})
+
+
+def test_transport_enables_tcp_keepalive():
+    """Long silent RPCs must survive cloud network idle timeouts."""
+    sock = MagicMock()
+
+    transport._configure_tcp_keepalive(sock)
+
+    sock.setsockopt.assert_any_call(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
 
 def test_device_resources_reported_for_knob_ranges(fleet):

@@ -20,12 +20,58 @@ Server helpers: :func:`read_json_body`, :func:`write_json` (used by
 
 from __future__ import annotations
 
+import http.client
 import json
+import socket
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
 
 from src.tuners.distributed.agent_api import ErrorResponse
+
+
+_TCP_KEEPALIVE_IDLE_S = 60
+_TCP_KEEPALIVE_INTERVAL_S = 30
+_TCP_KEEPALIVE_PROBES = 5
+
+
+def _configure_tcp_keepalive(sock: socket.socket) -> None:
+    """Keep silent long-running RPCs alive across cloud network devices."""
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    if hasattr(socket, "TCP_KEEPIDLE"):
+        sock.setsockopt(
+            socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, _TCP_KEEPALIVE_IDLE_S
+        )
+    elif hasattr(socket, "TCP_KEEPALIVE"):
+        sock.setsockopt(
+            socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, _TCP_KEEPALIVE_IDLE_S
+        )
+    if hasattr(socket, "TCP_KEEPINTVL"):
+        sock.setsockopt(
+            socket.IPPROTO_TCP,
+            socket.TCP_KEEPINTVL,
+            _TCP_KEEPALIVE_INTERVAL_S,
+        )
+    if hasattr(socket, "TCP_KEEPCNT"):
+        sock.setsockopt(
+            socket.IPPROTO_TCP, socket.TCP_KEEPCNT, _TCP_KEEPALIVE_PROBES
+        )
+
+
+class _KeepAliveHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection with proactive TCP keepalive probes enabled."""
+
+    def connect(self) -> None:
+        super().connect()
+        if self.sock is not None:
+            _configure_tcp_keepalive(self.sock)
+
+
+class _KeepAliveHTTPHandler(urllib.request.HTTPHandler):
+    """Route urllib HTTP requests through keepalive-enabled connections."""
+
+    def http_open(self, req):
+        return self.do_open(_KeepAliveHTTPConnection, req)
 
 
 class AgentRPCError(RuntimeError):
@@ -59,6 +105,7 @@ class AgentClient:
     def __init__(self, base_url: str, default_timeout: float = 60.0):
         self.base_url = base_url.rstrip("/")
         self.default_timeout = default_timeout
+        self._opener = urllib.request.build_opener(_KeepAliveHTTPHandler())
 
     def _request(
         self,
@@ -76,7 +123,7 @@ class AgentClient:
 
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(
+            with self._opener.open(
                 req, timeout=timeout or self.default_timeout
             ) as resp:
                 raw = resp.read().decode("utf-8") or "{}"
