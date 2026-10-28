@@ -99,8 +99,8 @@ python -m src.tuners pbt \
 
 ## After the Run
 
-1. Results saved under `--output-dir` as `pbt_results_{timestamp}.json`
-2. Best config saved to `results/{olap|oltp/{workload}}/pbt_runs/{tier}/best_configs/`
-3. Check `generation_history` in the results JSON for convergence
+1. Session JSON saved to `results/sessions/{workload}/pbt/{tier}/traces/trace_{timestamp}.json`
+2. Best config saved to `results/sessions/{workload}/pbt/{tier}/best_configs/`
+3. Check `history` in the session JSON for convergence
 4. Use the `results-and-visualization` skill (and `python -m src.visualization`)
    for plotting

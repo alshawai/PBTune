@@ -12,44 +12,53 @@ description: >
 
 ## Results JSON Schema
 
-All PBT runs output a results JSON with this structure:
+Every tuning session (PBT, BO, LHS) writes one session JSON under
+`results/sessions/{workload}/{strategy}/{tier}/traces/`. The canonical reference is
+`docs/reference/session-json-schema.md`; the abridged PBT shape is:
 
 ```json
 {
-  "system_info": { "cpu_model": "...", "ram_total_gb": 16.0, ... },
-  "experiment_config": { "workload": "oltp", "tier": "core", "seed": 42, ... },
-  "generation_history": [
+  "tuning_session": { "tuning_strategy": "pbt", "workload_type": "oltp", ... },
+  "best_configuration": { "score": 85.3, "knobs": { ... }, "metrics": { ... } },
+  "history": [
     {
-      "generation": 1,
+      "generation": 0,
       "best_score": 72.5,
       "mean_score": 45.3,
       "std_score": 12.1,
-      "median_score": 44.0,
-      "worker_scores": [72.5, 45.3, 38.1, ...],
-      "exploit_events": [
-        {"source": 0, "target": 3, "source_score": 72.5, "target_score": 38.1}
-      ]
+      "wall_clock_seconds": 287.3,
+      "worker_scores": [
+        { "worker_id": 0, "score": 72.5, "metrics": { ... }, "score_breakdown": { ... } }
+      ],
+      "worker_configs": [ { "worker_id": 0, "config": { ... } } ],
+      "exploitations": [ ... ],
+      "num_exploited": 1
     }
   ],
-  "best_config": { "shared_buffers": 0.30, "work_mem": 0.04, ... },
-  "best_score": 85.3,
-  "total_time_seconds": 3600.0
+  "system_info": { ... }
 }
 ```
+
+The per-round key names differ by strategy (`generation` / `iteration` / `batch`,
+and the matching `*_elapsed_seconds` / `*_overhead_seconds`). `mean_score` and
+`std_score` exist only on PBT records.
 
 ### Parsing Pattern
 ```python
 import json
 
-with open('results/path/to/results.json') as f:
+from src.tuners.utils.session_schema import get_history, get_iteration_index
+
+with open('results/path/to/trace.json') as f:
     data = json.load(f)
 
-gen_history = data['generation_history']
-best_scores = [g['best_score'] for g in gen_history]
-mean_scores = [g['mean_score'] for g in gen_history]
-std_scores = [g['std_score'] for g in gen_history]
-worker_scores = [g.get('worker_scores', []) for g in gen_history]
-exploit_events = [g.get('exploit_events', []) for g in gen_history]
+history = get_history(data)  # also reads legacy generation_history traces
+rounds = [get_iteration_index(g) for g in history]
+best_scores = [g['best_score'] for g in history]
+mean_scores = [g.get('mean_score') for g in history]  # PBT only
+std_scores = [g.get('std_score') for g in history]    # PBT only
+worker_scores = [[w['score'] for w in g.get('worker_scores', [])] for g in history]
+exploitations = [g.get('exploitations', []) for g in history]  # PBT only
 ```
 
 ## Approved Plot Types
@@ -58,7 +67,7 @@ exploit_events = [g.get('exploit_events', []) for g in gen_history]
 - Running-best score + per-generation best/mean ± std band
 - Baseline horizontal line for reference
 - Exploit-event markers (vertical dashed lines or scatter points)
-- Data source: `generation_history` → `best_score`, `mean_score`, `std_score`
+- Data source: `history` → `best_score`, `mean_score`, `std_score`
 
 ### Plot 2: Wall-Clock Time Comparison (PBT vs BO)
 - Score vs elapsed time (seconds)
@@ -74,7 +83,7 @@ exploit_events = [g.get('exploit_events', []) for g in gen_history]
 - Individual worker scores per generation (thin lines)
 - Exploit-event markers showing when workers were replaced
 - Best worker highlighted with thick line
-- Data source: `worker_scores` in generation_history
+- Data source: `worker_scores` in `history`
 
 ### Plot 5: Performance Improvement Breakdown
 - Grouped bar chart: latency improvement, throughput improvement, memory savings
