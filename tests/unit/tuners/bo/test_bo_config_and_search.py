@@ -517,6 +517,7 @@ class TestSessionPayload:
             disk_type="SSD",
         )
 
+        tuner.orchestrator = None
         tuner.iteration_log = iteration_log
         tuner.generation_history = tuner._build_generation_history()
         tuner._early_stopped = False
@@ -644,6 +645,144 @@ class TestSessionPayload:
         # Elapsed = 30 s wall clock + 1 s BO overhead.
         assert get_iteration_elapsed(record) == 31.0
         assert get_strategy_overhead(record) == 1.0
+
+    def test_history_records_built_through_shared_builder(self, tmp_path):
+        from datetime import datetime
+
+        from src.utils.timing import TimingRecorder
+
+        log = self._iteration_log()
+        timing = TimingRecorder()
+        timing.add("benchmark_run", 30.0)
+        log[0]["timing"] = timing
+        log[0]["phase"] = "bootstrap"
+        # A crashed iteration: no metrics, no breakdown.
+        log[1].update(metrics=None, score=0.0, score_breakdown=None)
+
+        tuner = self._make_tuner(tmp_path, iteration_log=log, n_iterations=2)
+        tuner.tuning_start_time = 1234567860.0
+        first, second = tuner._build_generation_history()
+
+        ws = first["worker_scores"][0]
+        # Builder-guaranteed fields, previously missing from BO records.
+        assert ws["actual_config"] == {}
+        assert ws["timing"]["records"][0]["component"] == "benchmark_run"
+        assert ws["score_breakdown"]["final_score"] == 0.5
+        assert first["phase"] == "bootstrap"
+        assert second["phase"] == "bo"
+        # Timestamps and cumulative wall clock replay the iteration's recorded
+        # end time, not the moment the history was rebuilt.
+        assert first["timestamp"] == datetime.fromtimestamp(1234567890.0).isoformat()
+        assert first["wall_clock_seconds"] == 30.0
+        assert second["wall_clock_seconds"] == 60.0
+        assert second["worker_scores"][0]["metrics"] is None
+        assert second["worker_scores"][0]["score_breakdown"] is None
+
+    def test_history_holds_best_maps_restart_and_recomputes_breakdown(
+        self, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        log = self._iteration_log()
+        log.append(
+            {
+                **log[0],
+                "iteration": 2,
+                "score": 0.2,
+                "restarted": True,
+                "timestamp": 1234567950.0,
+                # Metrics but no stored breakdown: the builder recomputes it.
+                "score_breakdown": None,
+            }
+        )
+        tuner = self._make_tuner(tmp_path, iteration_log=log, n_iterations=3)
+        tuner.orchestrator = SimpleNamespace(
+            scorer=SimpleNamespace(
+                compute_breakdown=lambda metrics: ScoreBreakdown(final_score=0.2)
+            )
+        )
+        history = tuner._build_generation_history()
+
+        assert history[2]["best_score"] == 0.6
+        assert [r["restart_count"] for r in history] == [0, 0, 1]
+        assert history[2]["worker_scores"][0]["score_breakdown"]["final_score"] == 0.2
+
+    @staticmethod
+    def _pbt_step_record():
+        """One history record from the real ``PBTTuner.step`` call site."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from src.tuners.pbt.population import GenerationResult
+        from src.tuners.pbt.tuner import PBTTuner
+        from src.tuners.utils.types import TuningStrategy
+
+        tuner = PBTTuner.__new__(PBTTuner)
+        tuner.strategy = TuningStrategy.PBT
+        tuner.start_time = tuner.tuning_start_time = 1.0
+        tuner.orchestrator = None
+        tuner.lifecycle = SimpleNamespace(num_parallel_workers=1, synchronize_workers=False)
+        tuner.restart_count = 0
+        tuner.generation_history = []
+        tuner.evaluate_worker = MagicMock()
+        tuner.population = MagicMock()
+        tuner.population.generation_timing = None
+        tuner.population.workers = [
+            SimpleNamespace(
+                worker_id=0,
+                knob_config={"shared_buffers": 0.4},
+                performance_score=0.5,
+                metrics=PerformanceMetrics(throughput=100.0),
+                score_breakdown=ScoreBreakdown(final_score=0.5),
+                last_eval_timing=None,
+                last_actual_config=None,
+            )
+        ]
+        tuner.population.train_generation.return_value = GenerationResult(
+            generation=0,
+            best_score=0.5,
+            mean_score=0.5,
+            std_score=0.0,
+            num_exploited=0,
+            best_worker_id=0,
+            best_config={},
+            converged=False,
+        )
+        tuner.step(0)
+        return tuner.generation_history[0]
+
+    def test_bo_and_pbt_records_share_base_key_set(self, tmp_path):
+        from src.tuners.utils.session_schema import HISTORY_KEYS
+        from src.tuners.utils.types import TuningStrategy
+
+        def base_keys(record, strategy, specific):
+            # Map the strategy's own index/elapsed/overhead names to their
+            # role, and drop the fields only that strategy emits.
+            roles = {key: role for role, key in HISTORY_KEYS[strategy]._asdict().items()}
+            return {roles.get(k, k) for k in record if k not in specific}
+
+        tuner = self._make_tuner(
+            tmp_path, iteration_log=self._iteration_log(), n_iterations=2
+        )
+        bo_record = tuner._build_generation_history()[0]
+        pbt_record = self._pbt_step_record()
+
+        pbt_only = {
+            "mean_score",
+            "std_score",
+            "num_exploited",
+            "exploitations",
+            "exploit_cohort",
+        }
+        assert base_keys(bo_record, TuningStrategy.BO, {"phase"}) == base_keys(
+            pbt_record, TuningStrategy.PBT, pbt_only
+        )
+        assert set(bo_record["worker_scores"][0]) == set(
+            pbt_record["worker_scores"][0]
+        )
+        assert set(bo_record["worker_configs"][0]) == set(
+            pbt_record["worker_configs"][0]
+        )
 
     def test_roundtrip_through_writer_and_loader(self, tmp_path):
         from src.tuners.utils.session_writer import write_session_json

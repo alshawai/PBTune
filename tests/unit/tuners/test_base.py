@@ -563,6 +563,38 @@ class TestBuildGenerationRecord:
         assert "mean_score" not in record
         assert "strategy_params" not in record
 
+    def test_as_of_drives_timestamp_and_wall_clock(self, lifecycle, tmp_path):
+        from datetime import datetime
+
+        tuner = self._tuner(lifecycle, tmp_path)
+        tuner.tuning_start_time = 1000.0
+        record = tuner._build_generation_record(
+            generation=0,
+            best_score_this_round=1.0,
+            worker_results=[],
+            generation_elapsed_seconds=5.0,
+            as_of=1042.5,
+        )
+        assert record["timestamp"] == datetime.fromtimestamp(1042.5).isoformat()
+        assert record["wall_clock_seconds"] == 42.5
+
+    def test_as_of_defaults_to_now(self, lifecycle, tmp_path, monkeypatch):
+        from datetime import datetime
+
+        from src.tuners.utils import session_assembly
+
+        monkeypatch.setattr(session_assembly.time, "time", lambda: 1100.0)
+        tuner = self._tuner(lifecycle, tmp_path)
+        tuner.tuning_start_time = 1000.0
+        record = tuner._build_generation_record(
+            generation=0,
+            best_score_this_round=1.0,
+            worker_results=[],
+            generation_elapsed_seconds=5.0,
+        )
+        assert record["timestamp"] == datetime.fromtimestamp(1100.0).isoformat()
+        assert record["wall_clock_seconds"] == 100.0
+
     def test_worker_scores_carry_breakdown_and_timing(self, lifecycle, tmp_path):
         tuner = self._tuner(lifecycle, tmp_path)
         timing = _FakeTiming([{"component": "apply", "seconds": 0.4}])

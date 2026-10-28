@@ -712,11 +712,14 @@ class BaseTuner(ABC):
         overhead_seconds: Optional[float] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
         extra: Optional[Dict[str, Any]] = None,
+        as_of: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Assemble one uniform ``history`` entry for any strategy.
 
         The per-round index, elapsed, and overhead keys are the strategy's
-        registered :attr:`history_keys`.
+        registered :attr:`history_keys`. ``as_of`` overrides the round's end
+        time for strategies that replay a post-hoc log (see
+        :func:`~src.tuners.utils.session_assembly.build_generation_record`).
         """
         scorer = (
             self.orchestrator.scorer if self.orchestrator is not None else None
@@ -738,6 +741,7 @@ class BaseTuner(ABC):
             num_exploited=num_exploited,
             strategy_params=strategy_params,
             extra=extra,
+            as_of=as_of,
         )
 
     def _aggregate_session_timing(self) -> Dict[str, Any]:
