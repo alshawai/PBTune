@@ -110,6 +110,38 @@ def _trace(
     )
 
 
+# ------------------------------------------------------------------ loading
+
+
+def test_legacy_generation_history_block_loads() -> None:
+    trace = SessionTrace.from_dict(
+        {"tuning_session": {}, "generation_history": [{"generation": i} for i in range(3)]}
+    )
+    assert trace.generations == [0, 1, 2]
+
+
+def test_non_pbt_trace_is_rejected() -> None:
+    with pytest.raises(ValueError, match="PBT traces only"):
+        SessionTrace.from_dict(
+            {"tuning_session": {"tuning_strategy": "bo"}, "history": [{"iteration": 0}]}
+        )
+
+
+def test_legacy_nested_strategy_fields_are_read() -> None:
+    """Legacy traces nested ``num_exploited``/``exploitations`` under strategy_params."""
+    pair = {"elite_worker_id": 1, "poor_worker_id": 0}
+    history = [
+        {
+            "generation": g,
+            "strategy_params": {"num_exploited": 1, "exploitations": [pair]},
+        }
+        for g in (0, 3)
+    ]
+    trace = _trace(history, ready_interval=3)
+    assert [e.generation for e in trace.exploitations] == [0, 3]
+    assert check_exploit_cadence(trace).observed["gaps"] == [3]
+
+
 # ------------------------------------------------------------ exploit cadence
 
 

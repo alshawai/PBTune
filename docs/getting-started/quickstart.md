@@ -97,7 +97,7 @@ Look for these top-level keys:
 | `tuning_session.scoring_policy` / `scoring_policy_version` | Which scoring formula evaluated this session. |
 | `best_configuration.knobs` | The configuration that won. **This is the actionable output.** |
 | `best_configuration.score_breakdown` | Resolved weights + per-metric utilities + reliability gate. Read this to understand *why* the winning config won. |
-| `generation_history[]` | Per-generation snapshot — best/mean/std scores, exploit count, per-worker metrics. |
+| `history[]` | Per-generation snapshot — best/mean/std scores, exploit count, per-worker metrics. |
 | `system_info`, `worker_resources` | Reproducibility metadata: host CPU/RAM, per-worker resource slice, Python and PostgreSQL versions. |
 
 The schema is documented exhaustively in [reference/session-json-schema](../reference/session-json-schema.md).

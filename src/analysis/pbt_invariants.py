@@ -80,6 +80,13 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from src.tuners.utils.session_schema import (
+    get_history,
+    get_iteration_index,
+    get_strategy_field,
+)
+from src.tuners.utils.types import TuningStrategy
+
 __all__ = [
     "Finding",
     "Exploitation",
@@ -108,6 +115,19 @@ __all__ = [
 #: A read-back resolves them to a concrete number; persisting that number back
 #: into the search state destroys the sentinel irreversibly.
 AUTOSIZE_SENTINELS: Tuple[int, ...] = (-1, 0)
+
+
+def _round_index(record: Dict[str, Any]) -> int:
+    """A history record's round index, read through the session-schema accessor.
+
+    Raises ``KeyError`` when the record carries no recognised index key.
+    ``SessionTrace`` admits PBT traces only, so the index read is PBT's
+    ``generation`` (or a legacy alias).
+    """
+    index = get_iteration_index(record)
+    if index is None:
+        raise KeyError("history record has no round-index key")
+    return int(index)
 
 
 @dataclass(frozen=True)
@@ -167,8 +187,14 @@ class SessionTrace:
     """
 
     def __init__(self, payload: Dict[str, Any]) -> None:
+        strategy = (payload.get("tuning_session") or {}).get("tuning_strategy")
+        if strategy not in (None, TuningStrategy.PBT.value):
+            raise ValueError(
+                "PBT invariants apply to PBT traces only; "
+                f"got tuning_strategy={strategy!r}"
+            )
         self._raw = payload
-        self._history: List[Dict[str, Any]] = list(payload.get("history") or [])
+        self._history: List[Dict[str, Any]] = list(get_history(payload))
 
     # ------------------------------------------------------------------ load
 
@@ -215,7 +241,7 @@ class SessionTrace:
     @property
     def generations(self) -> List[int]:
         """Generation indices present in the trace, in recorded order."""
-        return [int(h["generation"]) for h in self._history]
+        return [_round_index(h) for h in self._history]
 
     @property
     def history(self) -> List[Dict[str, Any]]:
@@ -226,7 +252,7 @@ class SessionTrace:
 
     def _generation(self, generation: int) -> Optional[Dict[str, Any]]:
         for record in self._history:
-            if int(record["generation"]) == generation:
+            if _round_index(record) == generation:
                 return record
         return None
 
@@ -289,10 +315,10 @@ class SessionTrace:
         """Every recorded exploit event, in generation order."""
         events: List[Exploitation] = []
         for record in self._history:
-            for entry in record.get("exploitations") or []:
+            for entry in get_strategy_field(record, "exploitations") or []:
                 events.append(
                     Exploitation(
-                        generation=int(record["generation"]),
+                        generation=_round_index(record),
                         elite_worker_id=int(entry["elite_worker_id"]),
                         poor_worker_id=int(entry["poor_worker_id"]),
                     )
@@ -321,9 +347,9 @@ def check_exploit_cadence(trace: SessionTrace) -> Finding:
     """
     interval = trace.ready_interval
     active = [
-        int(h["generation"])
+        _round_index(h)
         for h in trace.history
-        if int(h.get("num_exploited") or 0) > 0
+        if int(get_strategy_field(h, "num_exploited") or 0) > 0
     ]
     gaps = [b - a for a, b in zip(active, active[1:], strict=False)]
     observed = {
@@ -528,7 +554,7 @@ def check_score_metric_coupling(
     previous_metric: Optional[float] = None
     previous_score: Optional[float] = None
     for record in trace.history:
-        generation = int(record["generation"])
+        generation = _round_index(record)
         entries = record.get("worker_scores") or []
         values = [
             float(w["metrics"][metric])

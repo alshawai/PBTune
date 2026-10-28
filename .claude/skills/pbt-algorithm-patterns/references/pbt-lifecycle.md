@@ -31,7 +31,7 @@ BaseTuner.run()
 │   │       │   ├── poor.clone_from(elite, current_generation)
 │   │       │   └── poor.perturb(perturbation_factors=(0.8, 1.2))
 │   │       └── env.clone_instances(source_id, target_ids)   # physical PGDATA clone
-│   │   └── append the generation record to generation_history
+│   │   └── append the generation record to history
 │   └── should_stop(outcome) → population.should_stop()
 └── finally: teardown()
     └── _assemble_results() writes the session JSON

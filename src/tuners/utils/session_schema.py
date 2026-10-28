@@ -9,7 +9,9 @@ same fields (see :mod:`src.tuners.utils.session_assembly`):
   vocabulary)
 * per-record ``<strategy>_elapsed_seconds`` (PBT ``generation_elapsed_seconds``,
   BO ``iteration_elapsed_seconds``, LHS ``batch_elapsed_seconds``)
-* per-record ``<strategy>_overhead_seconds`` (was BO's ``bo_overhead_seconds``)
+* per-record ``<strategy>_overhead_seconds`` (PBT ``pbt_overhead_seconds``,
+  BO ``bo_overhead_seconds``, LHS ``lhs_overhead_seconds``; legacy
+  ``strategy_overhead_seconds``)
 * per-record strategy-specific fields emitted flat (e.g. ``num_exploited``,
   ``phase``); legacy traces nested them under ``strategy_params``
 
@@ -106,7 +108,7 @@ def _first(record: Dict[str, Any], keys: tuple, default: Any) -> Any:
 
 
 def get_iteration_index(record: Dict[str, Any], default: Any = None) -> Any:
-    """Per-record iteration index (new ``iteration``, legacy ``generation``)."""
+    """Per-record round index under any strategy's key, or legacy ``round``."""
     return _first(record, _ITERATION_KEYS, default)
 
 

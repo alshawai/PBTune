@@ -34,8 +34,8 @@ Each input file should use the tuning-session schema produced by the tuner or BO
 - `tuning_session` - Run metadata. The first input run provides the benchmark/workload context used for global rescoring.
 - `tuning_session.seed` - Tuning seed used for the run. Legacy files with `tuning_session.random_seed` are still accepted.
 - `best_configuration.metrics` - Final best metrics for the run.
-- `generation_history[].worker_scores[].metrics` - Evaluation metrics over time.
-- `generation_history[].timestamp` - Used to estimate elapsed wall-clock time.
+- `history[].worker_scores[].metrics` - Evaluation metrics over time (legacy files with `generation_history` are still accepted).
+- `history[].timestamp` - Used to estimate elapsed wall-clock time.
 
 BO outputs are written in the same shape as PBT outputs, with one worker score per BO iteration.
 

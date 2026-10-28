@@ -88,24 +88,20 @@ tiers carry an `@scalpel-v1` suffix (e.g. `core@scalpel-v1`).
 
 ## Results JSON Schema
 
-Every results file MUST include:
+Every session JSON includes (full reference: `docs/reference/session-json-schema.md`):
 
 ```json
 {
+  "tuning_session": {
+    "tuning_strategy": "pbt", "workload_type": "oltp",
+    "knob_tier": "core", "seed": 42, ...
+  },
+  "best_configuration": { "score": 85.3, "knobs": {...}, "metrics": {...} },
+  "history": [...],
   "system_info": {
-    "cpu_model": "...", "cpu_cores": 8,
-    "ram_total_gb": 16.0, "disk_type": "SSD",
-    "pg_version": "16.2", "os": "Ubuntu 22.04"
-  },
-  "experiment_config": {
-    "workload": "oltp", "tier": "core",
-    "population_size": 8, "generations": 20,
-    "seed": 42
-  },
-  "generation_history": [...],
-  "best_config": {...},
-  "best_score": 85.3,
-  "total_time_seconds": 3600.0
+    "cpu_model": "...", "cpu_cores": 8, "ram": "16.0 GiB",
+    "disk_type": "ssd", "pg_version": "16.2", "os": "..."
+  }
 }
 ```
 

@@ -33,8 +33,8 @@ Sessions written from 2026-06 onward carry `tuning_session.timing_schema_version
 **Hierarchy.** Timing data lives at three nested layers:
 
 1. **Session-level** — `bootstrap_breakdown` (one-shot setup costs incurred before the gen loop) and `timing_summary` (mean/std/n/min/max/total per component, aggregated across every `(generation, worker)` tuple in the session). Both carry a `summary` field — this is where aggregation matters.
-2. **Generation-level** — `generation_history[i].timing` is a per-generation block for whole-generation work that is not attributable to any single worker (currently only `evolve`). Shape: `{ "records": [...] }` — no `summary` because each component appears once per gen (n=1).
-3. **Worker-level** — `generation_history[i].worker_scores[j].timing` is a per-worker block covering everything from configuration apply through scoring. Shape: `{ "records": [...] }` — no `summary` because each component appears once per worker per gen (n=1).
+2. **Round-level** — whole-round work not attributable to any single worker (currently only PBT's `evolve`). There is no record-level `timing` block: these records are appended to the **first** worker's `history[i].worker_scores[0].timing.records`, after that worker's own components, so they still reach `timing_summary`. Older sessions carried them in a separate `generation_history[i].timing` block.
+3. **Worker-level** — `history[i].worker_scores[j].timing` is a per-worker block covering everything from configuration apply through scoring. Shape: `{ "records": [...] }` — no `summary` because each component appears once per worker per round (n=1).
 
 The `records` field is the ordered list of `TimingRecord` entries (component name, duration, optional metadata) at every layer.
 
@@ -92,7 +92,7 @@ For sysbench specifically, warmup / measurement durations could in principle be 
 }
 ```
 
-On a restore-interval generation, the record list contains a single `snapshot_restore` entry instead of `activate_reload` / `activate_restart`. A per-generation `timing` block is identical in shape but typically contains only an `evolve` record. Neither layer carries a `summary` field in v1.1 — see [Changes from v1.0](#changes-from-v10).
+On a restore-interval generation, the record list contains a single `snapshot_restore` entry instead of `activate_reload` / `activate_restart`. On PBT, worker 0's list additionally ends with the round's `evolve` record. Neither layer carries a `summary` field in v1.1 — see [Changes from v1.0](#changes-from-v10).
 
 The corresponding aggregate lives at the session level — `timing_summary[component]` accumulates each component's durations across every `(gen, worker)` tuple and emits `{n, mean, std, min, max, total}`. For the worker example above, the workload entry contributes one sample to `timing_summary["workload"]`.
 
@@ -128,8 +128,8 @@ File location: `results/sessions/{workload_dir}/pbt/{tier}/traces/trace_{timesta
   "best_configuration":      { ... }
   "worker_resources":        { "ram_bytes": ..., "cpu_cores": ..., "disk_type": ... },
   "warm_start":              { "enabled": false, ... },
-  "generation_history":      [ ... per-generation snapshots ... ],
-  "convergence":             { "converged": bool, "generations_without_improvement": int },
+  "history":                 [ ... per-round records ... ],
+  "convergence":             { ... },  (BO only)
   "system_info":             { ... host metadata ... }
 }
 ```
@@ -238,49 +238,88 @@ Snapshot of the `QuantileUtilityNormalizer` state at the end of the session, use
 
 The per-worker resource slice computed by [`detect_worker_resources`](../../src/utils/hardware_info.py). See [hardware-aware-normalization](../architecture/hardware-aware-normalization.md). Reviewers can check that the slice matches the `system_info` host totals divided by `num_parallel_workers × 0.8`.
 
-### `generation_history[]`
+### `history[]`
 
-One element per generation. Each is:
+One record per round — a PBT generation, a BO iteration, or an LHS batch. Every strategy builds its records through the shared `build_generation_record` ([`session_assembly.py`](../../src/tuners/utils/session_assembly.py)), so all three share one base shape. A PBT record:
 
 ```json
 {
   "generation": 0,
-  "best_score": 0.79,
-  "mean_score": 0.74,
-  "std_score": 0.04,
-  "num_exploited": 0,
-  "best_worker_id": 1,
-  "converged": false,
+  "best_score": 79.1,
+  "mean_score": 74.0,
+  "std_score": 4.2,
   "restart_count": 1,
   "timestamp": "2026-03-26T00:46:48.849150",
   "wall_clock_seconds": 287.3,
   "generation_elapsed_seconds": 287.3,
-  "exploit_cohort": { "intended": 2, "achieved": 0, "shortfall": 2 },
+  "pbt_overhead_seconds": 1.8,
+  "num_exploited": 0,
   "worker_scores": [
-    { "worker_id": 0, "score": 0.71, "metrics": { ... } },
-    { "worker_id": 1, "score": 0.79, "metrics": { ... } }
+    { "worker_id": 0, "score": 71.0, "metrics": { ... }, "score_breakdown": { ... },
+      "timing": { "records": [ ... ] }, "actual_config": { ... } },
+    { "worker_id": 1, "score": 79.1, "metrics": { ... }, "score_breakdown": { ... },
+      "timing": { "records": [ ... ] }, "actual_config": {} }
   ],
   "worker_configs": [
     { "worker_id": 0, "config": { ... } },
     { "worker_id": 1, "config": { ... } }
-  ]
+  ],
+  "exploitations": [],
+  "exploit_cohort": { "intended": 2, "achieved": 0, "shortfall": 2 }
 }
 ```
 
-`worker_scores[].metrics` is a `PerformanceMetrics.to_dict()`. `worker_configs[].config` is the post-verify quantised configuration for that worker at that generation. `restart_count` records how many workers triggered PostgreSQL restarts in the generation (a function of the tuning mode + the postmaster-context knobs touched).
+#### Per-strategy keys
+
+The round-index, elapsed, and overhead keys use each strategy's own vocabulary. They are registered in `HISTORY_KEYS` ([`session_schema.py`](../../src/tuners/utils/session_schema.py)), the single source of truth for both writer and reader:
+
+| Strategy | Round index | Round elapsed (s) | Strategy overhead (s) | Flat strategy-only fields |
+| --- | --- | --- | --- | --- |
+| PBT | `generation` | `generation_elapsed_seconds` | `pbt_overhead_seconds` (the `evolve` span) | `num_exploited`, `exploitations`, `exploit_cohort` |
+| BO | `iteration` | `iteration_elapsed_seconds` | `bo_overhead_seconds` (ask / tell / relabel) | `phase` (`"bootstrap"` or `"bo"`) |
+| LHS | `batch` | `batch_elapsed_seconds` | `lhs_overhead_seconds` (always `0.0`) | `evaluated` (design indices in the batch) |
+
+`mean_score` / `std_score` are written only by population strategies (PBT). BO records have length-1 `worker_scores` / `worker_configs`.
+
+#### Reading records portably
+
+Indexing a record by one strategy's key (`gen["generation"]`) raises `KeyError` on the other strategies' traces. The tolerant accessors in `src.tuners.utils.session_schema` read every strategy's key and the legacy names below. `get_strategy_field` checks the nested per-record `strategy_params` block first, then the flat key; the others check the current keys first, then the legacy names:
+
+| Accessor | Returns | Legacy fallbacks |
+| --- | --- | --- |
+| `get_history(data)` | the `history` list | top-level `generation_history`, `evaluation_history` |
+| `get_iteration_index(record)` | the round index | `round` |
+| `get_iteration_elapsed(record)` | round elapsed seconds | — |
+| `get_strategy_overhead(record)` | strategy overhead seconds | `strategy_overhead_seconds` |
+| `get_strategy_field(record, name)` | a strategy-only field (e.g. `phase`) | nested per-record `strategy_params` block |
+
+#### Field notes
+
+- `wall_clock_seconds` is cumulative seconds since tuning started, at the moment the round ended. The round's own duration is the `*_elapsed_seconds` key.
+- `best_score`: PBT and LHS write the best score of that round; BO writes the best score so far (running maximum).
+- `restart_count`: PBT writes the cumulative number of generations so far in which at least one worker restarted PostgreSQL; BO writes `1` if that iteration restarted PostgreSQL, else `0`; LHS writes `0`.
+- `worker_scores[].metrics` is a `PerformanceMetrics.to_dict()`, or `null` for a failed evaluation. `score_breakdown` is a `ScoreBreakdown` dict (recomputed from `metrics` when the tuner had none). `timing` is the worker-level block above.
+- `worker_scores[].actual_config` holds the SHOW-verified knob values read back on the device after the evaluation (distributed mode). It is `{}` when unavailable, so consumers can read the key unconditionally.
+- `worker_configs[].config` is the configuration the worker evaluated that round. PBT and LHS store raw knob values; BO stores hardware-relative fractions.
+
+Records carry no per-record `converged` or `best_worker_id`; convergence is session-level (`tuning_session.converged`), and older traces that still have these keys should not rely on them. BO traces written before #199 store `wall_clock_seconds` as that iteration's evaluation time rather than cumulative time, write `metrics: {}` (not `null`) for a failed evaluation, and omit `worker_scores[].actual_config` and `worker_scores[].timing` when unavailable.
 
 `num_exploited` is the number of poor workers that adopted an elite this generation (ready-pool exploits **and** dead-config rescues); `exploit_cohort` (bug B2, ticket #165) breaks that count against intent: `intended` is the quantile cohort `max(1, int(population_size × exploit_quantile))`, `achieved` is how many **ready-pool** workers filled that quantile — dead-config rescues are excluded, so `achieved ≤ num_exploited` — and `shortfall = max(0, intended − achieved)`. A positive `shortfall` means the ready pool could not fill the quantile — the expected steady state under the #164 readiness cooldown, which re-arms a worker's ready gate whenever it adopts a new configuration; the same condition also emits a WARNING at the selection seam. The sibling `exploitations` array records the `{ "elite_worker_id", "poor_worker_id" }` pairs behind `num_exploited`.
 
 ### `convergence`
 
+BO only. PBT and LHS record convergence in `tuning_session.converged`.
+
 ```json
 {
-  "converged": true,
-  "generations_without_improvement": 7
+  "converged": false,
+  "generations_without_improvement": 7,
+  "early_stopped": false,
+  "early_stopping_patience": 50
 }
 ```
 
-Drives the `should_stop()` decision in [`Population`](../architecture/pbt-core.md).
+`generations_without_improvement` is BO's stale-iteration counter for early stopping.
 
 ### `system_info`
 
@@ -318,7 +357,7 @@ The schema is **structurally identical** to the PBT session schema with one opti
 | `reference_pbt_knobs` | list[str] \| null | Knob names copied from the reference session. |
 | `pilot_size` | int | Sobol pilot iterations before `expand_ranges_for_metrics()` froze the normaliser. |
 
-`generation_history[]` for BO is a per-iteration list (each iteration is a single-worker "generation"), so `worker_scores` and `worker_configs` are length-1 arrays. This keeps the consuming code (visualization, evaluation suite, comparison script) workload-agnostic across PBT and BO.
+`history[]` for BO has one record per iteration, keyed by `iteration` (not `generation`) with `iteration_elapsed_seconds` / `bo_overhead_seconds` and a flat `phase` field — see [Per-strategy keys](#per-strategy-keys). `worker_scores` and `worker_configs` are length-1 arrays. Read records through the `session_schema` accessors so the consuming code (visualization, evaluation suite, comparison script) stays strategy-agnostic.
 
 The `population_size` field is **absent** for BO (it's not population-based); consuming code should treat its absence as "single-worker iteration."
 
@@ -445,6 +484,7 @@ Comparison files written before ADR-007 carry `"workload_features": {}` and no `
 
 ```python
 import json
+path = "path/to/session.json"
 with open(path) as f:
     data = json.load(f)
 best_config = data["best_configuration"]["knobs"]
@@ -456,6 +496,7 @@ best_score = data["best_configuration"]["score"]
 For anything beyond trivial inspection, use [`load_tuning_session`](../../src/evaluation/loader.py):
 
 ```python
+from pathlib import Path
 from src.evaluation.loader import load_tuning_session
 session = load_tuning_session(Path("path/to/session.json"))
 # Returns a typed TuningSessionData with version compatibility applied.
@@ -466,23 +507,52 @@ The loader handles all schema-version differences, populates default fields, inf
 ### "Convergence curve across multiple sessions"
 
 ```python
-history = data["generation_history"]
+from src.tuners.utils.session_schema import get_history, get_iteration_index
+
 best_so_far = []
 running = float("-inf")
-for gen in history:
-    running = max(running, gen["best_score"])
-    best_so_far.append((gen["generation"], running))
+for record in get_history(data):
+    running = max(running, record["best_score"])
+    best_so_far.append((get_iteration_index(record), running))
 ```
 
-This is what the `pbt_vs_bo_comarison.py` script does for its convergence plot, with the additional step of using `wall_clock_seconds` for the time-axis and `rescore_metrics_globally()` for cross-method score parity.
+This works on PBT, BO, and LHS traces. The `pbt_vs_bo_comarison.py` script does the same for its convergence plot, with the additional step of using `wall_clock_seconds` for the time-axis and `rescore_metrics_globally()` for cross-method score parity.
+
+### "Per-round time split"
+
+```python
+from src.tuners.utils.session_schema import (
+    get_history,
+    get_iteration_elapsed,
+    get_strategy_overhead,
+)
+
+for record in get_history(data):
+    elapsed = get_iteration_elapsed(record)
+    overhead = get_strategy_overhead(record)
+    evaluation = elapsed - overhead  # time spent outside the strategy machinery
+```
+
+Legacy traces with no `*_elapsed_seconds` key read as `0.0` elapsed, so `evaluation` comes out negative there; skip records where `elapsed` is `0.0`.
 
 ### "Per-knob lineage"
 
 ```python
-# Which generation did the best worker's config first appear in?
-history = data["generation_history"]
-best_worker_id = data["best_configuration"]  # might not be present in older sessions
-# walk worker_configs backwards looking for the last divergence
+from src.tuners.utils.session_schema import get_history, get_iteration_index
+
+# Each worker's config per round, then the rounds where a knob changed.
+configs = {}  # (round, worker_id) -> config
+for record in get_history(data):
+    for wc in record["worker_configs"]:
+        configs[(get_iteration_index(record), wc["worker_id"])] = wc["config"]
+
+knob, worker_id = "shared_buffers", 0
+rounds = sorted(r for r, w in configs if w == worker_id)
+changed_in = [
+    later
+    for earlier, later in zip(rounds, rounds[1:])
+    if configs[(earlier, worker_id)].get(knob) != configs[(later, worker_id)].get(knob)
+]
 ```
 
 There's no direct lineage field; lineage has to be reconstructed from `worker_configs` across generations. For automation, prefer the visualization loaders in [`src/visualization/loaders/session.py`](../../src/visualization/loaders/session.py).
@@ -503,6 +573,9 @@ There's no direct lineage field; lineage has to be reconstructed from `worker_co
 | `tuning_session.timing_schema_version` | timing-instrumentation v1.0 (current value `"1.1"`) | Absent in pre-2026-06 sessions; loader treats absence as `"0.0"`. |
 | `tuning_session.tuning_time_seconds`, `bootstrap_seconds` | timing-instrumentation v1.0 | Absent in pre-2026-06 sessions. |
 | `bootstrap_breakdown`, `timing_summary` | timing-instrumentation v1.0 | Top-level. Absent in pre-2026-06 sessions. Both carry `records` + `summary`. |
-| `generation_history[].timing`, `generation_history[].worker_scores[].timing` | timing-instrumentation v1.0 | Absent in pre-2026-06 sessions. v1.0 carried `records` + `summary`; v1.1 drops the redundant `summary` here (each component has n=1 at this scope). |
+| `history[].worker_scores[].timing` | timing-instrumentation v1.0 | Absent in pre-2026-06 sessions. v1.0 carried `records` + `summary`; v1.1 drops the redundant `summary` here (each component has n=1 at this scope). Older sessions also carried a record-level `generation_history[].timing` block, now folded into worker 0. |
+| Top-level `history` | unified session schema | Older sessions use `generation_history` (PBT) or `evaluation_history`; `get_history()` reads all three. |
+| Per-strategy record keys (`iteration` / `batch`, `*_elapsed_seconds`, `*_overhead_seconds`) | unified session schema | Older BO traces may key records by `generation`; `get_iteration_index()` reads any registered key. |
+| `history[].worker_scores[].actual_config` | distributed SHOW read-back | Absent in older sessions and in BO traces written before #199. |
 
 When in doubt, run the file through `load_tuning_session()` — the loader's compatibility branches are the source of truth on what older sessions look like and how to interpret missing fields.
