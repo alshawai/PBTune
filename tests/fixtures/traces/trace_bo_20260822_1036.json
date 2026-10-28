@@ -1,0 +1,870 @@
+{
+  "tuning_session": {
+    "timing_schema_version": "1.1",
+    "tuning_strategy": "bo",
+    "knob_tier": "minimal",
+    "knob_source": "expert",
+    "num_knobs": 5,
+    "workload_type": "oltp",
+    "benchmark_name": "sysbench",
+    "seed": 42,
+    "timestamp": "20260822_1036",
+    "num_rounds": 2,
+    "total_evaluations": 2,
+    "tuning_mode": "offline",
+    "converged": true,
+    "total_time_seconds": 72.85662651062012,
+    "tuning_time_seconds": 36.832398891448975,
+    "bootstrap_seconds": 36.02422761917114,
+    "num_parallel_workers": 2,
+    "strategy_overhead_seconds": 0.003339529037475586,
+    "strategy_params": {
+      "optimizer": "bayesian_optimization",
+      "bo_library": "smac3",
+      "bo_acquisition": "expected_improvement",
+      "n_iterations": 2,
+      "bo_surrogate": "rf",
+      "pilot_size": 2,
+      "range_update_interval": 10,
+      "enable_snapshots": true,
+      "snapshot_restore_interval": 1,
+      "cotenancy_degree": 2,
+      "early_stopping_enabled": true,
+      "early_stopping_patience": 2,
+      "pbt_session_sync": "/home/imalwaysforlife/PBTune/results/sessions/oltp_read_write/pbt/minimal/traces/trace_20260822_1034.json",
+      "reference_pbt_knobs": [
+        "effective_cache_size",
+        "max_parallel_workers_per_gather",
+        "random_page_cost",
+        "shared_buffers",
+        "work_mem"
+      ],
+      "resource_equalization": false
+    },
+    "benchmark": {
+      "name": "sysbench",
+      "workload": "oltp",
+      "sysbench_tables": 2,
+      "sysbench_table_size": 10000,
+      "sysbench_workload": "oltp_read_write",
+      "warmup_seconds": 5.0,
+      "measurement_seconds": 10.0,
+      "warmup_passes": 0,
+      "scale_factor": 0.01
+    },
+    "environment": {
+      "system_info": {
+        "cpu_model": "Intel(R) Xeon(R) CPU @ 2.80GHz",
+        "cpu_cores": {
+          "physical": 4,
+          "logical": 8
+        },
+        "ram": {
+          "total_bytes": 33646063616,
+          "total_gb": 31.34
+        },
+        "disk_type": "SSD",
+        "pg_version": "PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg26.04+2)",
+        "os": {
+          "system": "Linux",
+          "release": "7.0.0-1010-gcp",
+          "version": "#10-Ubuntu SMP PREEMPT Thu Aug  6 16:42:06 UTC 2026",
+          "machine": "x86_64"
+        },
+        "cpu_perf": {
+          "supported": false,
+          "governors": [],
+          "governor_uniform": true,
+          "turbo_enabled": null,
+          "turbo_mechanism": null,
+          "cur_freq_khz_min": null,
+          "cur_freq_khz_max": null
+        }
+      },
+      "data_disk_type": null,
+      "kernel_version": "7.0.0-1010-gcp",
+      "pg_server_version": "18.6 (Debian 18.6-1.pgdg13+2)",
+      "docker_version": "29.7.2",
+      "use_docker": true,
+      "num_parallel_workers": 2,
+      "population_size": 1,
+      "cpu_pinning_scheme": "cpuset"
+    },
+    "worker_resources": {
+      "ram_bytes": 15981346816,
+      "cpu_cores": 3,
+      "disk_type": "SSD",
+      "disk_read_bps": 108588646,
+      "disk_write_bps": 104857600,
+      "disk_read_iops": 3000,
+      "disk_write_iops": 3390,
+      "disk_class": "sata_ssd"
+    },
+    "scoring": {
+      "scoring_policy": "feature_driven_v2",
+      "scoring_policy_version": "2.0",
+      "metric_reference_version": "v2",
+      "workload_features": {
+        "read_ratio": 0.75,
+        "write_ratio": 0.25,
+        "olap_complexity": 0.05,
+        "join_intensity": 0.0,
+        "aggregation_intensity": 0.05,
+        "sort_intensity": 0.1,
+        "concurrency_pressure": 0.5,
+        "working_set_millions": 0.02,
+        "query_mix_entropy": 0.5,
+        "tail_latency_sensitivity": 0.55
+      },
+      "normalization_metadata": {
+        "normalizer": "quantile_utility",
+        "metric_reference_version": "v2",
+        "ranges": {},
+        "metadata": {
+          "is_calibrated": false
+        },
+        "latency_metric": "p95"
+      },
+      "score_breakdown": {
+        "final_score": 80.29469474559518,
+        "policy": "feature_driven_v2",
+        "policy_version": "2.0.0",
+        "reliability_gate": 0.9972166925682305,
+        "components": [
+          {
+            "metric_id": "latency_p95",
+            "raw_value": 7.702,
+            "normalized_value": 0.9986456140350877,
+            "weight": 0.2724306992992083,
+            "weighted_contribution": 27.130449156818575,
+            "directionality": "lower_is_better"
+          },
+          {
+            "metric_id": "latency_p99",
+            "raw_value": 9.057,
+            "normalized_value": 0.9986454090150251,
+            "weight": 0.2573975317875668,
+            "weighted_contribution": 25.63334173995916,
+            "directionality": "lower_is_better"
+          },
+          {
+            "metric_id": "latency_variance",
+            "raw_value": 1.2121670687789452,
+            "normalized_value": 0.9975756658624421,
+            "weight": 0.05431150512603725,
+            "weighted_contribution": 5.402903675021308,
+            "directionality": "lower_is_better"
+          },
+          {
+            "metric_id": "tail_amplification",
+            "raw_value": 1.5685833044683062,
+            "normalized_value": 0.9368240772812993,
+            "weight": 0.0398346081226519,
+            "weighted_contribution": 3.7214152475965148,
+            "directionality": "lower_is_better"
+          },
+          {
+            "metric_id": "throughput",
+            "raw_value": 1369.36,
+            "normalized_value": 0.27241683366733466,
+            "weight": 0.1794580637299667,
+            "weighted_contribution": 4.875132884061394,
+            "directionality": "higher_is_better"
+          },
+          {
+            "metric_id": "throughput_variance",
+            "raw_value": 99.50448851894403,
+            "normalized_value": 0.004955114810559658,
+            "weight": 0.046281211762559185,
+            "weighted_contribution": 0.022869042553058,
+            "directionality": "lower_is_better"
+          },
+          {
+            "metric_id": "memory_pressure",
+            "raw_value": 9.903416474027435e-07,
+            "normalized_value": 0.9999990096583526,
+            "weight": 0.03363868935578141,
+            "weighted_contribution": 3.3545029320629984,
+            "directionality": "lower_is_better"
+          },
+          {
+            "metric_id": "scan_efficiency",
+            "raw_value": 0.9873802777246528,
+            "normalized_value": 0.9873802777246528,
+            "weight": 0.014654333375444578,
+            "weighted_contribution": 1.4429126970236108,
+            "directionality": "higher_is_better"
+          },
+          {
+            "metric_id": "buffer_miss_rate",
+            "raw_value": 6.975655514780585e-05,
+            "normalized_value": 0.9999302434448522,
+            "weight": 0.026861039028399876,
+            "weighted_contribution": 2.6784407980473284,
+            "directionality": "lower_is_better"
+          }
+        ],
+        "metadata": {
+          "weights": {
+            "latency_p95": 0.2724306992992083,
+            "latency_p99": 0.2573975317875668,
+            "latency_variance": 0.05431150512603725,
+            "tail_amplification": 0.0398346081226519,
+            "throughput": 0.1794580637299667,
+            "throughput_variance": 0.046281211762559185,
+            "error_rate": 0.075132318412384,
+            "memory_pressure": 0.03363868935578141,
+            "scan_efficiency": 0.014654333375444578,
+            "buffer_miss_rate": 0.026861039028399876
+          },
+          "missing_utilities": [],
+          "error_rate_threshold": 0.07486768158761599
+        }
+      }
+    }
+  },
+  "best_configuration": {
+    "score": 80.29469474559518,
+    "knobs": {
+      "effective_cache_size": 0.6593491650810315,
+      "max_parallel_workers_per_gather": 0.0,
+      "random_page_cost": 1.497,
+      "shared_buffers": 0.24475253838330818,
+      "work_mem": 0.0017471248400695492
+    },
+    "metrics": {
+      "latency_p50": 5.774,
+      "latency_p95": 7.702,
+      "latency_p99": 9.057,
+      "latency_variance": 1.2121670687789452,
+      "tail_amplification": 1.5685833044683062,
+      "latency_unit": "ms",
+      "throughput": 1369.36,
+      "throughput_variance": 99.50448851894403,
+      "throughput_unit": "TPS",
+      "total_queries": 412708,
+      "total_time": 15.0113,
+      "memory_utilization": 0.00777174849091267,
+      "memory_pressure": 9.903416474027435e-07,
+      "io_read_mb": 3.9453125,
+      "io_write_mb": 10.049072265625,
+      "cache_hit_ratio": 0.9998725715778681,
+      "buffer_miss_rate": 6.975655514780585e-05,
+      "scan_efficiency": 0.9873802777246528,
+      "rows_examined": 8528900,
+      "rows_returned": 8637908,
+      "error_rate": 0.00020837977456216017,
+      "failure_type": null
+    }
+  },
+  "history": [
+    {
+      "iteration": 0,
+      "best_score": 79.58333386705604,
+      "restart_count": 1,
+      "timestamp": "2026-08-22T10:37:38.226908",
+      "wall_clock_seconds": 17.55747675895691,
+      "iteration_elapsed_seconds": 17.55891728401184,
+      "bo_overhead_seconds": 0.0014405250549316406,
+      "phase": "bootstrap",
+      "worker_scores": [
+        {
+          "worker_id": 0,
+          "score": 79.58333386705604,
+          "metrics": {
+            "latency_p50": 5.879,
+            "latency_p95": 7.702,
+            "latency_p99": 8.895,
+            "latency_variance": 19.843744549226294,
+            "tail_amplification": 1.5130124170777344,
+            "latency_unit": "ms",
+            "throughput": 1257.17,
+            "throughput_variance": 241.0610254340866,
+            "throughput_unit": "TPS",
+            "total_queries": 379298,
+            "total_time": 15.0124,
+            "memory_utilization": 0.005995597811823371,
+            "memory_pressure": 5.079730099282741e-07,
+            "io_read_mb": 3.859375,
+            "io_write_mb": 9.2313232421875,
+            "cache_hit_ratio": 0.9999152756696044,
+            "buffer_miss_rate": 7.852988244839641e-05,
+            "scan_efficiency": 0.9858441190658351,
+            "rows_examined": 7839602,
+            "rows_returned": 7952172,
+            "error_rate": 0.00026364494408090736,
+            "failure_type": null
+          },
+          "score_breakdown": {
+            "final_score": 79.58333386705604,
+            "policy": "feature_driven_v2",
+            "policy_version": "2.0.0",
+            "reliability_gate": 0.9964785213260228,
+            "components": [
+              {
+                "metric_id": "latency_p95",
+                "raw_value": 7.702,
+                "normalized_value": 0.9986456140350877,
+                "weight": 0.2724306992992083,
+                "weighted_contribution": 27.110366342817372,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "latency_p99",
+                "raw_value": 8.895,
+                "normalized_value": 0.9986994991652755,
+                "weight": 0.2573975317875668,
+                "weighted_contribution": 25.61575449635579,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "latency_variance",
+                "raw_value": 19.843744549226294,
+                "normalized_value": 0.9603125109015475,
+                "weight": 0.05431150512603725,
+                "weighted_contribution": 5.197235155381907,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "tail_amplification",
+                "raw_value": 1.5130124170777344,
+                "normalized_value": 0.9429986203246962,
+                "weight": 0.0398346081226519,
+                "weighted_contribution": 3.743169974459229,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "throughput",
+                "raw_value": 1257.17,
+                "normalized_value": 0.24993386773547097,
+                "weight": 0.1794580637299667,
+                "weighted_contribution": 4.469470032107135,
+                "directionality": "higher_is_better"
+              },
+              {
+                "metric_id": "throughput_variance",
+                "raw_value": 241.0610254340866,
+                "normalized_value": 0.0,
+                "weight": 0.046281211762559185,
+                "weighted_contribution": 0.0,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "memory_pressure",
+                "raw_value": 5.079730099282741e-07,
+                "normalized_value": 0.9999994920269901,
+                "weight": 0.03363868935578141,
+                "weighted_contribution": 3.3520214401221633,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "scan_efficiency",
+                "raw_value": 0.9858441190658351,
+                "normalized_value": 0.9858441190658351,
+                "weight": 0.014654333375444578,
+                "weighted_contribution": 1.439601396768725,
+                "directionality": "higher_is_better"
+              },
+              {
+                "metric_id": "buffer_miss_rate",
+                "raw_value": 7.852988244839641e-05,
+                "normalized_value": 0.9999214701175516,
+                "weight": 0.026861039028399876,
+                "weighted_contribution": 2.6764346486249977,
+                "directionality": "lower_is_better"
+              }
+            ],
+            "metadata": {
+              "weights": {
+                "latency_p95": 0.2724306992992083,
+                "latency_p99": 0.2573975317875668,
+                "latency_variance": 0.05431150512603725,
+                "tail_amplification": 0.0398346081226519,
+                "throughput": 0.1794580637299667,
+                "throughput_variance": 0.046281211762559185,
+                "error_rate": 0.075132318412384,
+                "memory_pressure": 0.03363868935578141,
+                "scan_efficiency": 0.014654333375444578,
+                "buffer_miss_rate": 0.026861039028399876
+              },
+              "missing_utilities": [],
+              "error_rate_threshold": 0.07486768158761599
+            }
+          },
+          "timing": {
+            "records": [
+              {
+                "component": "apply_only",
+                "seconds": 0.020851
+              },
+              {
+                "component": "activate_restart",
+                "seconds": 1.282254,
+                "metadata": {
+                  "strategy": "restart"
+                }
+              },
+              {
+                "component": "knob_verify",
+                "seconds": 0.014199
+              },
+              {
+                "component": "workload",
+                "seconds": 15.067364,
+                "metadata": {
+                  "executor": "benchmark"
+                }
+              },
+              {
+                "component": "score",
+                "seconds": 0.00036
+              }
+            ]
+          }
+        }
+      ],
+      "worker_configs": [
+        {
+          "worker_id": 0,
+          "config": {
+            "effective_cache_size": 0.39999989748048026,
+            "max_parallel_workers_per_gather": 0.6666666666666666,
+            "random_page_cost": 1.5,
+            "shared_buffers": 0.1499998974804803,
+            "work_mem": 0.0009999497654353388
+          }
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "best_score": 80.29469474559518,
+      "restart_count": 1,
+      "timestamp": "2026-08-22T10:37:57.228885",
+      "wall_clock_seconds": 18.99777317047119,
+      "iteration_elapsed_seconds": 18.999672174453735,
+      "bo_overhead_seconds": 0.0018990039825439453,
+      "phase": "bootstrap",
+      "worker_scores": [
+        {
+          "worker_id": 0,
+          "score": 80.29469474559518,
+          "metrics": {
+            "latency_p50": 5.774,
+            "latency_p95": 7.702,
+            "latency_p99": 9.057,
+            "latency_variance": 1.2121670687789452,
+            "tail_amplification": 1.5685833044683062,
+            "latency_unit": "ms",
+            "throughput": 1369.36,
+            "throughput_variance": 99.50448851894403,
+            "throughput_unit": "TPS",
+            "total_queries": 412708,
+            "total_time": 15.0113,
+            "memory_utilization": 0.00777174849091267,
+            "memory_pressure": 9.903416474027435e-07,
+            "io_read_mb": 3.9453125,
+            "io_write_mb": 10.049072265625,
+            "cache_hit_ratio": 0.9998725715778681,
+            "buffer_miss_rate": 6.975655514780585e-05,
+            "scan_efficiency": 0.9873802777246528,
+            "rows_examined": 8528900,
+            "rows_returned": 8637908,
+            "error_rate": 0.00020837977456216017,
+            "failure_type": null
+          },
+          "score_breakdown": {
+            "final_score": 80.29469474559518,
+            "policy": "feature_driven_v2",
+            "policy_version": "2.0.0",
+            "reliability_gate": 0.9972166925682305,
+            "components": [
+              {
+                "metric_id": "latency_p95",
+                "raw_value": 7.702,
+                "normalized_value": 0.9986456140350877,
+                "weight": 0.2724306992992083,
+                "weighted_contribution": 27.130449156818575,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "latency_p99",
+                "raw_value": 9.057,
+                "normalized_value": 0.9986454090150251,
+                "weight": 0.2573975317875668,
+                "weighted_contribution": 25.63334173995916,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "latency_variance",
+                "raw_value": 1.2121670687789452,
+                "normalized_value": 0.9975756658624421,
+                "weight": 0.05431150512603725,
+                "weighted_contribution": 5.402903675021308,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "tail_amplification",
+                "raw_value": 1.5685833044683062,
+                "normalized_value": 0.9368240772812993,
+                "weight": 0.0398346081226519,
+                "weighted_contribution": 3.7214152475965148,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "throughput",
+                "raw_value": 1369.36,
+                "normalized_value": 0.27241683366733466,
+                "weight": 0.1794580637299667,
+                "weighted_contribution": 4.875132884061394,
+                "directionality": "higher_is_better"
+              },
+              {
+                "metric_id": "throughput_variance",
+                "raw_value": 99.50448851894403,
+                "normalized_value": 0.004955114810559658,
+                "weight": 0.046281211762559185,
+                "weighted_contribution": 0.022869042553058,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "memory_pressure",
+                "raw_value": 9.903416474027435e-07,
+                "normalized_value": 0.9999990096583526,
+                "weight": 0.03363868935578141,
+                "weighted_contribution": 3.3545029320629984,
+                "directionality": "lower_is_better"
+              },
+              {
+                "metric_id": "scan_efficiency",
+                "raw_value": 0.9873802777246528,
+                "normalized_value": 0.9873802777246528,
+                "weight": 0.014654333375444578,
+                "weighted_contribution": 1.4429126970236108,
+                "directionality": "higher_is_better"
+              },
+              {
+                "metric_id": "buffer_miss_rate",
+                "raw_value": 6.975655514780585e-05,
+                "normalized_value": 0.9999302434448522,
+                "weight": 0.026861039028399876,
+                "weighted_contribution": 2.6784407980473284,
+                "directionality": "lower_is_better"
+              }
+            ],
+            "metadata": {
+              "weights": {
+                "latency_p95": 0.2724306992992083,
+                "latency_p99": 0.2573975317875668,
+                "latency_variance": 0.05431150512603725,
+                "tail_amplification": 0.0398346081226519,
+                "throughput": 0.1794580637299667,
+                "throughput_variance": 0.046281211762559185,
+                "error_rate": 0.075132318412384,
+                "memory_pressure": 0.03363868935578141,
+                "scan_efficiency": 0.014654333375444578,
+                "buffer_miss_rate": 0.026861039028399876
+              },
+              "missing_utilities": [],
+              "error_rate_threshold": 0.07486768158761599
+            }
+          },
+          "timing": {
+            "records": [
+              {
+                "component": "apply_only",
+                "seconds": 0.024956
+              },
+              {
+                "component": "snapshot_restore",
+                "seconds": 1.744491
+              },
+              {
+                "component": "knob_verify",
+                "seconds": 0.014533
+              },
+              {
+                "component": "workload",
+                "seconds": 15.071988,
+                "metadata": {
+                  "executor": "benchmark"
+                }
+              },
+              {
+                "component": "score",
+                "seconds": 0.000389
+              }
+            ]
+          }
+        }
+      ],
+      "worker_configs": [
+        {
+          "worker_id": 0,
+          "config": {
+            "effective_cache_size": 0.6593491650810315,
+            "max_parallel_workers_per_gather": 0.0,
+            "random_page_cost": 1.497,
+            "shared_buffers": 0.24475253838330818,
+            "work_mem": 0.0017471248400695492
+          }
+        }
+      ]
+    }
+  ],
+  "bootstrap_breakdown": {
+    "records": [
+      {
+        "component": "setup_instances",
+        "seconds": 8.342611
+      },
+      {
+        "component": "verify_instances",
+        "seconds": 0.002759
+      },
+      {
+        "component": "prune_knobs",
+        "seconds": 0.010074
+      },
+      {
+        "component": "configspace_build",
+        "seconds": 0.002964
+      },
+      {
+        "component": "pilot_generation",
+        "seconds": 0.013,
+        "metadata": {
+          "requested": 2
+        }
+      },
+      {
+        "component": "default_config_seed",
+        "seconds": 0.013254
+      },
+      {
+        "component": "smac_scenario_build",
+        "seconds": 0.00293
+      },
+      {
+        "component": "setup",
+        "seconds": 36.022917
+      }
+    ],
+    "summary": {
+      "setup_instances": {
+        "n": 1.0,
+        "mean": 8.342611466000108,
+        "std": 0.0,
+        "min": 8.342611466000108,
+        "max": 8.342611466000108,
+        "total": 8.342611466000108
+      },
+      "verify_instances": {
+        "n": 1.0,
+        "mean": 0.0027588729999479256,
+        "std": 0.0,
+        "min": 0.0027588729999479256,
+        "max": 0.0027588729999479256,
+        "total": 0.0027588729999479256
+      },
+      "prune_knobs": {
+        "n": 1.0,
+        "mean": 0.010073771999941528,
+        "std": 0.0,
+        "min": 0.010073771999941528,
+        "max": 0.010073771999941528,
+        "total": 0.010073771999941528
+      },
+      "configspace_build": {
+        "n": 1.0,
+        "mean": 0.0029642439999406633,
+        "std": 0.0,
+        "min": 0.0029642439999406633,
+        "max": 0.0029642439999406633,
+        "total": 0.0029642439999406633
+      },
+      "pilot_generation": {
+        "n": 1.0,
+        "mean": 0.013000283000110358,
+        "std": 0.0,
+        "min": 0.013000283000110358,
+        "max": 0.013000283000110358,
+        "total": 0.013000283000110358
+      },
+      "default_config_seed": {
+        "n": 1.0,
+        "mean": 0.013254181999855064,
+        "std": 0.0,
+        "min": 0.013254181999855064,
+        "max": 0.013254181999855064,
+        "total": 0.013254181999855064
+      },
+      "smac_scenario_build": {
+        "n": 1.0,
+        "mean": 0.0029296659999999974,
+        "std": 0.0,
+        "min": 0.0029296659999999974,
+        "max": 0.0029296659999999974,
+        "total": 0.0029296659999999974
+      },
+      "setup": {
+        "n": 1.0,
+        "mean": 36.02291669799979,
+        "std": 0.0,
+        "min": 36.02291669799979,
+        "max": 36.02291669799979,
+        "total": 36.02291669799979
+      }
+    }
+  },
+  "timing_summary": {
+    "apply_only": {
+      "n": 2.0,
+      "mean": 0.0229035,
+      "std": 0.0020524999999999988,
+      "min": 0.020851,
+      "max": 0.024956,
+      "total": 0.045807
+    },
+    "activate_restart": {
+      "n": 1.0,
+      "mean": 1.282254,
+      "std": 0.0,
+      "min": 1.282254,
+      "max": 1.282254,
+      "total": 1.282254
+    },
+    "knob_verify": {
+      "n": 2.0,
+      "mean": 0.014366,
+      "std": 0.00016700000000000048,
+      "min": 0.014199,
+      "max": 0.014533,
+      "total": 0.028732
+    },
+    "workload": {
+      "n": 2.0,
+      "mean": 15.069676,
+      "std": 0.0023119999999998697,
+      "min": 15.067364,
+      "max": 15.071988,
+      "total": 30.139352
+    },
+    "score": {
+      "n": 2.0,
+      "mean": 0.00037450000000000005,
+      "std": 1.45e-05,
+      "min": 0.00036,
+      "max": 0.000389,
+      "total": 0.0007490000000000001
+    },
+    "snapshot_restore": {
+      "n": 1.0,
+      "mean": 1.744491,
+      "std": 0.0,
+      "min": 1.744491,
+      "max": 1.744491,
+      "total": 1.744491
+    },
+    "bo_overhead_tell": {
+      "n": 2.0,
+      "mean": 0.001669764518737793,
+      "std": 0.00022923946380615234,
+      "min": 0.0014405250549316406,
+      "max": 0.0018990039825439453,
+      "total": 0.003339529037475586
+    },
+    "bootstrap_calibration": {
+      "n": 1.0,
+      "mean": 0.0022828820001450367,
+      "std": 0.0,
+      "min": 0.0022828820001450367,
+      "max": 0.0022828820001450367,
+      "total": 0.0022828820001450367
+    },
+    "setup_instances": {
+      "n": 1.0,
+      "mean": 8.342611466000108,
+      "std": 0.0,
+      "min": 8.342611466000108,
+      "max": 8.342611466000108,
+      "total": 8.342611466000108
+    },
+    "verify_instances": {
+      "n": 1.0,
+      "mean": 0.0027588729999479256,
+      "std": 0.0,
+      "min": 0.0027588729999479256,
+      "max": 0.0027588729999479256,
+      "total": 0.0027588729999479256
+    },
+    "prune_knobs": {
+      "n": 1.0,
+      "mean": 0.010073771999941528,
+      "std": 0.0,
+      "min": 0.010073771999941528,
+      "max": 0.010073771999941528,
+      "total": 0.010073771999941528
+    },
+    "configspace_build": {
+      "n": 1.0,
+      "mean": 0.0029642439999406633,
+      "std": 0.0,
+      "min": 0.0029642439999406633,
+      "max": 0.0029642439999406633,
+      "total": 0.0029642439999406633
+    },
+    "pilot_generation": {
+      "n": 1.0,
+      "mean": 0.013000283000110358,
+      "std": 0.0,
+      "min": 0.013000283000110358,
+      "max": 0.013000283000110358,
+      "total": 0.013000283000110358
+    },
+    "default_config_seed": {
+      "n": 1.0,
+      "mean": 0.013254181999855064,
+      "std": 0.0,
+      "min": 0.013254181999855064,
+      "max": 0.013254181999855064,
+      "total": 0.013254181999855064
+    },
+    "smac_scenario_build": {
+      "n": 1.0,
+      "mean": 0.0029296659999999974,
+      "std": 0.0,
+      "min": 0.0029296659999999974,
+      "max": 0.0029296659999999974,
+      "total": 0.0029296659999999974
+    },
+    "setup": {
+      "n": 1.0,
+      "mean": 36.02291669799979,
+      "std": 0.0,
+      "min": 36.02291669799979,
+      "max": 36.02291669799979,
+      "total": 36.02291669799979
+    }
+  },
+  "convergence": {
+    "converged": false,
+    "generations_without_improvement": 0,
+    "early_stopped": false,
+    "early_stopping_patience": 2
+  },
+  "warm_start": {
+    "enabled": false
+  },
+  "cotenancy": {
+    "enabled": true,
+    "degree": 2,
+    "background_worker_ids": [
+      1
+    ],
+    "foreground_worker_id": 0,
+    "load_config_seed": 42,
+    "load_config_source": "lhs_diverse",
+    "bg_restore_interval": 10
+  }
+}

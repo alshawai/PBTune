@@ -151,11 +151,6 @@ class LHSDesignTuner(BaseTuner):
             ("Design Batches:", str(self.max_rounds)),
         ]
 
-    def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
-        if not best_config or self.full_knob_space is None:
-            return {}
-        return self.full_knob_space.config_to_fractions(best_config)
-
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
         """Draw the fixed LHS design once and return it for evaluation.
 
@@ -276,10 +271,7 @@ class LHSDesignTuner(BaseTuner):
         outcome = GenerationOutcome(
             index=generation,
             best_score_this_generation=best_this_batch,
-            payload={
-                "evaluated": evaluated_indices,
-                "batch_elapsed_seconds": time.time() - gen_start,
-            },
+            payload={"evaluated": evaluated_indices},
         )
         return outcome
 

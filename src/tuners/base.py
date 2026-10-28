@@ -1,32 +1,74 @@
 """
 ``BaseTuner`` — the shared lifecycle ABC for all tuning strategies.
 
-The three strategies (PBT, BO, LHS-design) differ only in *how they propose
-configurations* and *when they stop*. Everything around that — resource
-resolution, workload/executor construction, environment + orchestrator wiring,
-instance bring-up, runtime knob pruning, the generation loop, instance
-teardown, optional global recalibration, and session serialization — is
-identical. This ABC encodes that invariant lifecycle as a concrete ``run()``
-template method (Template Method pattern) plus a concrete ``setup()`` that
-drives the shared bring-up, delegating the strategy-specific decisions to a few
-abstract hooks.
+The three strategies — ``PBTTuner`` (``pbt/tuner.py``), ``BOTuner``
+(``bo/tuner.py``) and ``LHSDesignTuner`` (``lhs_design/tuner.py``) — share one
+lifecycle: a concrete ``run()`` template method (Template Method pattern) that
+drives ``setup()`` → the round loop (``step`` / ``should_stop``) →
+``teardown()`` → session serialization. Strategies plug in through the hooks
+below; ADR-006 records the migration history.
 
-Concrete subclasses implement:
-  - ``propose_initial_configs``  — draw the configurations to evaluate
-  - ``step``                     — run one generation and report its outcome
-  - ``should_stop``              — decide whether to halt after a generation
-  - ``collect_best``             — surface the best (config, score, metrics)
-  - ``build_session_payload``    — assemble the strategy-specific JSON sections
+Each hook and setup phase below is listed as ``name`` [overriding strategies].
 
-Subclasses set a handful of strategy inputs on ``self`` before ``run()``
-(``benchmark``, ``benchmark_config``, ``workload_file``, ``data_root``); the
-concrete ``setup()`` reads those to build the shared environment and populates
-``self.knob_space`` / ``self.full_knob_space`` / ``self.orchestrator`` /
-``self.worker_resources`` for the strategy hooks to use.
+Mandatory hooks (abstract; a strategy that omits one fails at construction):
+  - ``propose_initial_configs`` — draw the configurations to evaluate
+  - ``step`` — run one round and report its outcome
+  - ``should_stop`` — decide whether to halt after a round
+  - ``collect_best`` — surface the best (config, score, metrics)
+  - ``build_session_payload`` — assemble the strategy-specific JSON sections
+  - ``max_rounds`` (property) — planned ceiling on rounds (loop budget)
+  - ``seeded_config_count`` (property) — configs seeded, known before the draw
+  - ``round_label`` (property) — display-only noun for one round
+  - ``config_summary_lines`` — startup-summary budget rows
+  - ``total_evaluations`` — configurations actually benchmarked
+  - ``converged`` — whether the planned terminal state was hit
 
-All three strategies now subclass this ABC: ``PBTTuner`` (``pbt/tuner.py``),
-``BOTuner`` (``bo/tuner.py``) and ``LHSDesignTuner`` (``lhs_design/tuner.py``).
-See ADR-006 for the migration history.
+Optional hooks, with the base default. The strategies with an optimizer core
+(PBT, BO) override all five; LHS overrides none.
+  - ``build_optimizer`` [PBT, BO] — no-op. PBT builds the population, BO the
+    surrogate.
+  - ``num_instances`` [PBT, BO] — ``num_parallel_workers``. PBT returns the
+    population size, BO the co-tenancy degree.
+  - ``emits_stop_status`` [PBT, BO] — ``False``. A strategy that returns
+    ``True`` must set ``self.stop_reason`` in ``should_stop`` on the terminal
+    round.
+  - ``strategy_overhead_seconds`` [PBT, BO] — ``0.0``. PBT reports its evolve
+    time, BO its ask/tell time.
+  - ``teardown`` [PBT, BO] — stop instances, then optional cleanup. PBT also
+    shuts the fleet down in distributed mode; BO stops its co-tenant pool
+    first. Both call ``super()``.
+
+Shared, not hooks: ``best_config_fractions`` (encodes against
+``full_knob_space``) and ``history_keys`` (the persisted per-record keys,
+declared per strategy in ``session_schema.HISTORY_KEYS``).
+
+Setup phases, run in this order by ``setup()``:
+  1. ``_load_knob_space`` []
+  2. ``_resolve_resources`` [PBT, BO] — BO adopts a PBT session's
+     ``worker_resources`` when given one with ``--no-cotenant``, and otherwise
+     uses local detection. PBT logs, in distributed mode, that local detection
+     is provisional.
+  3. ``_build_workload_and_metrics`` []
+  4. ``_create_environment`` [PBT] — PBT builds a remote environment in
+     distributed mode.
+  5. ``_bring_up_instances`` [PBT] — PBT brings up the fleet in distributed
+     mode and skips the runtime knob prune.
+     - ``_prune_unsupported_runtime_knobs`` [BO] — called from phase 5. BO
+       then applies the reference-PBT knob filter.
+  6. ``_seed_initial_configs`` [] — calls ``propose_initial_configs``, then
+     ``build_optimizer``.
+
+Every ``_resolve_resources`` path ends in ``_adopt_worker_resources``, the
+setup-phase seam that sizes the knob spaces for a resource profile.
+
+Distributed mode is PBT-only by design (see the ADR-006 2026-10-26 addendum).
+Outside distributed mode, each PBT setup-phase override delegates to
+``super()``.
+
+Subclasses set strategy inputs on ``self`` before ``run()`` (``benchmark``,
+``benchmark_config``, ``workload_file``, ``data_root``); ``setup()`` reads them
+and populates ``knob_space`` / ``full_knob_space`` / ``orchestrator`` /
+``worker_resources`` for the hooks to use.
 """
 
 from __future__ import annotations
@@ -72,6 +114,7 @@ from src.tuners.utils.session_writer import (
     write_session_json,
 )
 from src.tuners.utils.exceptions import KnobSpaceEmptyError
+from src.tuners.utils.session_schema import HistoryKeys, history_keys_for
 from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
@@ -104,10 +147,10 @@ class BaseTuner(ABC):
     """
     Abstract base class encoding the shared tuner lifecycle.
 
-    Subclasses provide strategy-specific behavior through the abstract hooks;
-    the concrete ``run()`` and ``setup()`` methods drive the invariant
-    lifecycle and own the timing instrumentation, instance lifecycle, and
-    result serialization.
+    Subclasses provide strategy-specific behavior through the hooks listed in
+    the module docstring; the concrete ``run()`` and ``setup()`` methods drive
+    the shared lifecycle and own the timing instrumentation, instance
+    lifecycle, and result serialization.
     """
 
     def __init__(
@@ -119,6 +162,9 @@ class BaseTuner(ABC):
     ) -> None:
         self.lifecycle = lifecycle
         self.strategy: TuningStrategy = lifecycle.strategy
+        # Fail at construction, not at first write, if the strategy has no
+        # registered persisted history keys.
+        history_keys_for(self.strategy)
         self.timestamp = timestamp
         self.output_root = Path(output_root)
 
@@ -202,26 +248,25 @@ class BaseTuner(ABC):
         (generation history, score breakdown, provenance, ...).
         """
 
+    @abstractmethod
     def total_evaluations(self) -> int:
         """Number of configurations actually benchmarked across the run.
 
         This is the fair cross-strategy *budget* axis (PBT evaluates
         population×generations, BO one config per iteration, LHS one per design
         point), serialized as ``tuning_session.total_evaluations``. Distinct
-        from ``num_rounds`` (the count of ``step()`` calls). The base default
-        returns 0; every concrete strategy overrides it.
+        from ``num_rounds`` (the count of ``step()`` calls).
         """
-        return 0
 
+    @abstractmethod
     def converged(self) -> bool:
         """Whether the strategy reached its planned terminal state.
 
         Serialized as the shared ``tuning_session.converged`` flag. Each
-        strategy defines convergence in its own terms (PBT: early-stop on no
-        improvement; LHS: the full design was swept). The base default is
-        ``False`` so a strategy that never converges needs no override.
+        strategy defines convergence in its own terms (PBT: the last generation
+        reported population convergence; BO: early-stop fired or the iteration
+        budget was consumed; LHS: the full design was swept).
         """
-        return False
 
     def strategy_overhead_seconds(self) -> float:
         """Wall-time the strategy spent on its own machinery, not evaluation.
@@ -268,33 +313,42 @@ class BaseTuner(ABC):
         return None
 
     @property
+    @abstractmethod
     def max_rounds(self) -> int:
         """Upper bound on generation rounds (the ``run()`` loop budget).
 
         Named to parallel the serialized ``tuning_session.num_rounds`` (the
         count of rounds that *actually ran*, which is lower when early-stopping
         fires): ``max_rounds`` is the planned ceiling, ``num_rounds`` the
-        realized count. Override for finite-budget strategies.
+        realized count.
         """
-        return 1
 
     @property
+    @abstractmethod
     def round_label(self) -> str:
         """Human-facing noun for one iteration of the ``run()`` loop.
 
         The loop is strategy-neutral (``num_rounds`` is the serialized count),
         but each strategy has its own natural vocabulary for one pass, and the
-        *display* logs should speak it. The default is the generic ``"Round"``;
-        concrete strategies override: PBT → ``"Generation"`` (an EA breeds a new
-        generation each pass), LHS → ``"Batch"`` (one parallel slice of a fixed
-        design), BO → ``"Iteration"`` (one sequential propose-evaluate step).
+        *display* logs should speak it: PBT → ``"Generation"`` (an EA breeds a
+        new generation each pass), LHS → ``"Batch"`` (one parallel slice of a
+        fixed design), BO → ``"Iteration"`` (one sequential propose-evaluate
+        step).
 
-        This governs only user-facing log strings ("GENERATION 3", "Generation
-        3 Summary"); the on-disk ``generation_history`` / ``generation`` JSON
-        keys are the fixed analysis-loader schema and are intentionally *not*
-        renamed.
+        Display-only: it governs user-facing log strings ("GENERATION 3",
+        "Generation 3 Summary") and nothing persisted. The on-disk ``history``
+        record keys come from :attr:`history_keys`, so relabelling a round
+        never changes the session schema.
         """
-        return "Round"
+
+    @property
+    def history_keys(self) -> HistoryKeys:
+        """Persisted per-record ``history`` keys (index, elapsed, overhead).
+
+        Declared per strategy in ``session_schema.HISTORY_KEYS``, the same
+        registry the session reader derives its key aliases from.
+        """
+        return history_keys_for(self.strategy)
 
     @property
     def num_instances(self) -> int:
@@ -329,16 +383,15 @@ class BaseTuner(ABC):
         """
         return self._benchmark_name
 
+    @abstractmethod
     def config_summary_lines(self) -> List[Tuple[str, str]]:
         """
         Strategy-specific ``(label, value)`` rows for the startup summary.
 
         Rendered in ``run()``'s initialization block (bold label, cyan value),
-        matching PBT's banner. The base returns the generic round budget;
-        concrete tuners override to name their own budget line (PBT:
+        matching PBT's banner. Each strategy names its own budget line (PBT:
         "Population Size", BO: "Iterations", LHS: "Design Size").
         """
-        return [("Max Rounds:", str(self.max_rounds))]
 
     def session_filename(self) -> str:
         """Filename for the session trace JSON (``trace_{ts}.json``).
@@ -358,10 +411,14 @@ class BaseTuner(ABC):
         """
         Convert a best-config dict to hardware-relative fractions.
 
-        Default is identity; concrete tuners with a ``KnobSpace`` override
-        this to serialize cross-host-portable fractions.
+        Serialized as both ``best_configuration.knobs`` and the best-config
+        JSON, so the persisted values stay portable across hosts. Shared by
+        every strategy: all of them encode against ``self.full_knob_space``.
+        Returns ``{}`` when there is no best config or no knob space yet.
         """
-        return best_config
+        if not best_config or self.full_knob_space is None:
+            return {}
+        return self.full_knob_space.config_to_fractions(best_config)
 
     def setup(self) -> None:
         """
@@ -397,14 +454,14 @@ class BaseTuner(ABC):
         self.full_knob_space = self.knob_space
 
     def _resolve_resources(self) -> None:
-        """Detect hardware and resolve knob ranges against worker resources."""
+        """Detect local worker resources and adopt them for the knob spaces."""
         LOGGER.info(
             "Detecting hardware resources for %s%d%s parallel workers...",
             COLORS.bold,
             self.lifecycle.num_parallel_workers,
             COLORS.reset,
         )
-        self.worker_resources = resolve_worker_resources(
+        resources = resolve_worker_resources(
             num_workers=self.lifecycle.num_parallel_workers,
             data_path=self.data_root,
             worker_ram=self.lifecycle.worker_ram,
@@ -419,8 +476,30 @@ class BaseTuner(ABC):
             "Resolving hardware-relative knob ranges based on detected worker "
             "resources..."
         )
-        self.full_knob_space.resolve_hardware_ranges(self.worker_resources)
-        self.knob_space.worker_resources = self.worker_resources
+        self._adopt_worker_resources(resources)
+
+    def _adopt_worker_resources(self, resources: WorkerResources) -> None:
+        """Make ``resources`` the worker profile the knob spaces are sized for.
+
+        The shared tail of :meth:`_resolve_resources`: resolves hardware-relative
+        knob ranges on ``full_knob_space`` (which also attaches the profile) and
+        rebuilds ``knob_space`` as its tuning-mode view. Local detection (base)
+        and the solo-BO session envelope (``BOTuner``) both feed it; an override
+        decides only where ``resources`` come from.
+
+        Setup-phase only: it must run before :meth:`_create_environment`. The
+        orchestrator copies the RAM budget once, and the rebuilt ``knob_space``
+        would discard runtime pruning and any strategy filter applied later.
+        PBT's distributed fleet promotion runs after bring-up, so it updates
+        resources in place instead of calling this.
+        """
+        if self.orchestrator is not None:
+            raise RuntimeError(
+                "_adopt_worker_resources must run before the environment and "
+                "orchestrator are created."
+            )
+        self.worker_resources = resources
+        self.full_knob_space.resolve_hardware_ranges(resources)
 
         # ONLINE knob-view: keep full_knob_space complete, narrow knob_space
         # to the restart-free view the loop refines.
@@ -557,17 +636,18 @@ class BaseTuner(ABC):
         )
 
     @property
+    @abstractmethod
     def seeded_config_count(self) -> int:
         """
         Number of configurations seeded for ``session_environment``.
 
-        Defaults to the count of initial configs drawn (parallel-workers if
-        not yet drawn). Override when the design size is known up front. This
-        is the in-code analogue of PBT's "population size"; it is serialized
-        under ``strategy_params`` by strategies that carry the notion, never as
-        a shared header field.
+        Read by ``_seed_initial_configs()`` *before*
+        ``propose_initial_configs()`` runs, so it must be known up front
+        (PBT: population size, BO: 1, LHS: design size). This is the in-code
+        analogue of PBT's "population size"; it is serialized under
+        ``strategy_params`` by strategies that carry the notion, never as a
+        shared header field.
         """
-        return len(self.initial_configs) or self.lifecycle.num_parallel_workers
 
     def _resolve_granular_workload_type(self) -> str:
         """Map the benchmark selector to the granular knob-space workload type."""
@@ -635,10 +715,8 @@ class BaseTuner(ABC):
     ) -> Dict[str, Any]:
         """Assemble one uniform ``history`` entry for any strategy.
 
-        The per-round index key and the flat overhead key both speak this
-        strategy's vocabulary: ``round_label`` (``Generation`` / ``Batch`` /
-        ``Iteration``) drives the index key (lower-cased) and the
-        ``<strategy>_overhead_seconds`` name.
+        The per-round index, elapsed, and overhead keys are the strategy's
+        registered :attr:`history_keys`.
         """
         scorer = (
             self.orchestrator.scorer if self.orchestrator is not None else None
@@ -650,9 +728,7 @@ class BaseTuner(ABC):
             generation_elapsed_seconds=generation_elapsed_seconds,
             tuning_start_time=self.tuning_start_time,
             start_time=self.start_time,
-            round_index_key=self.round_label.lower(),
-            elapsed_key=f"{self.round_label.lower()}_elapsed_seconds",
-            overhead_key=f"{self.strategy.value}_overhead_seconds",
+            history_keys=self.history_keys,
             overhead_seconds=overhead_seconds,
             scorer=scorer,
             restart_count=restart_count,

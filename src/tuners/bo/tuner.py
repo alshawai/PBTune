@@ -49,7 +49,6 @@ from src.config.database import get_db_config
 from src.tuners.base import BaseTuner
 from src.tuners.engine.worker import BaseWorker
 from src.tuners.engine.orchestrator import WorkloadOrchestrator
-from src.tuners.utils.knob_filter import apply_tuning_mode_filter
 from src.tuners.utils.metrics_table import build_worker_metric_row
 from src.tuners.utils.session_writer import build_scoring_block, convert_numpy_types
 from src.tuners.utils.types import (
@@ -247,12 +246,7 @@ class BOTuner(BaseTuner):
                 "PBT session worker_resources must contain positive RAM and CPU values"
             )
 
-        self.worker_resources = resources
-        self.full_knob_space.resolve_hardware_ranges(resources)
-        self.knob_space.worker_resources = resources
-        self.knob_space = apply_tuning_mode_filter(
-            self.full_knob_space, self.lifecycle.tuning_mode
-        )
+        self._adopt_worker_resources(resources)
         LOGGER.info(
             "Using authoritative distributed PBT worker resources at full "
             "dedicated-device capacity (RAM=%.1f GB, CPU=%d cores, disk=%s).",
@@ -267,11 +261,6 @@ class BOTuner(BaseTuner):
             ("Surrogate:", self.bo_surrogate.upper()),
             ("Pilot Size:", str(self.requested_pilot_size or self.bo_config.range_update_interval)),
         ]
-
-    def best_config_fractions(self, best_config: Dict[str, Any]) -> Dict[str, Any]:
-        if not best_config or self.full_knob_space is None:
-            return {}
-        return self.full_knob_space.config_to_fractions(best_config)
 
     def _prune_unsupported_runtime_knobs(self) -> None:
         """Prune runtime-unsupported knobs, then apply the reference-PBT filter."""
@@ -677,6 +666,7 @@ class BOTuner(BaseTuner):
         ``worker_configs``, strategy-specific fields under ``strategy_params``)
         so a BO trace loads through the same analysis path.
         """
+        keys = self.history_keys
         history: List[Dict[str, Any]] = []
         best_score_so_far = -float("inf")
         for i, iteration in enumerate(self.iteration_log):
@@ -704,15 +694,15 @@ class BOTuner(BaseTuner):
 
             history.append(
                 {
-                    "iteration": i,
+                    keys.round_index: i,
                     "best_score": best_score_so_far,
                     "restart_count": 1 if iteration.get("restarted", False) else 0,
                     "timestamp": datetime.fromtimestamp(
                         iteration.get("timestamp", 0.0)
                     ).isoformat(),
                     "wall_clock_seconds": wall_clock,
-                    "iteration_elapsed_seconds": generation_elapsed,
-                    "bo_overhead_seconds": bo_overhead,
+                    keys.elapsed: generation_elapsed,
+                    keys.overhead: bo_overhead,
                     # BO's bootstrap/ask-tell phase is a flat per-record field
                     # (not PBT-shaped ``strategy_params``); ``num_exploited`` /
                     # ``mean_score`` / ``std_score`` / ``best_worker_id`` /

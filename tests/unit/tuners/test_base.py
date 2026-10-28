@@ -1,10 +1,26 @@
 """Tests for the BaseTuner lifecycle ABC using a fake in-memory strategy."""
 
+import contextlib
+import dataclasses
+import importlib
+import json
+import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import Mock, patch
 
 import pytest
 
+from src.knobs import get_knob_space
 from src.tuners.base import BaseTuner
+from src.tuners.utils.session_schema import (
+    HISTORY_KEYS,
+    get_history,
+    get_iteration_elapsed,
+    get_iteration_index,
+    get_strategy_overhead,
+    history_keys_for,
+)
 from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
@@ -12,11 +28,24 @@ from src.tuners.utils.types import (
     WorkerEvalResult,
 )
 from src.utils.hardware_info import WorkerResources
+from src.utils.types import TuningMode
+
+_FIXTURE_TRACES = Path(__file__).parents[2] / "fixtures" / "traces"
 
 
 class _FakeMetrics:
     def to_dict(self) -> Dict[str, Any]:
         return {"throughput": 100.0}
+
+
+class _FakeKnobSpace:
+    """Knob space whose fraction encoding divides every value by ``scale``."""
+
+    def __init__(self, scale: float = 1.0) -> None:
+        self.scale = scale
+
+    def config_to_fractions(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return {name: value / self.scale for name, value in config.items()}
 
 
 class _FakeTuner(BaseTuner):
@@ -33,6 +62,23 @@ class _FakeTuner(BaseTuner):
     @property
     def max_rounds(self) -> int:
         return 10
+
+    @property
+    def seeded_config_count(self) -> int:
+        return 1
+
+    @property
+    def round_label(self) -> str:
+        return "Round"
+
+    def config_summary_lines(self) -> List[Tuple[str, str]]:
+        return [("Max Rounds:", str(self.max_rounds))]
+
+    def total_evaluations(self) -> int:
+        return self.steps_run
+
+    def converged(self) -> bool:
+        return False
 
     @property
     def num_knobs(self) -> int:
@@ -54,6 +100,7 @@ class _FakeTuner(BaseTuner):
         self.worker_resources = WorkerResources(
             ram_bytes=2048, cpu_cores=2, disk_type="SSD"
         )
+        self.full_knob_space = _FakeKnobSpace()
         self.initial_configs = self.propose_initial_configs()
 
     def propose_initial_configs(self) -> List[Dict[str, Any]]:
@@ -84,9 +131,6 @@ class _FakeTuner(BaseTuner):
 
     def teardown(self) -> None:
         self.teardown_called = True
-
-    def best_config_fractions(self, best_config):
-        return best_config
 
 
 @pytest.fixture
@@ -164,6 +208,222 @@ class TestBaseTunerLifecycle:
     def test_cannot_instantiate_abstract_base(self, lifecycle, tmp_path):
         with pytest.raises(TypeError):
             BaseTuner(lifecycle, timestamp="t", output_root=tmp_path)
+
+
+# Hooks every concrete strategy must supply; the base carries no default body.
+_MANDATORY_HOOKS = (
+    "max_rounds",
+    "seeded_config_count",
+    "round_label",
+    "config_summary_lines",
+    "total_evaluations",
+    "converged",
+)
+
+
+_STRATEGY_CLASSES = [
+    ("src.tuners.pbt.tuner", "PBTTuner"),
+    ("src.tuners.bo.tuner", "BOTuner"),
+    ("src.tuners.lhs_design.tuner", "LHSDesignTuner"),
+]
+
+
+class TestMandatoryHooks:
+    @pytest.mark.parametrize("hook", _MANDATORY_HOOKS)
+    def test_strategy_omitting_hook_fails_at_construction(
+        self, hook, lifecycle, tmp_path
+    ):
+        # A strategy implementing every abstract member except ``hook``.
+        namespace = {
+            name: _FakeTuner.__dict__[name]
+            for name in BaseTuner.__abstractmethods__
+            if name != hook
+        }
+        incomplete = type("_Incomplete", (BaseTuner,), namespace)
+        with pytest.raises(TypeError, match=hook):
+            incomplete(lifecycle, timestamp="t", output_root=tmp_path)
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_concrete_strategies_implement_every_hook(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        assert not cls.__abstractmethods__
+
+
+# Strategy names as the base module docstring writes them in owner brackets.
+_STRATEGY_LABELS = {
+    "PBTTuner": "PBT",
+    "BOTuner": "BO",
+    "LHSDesignTuner": "LHS",
+}
+# A docstring row: ``name``, an optional "(property)" tag, then the
+# [overriding strategies] bracket.
+_ROW = re.compile(
+    r"^\s+(?:- |\d\. )``(\w+)``(?: \(property\))?(?: \[([^\]]*)\])?",
+    re.MULTILINE,
+)
+
+
+def _doc_section(start: str, end: str) -> str:
+    """Return the base module docstring between two section headings."""
+    doc = importlib.import_module(BaseTuner.__module__).__doc__ or ""
+    for heading in (start, end):
+        if heading not in doc:
+            pytest.fail(f"base module docstring has no {heading!r} section")
+    return doc[doc.index(start) : doc.index(end)]
+
+
+def _documented_owners(start: str, end: str) -> Dict[str, set]:
+    """Map each name in a docstring section to its documented overriders."""
+    return {
+        name: {owner.strip() for owner in owners.split(",") if owner.strip()}
+        for name, owners in _ROW.findall(_doc_section(start, end))
+    }
+
+
+def _optional_hooks() -> Dict[str, set]:
+    return _documented_owners("Optional hooks", "Shared, not hooks")
+
+
+def _setup_phases() -> Dict[str, set]:
+    return _documented_owners("Setup phases", "Every ``_resolve_resources``")
+
+
+class TestDocumentedOverrideMatrix:
+    """The base module docstring's hook and phase tables match the code."""
+
+    def test_documented_mandatory_hooks_are_the_abstract_set(self):
+        mandatory = _documented_owners("Mandatory hooks", "Optional hooks")
+        assert set(mandatory) == BaseTuner.__abstractmethods__
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_optional_hook_owners_match_overrides(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        label = _STRATEGY_LABELS[cls_name]
+        for name, owners in _optional_hooks().items():
+            assert (label in owners) == (name in vars(cls)), name
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_setup_phase_owners_match_overrides(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        label = _STRATEGY_LABELS[cls_name]
+        for name, owners in _setup_phases().items():
+            assert (label in owners) == (name in vars(cls)), name
+
+    @pytest.mark.parametrize("path, cls_name", _STRATEGY_CLASSES)
+    def test_every_base_override_is_documented(self, path, cls_name):
+        cls = getattr(importlib.import_module(path), cls_name)
+        documented = (
+            set(BaseTuner.__abstractmethods__)
+            | set(_optional_hooks())
+            | set(_setup_phases())
+        )
+        overrides = {
+            name
+            for name in vars(cls)
+            if hasattr(BaseTuner, name)
+            and not name.startswith("__")
+            and name != "_abc_impl"
+        }
+        assert overrides <= documented
+
+    def test_setup_runs_numbered_phases_in_documented_order(
+        self, lifecycle, tmp_path
+    ):
+        documented = re.findall(
+            r"^\s+\d\. ``(\w+)``",
+            _doc_section("Setup phases", "Every ``_resolve_resources``"),
+            re.MULTILINE,
+        )
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        calls: List[str] = []
+        with contextlib.ExitStack() as stack:
+            for name in documented:
+                stack.enter_context(
+                    patch.object(
+                        tuner,
+                        name,
+                        side_effect=lambda name=name: calls.append(name),
+                    )
+                )
+            BaseTuner.setup(tuner)
+        assert calls == documented
+
+
+class TestBestConfigFractions:
+    """The shared encoder serializes the best config as knob-space fractions."""
+
+    def test_encodes_against_full_knob_space(self, lifecycle, tmp_path):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        tuner.full_knob_space = _FakeKnobSpace(scale=100)
+        assert tuner.best_config_fractions({"work_mem": 25}) == {"work_mem": 0.25}
+
+    @pytest.mark.parametrize(
+        "best_config, has_space",
+        [
+            pytest.param({}, True, id="no-best-config"),
+            pytest.param({"k": 1}, False, id="no-knob-space"),
+        ],
+    )
+    def test_empty_without_config_or_knob_space(
+        self, best_config, has_space, lifecycle, tmp_path
+    ):
+        tuner = _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        tuner.full_knob_space = _FakeKnobSpace() if has_space else None
+        assert tuner.best_config_fractions(best_config) == {}
+
+
+class TestAdoptWorkerResources:
+    """The shared setup-phase tail of every ``_resolve_resources`` path."""
+
+    _RESOURCES = WorkerResources(ram_bytes=4 * 1024**3, cpu_cores=4, disk_type="SSD")
+
+    def _tuner(self, lifecycle, tmp_path, tuning_mode):
+        tuner = _FakeTuner(
+            dataclasses.replace(lifecycle, tuning_mode=tuning_mode),
+            timestamp="t",
+            output_root=tmp_path,
+        )
+        # State right after ``_load_knob_space``.
+        tuner.full_knob_space = get_knob_space("minimal")
+        tuner.knob_space = tuner.full_knob_space
+        return tuner
+
+    def test_offline_tunes_full_space_sized_for_profile(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.OFFLINE)
+
+        tuner._adopt_worker_resources(self._RESOURCES)
+
+        assert tuner.worker_resources == self._RESOURCES
+        assert tuner.knob_space is tuner.full_knob_space
+        assert tuner.knob_space.worker_resources == self._RESOURCES
+
+    def test_online_tunes_restart_free_view(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.ONLINE)
+
+        tuner._adopt_worker_resources(self._RESOURCES)
+
+        assert tuner.knob_space.worker_resources == self._RESOURCES
+        assert "shared_buffers" in tuner.full_knob_space.knobs
+        assert "shared_buffers" not in tuner.knob_space.knobs
+
+    def test_local_resolution_adopts_detected_resources(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.ONLINE)
+        with patch(
+            "src.tuners.base.resolve_worker_resources",
+            return_value=self._RESOURCES,
+        ):
+            tuner._resolve_resources()
+
+        assert tuner.worker_resources == self._RESOURCES
+        assert tuner.knob_space.worker_resources == self._RESOURCES
+        assert "shared_buffers" not in tuner.knob_space.knobs
+
+    def test_refuses_once_environment_exists(self, lifecycle, tmp_path):
+        tuner = self._tuner(lifecycle, tmp_path, TuningMode.OFFLINE)
+        tuner.orchestrator = Mock()
+
+        with pytest.raises(RuntimeError, match="before the environment"):
+            tuner._adopt_worker_resources(self._RESOURCES)
 
 
 class TestBaseTunerLogging:
@@ -280,20 +540,20 @@ class TestBuildGenerationRecord:
             generation_elapsed_seconds=2.0,
             restart_count=1,
         )
-        # Shared axes present regardless of strategy. The round-index key speaks
-        # the strategy's vocabulary (_FakeTuner uses the generic "Round" label).
+        # Shared axes present regardless of strategy. The round-index and
+        # elapsed keys are the strategy's declared history keys.
         for key in (
-            "round",
+            "batch",
             "best_score",
             "restart_count",
             "timestamp",
             "wall_clock_seconds",
-            "round_elapsed_seconds",
+            "batch_elapsed_seconds",
             "worker_scores",
             "worker_configs",
         ):
             assert key in record
-        assert record["round"] == 3
+        assert record["batch"] == 3
         assert record["restart_count"] == 1
         # Per-record ``converged`` is dropped (top-level tuning_session.converged
         # is authoritative); no record-level ``timing`` block anymore.
@@ -366,6 +626,106 @@ class TestBuildGenerationRecord:
         assert ws["score_breakdown"] is None
         # The config is still recorded even for a failed evaluation.
         assert record["worker_configs"][0]["config"] == {"k": 1}
+
+
+class TestPersistedHistoryKeys:
+    """Persisted history keys come from the registry, never from round_label."""
+
+    def _record(self, tuner) -> Dict[str, Any]:
+        tuner.tuning_start_time = 0.0
+        tuner.start_time = 0.0
+        return tuner._build_generation_record(
+            generation=4,
+            best_score_this_round=1.0,
+            worker_results=[],
+            generation_elapsed_seconds=2.5,
+            overhead_seconds=0.5,
+        )
+
+    def test_relabelling_round_does_not_change_persisted_keys(
+        self, lifecycle, tmp_path
+    ):
+        class _Relabelled(_FakeTuner):
+            @property
+            def round_label(self) -> str:
+                return "Sweep"
+
+        baseline = self._record(
+            _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        )
+        relabelled = self._record(
+            _Relabelled(lifecycle, timestamp="t", output_root=tmp_path)
+        )
+        assert relabelled.keys() == baseline.keys()
+        assert not any(key.startswith("sweep") for key in relabelled)
+
+    def test_built_record_reads_back_through_session_reader(
+        self, lifecycle, tmp_path
+    ):
+        record = self._record(
+            _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+        )
+        assert get_iteration_index(record) == 4
+        assert get_iteration_elapsed(record) == 2.5
+        assert get_strategy_overhead(record) == 0.5
+
+    @pytest.mark.parametrize("strategy", list(TuningStrategy))
+    def test_every_strategy_keys_read_back_through_session_reader(
+        self, strategy
+    ):
+        # Holds by construction (reader aliases derive from the registry); it
+        # pins that contract. The on-disk guard is the literal-key test below.
+        keys = history_keys_for(strategy)
+        record = {keys.round_index: 3, keys.elapsed: 7.0, keys.overhead: 0.25}
+        assert get_iteration_index(record) == 3
+        assert get_iteration_elapsed(record) == 7.0
+        assert get_strategy_overhead(record) == 0.25
+
+    @pytest.mark.parametrize(
+        "strategy, round_index, elapsed, overhead",
+        [
+            (
+                TuningStrategy.PBT,
+                "generation",
+                "generation_elapsed_seconds",
+                "pbt_overhead_seconds",
+            ),
+            (
+                TuningStrategy.BO,
+                "iteration",
+                "iteration_elapsed_seconds",
+                "bo_overhead_seconds",
+            ),
+            (
+                TuningStrategy.LHS,
+                "batch",
+                "batch_elapsed_seconds",
+                "lhs_overhead_seconds",
+            ),
+        ],
+    )
+    def test_strategy_keys_match_on_disk_schema(
+        self, strategy, round_index, elapsed, overhead
+    ):
+        # Existing traces were written with these keys; they must not drift.
+        assert history_keys_for(strategy) == (round_index, elapsed, overhead)
+
+    def test_unregistered_strategy_fails_at_construction(
+        self, lifecycle, tmp_path, monkeypatch
+    ):
+        monkeypatch.delitem(HISTORY_KEYS, TuningStrategy.LHS)
+        with pytest.raises(KeyError, match="HISTORY_KEYS"):
+            _FakeTuner(lifecycle, timestamp="t", output_root=tmp_path)
+
+    @pytest.mark.parametrize(
+        "trace", sorted(_FIXTURE_TRACES.glob("*.json")), ids=lambda p: p.name
+    )
+    def test_existing_traces_read_through_session_reader(self, trace):
+        history = get_history(json.loads(trace.read_text()))
+        assert history
+        for record in history:
+            assert get_iteration_index(record) is not None
+            assert get_iteration_elapsed(record) > 0.0
 
 
 class TestAggregateSessionTiming:

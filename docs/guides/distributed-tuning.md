@@ -329,8 +329,8 @@ python -m ruff check src/tuners/distributed/ tests/unit/tuners/distributed/
   **coordinator can be any light machine**: each agent reports its detected
   `WorkerResources` from `/setup`, and the coordinator resolves hardware-aware
   knob ranges against **device** hardware (identical fleet ⇒ one device is
-  representative). `--worker-ram`/`--worker-cpus` are the manual override if no
-  device reports resources.
+  representative). If no device reports resources, setup fails rather than
+  falling back to coordinator hardware.
 - **Version-based knob pruning is skipped** in distributed mode — the coordinator
   has no direct TCP path to the remote instances, so it relies on the
   identical-fleet assumption (every device runs the same PostgreSQL).

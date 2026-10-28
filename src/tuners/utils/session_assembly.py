@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
+from src.tuners.utils.session_schema import HistoryKeys
 from src.tuners.utils.session_writer import convert_numpy_types
 from src.tuners.utils.types import WorkerEvalResult
 from src.utils.logger import get_logger
@@ -44,9 +45,7 @@ def build_generation_record(
     generation_elapsed_seconds: float,
     tuning_start_time: float,
     start_time: float,
-    round_index_key: str = "iteration",
-    elapsed_key: str = "iteration_elapsed_seconds",
-    overhead_key: str = "strategy_overhead_seconds",
+    history_keys: HistoryKeys,
     overhead_seconds: Optional[float] = None,
     scorer: Any = None,
     restart_count: int = 0,
@@ -65,13 +64,11 @@ def build_generation_record(
     per-record data (PBT's ``num_exploited``) is emitted flat on the record so
     it reads directly, with no nested wrapper.
 
-    The per-round index is keyed by ``round_index_key`` so each strategy speaks
-    its own vocabulary (PBT ``generation``, LHS ``batch``, BO ``iteration``);
-    ``session_schema.get_iteration_index`` reads all three. The per-round
-    elapsed span is keyed by ``elapsed_key`` for the same reason (PBT
-    ``generation_elapsed_seconds``, BO/LHS variants). The strategy's
-    non-evaluation overhead is emitted flat under ``overhead_key`` (e.g.
-    ``pbt_overhead_seconds``). There is no record-level ``timing`` block: any
+    The per-round index, elapsed span, and flat non-evaluation overhead are
+    keyed by ``history_keys`` (the strategy's ``session_schema.HISTORY_KEYS``
+    entry), so each strategy speaks its own vocabulary (PBT ``generation``,
+    LHS ``batch``, BO ``iteration``) and the session reader recognises every
+    key. There is no record-level ``timing`` block: any
     ``generation_timing`` records (PBT's ``evolve`` span) are folded into the
     first worker's ``timing.records`` — after that worker's own components — so
     they still feed ``timing_summary`` while keeping timing under
@@ -132,7 +129,7 @@ def build_generation_record(
             first["timing"].setdefault("records", []).extend(gen_records)
 
     record: Dict[str, Any] = {
-        round_index_key: generation,
+        history_keys.round_index: generation,
         "best_score": float(best_score_this_round),
     }
     # Aggregate stats sit right after best_score (omitted for sequential
@@ -146,11 +143,11 @@ def build_generation_record(
             "restart_count": int(restart_count),
             "timestamp": datetime.now().isoformat(),
             "wall_clock_seconds": time.time() - (tuning_start_time or start_time),
-            elapsed_key: float(generation_elapsed_seconds),
+            history_keys.elapsed: float(generation_elapsed_seconds),
         }
     )
     if overhead_seconds is not None:
-        record[overhead_key] = float(overhead_seconds)
+        record[history_keys.overhead] = float(overhead_seconds)
 
     # Strategy-specific per-record fields are emitted flat (e.g. PBT's
     # ``num_exploited``), matching the flat overhead/elapsed keys — there is no
