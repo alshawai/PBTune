@@ -32,7 +32,6 @@ import json
 import shutil
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -55,6 +54,7 @@ from src.tuners.utils.types import (
     GenerationOutcome,
     TunerLifecycleConfig,
     TuningStrategy,
+    WorkerEvalResult,
 )
 from src.tuners.bo.config import BOConfig
 from src.tuners.bo.search_space import (
@@ -661,66 +661,47 @@ class BOTuner(BaseTuner):
     def _build_generation_history(self) -> List[Dict[str, Any]]:
         """Convert the per-iteration log into unified ``history`` records.
 
-        Each BO iteration is one record with a single worker (id 0). The record
-        shape matches PBT/LHS (shared top-level fields + ``worker_scores`` /
-        ``worker_configs``, strategy-specific fields under ``strategy_params``)
-        so a BO trace loads through the same analysis path.
+        Each BO iteration is one single-worker (id 0) record built through the
+        shared :meth:`_build_generation_record`, so BO records carry every
+        field PBT/LHS records do. The whole log is replayed on every step
+        (range expansion rescores earlier iterations), so each record takes its
+        timestamp from the iteration's recorded end time via ``as_of``. Its
+        ``wall_clock_seconds`` is therefore cumulative since tuning start, as
+        for PBT/LHS; the iteration's own span is the elapsed key.
+        ``mean_score`` / ``std_score`` / ``num_exploited`` are PBT-specific and
+        are omitted for the single-config BO step; ``phase`` is BO's flat
+        per-record field.
         """
-        keys = self.history_keys
         history: List[Dict[str, Any]] = []
         best_score_so_far = -float("inf")
         for i, iteration in enumerate(self.iteration_log):
             score = iteration.get("score", 0.0) or 0.0
-            if score > best_score_so_far:
-                best_score_so_far = score
-
+            best_score_so_far = max(best_score_so_far, score)
             bo_overhead = iteration.get("bo_overhead_seconds", 0.0)
-            wall_clock = iteration.get("wall_clock_seconds", 0.0)
-            generation_elapsed = wall_clock + bo_overhead
-
-            metrics = iteration.get("metrics")
-            iteration_timing = iteration.get("timing")
-
-            worker_score_entry: Dict[str, Any] = {
-                "worker_id": 0,
-                "score": score,
-                "metrics": metrics.to_dict() if metrics is not None else {},
-                "score_breakdown": convert_numpy_types(
-                    iteration.get("score_breakdown")
-                ),
-            }
-            if iteration_timing is not None:
-                worker_score_entry["timing"] = iteration_timing
-
             history.append(
-                {
-                    keys.round_index: i,
-                    "best_score": best_score_so_far,
-                    "restart_count": 1 if iteration.get("restarted", False) else 0,
-                    "timestamp": datetime.fromtimestamp(
-                        iteration.get("timestamp", 0.0)
-                    ).isoformat(),
-                    "wall_clock_seconds": wall_clock,
-                    keys.elapsed: generation_elapsed,
-                    keys.overhead: bo_overhead,
-                    # BO's bootstrap/ask-tell phase is a flat per-record field
-                    # (not PBT-shaped ``strategy_params``); ``num_exploited`` /
-                    # ``mean_score`` / ``std_score`` / ``best_worker_id`` /
-                    # ``converged`` are PBT-specific or recomputed by loaders and
-                    # are intentionally omitted for the single-config BO step.
-                    "phase": iteration.get("phase", "bo"),
-                    "worker_scores": [worker_score_entry],
-                    "worker_configs": [
-                        {
-                            "worker_id": 0,
-                            "config": convert_numpy_types(
-                                self.full_knob_space.config_to_fractions(
-                                    iteration.get("config", {})
-                                )
+                self._build_generation_record(
+                    generation=i,
+                    best_score_this_round=best_score_so_far,
+                    worker_results=[
+                        WorkerEvalResult(
+                            worker_id=0,
+                            knob_config=self.full_knob_space.config_to_fractions(
+                                iteration.get("config", {})
                             ),
-                        }
+                            score=score,
+                            metrics=iteration.get("metrics"),
+                            score_breakdown=iteration.get("score_breakdown"),
+                            timing=iteration.get("timing"),
+                        )
                     ],
-                }
+                    generation_elapsed_seconds=(
+                        iteration.get("wall_clock_seconds", 0.0) + bo_overhead
+                    ),
+                    restart_count=1 if iteration.get("restarted", False) else 0,
+                    overhead_seconds=bo_overhead,
+                    extra={"phase": iteration.get("phase", "bo")},
+                    as_of=iteration.get("timestamp"),
+                )
             )
         return history
 
@@ -977,7 +958,7 @@ class BOTuner(BaseTuner):
                 "wall_clock_seconds": wall_time,
                 "restarted": restarted,
                 "timestamp": time.time(),
-                "timing": eval_timing.to_dict(include_summary=False),
+                "timing": eval_timing,
                 "phase": "bootstrap",
             }
         )
@@ -1355,7 +1336,7 @@ class BOTuner(BaseTuner):
                 "wall_clock_seconds": wall_time,
                 "restarted": restarted,
                 "timestamp": time.time(),
-                "timing": eval_timing.to_dict(include_summary=False),
+                "timing": eval_timing,
                 "phase": "bo",
             }
         )

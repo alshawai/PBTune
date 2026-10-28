@@ -55,6 +55,7 @@ def build_generation_record(
     num_exploited: Optional[int] = None,
     strategy_params: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
+    as_of: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Assemble one uniform ``history`` entry for any strategy.
 
@@ -73,6 +74,12 @@ def build_generation_record(
     first worker's ``timing.records`` — after that worker's own components — so
     they still feed ``timing_summary`` while keeping timing under
     ``worker_scores``.
+
+    ``as_of`` is the epoch time the round finished; ``timestamp`` and the
+    cumulative ``wall_clock_seconds`` are both taken from it. It defaults to
+    now, which is right for live recording. A strategy that replays a
+    post-hoc log (BO rebuilds its history every iteration) passes the round's
+    recorded end time instead.
     """
     worker_scores: List[Dict[str, Any]] = []
     worker_configs: List[Dict[str, Any]] = []
@@ -138,11 +145,12 @@ def build_generation_record(
         record["mean_score"] = float(mean_score)
     if std_score is not None:
         record["std_score"] = float(std_score)
+    finished_at = time.time() if as_of is None else float(as_of)
     record.update(
         {
             "restart_count": int(restart_count),
-            "timestamp": datetime.now().isoformat(),
-            "wall_clock_seconds": time.time() - (tuning_start_time or start_time),
+            "timestamp": datetime.fromtimestamp(finished_at).isoformat(),
+            "wall_clock_seconds": finished_at - (tuning_start_time or start_time),
             history_keys.elapsed: float(generation_elapsed_seconds),
         }
     )

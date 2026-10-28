@@ -126,12 +126,17 @@ def align_timeseries_to_grid(
 class EvaluationPoint:
     """Represents a single evaluation point during tuning."""
 
-    def __init__(self, metrics_dict: dict, wall_time: float, evals_so_far: int):
+    def __init__(
+        self, metrics_dict: Optional[dict], wall_time: float, evals_so_far: int
+    ):
         self.wall_time = wall_time
         self.evals_so_far = evals_so_far
         self.global_score: Optional[float] = None
-        # Safely instantiate PerformanceMetrics, ignoring unknown keys
-        valid_keys = {k: v for k, v in metrics_dict.items() if k in METRIC_FIELD_NAMES}
+        # Safely instantiate PerformanceMetrics, ignoring unknown keys. A failed
+        # evaluation persists ``metrics: null``.
+        valid_keys = {
+            k: v for k, v in (metrics_dict or {}).items() if k in METRIC_FIELD_NAMES
+        }
         self.metrics = PerformanceMetrics(**valid_keys)
 
 
@@ -197,7 +202,7 @@ class TuningRun:
             for worker in workers:
                 evals_so_far += 1
                 self.evaluations.append(
-                    EvaluationPoint(worker.get("metrics", {}), wall_time, evals_so_far)
+                    EvaluationPoint(worker.get("metrics"), wall_time, evals_so_far)
                 )
 
     @staticmethod

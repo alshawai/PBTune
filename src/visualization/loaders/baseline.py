@@ -200,7 +200,8 @@ def load_bo_trace(
             try:
                 current_time = dateutil_parser.isoparse(ts_str)
                 if start_time is None:
-                    # Give it a tiny offset based on the duration of the first iteration
+                    # Back-date to tuning start: the first record's cumulative
+                    # wall_clock_seconds (legacy BO traces: first-iteration duration)
                     import datetime
 
                     start_time = current_time - datetime.timedelta(
