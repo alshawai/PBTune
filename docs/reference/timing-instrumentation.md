@@ -82,7 +82,7 @@ Empty recorders aggregate to `{}`.
 
 `TimingRecorder.to_dict(include_summary=True)` emits `{"records": [...], "summary": aggregate()}` for JSON serialization. Pass `include_summary=False` at non-aggregating layers (per-worker, per-gen) — each component appears once at that scope, so the summary block has `n=1` and is pure noise. Use the default (`True`) at session level (`bootstrap_breakdown`, `timing_summary`) where pooling produces non-trivial aggregates.
 
-The session-level `timing_summary` is computed by `PBTTuner._aggregate_session_timing()`, which walks `generation_history`, merges every per-worker and per-generation `timing.records` into a single recorder, and emits its `aggregate()`. This means `timing_summary` reflects *all* observations of each component across the session — typically `n = population_size × total_generations` for worker-level components.
+The session-level `timing_summary` is computed by `BaseTuner._aggregate_session_timing()`, which walks `history`, merges every per-worker `timing.records` block (worker 0's block also carries the round-level records such as `evolve`) into a single recorder, and emits its `aggregate()`. BO does not use it: `BOTuner.build_session_payload` supplies its own `timing_summary` from `_merged_timing_summary()`, which also folds in the ask/tell and bootstrap spans, and that payload key replaces the base one. This means `timing_summary` reflects *all* observations of each component across the session — typically `n = population_size × total_generations` for worker-level components.
 
 ## Algorithm-overhead mapping (PBT vs BO)
 
@@ -114,7 +114,7 @@ for component, stats in data["timing_summary"].items():
           f"std={stats['std']:.3f}s total={stats['total']:.2f}s")
 ```
 
-For per-generation or per-worker drill-down, walk `data["generation_history"][i]["timing"]` and `data["generation_history"][i]["worker_scores"][j]["timing"]` respectively. The bootstrap line items are at `data["bootstrap_breakdown"]`.
+For per-round or per-worker drill-down, walk `get_history(data)[i]["worker_scores"][j]["timing"]` (`get_history` is in `src.tuners.utils.session_schema`; round-level records such as `evolve` sit at the end of worker 0's list). Sessions written before the unified schema use `generation_history` and a record-level `timing` block. The bootstrap line items are at `data["bootstrap_breakdown"]`.
 
 ## Schema compatibility
 

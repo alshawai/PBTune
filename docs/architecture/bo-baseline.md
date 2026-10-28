@@ -42,7 +42,7 @@ The design priorities are:
 | [`tuner.py`](../../src/tuners/bo/tuner.py) | `BOTuner(BaseTuner)` — owns the ask-tell loop, Pilot+Freeze normalisation, and lifecycle integration. |
 | [`cli.py`](../../src/tuners/bo/cli.py) / [`__main__.py`](../../src/tuners/bo/__main__.py) | Argument parsing and CLI entry point (`python -m src.tuners bo`). |
 
-Session-JSON serialisation is shared across strategies in [`session_writer.py`](../../src/tuners/utils/session_writer.py) (`write_bo_results`), not a BO-local module. Every component except `tuner.py` is small and pure (the tuner is where integration with the rest of the codebase happens). This split lets the search-space translation be tested independently of SMAC3.
+Session-JSON serialisation is shared across strategies in [`session_writer.py`](../../src/tuners/utils/session_writer.py) (`write_session_json`), not a BO-local module. Every component except `tuner.py` is small and pure (the tuner is where integration with the rest of the codebase happens). This split lets the search-space translation be tested independently of SMAC3.
 
 ---
 
@@ -195,11 +195,11 @@ Restart detection runs before each evaluation and triggers a restart only when a
 
 ### Result serialisation
 
-Session serialisation ([`write_bo_results` in `session_writer.py`](../../src/tuners/utils/session_writer.py)) emits session JSON with the same schema as PBT (see [reference/session-json-schema](../reference/session-json-schema.md)). Differences:
+Session serialisation goes through the shared `BaseTuner` assembly and [`write_session_json` in `session_writer.py`](../../src/tuners/utils/session_writer.py), so BO emits session JSON with the same schema as PBT (see [reference/session-json-schema](../reference/session-json-schema.md)). Differences:
 
-- `generation_history[]` has one element per BO iteration; `worker_scores` and `worker_configs` are length-1 arrays. This keeps downstream tooling (visualization loaders, evaluation suite, comparison script) workload-agnostic across PBT and BO.
-- The best configuration is extracted from SMAC's incumbent at the end of optimisation, not from the maximum-score evaluation in history (those can differ if SMAC's surrogate believes a particular point is the predicted optimum even though it was not the empirically-best evaluation).
-- Convergence is tracked through the per-iteration `generation_history` rather than a separate convergence record.
+- `history[]` has one record per BO iteration, keyed by `iteration` with `iteration_elapsed_seconds` / `bo_overhead_seconds` and a flat `phase` field (`"bootstrap"` or `"bo"`); `worker_scores` and `worker_configs` are length-1 arrays. Downstream tooling (visualization loaders, analysis loaders, comparison script) reads records through the `session_schema` accessors, so it stays strategy-agnostic across PBT and BO.
+- The best configuration is the maximum-score iteration in the iteration log (`BOTuner.collect_best`), not SMAC's incumbent.
+- Early stopping is recorded in a top-level `convergence` block (`converged`, `early_stopped`, `generations_without_improvement`, `early_stopping_patience`); records carry no per-iteration `converged` flag.
 
 ---
 
